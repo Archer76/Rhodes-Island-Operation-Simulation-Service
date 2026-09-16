@@ -857,6 +857,11 @@ class BattleSimulator:
             "TRUE" if (sk.effects.true_damage
                        or sk.effects.true_from_final_hit) else None)
         op.slash_pending = sk.effects.true_from_final_hit
+        # 技能期间获得的闪避（赤刃明霄陈技2「获得 60% 物理和法术闪避」）。
+        # 值由描述驱动（`skill._wants_dodge`）——黑板那个键叫 `prob`，
+        # 与提丰技2 的「40% 概率晕眩」同名反义，按键名认必错。
+        op.dodge_phys = sk.effects.dodge_phys
+        op.dodge_arts = sk.effects.dodge_arts
         # 回费技能（德克萨斯、桃金娘这一类）：开启时直接给费用
         gain_cost = sk.effects.buffs.get("cost", 0.0)
         if gain_cost:
@@ -882,6 +887,9 @@ class BattleSimulator:
         # 不能带到下一次开技能（阿米娅技2 整场只放一次，但机制上如此）。
         op.kill_stacks = 0
         op.slash_pending = False
+        # 闪避也是"持续至技能结束"的一类，出技能就掉回去。
+        op.dodge_phys = 0.0
+        op.dodge_arts = 0.0
         # 技能结束时的**自身**效果，两条都只在描述里写明，判据在 skill.py。
         if sk is not None:
             if sk.effects.self_stun:
@@ -1465,6 +1473,9 @@ class BattleSimulator:
             dealt = op.take(resolve_damage(
                 e.atk, damage_type=e.attack_type,
                 defense=op.current_defense(), res=op.current_res(),
+                # 闪避走期望值法：把最终伤害乘 `(1 − 闪避率)`，不掷骰。
+                # 掷骰会让同一份作业每次跑出不同结果，搜索与回归都不可复现。
+                dodge_phys=op.dodge_phys, dodge_arts=op.dodge_arts,
             ).final)
             # 受击回复的技力
             if dealt > 0 and op.skill is not None and not op.skill.is_passive \

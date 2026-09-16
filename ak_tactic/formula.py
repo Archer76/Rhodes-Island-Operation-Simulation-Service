@@ -703,14 +703,20 @@ RULES: tuple[Rule, ...] = (
     _r("pen_def",
        rf"无视(?:目标|敌人)?{N}(?:点|%|％)?的?防御力?", "pen", op="enemy",
        attr="防御力", scale=0, form="flat"),
+    # 闪避三条：「的」**必须是可选的**。正文里带「的」与不带「的」各占一半
+    # （赤刃明霄陈技2 原文就是「获得60%物理和法术闪避」，没有「的」），
+    # 写成必须有「的」会让全库一半的闪避正文一条也编不出来——这正是
+    # 「闪避」长期没接进战斗层的根因：编译层不吐项，下游自然无事可做。
+    # 同文件的 `pen_res` / `pen_def` 早就写的是 `的?`，此处只是补齐。
+    # 战斗侧的同一判据在 `operator/skill.py::_wants_dodge`，两处必须同口径。
     _r("dodge_both",
-       rf"获得{N}{PCT}的物理和法术闪避", "dodge", op="self", attr="物理/法术闪避",
+       rf"获得{N}{PCT}的?物理和法术闪避", "dodge", op="self", attr="物理/法术闪避",
        scale=0, form="signed"),
     _r("dodge_phys",
-       rf"获得{N}{PCT}的物理闪避", "dodge", op="self", attr="物理闪避",
+       rf"获得{N}{PCT}的?物理闪避", "dodge", op="self", attr="物理闪避",
        scale=0, form="signed"),
     _r("dodge_arts",
-       rf"获得{N}{PCT}的法术闪避", "dodge", op="self", attr="法术闪避",
+       rf"获得{N}{PCT}的?法术闪避", "dodge", op="self", attr="法术闪避",
        scale=0, form="signed"),
     _r("fragile",
        rf"获得{N}{PCT}的(?:【)?脆弱(?:】)?", "debuff", op="enemy", attr="脆弱",
