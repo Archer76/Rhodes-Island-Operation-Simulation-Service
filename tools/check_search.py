@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import pathlib
 import sys
 
@@ -246,6 +247,59 @@ def main() -> int:                                                    # noqa: C9
         check("名册精英段在库里缺失时退到不高于它的最高段",
               team._cost_at({"phase": {0: {"cost": 6.0, "respawn": 18.0}}}, 2) == 6,
               "退到精0")
+
+        # ---- 「随用随部署」的用法分表（博士 2026-09-17 给出）----------------
+        # 判据是「子职业 + 用途标签」两条，不是子职业一条：同一条用法横跨两类
+        # 干员。这几条守的是记录的**可验证性**——哪天上游改了标签或子职业，
+        # 这里必须红，而不是让 team.py 的表悄悄变成假话。
+        tags = {r["name"]: (r["sub_profession_name"],
+                            set(json.loads(r["tag_list"] or "[]")))
+                for r in rows(conn, "SELECT name, sub_profession_name, tag_list "
+                                    "FROM operator WHERE is_operator=1")}
+
+        def _sub(n: str) -> str:
+            return tags.get(n, ("—", set()))[0]
+
+        def _has(n: str, t: str) -> bool:
+            return t in tags.get(n, ("—", set()))[1]
+
+        check("砾是处决者、带「防护」——骗伤害型的判据",
+              _sub("砾") == "处决者" and _has("砾", "防护"),
+              str(tags.get("砾")))
+        for n in ("缄默德克萨斯", "麒麟R夜刀"):
+            check(f"{n} 是处决者、带输出类标签——输出型的判据",
+                  _sub(n) == "处决者" and (_has(n, "输出") or _has(n, "爆发")),
+                  str(tags.get(n)))
+        check("焰狐龙梓兰是**重射手**却带「快速复活」——"
+              "同一条用法横跨子职业的铁证（不能用标签判处决者）",
+              _sub("焰狐龙梓兰") == "重射手" and _has("焰狐龙梓兰", "快速复活"),
+              str(tags.get("焰狐龙梓兰")))
+        check("THRM-EX **没有**「快速复活」标签（有的话它就该能反复送）",
+              not _has("THRM-EX", "快速复活"), str(tags.get("THRM-EX")))
+
+        # 她的「快」是天赋 + 模组挣来的，**不在** operator_attr.respawn_time 里——
+        # 这正是"再部署 ≤ 30s"这条判据会漏掉她的原因。
+        zl = conn.execute(
+            "SELECT respawn_time FROM operator_attr WHERE char_id='char_1048_orchd2' "
+            "AND kind='phase' AND phase=0").fetchone()
+        check("焰狐龙梓兰的基础再部署 70s，高于 BAIT_MAX_RESPAWN"
+              "——库里这一列不含减免",
+              zl is not None and float(zl["respawn_time"]) > team.BAIT_MAX_RESPAWN,
+              f"{zl['respawn_time'] if zl else None}")
+        # 注意 rows() 交回的是 dict（不是 sqlite3.Row），按列名取。
+        zl_mods = [r["attribute_blackboard"] or "" for r in rows(
+            conn, "SELECT l.attribute_blackboard AS attribute_blackboard "
+                  "FROM module m JOIN module_level l ON l.module_id=m.module_id "
+                  "WHERE m.char_id='char_1048_orchd2' AND m.is_special_equip=0")]
+        check("她的模组属性黑板里确有 respawn_time 减免（-25）",
+              bool(zl_mods) and any("respawn_time" in b for b in zl_mods),
+              "；".join(b[:60] for b in zl_mods))
+        zl_tal = [r["blackboard"] or "" for r in rows(
+            conn, "SELECT blackboard FROM operator_talent "
+                  "WHERE char_id='char_1048_orchd2'")]
+        check("她的天赋黑板里也有 respawn_time 减免（-15）",
+              any("respawn_time" in b for b in zl_tal),
+              "；".join(b[:60] for b in zl_tal if "respawn_time" in b))
 
         # ---- 特殊模式专属：预备干员 + 集成战略/危机合约专属 ----
         # 判据必须是 is_not_obtainable，不能按名字剔「预备干员」——模式专属那批
