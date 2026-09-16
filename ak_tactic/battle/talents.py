@@ -67,6 +67,10 @@ __all__ = [
     "REGEN_KEYS",
     "find_regen",
     "RegenAura",
+    "SP_KEYS",
+    "is_sp_talent",
+    "find_sp_on_action",
+    "SpOnAction",
     "MODELED",
 ]
 
@@ -95,7 +99,57 @@ MODELED = {
     "snow": "积雪：积层 / 踏入伤害 / 每层减速 / 满层冻结 / 技能2 持续伤害",
     "squad_cost": "编入队伍后额外获得初始部署费用",
     "regen_aura": "友方进入攻击范围时获得每秒回复生命值的增益治疗",
+    "sp_on_action": "情绪吸收：攻击敌人额外回技力、消灭敌人额外得技力",
+    "team_aura": "青色怒火：全场友方攻击力/防御力提升，光环主人开技能时加倍",
 }
+
+#: 认出"情绪吸收"天赋的黑板指纹（阿米娅·**中坚术师**形态）。
+#:
+#: 依据：天赋描述与黑板逐字对应——
+#:
+#: > 攻击敌人时额外回复 2 点技力，消灭敌人后额外获得 8 点技力
+#:
+#: ```
+#: 潜能 1–4 档： amiya_t_1[atk].sp 2    amiya_t_1[kill].sp 8
+#: 潜能 5–6 档： amiya_t_1[atk].sp 3    amiya_t_1[kill].sp 10
+#: ```
+#:
+#: 两个坑：
+#: ① 键名里的 `atk` 指的是**"攻击"这个动作**，与攻击力无关，别被它误导；
+#: ② **阿米娅三个形态的天赋各不相同**——中坚术师「情绪吸收」、术战者
+#:    「青色怒火」、医疗「诚挚期许」。所以指纹只认这对键、不认干员是谁；
+#:    术战者的黑板是 `atk`/`def`，不会误中。
+SP_KEYS = ("amiya_t_1[atk].sp", "amiya_t_1[kill].sp")
+
+
+def is_sp_talent(t: Talent) -> bool:
+    return t.has(*SP_KEYS)
+
+
+@dataclass
+class SpOnAction:
+    """「情绪吸收」：攻击敌人时额外回技力，消灭敌人后额外获得技力。
+
+    这是**叠加在技能自己的 `sp_type` 之上的第二条 SP 来源**，不是替代：
+    技能是"攻击回复"型时两条都记；是"自动回复"型时这条照样记
+    （阿米娅技1「战术咏唱·γ型」正是自动回复型，若只认 sp_type 就整条漏掉）。
+
+    「攻击敌人时」按**出手**算一次，不按打中几个目标算——与模拟器里
+    `sp_per_attack` 的口径一致（见 `_operators_attack` 的同名注释）。
+    """
+
+    per_attack: float = 0.0
+    per_kill: float = 0.0
+
+
+def find_sp_on_action(talents) -> "SpOnAction | None":
+    """把「情绪吸收」的黑板翻成 `SpOnAction`，没有这个天赋则返回 None。"""
+    for t in talents or ():
+        if not is_sp_talent(t):
+            continue
+        return SpOnAction(per_attack=t.value("amiya_t_1[atk].sp"),
+                          per_kill=t.value("amiya_t_1[kill].sp"))
+    return None
 
 
 def is_regen_talent(t: Talent) -> bool:
@@ -107,6 +161,61 @@ def find_regen(talents) -> Talent | None:
         if is_regen_talent(t):
             return t
     return None
+
+
+#: 「青色怒火」——阿米娅·**术战者**形态的天赋。
+#:
+#: 为什么只能按**天赋名**认、不能按键名认：它的黑板就是裸 `atk` / `def`，
+#: 与技能自己的攻击力/防御力增益**完全同名**，靠键名根本分不出"这是光环"
+#: 还是"这是技能给自己加的"。三个形态的天赋名各不相同（中坚术师「情绪吸收」
+#: 的键是 `amiya_t_1[atk].sp`，不会误中），所以名字在这里是**可靠判据**。
+#:
+#: ```
+#: 精一： atk 0.04  def 0.04
+#: 精二： atk 0.07  def 0.07
+#: ```
+TEAM_AURA_NAME = "青色怒火"
+
+
+def is_team_aura_talent(t: Talent) -> bool:
+    return t.name == TEAM_AURA_NAME and t.has("atk", "def")
+
+
+def find_team_aura(talents) -> Talent | None:
+    for t in talents or ():
+        if is_team_aura_talent(t):
+            return t
+    return None
+
+
+@dataclass
+class TeamAura:
+    """一个干员发给**全场友方**的攻击力/防御力光环。
+
+    描述：「在场时所有友方单位的攻击力和防御力 +7%，**技能开启期间效果加倍**」。
+    「加倍」的主语是**光环的主人自己**——博士 2026-09-17 裁定。阿米娅开技能
+    的那段时间全场吃到双倍，她不开就只有基础值；别人开不开技能与她无关。
+    技2 黑板里的 `talent_scale: 2.0` 正是这个倍率的数据化表达。
+
+    与 `RegenAura` 的关键差别：那个是**射程内**才生效，这个是**全场**，
+    不看位置，所以没有 `cells_of`、也没有"进入"那一刻的歧义。
+    """
+
+    owner: str
+    atk_pct: float
+    def_pct: float
+    #: 加倍倍率。描述写「加倍」即 2.0。
+    double_scale: float = 2.0
+    #: 光环主人本体（模拟器填），翻倍与否要看它开着技能没有
+    operator: object = None
+
+    def current(self) -> tuple[float, float]:
+        """当前生效的 `(攻击力比例, 防御力比例)`。"""
+        k = 1.0
+        op = self.operator
+        if op is not None and getattr(op, "skill_active", False):
+            k = self.double_scale
+        return self.atk_pct * k, self.def_pct * k
 
 
 @dataclass

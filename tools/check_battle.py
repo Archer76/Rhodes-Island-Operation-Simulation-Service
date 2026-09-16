@@ -26,7 +26,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ak_tactic.battle import BattleSimulator, Deployment           # noqa: E402
-from ak_tactic.battle.talents import SnowField, find_snow, squad_cost_bonus  # noqa: E402
+from ak_tactic.battle.talents import (SnowField, find_snow, find_sp_on_action,
+                                      squad_cost_bonus)  # noqa: E402
 from ak_tactic.operator.attack_speed import attack_speed_bonus      # noqa: E402
 from ak_tactic.battle.unit import OperatorUnit                      # noqa: E402
 from ak_tactic.gamedata import EnemyLibrary, GameDataSource, load_stage  # noqa: E402
@@ -493,10 +494,25 @@ def check_effect_source(stage, lib, calc, book) -> None:
         runs[mode] = sim.run()
         print(f"         {mode:<10} {runs[mode].summary()}")
     b, m = runs["blackboard"], runs["merge"]
-    check("描述驱动把连击并进了结算（总伤害更高）",
-          m.damage_dealt > b.damage_dealt,
-          f"{m.damage_dealt:,.0f} vs {b.damage_dealt:,.0f}")
-    check("描述驱动少漏怪", m.leaks < b.leaks, f"{m.leaks} < {b.leaks}")
+    # 2026-09-16 起「攻击变为 N 连击」落在 `SkillEffects.multi_hit` 上，
+    # 与 `repeat_hits` / `true_damage` **同层**——这三个字段都在
+    # `_parse_level` 里由描述赋值。于是**三种 effect_source 都会并进连击**，
+    # 不再有「黑板驱动少一半」的差异。
+    #
+    # 原先这里断的是 `m.damage_dealt > b.damage_dealt` 与 `m.leaks < b.leaks`
+    # （描述驱动更优），那是 `multi_hit` 只存在于 formula 层时的表现。
+    # 现在如实改成三者相等：**这不是回归，是黑板驱动也变正确了**。
+    # 描述编译层的价值改由上面那条「描述解出二连击」（`desc.hit_count == 2`）
+    # 钉住——它测的是编译层本身，不受结算层这层影响。
+    check("三种效果来源都把连击并进了结算（同层，故相等）",
+          b.damage_dealt == m.damage_dealt == runs["desc"].damage_dealt,
+          f"{b.damage_dealt:,.0f} / {m.damage_dealt:,.0f} / "
+          f"{runs['desc'].damage_dealt:,.0f}")
+    check("且连击确实生效（伤害为正、编译层为 2 连击）",
+          b.damage_dealt > 0 and desc.hit_count == 2,
+          f"hit_count={desc.hit_count}  伤害 {b.damage_dealt:,.0f}")
+    check("三种模式漏怪数一致", b.leaks == m.leaks == runs["desc"].leaks,
+          f"{b.leaks} / {m.leaks} / {runs['desc'].leaks}")
     check("两种模式都胜利", b.won and m.won, f"{b.won} / {m.won}")
     check("`desc` 与原黑板一致或更强（此例二者相同）",
           runs["desc"].damage_dealt >= b.damage_dealt,
@@ -628,6 +644,86 @@ def check_attack_speed(calc) -> None:
           f"实得 {round(eff.attack_interval(1.25, 124.0), 4)}s")
 
 
+def check_desc_effects(book, book_t) -> None:
+    """[12] 只写在描述里的效果：判据与结算。
+
+    这一节守的是 2026-09-16 补的一批建模。它们的**共同点**是：黑板里没有，
+    只能从技能正文判断，因此最容易被日后「顺手改成读键名」而静默失效。
+
+    三条已经真实踩过的坑：
+    ① `true_damage` 旧判据用「真实伤害」，被附加伤害类的描述**大量误判**
+       （装置自爆、脉冲波、「额外造成 50% 攻击力的真实伤害」），
+       真判据是「伤害类型变为真实」；
+    ② 连击的数值藏在描述里（「攻击变为二连击」），而 `atk_scale_2` 这个键
+       在别的干员身上另有含义，**不能按名字通用**；
+    ③ `SkillBook` / `TalentBook` 早先都漏了 `char_patch_table.patchChars`，
+       术战者与医疗形态的阿米娅**技能和天赋一条都查不到**。
+    """
+    print("\n[12] 描述驱动的效果（连击 / 真实伤害 / 末击 / 自身代价 / SP）")
+
+    def lv(char_id: str, slot: int, level: int = 7, mastery: int = 3):
+        return book.for_operator(char_id)[slot - 1].level(level, mastery)
+
+    # ---- 连击：三种来源各不相同，都要能取到
+    a1 = lv("char_1001_amiya2", 1)
+    check("阿米娅技1 二连击（描述驱动，黑板无 times）",
+          a1.effects.damage.get("times") is None and a1.effects.hit_count == 2,
+          f"times={a1.effects.damage.get('times')} "
+          f"hit={a1.effects.hit_count}")
+    chen1 = lv("char_1050_chen3", 1)
+    check("赤刃明霄陈技1 二连击（同为描述驱动）",
+          chen1.effects.hit_count == 2, f"实得 {chen1.effects.hit_count}")
+    mc1 = lv("char_4230_mcnist", 1)
+    check("机械师技1 五连击（黑板 times 优先于描述）",
+          mc1.effects.damage.get("times") == 5.0 and mc1.effects.hit_count == 5,
+          f"times={mc1.effects.damage.get('times')} hit={mc1.effects.hit_count}")
+
+    # ---- 真实伤害：判据必须是「伤害类型变为真实」
+    qimera = lv("char_002_amiya", 3)
+    check("奇美拉判为真实伤害（原文写作『伤害类型变为真实』）",
+          qimera.effects.true_damage is True,
+          f"实得 {qimera.effects.true_damage}")
+    check("奇美拉生命上限 +100%",
+          qimera.effects.buffs.get("max_hp") == 1.0,
+          f"实得 {qimera.effects.buffs.get('max_hp')}")
+
+    # ---- 末击加倍（键名不可通用，只认描述）
+    a2 = lv("char_1001_amiya2", 2)
+    check("影霄·绝影末击倍率 = 常规的两倍",
+          a2.effects.final_hit_scale == a2.effects.atk_scale * 2,
+          f"{a2.effects.final_hit_scale} vs {a2.effects.atk_scale}")
+
+    # ---- 技能结束时的自身代价
+    burst = lv("char_002_amiya", 2)
+    check("精神爆发自身晕眩 10s（裸 stun 键是**自己**晕，不是控敌）",
+          burst.effects.self_stun == 10.0, f"实得 {burst.effects.self_stun}")
+    check("奇美拉技能结束后强制退场", qimera.effects.self_retreat is True)
+    check("技1 无自身代价",
+          a1.effects.self_stun == 0.0 and a1.effects.self_retreat is False,
+          f"stun={a1.effects.self_stun} retreat={a1.effects.self_retreat}")
+
+    # ---- 天赋「情绪吸收」：**形态专属**，只有中坚术师有
+    spa = find_sp_on_action(
+        book_t.for_operator("char_002_amiya", elite=2, potential=6))
+    check("情绪吸收（潜能 6）为 攻 3 / 杀 10",
+          spa is not None and spa.per_attack == 3.0 and spa.per_kill == 10.0,
+          f"实得 {spa}")
+    spa4 = find_sp_on_action(
+        book_t.for_operator("char_002_amiya", elite=2, potential=4))
+    check("情绪吸收潜能门槛：潜能 4 仍是 攻 2 / 杀 8",
+          spa4 is not None and spa4.per_attack == 2.0 and spa4.per_kill == 8.0,
+          f"实得 {spa4}")
+    check("术战者形态**没有**情绪吸收（它是青色怒火）",
+          find_sp_on_action(book_t.for_operator(
+              "char_1001_amiya2", elite=2, potential=6)) is None)
+
+    # ---- 无视法抗：解析出来就必须真的传进结算
+    sbell = lv("char_1046_sbell2", 3)
+    check("圣聆初雪技3 解析出固定法术穿透 10",
+          sbell.effects.buffs.get("res_penetrate_fixed") == 10.0,
+          f"实得 {sbell.effects.buffs.get('res_penetrate_fixed')}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="战斗与技能的回归检查")
     ap.parse_args()
@@ -653,6 +749,7 @@ def main() -> int:
     check_ranged_stop(stage, lib, calc)
     check_effect_source(stage, lib, calc, book)
     check_attack_speed(calc)
+    check_desc_effects(book, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:
