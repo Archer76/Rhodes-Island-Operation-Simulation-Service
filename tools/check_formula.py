@@ -462,6 +462,31 @@ def operator_attrs() -> None:
           f"实得 {n_expr}")
 
 
+# ---------------------------------------------------------------- [8] 序列化
+
+def serialization() -> None:
+    """公式项 → JSON：`--json` 走的那条路。
+
+    这一节是被一次真崩溃补上的：`cli.py` 的 `enemydb formula --json` 调的是
+    `Term.as_dict()`，而 `Term` 上只有 `to_dict()`——**自检全绿、命令却直接
+    traceback**。教训是"检查没跑的那条路等于没检查"，所以这里把两侧都真跑一次。
+    """
+    import json as _json
+
+    from ak_tactic.enemy_formula import parse_enemy
+
+    section("[8] 序列化冒烟（--json 走的那条路）")
+    for label, terms in (("干员", parse("攻击力+50%，攻击速度+30")),
+                         ("敌人", parse_enemy("移动速度提升至150%"))):
+        check(bool(terms), f"{label}侧样例能编出公式项")
+        try:
+            blob = _json.dumps([t.to_dict() for t in terms], ensure_ascii=False)
+            check(True, f"{label}侧公式项可 to_dict() → JSON", f"{len(blob)} 字节")
+        except Exception as exc:                       # noqa: BLE001
+            check(False, f"{label}侧公式项可 to_dict() → JSON",
+                  f"{type(exc).__name__}: {exc}")
+
+
 def main() -> int:
     global VERBOSE
     ap = argparse.ArgumentParser(description="描述→公式模型校验")
@@ -476,6 +501,7 @@ def main() -> int:
     settlement()
     expressions()
     operator_attrs()
+    serialization()
 
     print(f"\n{'=' * 60}")
     print(f"通过 {PASS} / 失败 {FAIL}")
