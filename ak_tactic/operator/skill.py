@@ -303,6 +303,50 @@ def _wants_once_per_battle(description: str) -> bool:
     return "整场战斗中该技能只能释放一次" in _TAG.sub("", description or "")
 
 
+#: 「获得 N%[的]（物理和法术|物理|法术）闪避」。
+#:
+#: ⚠️ **「的」必须是可选的**。规则按「有『的』」写会漏掉正文的真实写法：
+#: 赤刃明霄陈技2 的原文是「获得 60%<标签>物理和法术闪避」——**没有「的」**，
+#: 而全库同族正文里带「的」与不带「的」**各占一半**。这正是「闪避」此前
+#: 从未接进战斗层的根因：判据写窄了，编译层一个项都没吐出来，下游自然无事可做。
+#:
+#: 三处**故意不认**的写法（宁可少认，不要认错）：
+#: * `获得 30% 的**近战**物理闪避`（火神）——「近战」是**限定**，只挡近战攻击。
+#:   当成普通物理闪避会高估，而 `SkillEffects` 没有表达限定范围的字段。
+#: * `有 15% 的概率闪避敌人的近战物理攻击`（因陀罗）——结构完全不同（有概率、
+#:   限定近战、且成功后还给下一次攻击加成），不是单纯发一个闪避状态。
+#: * `治疗友方单位后为其**提供**持续 3 秒的 10% 物理闪避`（斑点）——作用对象是
+#:   **被治疗者**而不是自己，本项目的 `SkillEffects` 只描述"给自己"的那一类。
+#: 三种都已记进 `docs/uncertainties.md`，等后续批次处理。
+_DODGE = re.compile(
+    r"获得(?P<val>\d+(?:\.\d+)?)%"
+    r"(?:（[^）]*）)?"          # 潜能展示值，如 `获得19%（+4%）的物理闪避`
+    r"(?:的)?"
+    r"(?P<kind>物理和法术|物理|法术)闪避")
+
+
+def _wants_dodge(description: str) -> tuple[float, float]:
+    """从描述里取技能给的闪避，返回 `(物理闪避, 法术闪避)`，比例量纲。
+
+    为什么只能按描述判：赤刃明霄陈技2 的闪避值在黑板键
+    `chen3_s2[respawn_buff].prob` 上，而**同一个 `prob` 名字**在提丰技2 里
+    是 `attack@prob` = 40% 概率晕眩。键名同名反义，只有正文说得清是哪一个。
+
+    描述传入的应是 `render_description` **渲染后**的文本（占位符已换成数字），
+    所以这里直接取数字即可，不必再去黑板里找键。
+    """
+    m = _DODGE.search(_TAG.sub("", description or ""))
+    if m is None:
+        return 0.0, 0.0
+    val = float(m.group("val")) / 100.0
+    kind = m.group("kind")
+    if kind == "物理和法术":
+        return val, val
+    if kind == "物理":
+        return val, 0.0
+    return 0.0, val
+
+
 def render_description(text: str, blackboard: dict[str, float]) -> str:
     """把 `攻击力<@ba.vup>+{atk:0%}</>` 渲染成 `攻击力+50%`。
 
@@ -491,6 +535,14 @@ class SkillEffects:
     true_from_final_hit: bool = False
     #: 「整场战斗中该技能只能释放一次」（阿米娅技2 影霄·绝影）。
     once_per_battle: bool = False
+    #: 技能期间获得的闪避，**比例**量纲（0.6 = 60%），物理与法术分开。
+    #:
+    #: 为什么按描述判而不是按黑板：赤刃明霄陈技2 的值在
+    #: `chen3_s2[respawn_buff].prob` 上，而**同一个 `prob` 名字**在提丰技2
+    #: 里是 `attack@prob` = 40% 概率晕眩。键名同名反义，只有正文说得清。
+    #: 见 `_wants_dodge`（那里同时列了三种**故意不认**的限定写法）。
+    dodge_phys: float = 0.0
+    dodge_arts: float = 0.0
     #: 击杀叠层的**层数上限**（0 = 没有这类效果）。数值来自
     #: `<前缀>[kill].max_stack_cnt`；每层的加成在 `variants["kill"]` 里
     #: （`atk` 是比例、`res` 是绝对值）。标本：阿米娅技2 影霄·绝影——
@@ -1073,6 +1125,9 @@ class SkillBook:
             lv.effects.true_from_final_hit = True
             lv.effects.true_damage = False
         lv.effects.once_per_battle = _wants_once_per_battle(lv.description)
+        # 闪避：值写在黑板（键名可能是 `prob`，与"概率晕眩"同名），
+        # **认哪个键只能靠描述**，所以这里判的是描述、拿的是渲染后的数字。
+        lv.effects.dodge_phys, lv.effects.dodge_arts = _wants_dodge(lv.description)
         return lv
 
     # -------------------------------------------------------- 概览

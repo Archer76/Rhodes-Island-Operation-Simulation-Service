@@ -58,6 +58,7 @@ class DamageResult:
     type: str
     floored: bool = False   #: 是否吃到了物理 5% 保底
     mitigated: float = 0.0  #: 被防御/法抗吃掉的部分
+    dodged: float = 0.0     #: 被闪避削掉的比例（0.6 = 削掉 60%）
 
     @property
     def value(self) -> int:
@@ -81,6 +82,8 @@ def resolve_damage(
     res_reduce: float = 0.0,
     fragile: float = 0.0,
     final_multiplier: float = 1.0,
+    dodge_phys: float = 0.0,
+    dodge_arts: float = 0.0,
 ) -> DamageResult:
     """结算一次伤害。
 
@@ -95,10 +98,24 @@ def resolve_damage(
     :param res_reduce: 削减法抗的点数
     :param fragile: 脆弱 / 法术脆弱等最终增伤，0.3 表示 +30%
     :param final_multiplier: 其它最终乘区
+    :param dodge_phys: 受击方的物理闪避比例（0.6 = 60%）
+    :param dodge_arts: 受击方的法术闪避比例
+
+    **闪避走期望值法**（博士 2026-09-17 裁定④）：不掷骰，把最终伤害乘
+    `(1 − 闪避率)`。理由是模拟器要的是**期望输出**而不是某一局的实现——
+    掷骰会让同一份作业跑出不同结果，搜索与回归全都不可复现。
+    代价是看不到"这一次被闪掉了"，换来的是确定性。
+
+    两个方向性细节都写在这里，免得日后有人"顺手补全"：
+    * **物理闪避只挡物理、法术闪避只挡法术**，各管各的。
+    * **真实伤害不吃这两者**。游戏里这两个词条分别叫「物理闪避」与
+      「法术闪避」，都以伤害类型限定；真实伤害不属于任何一类，故不掷。
+      这一条**尚无实机判据**，已记进 `docs/uncertainties.md` 待博士裁定。
     """
     raw = atk * scale
     floored = False
     mitigated = 0.0
+    dodge = 0.0
     floor = raw * DAMAGE_FLOOR
 
     if damage_type == DamageType.PHYSICAL:
@@ -124,9 +141,18 @@ def resolve_damage(
     else:
         raise ValueError(f"未知的伤害类型：{damage_type}")
 
+    # 闪避按**伤害类型**各取各的。真实伤害两类都不吃（见 docstring）。
+    if damage_type == DamageType.PHYSICAL:
+        dodge = dodge_phys
+    elif damage_type == DamageType.MAGIC:
+        dodge = dodge_arts
+    if dodge:
+        dodge = min(1.0, max(0.0, dodge))
+        dealt *= (1.0 - dodge)
+
     dealt *= (1.0 + fragile) * final_multiplier
     return DamageResult(raw=raw, final=dealt, type=damage_type,
-                        floored=floored, mitigated=mitigated)
+                        floored=floored, mitigated=mitigated, dodged=dodge)
 
 
 def physical(atk: float, defense: float, **kw) -> DamageResult:
