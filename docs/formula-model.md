@@ -4,6 +4,11 @@
 `data/akdb.sqlite`（`skill_level.description` / `operator_talent.description` /
 `operator_trait` / `module_level`），出口是 `ak_tactic/formula.py`。
 
+> 本文是**干员侧的调研记录**，讲的是"当初为什么这么定"。
+> **要动代码，先读 [`formula-maintenance.md`](formula-maintenance.md)** —— 那是写给维护者的
+> 操作手册：接口清单、加一条规则的配方、必须守住的不变量、逐条踩过的坑、常用命令。
+> 敌人侧见 [`enemy-formula.md`](enemy-formula.md)。
+
 ## 一、为什么非做不可
 
 技能的实际效果有一部分**只写在正文里**，黑板拿不到：
@@ -26,7 +31,7 @@
    把 `{key:spec}` 占位符换成单字符哨兵 `«i»` 并**记下槽位**
    （key、说明符、在文本中的位置、位数）。同时剔除 `27%（+3%）` 这类
    「潜能加成后的展示值」——它是给人看的，不能当成第二个系数。
-2. **规则扫描**：130 条规则按**表内顺序**逐条在扁平文本上找。
+2. **规则扫描**：规则表按**表内顺序**逐条在扁平文本上找。
    命中即**消费该区间**（已消费的字符不参与后续规则），再按 `pos` 排序输出。
    区间消费是"不重复计"的唯一保证：`攻击力和防御力+18%` 只会出一个增益项。
 3. **Term**：`kind / expr / op / dtype / attr / duration / count / source /

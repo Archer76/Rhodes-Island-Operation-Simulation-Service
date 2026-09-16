@@ -3,19 +3,24 @@
 把 prts.wiki 敌人页上的**机制正文**（能力 / 天赋 / 描述 / 敌方技能）编译成可结算的
 公式项，口径与干员侧的 `docs/formula-model.md` 一致。
 
+> 本文是**敌人侧的完整细节**（改敌人规则必读）。
+> 上手先读 [`formula-maintenance.md`](formula-maintenance.md)** —— 维护者的操作手册：
+> 接口清单、加一条规则的配方、必须守住的不变量、逐条踩过的坑、常用命令。
+> 干员侧见 [`formula-model.md`](formula-model.md)。
+
 命令：
 
 ```powershell
 python -m ak_tactic enemydb formula 死志的凝结        # 一个敌人的全部公式项
 python -m ak_tactic enemydb formula 源石虫 --json     # 机器可读
-python tools/check_enemy_formula.py                   # 自检 118 项
+python tools/check_enemy_formula.py                   # 敌人公式项自检
 ```
 
 ---
 
 ## 一、为什么不直接复用干员的规则表
 
-`ak_tactic/formula.py` 的 130 条规则是**吃 gamedata 正文**长出来的：游戏内文本
+`ak_tactic/formula.py` 的规则表是**吃 gamedata 正文**长出来的：游戏内文本
 只有 `<$ba.xxx>` 标签与 `{key:spec}` 占位符，`formula.normalize` 直接吃得下。
 
 敌人正文来自 **prts.wiki 的 wikitext**，多夹着一层 wiki 模板：
@@ -68,7 +73,7 @@ RULES_ENEMY = formula.RULES + ENEMY_RULES     # 干员规则在前
 **顺序是这个设计里唯一要紧的东西**。`formula.parse` 按表序扫描、命中即
 消费文字区间，所以：
 
-- 干员的 130 条在前 —— 它们已经把"数值 + 量纲（PCT / RATIO / FLAT / SCALE）
+- 干员规则在前（`RULES_ENEMY = RULES + ENEMY_RULES`）—— 它们已经把"数值 + 量纲（PCT / RATIO / FLAT / SCALE）
   + 表达式成形"这套练熟了，「造成攻击力210%的法术伤害」必须归它。
 - 敌人规则只补干员**不认识的概念**。
 
@@ -154,7 +159,8 @@ RULES_ENEMY = formula.RULES + ENEMY_RULES     # 干员规则在前
 | desc | 2,025 | 6.8% | 36.5% | 44.4% | **44.7%** |
 | **合计** | **6,935** | **20.2%** | **60.2%** | **68.2%** | **69.3%** |
 
-规则：干员 130 条 + 敌人 68 条 = 198 条，另有一个**算式 pass**（见 5.7）。
+规则：干员规则 + 敌人规则两张表拼成 `RULES_ENEMY`（条数以 `len()` 为准；写这段时是
+137 + 71 = 208），另有一个**算式 pass**（见 5.7）。
 
 ### 5.1 `desc` 覆盖率低是**对的**
 

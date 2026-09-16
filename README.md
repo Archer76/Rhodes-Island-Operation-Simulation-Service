@@ -463,8 +463,8 @@ ak-tactic/
 │  │  ├─ skill.py            技能 / 天赋 / 模组 → 战斗效果
 │  │  ├─ attack_speed.py     总攻速 = 基础 100 + 天赋 + 模组特性改写（含条件性）
 │  │  └─ talent.py           天赋按练度取值（潜能门槛）
-│  ├─ formula.py             正文 → 公式项（干员侧 130 条规则）
-│  ├─ enemy_formula.py       正文 → 公式项（敌人侧，+53 条规则 + wiki 模板清洗）
+│  ├─ formula.py             正文 → 公式项（解析器 + 干员规则表）
+│  ├─ enemy_formula.py       正文 → 公式项（敌人规则表 + wiki 模板清洗）
 │  ├─ db/                    两个本地库（建库 + 查询，共用 store.py）
 │  │  ├─ store.py            连接与公共工具（默认只读连接）
 │  │  ├─ schema.py           干员库表结构（含 DB_VERSION）
@@ -888,8 +888,9 @@ calc.calibrate("char_002_amiya", elite=0, level=3, attr="atk", observed=280)
 ## 七、已知局限
 
 1. ~~**技能效果还是自然语言**~~ —— **已解决**（2026-09-15）。`ak_tactic/formula.py`
-   把技能/天赋/特性/模组的正文编译成可结算的公式项（130 条规则，覆盖 81.8%），
-   另加 `ak_tactic/enemy_formula.py`（53 条敌人规则，覆盖 60.2%）。
+   把技能/天赋/特性/模组的正文编译成可结算的公式项，另加 `ak_tactic/enemy_formula.py`
+   （敌人规则表 + wiki 模板清洗）。**要改这套解析器，先读 `docs/formula-maintenance.md`**
+   —— 维护者手册：接口清单、加一条规则的配方、必须守住的不变量、逐条踩过的坑。
    模拟器有 `effect_source` 三档（`blackboard` / `merge` 默认 / `desc`）。
    仍未对齐的是**对手**：抬手 `prepDuration` 与敌人的攻击动作时长（gamedata
    里没有，后者是模拟器给的 0.5s 假设）。**但「攻击间隔要不要动画帧补正」
