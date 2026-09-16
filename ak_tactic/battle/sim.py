@@ -53,7 +53,7 @@ from .damage import DamageType, resolve_damage
 from .talents import (RegenAura, SnowField, TeamAura, find_regen, find_snow,
                       find_sp_on_action, find_team_aura, squad_cost_bonus)
 from .p3r import BreakState, TotalAttackDevice, affinity_multiplier, damage_slot
-from .unit import EnemyUnit, OperatorUnit, point_at
+from .unit import POSITION_TOL, EnemyUnit, OperatorUnit, point_at
 
 __all__ = ["BattleSimulator", "BattleResult", "Deployment", "SkillUse"]
 
@@ -64,6 +64,10 @@ _INFINITE = float("inf")
 
 #: 「全场总攻击」装置的 characterKey。关卡 `predefines.tokenInsts` 里出现它就启用。
 TOTAL_ATTACK_KEY = "trap_335_totalattack"
+
+#: `POSITION_TOL` 的平方，供热路径用平方比较代替 `math.dist` 的开方。
+#: 两处必须同源，改 `unit.POSITION_TOL` 即自动生效。
+POSITION_TOL2 = POSITION_TOL * POSITION_TOL
 
 
 def make_total_attack(stage) -> TotalAttackDevice | None:
@@ -1111,39 +1115,76 @@ class BattleSimulator:
             op.aura_def_pct = def_
 
     def _update_blocking(self) -> None:
-        for op in self.operators:
-            op.blocking = [e for e in op.blocking if e.alive and e.blocked_by is op]
+        """每帧重算阻挡关系。
+
+        ⚠️ 这里写成**就地展开**不是为了压行数。本函数一场 1-7 要跑 4111 次、
+        每次扫 41 个敌人，而 `e.alive` / `op.alive` 是 property、
+        `can_block` / `is_at` 是小方法——**派发开销比它们做的事还贵**
+        （实测 property 访问约 80 ns，平属性读约 18 ns，整场这类调用上百万次）。
+        展开后本函数 8.61 µs/帧 vs 原版 14.53 µs/帧。
+
+        **为什么不改成「摊平成列表再写回」**：实测更慢——搬运 9.9 µs/帧
+        加上算法与写回 11.6 µs/帧，合计 20.8 µs，反而比原版的 14.53 µs 还差
+        （端到端 0.873×）。收益全在**减少间接层**，与数据放在对象还是列表里无关。
+        详见 `_proto/flat_probe.py` 与 README 的「性能与并行」节。
+
+        语义必须与展开前的写法逐条对齐，改动前请核对：
+        * `op.alive` = `hp > 0 and not retreated`（`OperatorUnit` 覆写过，
+          撤退时满血，只看血量会把已退场的人算成还在）
+        * `op.can_block(e)` = 非飞行 且 `block_cnt > 0` 且有空位
+        * `e.is_at(op.position)` = 距离 ≤ `POSITION_TOL`，此处改用平方比较省掉
+          开方（`dx*dx+dy*dy <= POSITION_TOL2`）；容差不是判据边界，浮点上
+          等价，实测三关基线逐字一致
+        """
+        ops = self.operators
+        for op in ops:
+            blocking = op.blocking
+            if blocking:
+                op.blocking = [e for e in blocking
+                               if e.hp > 0 and e.blocked_by is op]
         for e in self.enemies:
             # 离场传送中的敌人不在地图上，不占阻挡位
-            # 【倒地】不可阻挡
-            if not e.alive or e.leaked or e.off_map or e.down \
-                    or e.blocked_by is not None:
+            # 【倒地】不可阻挡；飞行单位任何地面干员都挡不住
+            if (e.hp <= 0 or e.leaked or e.off_map or e.down
+                    or e.blocked_by is not None or e.is_flying):
                 continue
-            for op in self.operators:
-                if not op.alive or not op.can_block(e):
+            ex, ey = e.position
+            for op in ops:
+                if op.hp <= 0 or op.retreated:
                     continue
-                if e.is_at(op.position):
+                cap = op.block_cnt
+                if cap == 0 or len(op.blocking) >= cap:
+                    continue
+                ox, oy = op.position
+                dx = ex - ox
+                dy = ey - oy
+                if dx * dx + dy * dy <= POSITION_TOL2:
                     e.blocked_by = op
                     op.blocking.append(e)
                     break
         for e in self.enemies:
-            if e.blocked_by is not None and not e.blocked_by.alive:
+            b = e.blocked_by
+            if b is not None and (b.hp <= 0 or b.retreated):
                 e.blocked_by = None
 
     def _pick_targets(self, op: OperatorUnit, cells: set, n: int = 1) -> list[EnemyUnit]:
         """目标选择：先打自己挡住的，再打离防守点最近的。
 
         返回最多 `n` 个——`n > 1` 对应技能里的「同时攻击 N 个目标」。
+
+        与 `_update_blocking` 同理，`e.alive` 这类 property 在此就地展开
+        （一场 1-7 调 6359 次、每次扫 41 个敌人）。`EnemyUnit` 的 `alive`
+        就是 `hp > 0`，没有覆写。
         """
         out: list[EnemyUnit] = []
         for e in op.blocking:
-            if e.alive and not e.leaked and e not in out:
+            if e.hp > 0 and not e.leaked and e not in out:
                 out.append(e)
                 if len(out) >= n:
                     return out
         rest = []
         for e in self.enemies:
-            if not e.alive or e.leaked or e.off_map or e in out:
+            if e.hp <= 0 or e.leaked or e.off_map or e in out:
                 continue
             if (int(round(e.position[0])), int(round(e.position[1]))) in cells:
                 rest.append(e)
@@ -1400,8 +1441,9 @@ class BattleSimulator:
         return picked
 
     def _enemies_attack(self, dt: float, t: float) -> None:
+        """敌方出手。每帧扫全部敌人，故 `alive` / `pending_reborn` 就地展开。"""
         for e in self.enemies:
-            if not e.alive or e.leaked or e.off_map or e.pending_reborn:
+            if e.hp <= 0 or e.leaked or e.off_map or e.reborn_at >= 0.0:
                 continue
             if e.frozen or e.down:
                 # 冻结 / 倒地的敌人不能攻击；计时器也不该偷偷攒着
@@ -1410,7 +1452,7 @@ class BattleSimulator:
                 # 【待机】/【缴械】期间不能出手（待机还额外不能移动，见 advance）
                 continue
             op = self._enemy_target(e)
-            if op is None or not op.alive:
+            if op is None or op.hp <= 0 or op.retreated:
                 continue
             e.attack_timer += dt
             if e.attack_timer < e.attack_interval:
@@ -1459,16 +1501,23 @@ class BattleSimulator:
                         f"（还剩 {e.reborn_left} 次）")
 
     def _resolve(self, t: float) -> None:
+        """收尾结算：击杀奖励费用与漏怪扣命。
+
+        同样就地展开 `alive` / `pending_reborn`——本函数每帧跑一次、每次扫
+        全部敌人，而这两个 property 加起来占了它自身耗时的大半。
+        * `e.alive` = `hp > 0`
+        * `e.pending_reborn` = `reborn_at >= 0.0`（倒下等重生，既不算活也不算死）
+        """
         for e in self.enemies:
             # 击杀奖励费用（没办法车 +50）。漏掉的不算击杀，不给钱。
-            if (not e.alive and not e.pending_reborn and not e.leaked
+            if (e.hp <= 0 and e.reborn_at < 0.0 and not e.leaked
                     and e.kill_cost and not e.cost_awarded):
                 e.cost_awarded = True
                 self.cost += e.kill_cost
                 if self.verbose:
                     self.result.log.append(
                         f"{t:7.1f}s  击倒 {e.name}  +{e.kill_cost} 费用")
-            if e.alive and not e.leaked and not e.off_map and e.reached_end:
+            if e.hp > 0 and not e.leaked and not e.off_map and e.reached_end:
                 e.leaked = True
                 e.leak_time = t
                 # lifePointReduce 可以是 0（没办法车），不能强行按 1 算
