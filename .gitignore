@@ -16,7 +16,13 @@ data/*.sqlite-journal
 data/*.sqlite-wal
 
 # ---- 隐私：森空岛名册含 uid / 昵称 / 完整练度 ----
+# data/skland/ 是算符口径的 json；docs/roster-*.md 是同一份数据的人读导出。
+# 原先只挡住了前者，后者因此跟进了提交（2026-09-17 已从历史摘除）。
 data/skland/
+docs/roster-*.md
+
+# MAA 的 OperBox 导出（同样是自己账号的名册）。tools/operbox_path.py 按此处找。
+data/operbox/
 
 # ---- 临时与导出产物 ----
 _t*.json

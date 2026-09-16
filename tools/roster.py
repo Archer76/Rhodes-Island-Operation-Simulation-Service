@@ -23,7 +23,7 @@
 用法
 ----
     python tools/roster.py
-    python tools/roster.py --uid <uid>
+    python tools/roster.py --uid 12345678
     python tools/roster.py --squad 机械师 圣聆初雪 ...   # 顺带打印指定编队
 """
 
