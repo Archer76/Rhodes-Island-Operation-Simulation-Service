@@ -1,0 +1,328 @@
+"""天赋在战斗里的落地。
+
+数据层（`ak_tactic.operator.talent`）只能告诉你"这条天赋的黑板长这样"，
+不能告诉你它**做什么**——和技能一样，语义活在描述文字里。所以这里对
+**已核实**的天赋做显式建模，一条一条写清楚依据；没建模的天赋一概不猜。
+
+目前建模两条：
+
+## 积雪（圣聆初雪「无垠的雪景」）
+
+依据：天赋描述 + 天赋黑板 + 技能2黑板三方对照。
+
+```
+天赋黑板（精英2，潜能1 档）：interval 5.5  max_cast_cnt 5
+                             move_speed -0.12  talent_magic_scale 0.75
+技能2黑板（专精三）：talent@s2_magic_scale 0.2
+                     talent@max_cast_tile_count 20   talent@cold 5.0
+```
+
+> 攻击范围内的地面每隔 5.5 秒产生一层积雪，地面敌人经过时立即受到相当于攻击力
+> 75% 的法术伤害，每层积雪使经过的所有敌人移动速度下降 12%，最多叠加 5 层
+> （首个敌人离开该地块时积雪消失）
+>
+> 技能2 追加：处于积雪上的地面敌人**每秒**受到攻击力 20% 的法术伤害，
+> 积雪超过 5 层时向周围扩散一层（最多向外扩散 20 格），敌人离开积雪时获得 5 秒寒冷
+
+落到代码上的四条：
+
+1. **积层**：每隔 `interval` 秒，射程内每个**地面**格 +1 层，上限 `max_cast_cnt`。
+2. **踏入伤害**：地面敌人**每次踏入**雪格时受一次 `talent_magic_scale × 攻击力`
+   的法术伤害。描述里"每层"只修饰减速（"每层积雪使……移动速度下降"），
+   伤害那句没有"每层"，所以**按每次踏入一次**算，不乘层数。
+3. **减速**：雪格上的敌人移速 × `(1 + move_speed × 层数)`，即每层 −12%、满 5 层 −60%。
+4. **技能2 持续伤害**：技能2 开启期间，雪格上的地面敌人每秒再受
+   `s2_magic_scale × 攻击力` 的法术伤害；并把扩散上限提到 `max_cast_tile_count`。
+
+**未建模**（如实记下，别当成 0）：离开积雪的 5 秒寒冷、满 5 层后地块的冻结状态、
+冻结带来的控制效果。以及天赋2「圣山的祝福」（受致命伤害时回满血并冻结周围）——
+它只在德克萨斯这类"会被打死"的干员身上才有意义，而圣聆初雪在 SR-6 里不掉血。
+
+## 编队加初始费（德克萨斯「战术快递」）
+
+依据：天赋描述与黑板都是单键 `cost`，精英2 为 `cost 2.0`。
+
+> **编入队伍后**，额外获得 2 点初始部署费用
+
+注意是**编队时**就生效，不是部署那一刻才返费——所以它是开局初始费用 +2，
+由模拟器在 `run()` 开始时一次性结算，而不是挂在 `_do_deploy` 上。
+两者总额相同、**时点不同**：开局就多 2 费意味着第一个干员能早 2 秒落地。
+
+判据：**天赋黑板有且仅有 `cost` 一个键**。键多了就可能是"费用降低／费用上限"之类，
+那属于没建模的范畴，宁可返回 0 也不猜。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from ..operator.talent import Talent
+
+__all__ = [
+    "SnowField",
+    "SNOW_KEYS",
+    "is_snow_talent",
+    "find_snow",
+    "squad_cost_bonus",
+    "REGEN_KEYS",
+    "find_regen",
+    "RegenAura",
+    "MODELED",
+]
+
+#: 认出"积雪天赋"的黑板指纹。三个键同时出现才是，缺一不可。
+SNOW_KEYS = ("interval", "max_cast_cnt", "talent_magic_scale")
+
+#: 认出"入场增益治疗"天赋的黑板指纹。
+#:
+#: 依据：凯尔希·思衡托天赋2 的描述与黑板逐字对应——
+#:
+#: > 其他友方干员**进入自身攻击范围时**立刻获得 1 层护盾并额外获得一次
+#: > **每秒回复 60 点生命值**的增益治疗，持续 **30 秒**（不可叠加），
+#: > 增益治疗对【罗德岛】干员的效果翻倍
+#:
+#: ```
+#: 黑板： buff_duration 30   hp_recovery_per_sec 60   rhodes_bonus 2
+#: ```
+#:
+#: 建模的是"每秒回复 + 持续 + 不可叠加"这三条。**护盾那一层没建模**
+#: （描述只写"1 层护盾"，没给数值），【罗德岛】翻倍也没建模——
+#: 两处都按**偏保守**处理：宁可把治疗算少，不把生存算多。
+REGEN_KEYS = ("hp_recovery_per_sec", "buff_duration")
+
+#: 已被显式建模的天赋一览（给 CLI 与文档用）
+MODELED = {
+    "snow": "积雪：积层 / 踏入伤害 / 每层减速 / 满层冻结 / 技能2 持续伤害",
+    "squad_cost": "编入队伍后额外获得初始部署费用",
+    "regen_aura": "友方进入攻击范围时获得每秒回复生命值的增益治疗",
+}
+
+
+def is_regen_talent(t: Talent) -> bool:
+    return t.has(*REGEN_KEYS)
+
+
+def find_regen(talents) -> Talent | None:
+    for t in talents or ():
+        if is_regen_talent(t):
+            return t
+    return None
+
+
+@dataclass
+class RegenAura:
+    """一个干员光环式发出的"增益治疗"。
+
+    「进入自身攻击范围时」——注意**部署进射程内也算进入**。游戏里干员落地
+    那一刻就是在范围里，天赋照样触发，所以这里在部署当帧就判一次，
+    不等它"走进来"。
+    """
+
+    owner: str
+    hp_per_sec: float
+    duration: float
+    #: 光环干员本体（模拟器填），射程要问它
+    operator: object = None
+    #: 已经吃过这份增益的友方名字——「不可叠加」= 每人只触发一次
+    granted: set = field(default_factory=set)
+    granted_count: int = 0
+
+    def tick(self, dt: float, operators, cells_of, *, strict: bool = False) -> float:
+        """推进一帧，返回本帧发出的治疗总量。
+
+        :param cells_of: `(op) -> set[(x, y)]`，取干员的攻击范围
+        :param strict: 「进入」的严格读法——只算**光环落地之后**才进场的
+            友方。宽松读法（默认）把光环落地当帧已在范围内的友方也算"进入"，
+            因为游戏里干员落地那一刻就是在范围里。
+
+            **这条歧义是实质性的**：SR-EX-8 里凯尔希 72s 才落地，而圣聆初雪
+            35s 就站在范围内了。严格读法下她吃不到这份治疗，本关的最优解
+            会从"四人·余量 79%"退回"三人·余量 38%"。故两种都要跑。
+        """
+        total = 0.0
+        give = self.operator is not None and self.operator.alive
+        aura_cells = cells_of(self.operator) if give else set()
+        # 光环本人在场上的序号：严格读法只认它之后的
+        order = {}
+        for i, o in enumerate(operators):
+            order[o.name] = i
+        owner_idx = order.get(self.owner, -1)
+        for op in operators:
+            if op is self.operator or not op.alive:
+                continue
+            cell = (int(round(op.position[0])), int(round(op.position[1])))
+            eligible = (not strict) or order.get(op.name, -1) > owner_idx
+            if give and eligible and op.name not in self.granted and cell in aura_cells:
+                self.granted.add(op.name)
+                self.granted_count += 1
+                op.regen_left = max(op.regen_left, self.duration)
+                op.regen_per_sec = max(op.regen_per_sec, self.hp_per_sec)
+            if op.regen_left > 0:
+                # 增益已经挂在身上了，就算光环本人倒掉也照样跳完
+                step = min(dt, op.regen_left)
+                got = op.heal(op.regen_per_sec * step)
+                op.regen_left = max(0.0, op.regen_left - dt)
+                if op.regen_left <= 0:
+                    op.regen_per_sec = 0.0
+                total += got
+                if self.operator is not None:
+                    self.operator.healing_done += got
+        return total
+
+
+Cell = tuple[int, int]
+
+
+def is_snow_talent(t: Talent) -> bool:
+    return t.has(*SNOW_KEYS)
+
+
+def find_snow(talents) -> Talent | None:
+    for t in talents or ():
+        if is_snow_talent(t):
+            return t
+    return None
+
+
+def squad_cost_bonus(talents) -> float:
+    """「编入队伍后，额外获得 N 点初始部署费用」这类天赋的数额，没有就是 0。
+
+    只认**单键 `cost`** 的天赋：键多了就可能是"费用降低 / 费用上限"之类，
+    那属于没建模的范畴，宁可返回 0 也不猜。
+
+    时点是**开局**，不是部署时——所以模拟器在 `run()` 起点结算一次，
+    而不是在 `_do_deploy` 里返费。
+    """
+    total = 0.0
+    for t in talents or ():
+        sig = [k for k in t.blackboard if not k.startswith("$")]
+        if sig == ["cost"]:
+            total += t.value("cost")
+    return total
+
+
+@dataclass
+class SnowField:
+    """一个干员铺出来的一片雪。
+
+    :param interval: 每隔多少秒积一层
+    :param max_layers: 单格层数上限（`max_cast_cnt`）
+    :param slow_per_layer: 每层减速比例（取黑板 `move_speed` 的绝对值）
+    :param magic_scale: 踏入伤害倍率（`talent_magic_scale`）
+    :param spread_cap: 技能开启后允许的总雪格数（`max_cast_tile_count`）；
+        为 0 表示不扩散，只在她射程内积。
+    """
+
+    owner: str                        # 干员名，仅用于日志
+    interval: float
+    max_layers: int
+    slow_per_layer: float
+    magic_scale: float
+    spread_cap: int = 0
+    dot_scale: float = 0.0            # 技能2 的每秒伤害倍率
+    #: 铺雪的干员本体（模拟器填），射程与攻击力都要问它
+    operator: object = None
+    timer: float = 0.0
+    #: 格 → 层数
+    layers: dict[Cell, int] = field(default_factory=dict)
+    #: 格 → 第一个踏入的敌人 id；它离开时整格雪消失
+    first_enemy: dict[Cell, int] = field(default_factory=dict)
+    #: 敌人 id → 它上一帧所在的格（用来判"踏入"与"离开"）
+    last_cell: dict[int, Cell] = field(default_factory=dict)
+    spawned: int = 0                  # 累计积出的层数，便于核对
+
+    # ------------------------------------------------------------ 积雪
+
+    @property
+    def max_tiles(self) -> int:
+        return self.spread_cap if self.spread_cap > 0 else 0
+
+    def tick(self, dt: float, ground_cells: list[Cell],
+             neighbour_of=None) -> int:
+        """推进计时，到点就往射程内的地面格加一层。返回本帧新增层数。"""
+        if self.interval <= 0:
+            return 0
+        self.timer += dt
+        added = 0
+        while self.timer >= self.interval:
+            self.timer -= self.interval
+            added += self._cast(ground_cells, neighbour_of)
+        return added
+
+    def _cast(self, ground_cells: list[Cell], neighbour_of) -> int:
+        added = 0
+        for cell in ground_cells:
+            added += self._add(cell)
+        # 射程内都满层了才向外扩散（描述：超过 5 层时向周围扩散一层）
+        if self.spread_cap > 0 and neighbour_of is not None:
+            if all(self.layers.get(c, 0) >= self.max_layers for c in ground_cells):
+                for cell in self._spread_frontier(neighbour_of):
+                    if len(self.layers) >= self.spread_cap:
+                        break
+                    added += self._add(cell)
+        return added
+
+    def _spread_frontier(self, neighbour_of) -> list[Cell]:
+        """已有雪格相邻的、还没雪的可走格，按距离由近及远。"""
+        seen = set(self.layers)
+        frontier: list[Cell] = []
+        for cell in list(self.layers):
+            for nxt in neighbour_of(cell):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    frontier.append(nxt)
+        return frontier
+
+    def _add(self, cell: Cell) -> int:
+        cur = self.layers.get(cell, 0)
+        if cur >= self.max_layers:
+            return 0
+        if cell not in self.layers and self.spread_cap > 0 and len(self.layers) >= self.spread_cap:
+            return 0
+        self.layers[cell] = cur + 1
+        self.spawned += 1
+        return 1
+
+    # ------------------------------------------------------------ 敌人
+
+    def slow_at(self, cell: Cell) -> float:
+        """这一格对移速的乘数（1.0 = 不减速）。"""
+        n = self.layers.get(cell, 0)
+        if n <= 0:
+            return 1.0
+        return max(0.05, 1.0 - self.slow_per_layer * n)
+
+    def enter(self, enemy_id: int, cell: Cell, atk: float,
+              damage_fn) -> float:
+        """敌人踏入某格：判"踏入"、记录首敌、结算踏入伤害。
+
+        :param damage_fn: `(raw_amount) -> 实际伤害`，由模拟器提供（要过法抗）。
+        :return: 本次造成的伤害
+        """
+        prev = self.last_cell.get(enemy_id)
+        self.last_cell[enemy_id] = cell
+        if prev == cell:
+            return 0.0
+        # 离开旧格：如果自己是那格的"第一个敌人"，整格雪消失
+        if prev is not None and self.first_enemy.get(prev) == enemy_id:
+            self.layers.pop(prev, None)
+            self.first_enemy.pop(prev, None)
+        if self.layers.get(cell, 0) <= 0:
+            return 0.0
+        self.first_enemy.setdefault(cell, enemy_id)
+        return damage_fn(self.magic_scale * atk)
+
+    def leave_all(self, enemy_id: int) -> None:
+        """敌人离场（死亡/漏怪）时调用：它踩过的格按首敌规则清雪。"""
+        prev = self.last_cell.pop(enemy_id, None)
+        if prev is not None and self.first_enemy.get(prev) == enemy_id:
+            self.layers.pop(prev, None)
+            self.first_enemy.pop(prev, None)
+
+    def draw(self, width: int, height: int) -> str:
+        """把雪画出来（层数用数字，空格表示无雪）。y 向下为正，顺序打印即所见。"""
+        lines = []
+        for y in range(height):
+            lines.append(" ".join(str(self.layers.get((x, y), 0)) if (x, y) in self.layers
+                                  else "." for x in range(width)))
+        return "\n".join(lines)
