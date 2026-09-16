@@ -25,7 +25,7 @@ zonai.skland.com 的接口一律要 `cred`，无 cred 时统一返回
 `sign_headers` 的键序固定为 platform / timestamp / dId / vName，
 `sign` 与这三项一起作为请求头返回。**键序或分隔符错了签名就错。**
 
-凭据只落盘在 `~/.skland/cred.json`（默认 `D:\\home\\DSH\\.skland\\`），
+凭据只落盘在 `~/.skland/cred.json`（主目录下，`SKLAND_HOME` 可换），
 不进仓库、不打印明文。
 
 用法
