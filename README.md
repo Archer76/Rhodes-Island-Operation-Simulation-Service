@@ -10,7 +10,7 @@
 
 编号得自游戏内的 PRTS 系统：Primitive Rhodes Island Terminal Service。它曾为一次搜救自行演算，留下 167 份过程记录与 3,711 个执行节点，而其中仅有两个结果能导向成功。本服务做的是同一件事——将那类「可能导向胜利的计算」做成可复现的程序。区别只在演算对象：一次是博士的搜救，一次是你自己的作战。
 
-> 注：本仓库里出现的「PRTS」有两种所指——**游戏内的 PRTS 系统**（本行及以上），与**取数用的 prts.wiki 资料站**（第四节起）。两者同名不同物，读到时请按上下文分辨。
+> 约定：本仓库里 **PRTS** 一律指游戏内的终端系统；取数用的资料站一律写作 **prts.wiki**。两者同名不同物，按写法分辨即可。
 
 数据有两条来源，分得很清楚：**文字资料查 prts.wiki 资料站，机器要算的数值查 gamedata**。
 
@@ -110,22 +110,22 @@ python tools/export_srx8.py
 | 模组 | `battle_equip_table[].phases[].attributeBlackboard` | 取该等级那一份**总加成**，不是增量 |
 
 - 数据源：`excel/` 三张表，**只有 GitHub 镜像提供**（ark-nights 不带 `excel/`，一律 404）
-- 六个端点值与 PRTS 属性模板逐项核对，**全部一致**
+- 六个端点值与 prts.wiki 属性模板逐项核对，**全部一致**
 - 产出：`OperatorCalculator` / `OperatorStats`
 
 ### 阶段 2 · 敌人数据 ✅ 已完成（改走 gamedata）
 
 - 敌人图鉴：中文名、编号、描述、伤害类型、免疫标签
 - 敌人数值：HP/ATK/DEF/法抗、重量等级、移动速度、攻击间隔、漏怪扣血量、多档位
-- **决定性发现（第一次）**：PRTS 的 Cargo 里没有敌人表、SMW 也不覆盖敌人属性，
+- **决定性发现（第一次）**：prts.wiki 的 Cargo 里没有敌人表、SMW 也不覆盖敌人属性，
   所以这一块先整体改走了 gamedata（`enemy_database.json`，2151 个敌人分档数值）。
-- **决定性发现（第二次，2026-09-16）**：PRTS 的**敌人页本身**其实带完整结构化数据——
+- **决定性发现（第二次，2026-09-16）**：prts.wiki 的**敌人页本身**其实带完整结构化数据——
   `{{敌人信息/common2}}` + 每档一个 `{{敌人信息/levelcontent}}`，图鉴文本、
   逐档数值、抗性、敌方技能、天赋黑板（P3R 相性 / 倒地阈值）全在一处。
   于是又建了一个**独立的**敌人库（见"两个本地库为什么分成两个文件"）。
   两条路并存：`EnemyLibrary` 走 gamedata 供模拟器实时取数，
-  `data/enemydb.sqlite` 走 PRTS 供全量 SQL 查询；9 个锚点已逐项对过账。
-- 产出：`EnemyLibrary` / `EnemyStats`（gamedata）+ `data/enemydb.sqlite`（PRTS）
+  `data/enemydb.sqlite` 走 prts.wiki 供全量 SQL 查询；9 个锚点已逐项对过账。
+- 产出：`EnemyLibrary` / `EnemyStats`（gamedata）+ `data/enemydb.sqlite`（prts.wiki）
 
 ### 阶段 3 · 关卡数据 ✅ 已完成（改走 gamedata）
 
@@ -140,7 +140,7 @@ python tools/export_srx8.py
 - 产出：`Stage` / `StageMap` / `Route` / `EnemySpawn`，报告见
   [docs/stage-1-7.md](docs/stage-1-7.md)（主线教学图）与
   [docs/stage-sr-ex-8.md](docs/stage-sr-ex-8.md)（活动高难图，带传送机制）
-- 原计划「用 PRTS 的关卡页面」被证伪：那种页面上只有文字攻略，
+- 原计划「用 prts.wiki 的关卡页面」被证伪：那种页面上只有文字攻略，
   真正的地图网格与路线只存在于游戏解包数据里
 
 ### 阶段 4 · 战斗模型 ✅ 完成
@@ -360,14 +360,14 @@ python -m ak_tactic cache --clear-gamedata               # 清 gamedata 缓存�
 |---|---|---|
 | 文件 | `data/akdb.sqlite` | `data/enemydb.sqlite` |
 | 来源 | 游戏本体 gamedata 的 `excel/` | prts.wiki 的「分类:敌人」 |
-| 主键 | `char_id` | PRTS 页名（`“死志的凝结”`） |
+| 主键 | `char_id` | prts.wiki 页名（`“死志的凝结”`） |
 | 数值口径 | 只存**关键帧原文**，面板另算 | 存**算好继承的逐档数值** |
 | 建库 | `db build`（不联网） | `enemydb build`（要联网，有 7 天缓存） |
 | 自检 | `tools/check_db.py`（64 项） | `tools/check_enemy_db.py`（62 项） |
 
 两者**不共用文件、不共用结构版本、不互相引用**。最要紧的理由不是"来源不同"，
 而是**数值口径正好相反**：干员那边只搬原文、插值与潜能留在计算层（两处各算
-一遍迟早对不上）；敌人这边没得选——PRTS 页面里没有"显式 / 继承"的标志位，
+一遍迟早对不上）；敌人这边没得选——prts.wiki 页面里没有"显式 / 继承"的标志位，
 只有"写了 / 没写"，所以继承只能在建库时算好。
 
 ### 地块字典（`tile` 表）——本库唯一的非 gamedata 表
@@ -499,7 +499,7 @@ ak-tactic/
 │  └─ enemy_field_audit.py   敌人字段总账（非 0 退出即有字段没入库）
 ├─ docs/                     各阶段实测报告（关卡、敌人、公式、库结构）
 └─ data/
-   ├─ cache/prts/            PRTS HTTP 响应缓存（7 天）
+   ├─ cache/prts/            prts.wiki HTTP 响应缓存（7 天）
    ├─ ranges.json            攻击范围索引
    ├─ gamedata/              gamedata 原始文件缓存（约 17 MB，可随时删）
    ├─ akdb.sqlite            干员库（纯派生物，db build 约 3.4s 重建）
@@ -510,7 +510,7 @@ ak-tactic/
 
 ---
 
-## 四、PRTS 数据源实测结论
+## 四、prts.wiki 数据源实测结论
 
 这些是踩出来的，记下来免得下次再踩。
 
@@ -586,7 +586,7 @@ chara        460 行
 
 ## 五、gamedata 数据源实测结论
 
-关卡的地图网格、出怪路线、敌人的数值，**PRTS 上都没有**——它是个文字 Wiki，
+关卡的地图网格、出怪路线、敌人的数值，**prts.wiki 上都没有**——它是个文字 Wiki，
 关卡页面写的是攻略心得，不是可解析的地图。这些东西只存在于游戏解包里。
 
 ### 两个镜像，默认走 ark-nights
@@ -691,8 +691,8 @@ python -m ak_tactic stage SR-EX-8             # 关卡号或 levelId 都收
 `enemy_1029_shdsbr`（1-7 里那只防御 250 的盾）在 `enemy_handbook_table.json`
 里叫**机动盾兵**，在 `enemy_database.json` 里却叫**持盾刀兵**。
 
-查证结果：PRTS 上「持盾刀兵」是一个 `#redirect [[机动盾兵]]` 的空页面，
-而 PRTS 记载的机动盾兵攻 240 / 防 250 与本数据分毫不差 —— 所以
+查证结果：prts.wiki 上「持盾刀兵」是一个 `#redirect [[机动盾兵]]` 的空页面，
+而 prts.wiki 记载的机动盾兵攻 240 / 防 250 与本数据分毫不差 —— 所以
 **图鉴表的是新名，战斗数据里留着旧名**。
 
 代码以图鉴名为准，旧名落到 `EnemyStats.alias`，不丢。
@@ -813,7 +813,7 @@ python -m ak_tactic stage SR-EX-8             # 关卡号或 levelId 都收
    `trust=100` 即满信赖 200%；`tools/roster.py` 的森空岛 `favorPercent/2` 是同一条换算。
 
 顺带一提，`character_table` 里的稀有度是 `"TIER_5"` 这种字符串，
-而 PRTS 的 SMW 那条路给的是 0 起算的整数（0=一星）。两套别混。
+而 prts.wiki 的 SMW 那条路给的是 0 起算的整数（0=一星）。两套别混。
 
 ### 模组：只有专属模组带属性
 
@@ -839,7 +839,7 @@ python -m ak_tactic stage SR-EX-8             # 关卡号或 levelId 都收
 
 ### 验证
 
-六个端点值与 PRTS 的 `{{属性}}` 模板逐项核对，**全部一致**：
+六个端点值与 prts.wiki 的 `{{属性}}` 模板逐项核对，**全部一致**：
 
 | 阶段 | 等级 | 生命 | 攻击 | 防御 | 法抗 |
 | --- | --- | --- | --- | --- | --- |
@@ -850,7 +850,7 @@ python -m ak_tactic stage SR-EX-8             # 关卡号或 levelId 都收
 | 精英 2 | 1 | 1198 | 514 | 110 | 20 |
 | 精英 2 | 80 | 1480 | 612 | 121 | 20 |
 
-潜能也与 PRTS 一致：潜 2 生命 +200、潜 3 费用 −1、潜 4 攻击 +30、潜 5 费用 −1、
+潜能也与 prts.wiki 一致：潜 2 生命 +200、潜 3 费用 −1、潜 4 攻击 +30、潜 5 费用 −1、
 潜 6 天赋增强。`potentialRanks` 只有 5 项，正对应潜能 2–6。
 
 ### 取整：唯一没有被证实的假设
@@ -858,7 +858,7 @@ python -m ak_tactic stage SR-EX-8             # 关卡号或 levelId 都收
 关键帧是精确值，但插值出来的中间值几乎都是小数，而面板显示整数。
 **取整方式（向下取整还是四舍五入）没有公开资料**，三条路都试过：
 
-- **PRTS** —— 属性模板只给端点值，它自己也是靠插值；`Template:` / `Module:`
+- **prts.wiki** —— 属性模板只给端点值，它自己也是靠插值；`Template:` / `Module:`
   命名空间被 WAF **一律 403**（不是限速，是持续的），拿不到 Scribunto 逻辑。
 - **`arknights-toolbox`（★694）** —— `Level.vue` 是**经验 / 龙门币**计算器
   （`characterExp`、LS-5、CE-6），`Math.ceil` 全用在经验书上，不碰属性插值。
@@ -910,7 +910,7 @@ calc.calibrate("char_002_amiya", elite=0, level=3, attr="atk", observed=280)
 4. **传送与等待还没并进时间轴**。SR-EX-8 的路线里有 `WAIT_FOR_SECONDS`（最长一条等 61 秒）和 `tile_telin → tile_telout` 的传送，目前只解析出来、没有并入出怪时刻，所以算不出「某只敌人几点出现在中央那个格子」。
 5. **`tile_replace_wall` / `tile_replace_road` 的触发条件未验证**。SR-EX-8 的 13 个可部署格里有 12 个标着 `tile_replace_*`——它们当前可部署，但会被关卡机制改写，改写后是否还站得住人需要对着实机确认。
 6. **关卡里还有没解析的字段**：`predefines`（1-7 有预置 token，位置在 `(3,3)` 朝上）、`runes`（四星限定词条）、`levelscripts`（关卡脚本）。目前只取了地图、路线、波次、基本参数。
-7. **干员数据只覆盖 PRTS 上有的**。新干员上线到 PRTS 更新之间有窗口期。
+7. **干员数据只覆盖 prts.wiki 上有的**。新干员上线到 prts.wiki 更新之间有窗口期。
 8. **还没做等级经验表**。`arknights-toolbox-data` 的 `assets/data/level.json` 里有完整的
    `characterExp` / `characterUpgradeCost`（按稀有度与精英段逐级列出经验、龙门币消耗），
    要算「从 1 级练到 90 级要多少」时取它就行，但本项目目前只关心战斗数值，没有接入。
@@ -919,8 +919,8 @@ calc.calibrate("char_002_amiya", elite=0, level=3, attr="atk", observed=280)
 10. **属性计算固定走 GitHub 镜像**，用不了 ark-nights 那个更精简的首选源——`excel/`
     三张表只有 GitHub 有。所以一旦 GitHub 直链不通，`stats` 会整体不可用，
     而 `stage` / `enemy` 不受影响。
-11. **PRTS 缓存是朴素的 7 天 TTL**，没有做条件请求（ETag / Last-Modified）；gamedata 缓存则干脆不过期（它是版本化快照，要更新就删）。关卡索引有 7 天 TTL——它跟着游戏版本走，但比游戏本体更新得晚。
-12. **PRTS 限速 1.2 秒/请求**意味着全库冷启动约 10 分钟（461 个干员）。批量抓取应该放在夜间一次性做完、落到本地仓库，而不是每次现抓。gamedata 没这个问题——关卡按需取，索引一次扒完能用一周。
+11. **prts.wiki 缓存是朴素的 7 天 TTL**，没有做条件请求（ETag / Last-Modified）；gamedata 缓存则干脆不过期（它是版本化快照，要更新就删）。关卡索引有 7 天 TTL——它跟着游戏版本走，但比游戏本体更新得晚。
+12. **prts.wiki 限速 1.2 秒/请求**意味着全库冷启动约 10 分钟（461 个干员）。批量抓取应该放在夜间一次性做完、落到本地仓库，而不是每次现抓。gamedata 没这个问题——关卡按需取，索引一次扒完能用一周。
 13. **三星判定是一条假设，不是从数据里读出来的**。`verify.stars_of()` 现在按
     「不漏怪 3 星、漏 1 只 2 星、漏 ≥2 只 1 星、打输 0 星」判，
     **没有用实机验证过这条规则**。所以 `Verdict` 把 `won` / `life` / `max_life` /
@@ -946,3 +946,13 @@ calc.calibrate("char_002_amiya", elite=0, level=3, attr="atk", observed=280)
 18. **ETA 的「预估到终点」是无人拦截前提下的理论值**。它是摆位判断的依据
     （敌人几点会压到防线），不是实际漏怪——实际漏怪看「漏怪」行。两者同源，
     自检里逐只对拍到一帧以内。
+
+---
+
+## 许可
+
+**MIT License**，全文见 [LICENSE](LICENSE)。
+
+干员数值与关卡数据取自游戏本体 gamedata，敌人资料取自 prts.wiki，地块字典取自 theresa.wiki
+——版权归各自权利人所有。两个数据库文件不入库（克隆后自行 `db build` 重建），仓库里不含
+游戏数据副本。本项目与鹰角网络无隶属关系。

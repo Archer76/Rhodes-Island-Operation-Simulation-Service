@@ -13,12 +13,12 @@
 | --- | --- | --- |
 | 【确证·原始数据】 | 直接从解包 JSON 读出的字段 | `levels/enemydata/enemy_database.json` |
 | 【确证·图鉴】 | 游戏内图鉴文本（`abilityList` / `description`） | `excel/enemy_handbook_table.json` |
-| 【确证·PRTS】 | PRTS 敌人页「天赋&能力 / 技能」段落，比图鉴更细（含数值、模式、阈值） | prts.wiki 敌人页 wikitext |
-| 【确证·PRTS机制】 | PRTS「特殊机制」「全场总攻击（装置）」条目 | prts.wiki 词条 |
+| 【确证·prts.wiki】 | prts.wiki 敌人页「天赋&能力 / 技能」段落，比图鉴更细（含数值、模式、阈值） | prts.wiki 敌人页 wikitext |
+| 【确证·prts.wiki机制】 | prts.wiki「特殊机制」「全场总攻击（装置）」条目 | prts.wiki 词条 |
 | 【推断】 | 我根据 prefabKey、blackboard 键名与上述文本做的对应关系推断 | — |
 
 取数脚本一律走项目自有取数层（`GameDataSource` / `EnemyLibrary`），未自写 HTTP。
-PRTS 侧用 `action=query&prop=revisions&rvslots=main`（`?action=raw` 在本 wiki 不可用）。
+prts.wiki 侧用 `action=query&prop=revisions&rvslots=main`（`?action=raw` 在本 wiki 不可用）。
 
 ### 0.1 一个必须先讲清的数据版本事实
 
@@ -42,13 +42,13 @@ PRTS 侧用 `action=query&prop=revisions&rvslots=main`（`?action=raw` 在本 wi
 都是典型的 prefabKey 命名风格。**这一点是推断，不是确证。**
 
 **技能侧不受影响**：`enemyData.skills[]` 每条都有 `prefabKey`、`priority`、`cooldown`、
-`initCooldown`、`spCost`、`blackboard`，与 PRTS 的技能表一一对得上。
+`initCooldown`、`spCost`、`blackboard`，与 prts.wiki 的技能表一一对得上。
 
 ---
 
 ## 1. 关卡级机制（这 8 个敌人全部依赖它，必须先懂）
 
-### 1.1 伤害相性（P3R）/ 击破值 / 倒地 【确证·PRTS机制】
+### 1.1 伤害相性（P3R）/ 击破值 / 倒地 【确证·prts.wiki机制】
 
 > 作为对《女神异闻录３ Reload》伤害相性机制的模拟，所有于月行水上登场的敌人均拥有
 > 对于**物理 / 法术 / 元素**的**伤害相性**（弱点 / 正常 / 免疫 / 反射）及**击破值计量**。
@@ -91,7 +91,7 @@ PRTS 侧用 `action=query&prop=revisions&rvslots=main`（`?action=raw` 在本 wi
 `3`（反射）在本关 8 种敌人本体上未出现 —— BOSS 的反射是「重生后由免疫转化」，
 写在天赋文本里而不是黑板上。**故 3=反射 是推断。**
 
-### 1.3 全场总攻击（`trap_335_totalattack`）—— 关卡唯一的全局装置 【确证·PRTS机制 + 原始数据】
+### 1.3 全场总攻击（`trap_335_totalattack`）—— 关卡唯一的全局装置 【确证·prts.wiki机制 + 原始数据】
 
 SR-EX-8 的 `predefines.tokenInsts` 里有且仅有一个装置，部署在 (0,0) 朝上：
 
@@ -109,7 +109,7 @@ SR-EX-8 的 `predefines.tokenInsts` 里有且仅有一个装置，部署在 (0,0
 | `attack@all_atk_scale` | 1.0 |
 
 装置名「全场总攻击」，我方阵营，生命 100，攻 0 防 0 抗 0，阻挡数 0，占用部署数 0，攻击范围 0-1，
-阻挡半径 0.7071，技力恢复 1.0/s。PRTS 装置页给出的机制：
+阻挡半径 0.7071，技力恢复 1.0/s。prts.wiki 装置页给出的机制：
 
 > - 无法被玩家选择查看详细信息。
 > - 持有**无敌、不可阻挡、孤立、禁疗、沉睡免疫、闭锁免疫**。
@@ -159,7 +159,7 @@ SR-EX-8 的 `predefines.tokenInsts` 里有且仅有一个装置，部署在 (0,0
 | `enemy_10191_pppgst` | 0 |
 | `enemy_10192_ppprpr` | 0 |
 
-PRTS 的「级别 1」表给出的 180000 / 750 / 800 与 `Value[1]` 完全一致，
+prts.wiki 的「级别 1」表给出的 180000 / 750 / 800 与 `Value[1]` 完全一致，
 且其【未来的期盼】倍率写作 350%（级别 0 是 250%），正对应
 `Value[1].Mode_A.attack@power_atk_scale = 3.5`（级别 0 是 2.5）。
 **BOSS 在本关不是 15 万血，是 18 万血。**（`docs/stage-sr-ex-8.md` 记的 15 万应按此更正。）
@@ -234,11 +234,11 @@ lib.get("enemy_1589_pppdth", 1).immunities -> {}          # ← 而关卡用的�
 
 **机制**
 
-- **仅进行阻挡攻击** 【确证·PRTS】。它只打挡住自己的单位，不会顺手打旁边的我方单位。
-- **伤害相性（P3R）**：物理弱点、法术弱点、元素弱点 【确证·图鉴/PRTS】
+- **仅进行阻挡攻击** 【确证·prts.wiki】。它只打挡住自己的单位，不会顺手打旁边的我方单位。
+- **伤害相性（P3R）**：物理弱点、法术弱点、元素弱点 【确证·图鉴/prts.wiki】
   → 黑板 `0/0/0` 完全对应。
-- **【倒地】阈值 2000 / 持续 15 秒** 【确证·PRTS】→ `weak_max 2000`、`fall_duration 15`。
-- **元素弱点**意味着：任意元素损伤爆发 → 立即倒地（不看伤害量）【确证·PRTS机制】。
+- **【倒地】阈值 2000 / 持续 15 秒** 【确证·prts.wiki】→ `weak_max 2000`、`fall_duration 15`。
+- **元素弱点**意味着：任意元素损伤爆发 → 立即倒地（不看伤害量）【确证·prts.wiki机制】。
 
 **关注项**：无沉默、无眩晕（除倒地自带）、无召唤、无复活、无护盾、无反伤、无远程、无光环、无死亡效果、
 无变身、无成长、无对空限制。**唯一机制就是 P3R + 倒地**，且它是全关最容易被点燃的表——2000 阈值、15 秒倒地，12 只。
@@ -277,9 +277,9 @@ lib.get("enemy_1589_pppdth", 1).immunities -> {}          # ← 而关卡用的�
 
 **机制**
 
-- **仅进行阻挡攻击** 【确证·PRTS】。
-- **伤害相性**：物理正常、法术弱点、元素弱点 【确证·图鉴/PRTS】。
-- **【倒地】阈值 2000 / 持续 15 秒** 【确证·PRTS】。
+- **仅进行阻挡攻击** 【确证·prts.wiki】。
+- **伤害相性**：物理正常、法术弱点、元素弱点 【确证·图鉴/prts.wiki】。
+- **【倒地】阈值 2000 / 持续 15 秒** 【确证·prts.wiki】。
 - 名字叫「沉默收音机」但**它并不施加沉默** —— 描述只讲它自己被源石技艺扰乱。
   【确证·图鉴】：`silenceImmune = false`，天赋里也没有任何沉默相关键。
 
@@ -320,7 +320,7 @@ lib.get("enemy_1589_pppdth", 1).immunities -> {}          # ← 而关卡用的�
 
 **技能**：`skills = null` —— **没有技能**。
 
-**机制**（全部【确证·PRTS】）
+**机制**（全部【确证·prts.wiki】）
 
 - **近地悬浮**（`ba.float`）：一个独立的悬浮状态。
 - **伤害相性**：物理弱点、法术正常、元素正常。
@@ -388,7 +388,7 @@ blackboard：
 | `attack_speed` | 1.0 |
 | `self_damage` | 100.0 |
 
-**机制**（【确证·PRTS】，技能名在 PRTS 上写作「炸膛」）
+**机制**（【确证·prts.wiki】，技能名在 prts.wiki 上写作「炸膛」）
 
 - **仅进行阻挡攻击**；**无法获得【炸膛增益】**；**索敌不受阻挡影响**。
 - 天赋「伤害相性」：物理正常、法术正常、**元素弱点**；【倒地】阈值 4000 / 持续 10 秒。
@@ -453,7 +453,7 @@ blackboard：
 
 **技能**：`skills = null` —— **没有技能**。
 
-**机制**（全部【确证·PRTS】）
+**机制**（全部【确证·prts.wiki】）
 
 - **普通攻击为法术伤害**，且是**溅射**：
   > 对**主目标**造成攻击力 100% 的**近战途径法术伤害**，
@@ -553,7 +553,7 @@ blackboard：
 | `hp_ratio` | 0.99 |
 | `disarmed_duration` | 7.0 |
 
-**机制**（全部【确证·PRTS】，技能名 PRTS 写作【最后的奖赏】）
+**机制**（全部【确证·prts.wiki】，技能名 prts.wiki 写作【最后的奖赏】）
 
 天赋：
 
@@ -578,7 +578,7 @@ blackboard：
 **重生形态**
 - 持有**无敌、不可阻挡、失衡免疫、自缚**
 - **10 秒内每秒回复 10% 生命值**（生命复原）
-- 攻击间隔缩短（PRTS 标注「存疑」），**普通攻击变为对全场我方单位造成攻击力 50% 的法术伤害**（不叠加【死志】，至多 6 次）
+- 攻击间隔缩短（prts.wiki 标注「存疑」），**普通攻击变为对全场我方单位造成攻击力 50% 的法术伤害**（不叠加【死志】，至多 6 次）
 - 重生结束后，将技能【最后的奖赏】的剩余冷却时间**设为 25 秒**，随后切换到第一或第二形态
 - 重生期间的 6 次全场攻击对应 `Reborn.attack@attack_trigger_cnt 6.0`、`Reborn.attack@atk_scale 0.5`、`Reborn.reborn_duration 10.0`
 
@@ -599,7 +599,7 @@ blackboard：
 **攻击速度提升（第一形态 +50）**、**移动速度提升（第二形态 ×2）**。
 无召唤、无死亡效果。
 
-**一个已知机制 BUG（PRTS 标注）**：若在【倒地】期间进入重生，
+**一个已知机制 BUG（prts.wiki 标注）**：若在【倒地】期间进入重生，
 可能因「全场总攻击」等原因在短时间内连续切换两三次形态再进入重生，
 导致最终重生后进入的形态**不确定**。
 
@@ -636,7 +636,7 @@ blackboard：
 
 **技能**：`skills = null` —— **没有技能**。
 
-**机制**（全部【确证·PRTS】）
+**机制**（全部【确证·prts.wiki】）
 
 - **不可阻挡**（`不可阻挡` 异常效果），**不进行普通攻击**。
 - **死亡时给予 50 点部署费用**（`Talent1.cost = 50`）。
@@ -684,7 +684,7 @@ blackboard：
 
 **技能**：`skills = null` —— **没有技能**。
 
-**机制**（全部【确证·PRTS】）
+**机制**（全部【确证·prts.wiki】）
 
 - **飞行单位**（`motion = FLY`，行动方式＝飞行）。它是 SR-EX-8 里**唯一走 FLY 路线**的敌人
   （route 38，也是全关唯一不经过传送口的路线）。
@@ -692,7 +692,7 @@ blackboard：
 - **不会攻击飞行单位**。
 - **伤害相性：物理正常、法术正常、元素正常** —— 也就是**没有弱点**。
 - 【倒地】阈值 4000 / 持续 10 秒，**但由于不存在弱点，该敌人将无法【倒地】**，
-  从而**可阻止「全场总攻击」的发动**（PRTS 明确写了这一句）。
+  从而**可阻止「全场总攻击」的发动**（prts.wiki 明确写了这一句）。
 
 **关注项**：**飞行（无人机路线，只此一条）**、**远程 1.5（打 1500 攻 / 2.0 秒间隔，物理）**、
 **高攻高防（1500/1000，法抗 40）**、**无弱点 → 永不倒地 → 卡死全场总攻击**、**静态刚体**。
@@ -826,5 +826,5 @@ lib.describe("enemy_10192_ppprpr")          # 单行人类可读摘要
 - 原始 JSON 的值一律包一层 `{m_defined, m_value}`，`m_defined = false` 表示沿用低优先级档，需逐档合并。
 - `lifePointReduce` / `rangeRadius` / `levelType` 挂在 `enemyData` 顶层，不在 `attributes` 下。
 - 本版本 `enemyData` **没有 `talents` 字段**，天赋全部拍平在 `talentBlackboard`。
-- PRTS 侧取文本：`https://prts.wiki/api.php?action=query&prop=revisions&rvslots=main&rvprop=content&format=json&titles=<敌人名>`
+- prts.wiki 侧取文本：`https://prts.wiki/api.php?action=query&prop=revisions&rvslots=main&rvprop=content&format=json&titles=<敌人名>`
   （`?action=raw` 不可用；本机 `curl` 直连一律 403，用 `web_fetch` 可通）。
