@@ -952,8 +952,13 @@ calc.calibrate("char_002_amiya", elite=0, level=3, attr="atk", observed=280)
 
 ## 许可
 
-**MIT License**，全文见 [LICENSE](LICENSE)。
+**MIT License**，全文见 [LICENSE](LICENSE)。第三方来源、许可与合规说明见
+[THIRD-PARTY.md](THIRD-PARTY.md)。
 
 干员数值与关卡数据取自游戏本体 gamedata，敌人资料取自 prts.wiki，地块字典取自 theresa.wiki
-——版权归各自权利人所有。两个数据库文件不入库（克隆后自行 `db build` 重建），仓库里不含
-游戏数据副本。本项目与鹰角网络无隶属关系。
+——版权归各自权利人所有。两个数据库文件不入库（克隆后自行 `db build` 重建），**仓库里不含
+任何游戏数据副本**。本项目与鹰角网络无隶属关系、未获其授权，也不提供游戏资源下载。
+
+⚠️ **代码与数据是两件事**：本仓库的**代码**是 MIT，允许商用；但由 prts.wiki、theresa.wiki
+派生的**数据**随其 **CC BY-NC-SA 4.0**（署名—非商业—相同方式共享）走，不在 MIT 覆盖范围内。
+要再分发建好的库，请先读 [THIRD-PARTY.md](THIRD-PARTY.md) 第六节的自查清单。
