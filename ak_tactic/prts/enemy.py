@@ -458,6 +458,13 @@ class PrtsEnemy:
 
     @property
     def description(self) -> str | None:
+        """图鉴「描述」——**风味文本，按裁定不入库**。
+
+        解析器照旧读出来（它确实是页面的一部分），但 `enemy_build` 不写进
+        `enemy` 表，`enemy_field_audit` 把它列在 `_NOT_BATTLE` 里。
+        逐档的那个 `描述`（`EnemyLevel.description`）是另一回事——里面混着
+        能力正文，照旧入库，别一起删了。
+        """
         return _text(self.common.get("描述"))
 
     @property

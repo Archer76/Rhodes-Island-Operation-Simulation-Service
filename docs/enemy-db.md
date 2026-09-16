@@ -81,7 +81,7 @@ python -m ak_tactic enemydb info                 # 版本戳与行数
 
 `page`（**主键**）· `prts_id`（模板 `id`）· `name` · `display_name` · `index_code`
 （图鉴编号如 `B1` / `SD13`）· `grade`（普通 / 精英 / 领袖）· `category`（种类）·
-`damage_type` · `attack_way` · `move_way` · `camp` · `description` · `ability` ·
+`damage_type` · `attack_way` · `move_way` · `camp` · `ability` ·
 `ability_fixed` · `ability_errata` · `debut_event` · `is_irregular` ·
 `has_handbook` · `level_count` · `raw_wikitext`
 
@@ -91,6 +91,16 @@ python -m ak_tactic enemydb info                 # 版本戳与行数
 **游戏内原文**（模板 `能力`），后者是**站方勘误后**的读法（模板 `能力修正`，
 展开 `修正lite` 标记）。114 页有勘误，`ability_errata` 留原始标记以便追溯。
 详见第四节末尾。
+
+**图鉴「描述」不入库**（2026-09-17 裁定）：模板上有 `描述` 一栏，是纯剧情文案
+（1710 页，**无一含机制模板**），对推演没有任何用处，故整列删除。
+`enemy_field_audit` 把它列进 `_NOT_BATTLE`——出现在模板上不再算"没入库的字段"。
+
+> ⚠️ **别把这一条推广到 `enemy_level.description`。** 逐档的那个是另一回事：
+> 它里面**混着能力正文**（如「未被阻挡时受到的物理或法术伤害减少50%」只写在
+> 那里，该页图鉴级 `ability` 反而是空的），而且是公式语料 `desc` 的来源（2025 条）。
+> 整列删掉会静默丢掉一批只此一处的机制。`check_enemy_db.py` 的
+> 「风味文本不入库」节用一正一反两条守卫钉住了这件事。
 
 ### `enemy_level`（逐档，1 行/档）
 

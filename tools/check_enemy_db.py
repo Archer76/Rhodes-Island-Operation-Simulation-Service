@@ -328,6 +328,20 @@ def check_field_audit(conn: sqlite3.Connection) -> None:
         conn, "SELECT COUNT(*) n FROM enemy_level "
               "WHERE description_fixed IS NOT NULL") == 6)
 
+    # -- 风味文本不入库（2026-09-17 裁定）------------------------------------
+    # 图鉴级的「描述」是纯剧情文案（1710 行，**无一含机制模板**），整列删掉。
+    # **逐档的那个必须留着**：它里面混着能力正文（「未被阻挡时受到的物理或法术
+    # 伤害减少50%」只写在那里），且是公式语料 `desc` 的来源（check_enemy_formula
+    # 另有逐来源条数把它钉死）。一正一反两条守卫，防的都是"一起删了"。
+    e_cols = {r[1] for r in conn.execute("PRAGMA table_info(enemy)")}
+    check("enemy 表不存图鉴风味文本（无 description 列）",
+          "description" not in e_cols, f"实得列 {sorted(e_cols)}")
+    lv_desc = _count(conn, "SELECT COUNT(*) n FROM enemy_level "
+                           "WHERE description IS NOT NULL "
+                           "AND TRIM(description) <> ''")
+    check("enemy_level 仍存逐档描述（混着能力正文，删不得）",
+          lv_desc > 2000, f"实得 {lv_desc} 行非空")
+
     # -- 展开勘误时不能多吃花括号 -------------------------------------------
     # `iter_templates` 曾把 `end` 给成闭合 `}}` 的**第一个字符**下标，
     # 而第三项 `raw` 却含完整的 `}}`——两者不自洽。照 `last = end` 续接的

@@ -69,13 +69,13 @@ def _insert(conn: sqlite3.Connection, e: PrtsEnemy) -> None:
     conn.execute(
         """INSERT OR REPLACE INTO enemy
            (page, prts_id, name, display_name, index_code, grade, category,
-            damage_type, attack_way, move_way, camp, description, ability,
+            damage_type, attack_way, move_way, camp, ability,
             ability_fixed, ability_errata, debut_event, is_irregular,
             has_handbook, level_count, raw_wikitext)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (e.page, e.prts_id, e.name, e.display_name, e.index_code, e.grade,
          e.category, e.damage_type, e.attack_way, e.move_way, e.camp,
-         e.description, e.ability, e.ability_fixed, e.ability_errata_raw,
+         e.ability, e.ability_fixed, e.ability_errata_raw,
          e.debut_event,
          int(e.is_irregular), int(e.has_handbook), len(e.levels),
          e.raw_wikitext),
