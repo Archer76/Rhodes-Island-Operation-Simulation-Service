@@ -97,13 +97,31 @@ python -c "from ak_tactic import formula as F, enemy_formula as E; print(len(F.R
 `true_damage` / `damage_type` / `ep_damage` / `ep_burst` / `ep_heal` /
 `self_control` / `enemy_control` / `sources` / `suspect` / `terms`。
 
+### 命令行（两侧对称，2026-09-17 起）
+
+| 命令 | 用途 |
+| --- | --- |
+| `python -m ak_tactic formula "<文本>"` | **干员侧**：编译任意文本，**不查库** |
+| `python -m ak_tactic formula --char <干员>` | 库里一个干员的全部天赋（名字或 `char_id`） |
+| `python -m ak_tactic formula --skill <技能>` | 一个技能的全部等级（技能名或 `skill_id`；撞名时报错列候选） |
+| `python -m ak_tactic formula --scan` | 干员全库覆盖率 + 未命中的高频残句 |
+| `python -m ak_tactic formula --enemy "<文本>"` | 临时改用敌人规则（含 detemplate 与算式钩子） |
+| `python -m ak_tactic formula --scan --enemy` | 敌人全库覆盖率 |
+| `python -m ak_tactic enemydb formula <敌人>` | 敌人单页报告（每节的原文、洗净文本、公式项） |
+
+两侧都认 `--bb "k=v,k=v"`（黑板系数，也接受 JSON 对象）与 `--json`。
+**统计命令必须与编译器同口径**：`scan` / `enemy_scan` 报的数就是 CLI 打印给用户的数，
+它们一旦漏挂某个钩子，等于把编译器的成绩报低——已由自检逐行钉死（见第六节）。
+
 ---
 
 ## 四、加一条规则：六步
 
 1. **先看它现在被编译成什么。** 别凭正文想象。
-   `python -m ak_tactic enemydb formula <名字>` 出敌人单页报告（含每节的原文、洗净文本、公式项）。
-   干员侧用 `formula.describe_row`。**先跑一遍自检确认基线是绿的**，否则你分不清红是你造成的还是原来就红。
+   敌人侧：`python -m ak_tactic enemydb formula <名字>`（单页报告）。
+   干员侧：`python -m ak_tactic formula --char <干员>` 或 `--skill <技能>`；
+   手头只有一句话时直接 `python -m ak_tactic formula "<那句话>"`，不必先入库。
+   **先跑一遍自检确认基线是绿的**，否则你分不清红是你造成的还是原来就红。
 2. **决定落在哪张表。** 干员语料的概念进 `RULES`；敌人独有概念进 `ENEMY_RULES`。
    **不要把敌人规则写进 `RULES`**——它是干员侧自检的基线，混进去会把干员的期望值一起带偏。
 3. **决定插在哪一段。** 顺序即优先级（见 5.1）。`_r` 附近已按概念分了段
@@ -201,6 +219,8 @@ PRTS 用尖括号表示单位引用（`<无谓>`、`<R系列动力装甲>`），
 | 干员侧**不接**算式 pass | 实测纯常数片段 561 处、真变量仅 8 处且全是 `/秒` 被当除号：零收益、只增误读 |
 | 覆盖率下限（总 65%，分来源）+ `desc` 上限 55% | 下限防退化；上限防"把剧情文本也算进来刷数" |
 | 三条战斗基线逐字不变 | 这一层是给战斗层供数的，改了不该改的会静默改变战斗结果 |
+| 统计函数与真编译器**逐行同口径** | `enemy_scan` 曾漏挂算式钩子，把编译器的成绩报低；CLI 照它打印 |
+| `--json` 走的那条序列化路径**真能跑** | `Term` 只有 `to_dict`，写成 `as_dict` 时自检全绿、命令直接崩 |
 | 自检**不是空转** | 见第七节最后一条 |
 
 ---
@@ -219,6 +239,8 @@ PRTS 用尖括号表示单位引用（`<无谓>`、`<R系列动力装甲>`），
 | 覆盖率涨了 0.9%，但那一涨是错的 | 把「释放」「放下」也算进召唤 | 逐条看证据；总覆盖不是正确率 |
 | 长度上限 8 字把真属性名顶红 | `可抵抗状态生效时间倍率` 是 11 字的真属性名 | 阈值按**真实反例**校正，不凭手感 |
 | 自检整节静默变成空转 | `check` 的参数顺序写反（见第八节） | 新加自检前先看该文件的签名 |
+| `enemydb formula --json` 直接崩，自检却全绿 | CLI 调 `Term.as_dict()`，真名是 `to_dict()` | `check_formula` 的「序列化冒烟」节 |
+| 敌人覆盖率统计比编译器低 0.9 个点 | `enemy_scan` 漏挂 `expr_terms` 钩子 | `check_enemy_formula` 覆盖率节里的逐行对拍 |
 
 **「伪装成已解析」要单独记一笔**：判据是"规则表完全不匹配、随后被兜底 pass 收走"。
 它比"漏了"更危险——漏了看得出来，错了看不出来。加新规则时，**先确认它确实被某条规则命中**
@@ -232,7 +254,10 @@ PRTS 用尖括号表示单位引用（`<无谓>`、`<R系列动力装甲>`），
 python -m ak_tactic db build                 # 干员库（3.4 秒，不联网）
 python -m ak_tactic enemydb build            # 敌人库（联网，首次约 53 秒）
 
-python -m ak_tactic enemydb formula 死志的凝结   # 单页报告：最好用的调试入口
+python -m ak_tactic enemydb formula 死志的凝结   # 敌人单页报告：最好用的调试入口
+python -m ak_tactic formula --char 望        # 干员侧：一个干员的全部天赋
+python -m ak_tactic formula "攻击力+50%"     # 干员侧：随手验一句话，不查库
+python -m ak_tactic formula --scan           # 干员全库覆盖率 + 未命中残句
 python tools/check_formula.py                # 干员侧自检
 python tools/check_enemy_formula.py          # 敌人侧自检
 python tools/unit_audit.py                   # 重刷 docs/formula-units.md（已填的裁定会续用）
