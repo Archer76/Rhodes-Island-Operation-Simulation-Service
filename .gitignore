@@ -30,3 +30,8 @@ out/
 
 # ---- B 站视频处理残留（抽帧图 / 中间文件）----
 _vid*/
+
+# ---- C 原型的构建产物（源码 _proto/*.c 入库，二进制与中间物不入库）----
+_proto/build/
+_proto/*.pyd
+_proto/*.egg-info/
