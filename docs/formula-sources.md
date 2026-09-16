@@ -19,7 +19,7 @@ GitHub 上「有完整公式实现」的项目只有两个（外加一个数据�
 wiki 侧（非 GitHub，但公式最权威、最适合当验收基线）：
 [Arknights Terra Wiki](https://arknights.wiki.gg/) 的 `Damage` / `Damage/Physical` / `Damage/Arts` /
 `Attribute/Attack_interval` / `Skill Point`。用 `api.php?action=parse&page=X&prop=wikitext` 取纯文本，比读 HTML 干净。
-（PRTS 的 `/w/伤害` 页不存在，别再找。）
+（prts.wiki 的 `/w/伤害` 页不存在，别再找。）
 
 ## 二、AKData 引擎里的公式（`resources/dpsv2.js`）
 
@@ -144,13 +144,13 @@ SP    : 自动回复 1/s；攻击回复每次攻击 1 点（含治疗）；受�
 | 模组 | `battle_equip_table` | `attributeBlackboard` 是**该等级的总加成，不是增量**（阿米娅 1/2/3 级 = max_hp 100/130/150、atk 30/40/50） |
 
 **取整是唯一未证实的假设。** wiki 的 `Attribute` 页明确写了 `FLOOR`，社区的
-三个开源实现要么没取整、要么方式不一，而 PRTS 的模板命名空间常年 403，拿不到
+三个开源实现要么没取整、要么方式不一，而 prts.wiki 的模板命名空间常年 403，拿不到
 更多的实测端点。项目把取整做成 `rounding` 参数（默认 `floor`），并留了
 `calibrate()` 用一条实机面板反推。
 
 **验过的锚点**（都是外部数据，不是从库里反推的）：
 
-* 阿米娅六个端点 699/276/48/10 → 1480/612/121/20（PRTS 属性模板）；
+* 阿米娅六个端点 699/276/48/10 → 1480/612/121/20（prts.wiki 属性模板）；
 * 怒潮凛冬 精2 60 = **2731 / 1193 / 387 / 0 / 攻击间隔 1.80 / 阻挡 2 / 费用 20**
   （实机录像逐项读过）——这条特别有价值，因为它落在**插值中段**，
   能同时验关键帧与插值口径。

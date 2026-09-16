@@ -1,4 +1,4 @@
-# 敌人库：PRTS 敌人页 → `data/enemydb.sqlite`
+# 敌人库：prts.wiki 敌人页 → `data/enemydb.sqlite`
 
 `python -m ak_tactic enemydb build` 会把 **prts.wiki 的『分类:敌人』**（约 1800 页）
 解析进一个**独立的库文件** `data/enemydb.sqlite`，里面四张表：
@@ -13,14 +13,14 @@
 | 文件 | `data/akdb.sqlite` | `data/enemydb.sqlite` |
 | 来源 | 游戏本体 gamedata 的 `excel/` | prts.wiki 的「分类:敌人」 |
 | 更新节奏 | 跟着游戏版本 | 跟着站内编辑 |
-| 主键 | `char_id`（`char_002_amiya`） | PRTS 页名（`“死志的凝结”`） |
+| 主键 | `char_id`（`char_002_amiya`） | prts.wiki 页名（`“死志的凝结”`） |
 | 数值口径 | 只存**关键帧原文**，面板另算 | 存**算好继承的逐档数值** |
 | 建库 | `python -m ak_tactic db build` | `python -m ak_tactic enemydb build` |
 | 查询 | `python -m ak_tactic db …` | `python -m ak_tactic enemydb …` |
 | 自检 | `tools/check_db.py` | `tools/check_enemy_db.py` |
 
 放一个文件里最坏的地方不是乱，是**数值口径正好相反**：干员那边存原文、算在代码里，
-敌人这边没得选（PRTS 页面里没有"显式/继承"标志位）只能建库时算好。
+敌人这边没得选（prts.wiki 页面里没有"显式/继承"标志位）只能建库时算好。
 同一个文件里两种口径并存，读的人迟早按错的那套读。
 
 查询：
@@ -40,11 +40,11 @@ python -m ak_tactic enemydb info                 # 版本戳与行数
 
 ---
 
-## 一、为什么是 PRTS，而不是游戏本体
+## 一、为什么是 prts.wiki，而不是游戏本体
 
 敌人数据其实有两个来源，都能拿到：
 
-| | 游戏本体 gamedata（`levels/enemydata/enemy_database.json`） | PRTS 敌人页 |
+| | 游戏本体 gamedata（`levels/enemydata/enemy_database.json`） | prts.wiki 敌人页 |
 |---|---|---|
 | 逐档数值 | 有（原始 Unity 结构，`m_defined` 合并） | 有（模板参数，SMW 继承） |
 | 天赋黑板（P3R 相性 / 倒地阈值 / 重生参数） | 有（`talentBlackboard`） | **有**，以 HTML 注释形式原样带出 |
@@ -52,8 +52,8 @@ python -m ak_tactic enemydb info                 # 版本戳与行数
 | 敌方技能（首次冷却 / 周期冷却 / 技力 / 效果） | 有原始 `skills`，但无中文名 | 有中文名与效果正文 |
 | 抗性 | 11 项布尔位 | 十余项「有 / 无」+ 损伤抵抗 / 元素抗性 |
 
-也就是说 PRTS 把**图鉴 + 数值 + 抗性 + 技能 + 黑板**放在同一个地方，一个源就够，
-不必再拿 gamedata 的敌人库去补。**但两者是同源的**——PRTS 的数值本来就是从游戏里
+也就是说 prts.wiki 把**图鉴 + 数值 + 抗性 + 技能 + 黑板**放在同一个地方，一个源就够，
+不必再拿 gamedata 的敌人库去补。**但两者是同源的**——prts.wiki 的数值本来就是从游戏里
 整理出来的，所以这不是"另一个数据"，而是"同数据的另一种组织方式"。
 
 正因为同源，`tools/check_enemy_db.py` 才会拿**游戏本体**去对账：两边一起错的概率，
@@ -70,7 +70,7 @@ python -m ak_tactic enemydb info                 # 版本戳与行数
   单批实测 1.4 s / 67 KB。
 * 每次请求都被 `PrtsClient` 的磁盘缓存（`data/cache/prts/`，TTL 7 天）按 URL 收下，
   **重跑不重复打网**：首次建库 50.8 s，之后基本只剩解析时间。
-* 限速仍是 1.2 s/请求（PRTS 的 WAF 按来源 IP 计），所以首次那 37 次请求要
+* 限速仍是 1.2 s/请求（prts.wiki 的 WAF 按来源 IP 计），所以首次那 37 次请求要
   一分多钟。
 
 ---
@@ -119,7 +119,7 @@ python -m ak_tactic enemydb info                 # 版本戳与行数
 `page` `level` `name`（如 `眩晕抗性`）`value`（原文，`有` / `无` / `免疫`）
 `is_immune` · `source` · `is_effective`
 
-以 `抗性` 结尾的参数**一律收进来**，不写死名单——PRTS 模板加一项，这里自动跟上。
+以 `抗性` 结尾的参数**一律收进来**，不写死名单——prts.wiki 模板加一项，这里自动跟上。
 
 **`source` 两种取值的语义不同，不能混排**：
 
@@ -143,13 +143,13 @@ python -m ak_tactic enemydb info                 # 版本戳与行数
 
 ### 1. 高档位只写被改写的字段，其余继承
 
-`级别1` 常常只有 `index` 与 `最大生命值` 两行。PRTS 模板里每个字段都写成
+`级别1` 常常只有 `index` 与 `最大生命值` 两行。prts.wiki 模板里每个字段都写成
 `{{{字段|{{#ask:[[<页名>#LEVEL<index-1>]]|?字段}}}}}`，即**向上一档取**，
 由 SMW 在渲染时完成。
 
 本库在建库时就把继承算好（落在列里），同时把**本档显式写出的参数**留在
 `explicit_params` 里，用来分辨"这一档真的改了没有"。这与干员那半边"只存关键帧
-原文"的做法**不同**——PRTS 页面里没有"显式 / 继承"的标志位，只有"写了 / 没写"。
+原文"的做法**不同**——prts.wiki 页面里没有"显式 / 继承"的标志位，只有"写了 / 没写"。
 
 ### 2. 黑板藏在 HTML 注释里，且解析参数前必须先剥注释
 
@@ -172,7 +172,7 @@ python -m ak_tactic enemydb info                 # 版本戳与行数
 |名称=死志暗影-->
 ```
 
-PRTS 页面上这一档仍显示「“死志的凝结”」（因为 `名称` 被注释掉了，走了继承），
+prts.wiki 页面上这一档仍显示「“死志的凝结”」（因为 `名称` 被注释掉了，走了继承），
 而**游戏数据里的名字是「死志暗影」**。
 
 本库两者都留：生效参数进列，注释参数进 `hidden_params`。谁也不替谁下判断。
@@ -320,11 +320,11 @@ python tools/enemy_field_audit.py -v       # 连已入库的也逐条列出
 
 1. **「同构碎片」是唯一零档的敌人**（非常规、无图鉴，页面 299 字，本来就没有
    `levelcontent` 模板）。不代它编一档，`check_enemy_db` 断的是"有图鉴却零档"为零。
-2. **16 个敌人没有地位、10 个没有行动方式、22 个没有攻击方式**——PRTS 页面上
+2. **16 个敌人没有地位、10 个没有行动方式、22 个没有攻击方式**——prts.wiki 页面上
    就是空的（多是关卡脚本生成物，如「落石」「喷口」「结晶」）。按空存，不猜。
-3. **PRTS 的敌人页是"通常数据"**，页面自己注明：具体到某一关可能被关卡页的
+3. **prts.wiki 的敌人页是"通常数据"**，页面自己注明：具体到某一关可能被关卡页的
    「敌方情报」覆写。本库收的是**页面级通常数据**，不含关卡级覆写。
-4. **页数与游戏本体敌人 id 数不等**（1804 页 vs 2151 个 id）：PRTS 按"敌人条目"
+4. **页数与游戏本体敌人 id 数不等**（1804 页 vs 2151 个 id）：prts.wiki 按"敌人条目"
    组织，同一个敌人在不同关卡的不同档位不重复建页；也会出现有 id 无页
    （纯脚本生成）与有页无 id（编辑整理的条目）。
 5. **`raw_wikitext` 存了整页原文**（含被注释的参数），是这一层唯一的兜底；

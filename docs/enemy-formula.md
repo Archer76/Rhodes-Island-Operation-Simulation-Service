@@ -1,6 +1,6 @@
 # 敌人正文 → 公式项
 
-把 PRTS 敌人页上的**机制正文**（能力 / 天赋 / 描述 / 敌方技能）编译成可结算的
+把 prts.wiki 敌人页上的**机制正文**（能力 / 天赋 / 描述 / 敌方技能）编译成可结算的
 公式项，口径与干员侧的 `docs/formula-model.md` 一致。
 
 命令：
@@ -18,7 +18,7 @@ python tools/check_enemy_formula.py                   # 自检 118 项
 `ak_tactic/formula.py` 的 130 条规则是**吃 gamedata 正文**长出来的：游戏内文本
 只有 `<$ba.xxx>` 标签与 `{key:spec}` 占位符，`formula.normalize` 直接吃得下。
 
-敌人正文来自 **PRTS 的 wikitext**，多夹着一层 wiki 模板：
+敌人正文来自 **prts.wiki 的 wikitext**，多夹着一层 wiki 模板：
 
 | 原文 | 期望 |
 |---|---|
@@ -43,7 +43,7 @@ python tools/check_enemy_formula.py                   # 自检 118 项
 
 ### 1.2 单位引用必须在 `normalize` 之前抢救出来
 
-PRTS 用尖括号表示**单位引用**：`<无谓>`、`<大君之触>`、`<R系列动力装甲>`。
+prts.wiki 用尖括号表示**单位引用**：`<无谓>`、`<大君之触>`、`<R系列动力装甲>`。
 而 `formula.normalize` 的 `TAG_RE` 会把 `<...>` 当富文本标签**整段剥掉**：
 
 ```
@@ -97,7 +97,7 @@ RULES_ENEMY = formula.RULES + ENEMY_RULES     # 干员规则在前
 
 ### 3.1 中文数字：量词里是**习语**，序数里是**真数值**
 
-干员侧的 `{N}` 接受「一/二/两/三」。用在敌人正文上会出事——PRTS 是人写的散文，
+干员侧的 `{N}` 接受「一/二/两/三」。用在敌人正文上会出事——prts.wiki 是人写的散文，
 中文数字几乎只出现在习语里：
 
 ```
@@ -111,7 +111,7 @@ RULES_ENEMY = formula.RULES + ENEMY_RULES     # 干员规则在前
 ### 3.2 `攻击速度+50` 与 `攻击速度提升50` 不是同一句话
 
 干员的 `buff_atk` / `buff_aspd` 只认**游戏内的 `+N` 记法**——因为 gamedata 的
-正文本来就是那样写的。PRTS 的敌人正文是手写的，用「攻击力提升50」这种自然语句，
+正文本来就是那样写的。prts.wiki 的敌人正文是手写的，用「攻击力提升50」这种自然语句，
 直接漏掉一大片。故补 `e_attr_up` / `e_attr_down`，以及无数值的
 `e_attr_word_up` / `e_attr_word_down`（「·攻击速度提升，」——真数据在黑板里，
 正文只说了方向）。
@@ -186,7 +186,7 @@ RULES_ENEMY = formula.RULES + ENEMY_RULES     # 干员规则在前
 | 溅射与范围 | 攻击造成法术溅射伤害 / 对周围我方单位造成物理伤害 | `e_splash_damage` `e_around_damage` |
 | 生死语义 | 消失时不会扣除目标生命 / 不计入歼灭数 | `e_no_life_cost` `e_death_life_cost` |
 
-**元素损伤**这一类尤其值得单独说：PRTS 手写的敌人正文**不写数值**
+**元素损伤**这一类尤其值得单独说：prts.wiki 手写的敌人正文**不写数值**
 （「造成一定侵蚀损伤」），真值在敌人同档黑板上。所以 `e_ep_damage` 只认种类、
 量纲记 `word`、`amount` 留 None——**不编造数值**。这与干员侧那些带数值的
 `ep_damage` 规则分工不同，两边不能互相顶替。
