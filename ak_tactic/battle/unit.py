@@ -149,6 +149,11 @@ class OperatorUnit(Combatant):
     #: 增益治疗的剩余秒数与每秒回复量（天赋「入场增益治疗」给的）
     regen_left: float = 0.0
     regen_per_sec: float = 0.0
+    #: 天赋「情绪吸收」给的额外技力：每次**出手**回 `sp_per_attack_talent`，
+    #: 每次**击杀**回 `sp_per_kill_talent`。二者与技能自己的 `sp_type`
+    #: **叠加**而不是二选一——技能是自动回复型时这条照样生效。
+    sp_per_attack_talent: float = 0.0
+    sp_per_kill_talent: float = 0.0
 
     # ------------------------------------------------------------ 技能状态
 
@@ -170,6 +175,29 @@ class OperatorUnit(Combatant):
     ammo_left: int = 0
     #: 开技能期间强制改变的伤害类型（机械师这类"攻击变法术"的技能）
     skill_attack_type: str | None = None
+    #: 技能结束后**自身**晕眩的剩余秒数（阿米娅技2 精神爆发那类）。
+    #: 晕眩期间不能出手，但仍在场上、仍会阻挡、仍会挨打。
+    stun_timer: float = 0.0
+    #: 是不是**技能强制退场**走的（阿米娅技3 奇美拉），而不是被打死。
+    #: 结算时必须与阵亡分开——`operator_deaths` 只数被打死的那些。
+    retreated: bool = False
+    #: 「末击起为真实」类技能（阿米娅技2 影霄·绝影）的**斩击阶段还没打完**。
+    #: 为 True 时这一次出手的前 N-1 击仍用干员本来的伤害类型，只有末击转真实；
+    #: 打完置 False，此后技能期内的普攻才整体走 `skill_attack_type`。
+    slash_pending: bool = False
+    #: 击杀叠层的当前层数（阿米娅技2 影霄·绝影）。技能期间每击杀一个 +1，
+    #: 上限取 `SkillEffects.kill_max_stack`；**技能结束时清零**。
+    kill_stacks: int = 0
+    #: 全场光环（「青色怒火」）给的攻击力/防御力比例加成。由模拟器每帧刷新——
+    #: **不能在建单位时定死**，因为「光环主人开技能期间效果加倍」会随时间变。
+    aura_atk_pct: float = 0.0
+    aura_def_pct: float = 0.0
+    #: 是不是**撤离/退场**离场的。`Combatant.alive` 只看血量，而强制退场
+    #: 时干员是满血的，所以必须覆写：让 `alive` 一次覆盖「被打死」与
+    #: 「自己下场」两种不在场，其它所有 `if op.alive` 的地方自动跟着对。
+    @property
+    def alive(self) -> bool:
+        return self.hp > 0 and not self.retreated
     #: 技能加生命上限之前的基准值，用于关技能时还原
     _base_max_hp: float = field(default=0.0, repr=False)
 
@@ -217,15 +245,47 @@ class OperatorUnit(Combatant):
         return bool(self.skill is not None and getattr(self.skill, "is_passive", False))
 
     def current_atk(self) -> float:
-        """当前攻击力——开技能期间含攻击力增益与技能倍率。"""
+        """当前攻击力——开技能期间含攻击力增益、技能倍率与**击杀叠层**。
+
+        注意 `effects is None`（这一帧没开技能）的分支**也要算全场光环**：
+        「青色怒火」是发给所有友方的，不挑对方开不开技能。早期版本在这个分支
+        直接 `return self.atk`，症状是光环只对开着技能的人生效、对队友一点用没有。
+        """
         e = self.effects
-        return e.attack_power(self.atk) if e is not None else self.atk
+        if e is None:
+            return self.atk * (1.0 + self.aura_atk_pct)
+        # 击杀叠层的加成与普通攻击力增益**同层相加**（都进 `(1 + 攻击力增益)`
+        # 这个括号），不乘在外面——三层的 +40% 是 +120%，不是 1.4³。
+        pct = 0.0
+        if self.kill_stacks:
+            v = e.variants.get("kill") or {}
+            pct = float(v.get("atk", 0.0)) * self.kill_stacks
+        # 全场光环（青色怒火）同样是**同层相加**的百分比加成。
+        if pct or self.aura_atk_pct:
+            return (self.atk * (1.0 + e.atk_pct + pct + self.aura_atk_pct)
+                    * e.atk_scale)
+        return e.attack_power(self.atk)
+
+    def current_res(self) -> float:
+        """当前法术抗性——含技能增益与**击杀叠层**的固定值加成。
+
+        此前敌人打干员时直接读 `op.res`，把技能自带的 `magic_resistance`
+        增益整个漏掉了；顺带把击杀叠层也接上。两者都是**固定值**相加。
+        """
+        e = self.effects
+        if e is None:
+            return self.res
+        res = self.res + float(e.buffs.get("res", 0.0))
+        if self.kill_stacks:
+            v = e.variants.get("kill") or {}
+            res += float(v.get("res", 0.0)) * self.kill_stacks
+        return res
 
     def current_defense(self) -> float:
         e = self.effects
         if e is None:
-            return self.defense
-        return self.defense * (1.0 + e.buffs.get("def", 0.0))
+            return self.defense * (1.0 + self.aura_def_pct)
+        return self.defense * (1.0 + e.buffs.get("def", 0.0) + self.aura_def_pct)
 
     def current_attack_speed(self) -> float:
         """当前总攻速——含「未阻挡敌人时」的条件加成。

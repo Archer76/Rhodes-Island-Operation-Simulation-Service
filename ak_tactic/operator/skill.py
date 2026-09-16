@@ -155,21 +155,34 @@ def format_value(value: float, spec: str = "") -> str:
     return f"{value:g}"
 
 
+#: 富文本标签。**扫描描述前必须先剥掉它**——标签会插在词中间，例如
+#: 影霄·绝影的 `为<@ba.vup>真实</>伤害`，原样扫「真实伤害」是扫不到的。
+_TAG = re.compile(r"<[^>]+>")
+
+
 def _wants_true_damage(description: str) -> bool:
     """这一击是不是真实伤害——**只能从描述判**。
 
     黑板里没有伤害类型字段：`atk_scale 3.8` 只说倍率，不说它是物理、法术
     还是真实。游戏把这件事写进了技能描述的自然语言里，所以这里扫描述。
 
-    保守起见只在出现"真实伤害"时才判真，其余一律交回默认（干员面板的
-    `attack_type`），宁可按法术少算也不按真实多算。
+    判据是**「伤害类型变为真实」**，不是「真实伤害」。这两个措辞在数据里
+    指向完全不同的东西：
+
+    - 「伤害类型变为真实」= **这一击的类型被改写**，整条技能的攻击都变真实。
+      标本：阿米娅技3「奇美拉」、Mon3tr、耀骑士临光（「攻击时伤害类型变为真实」）。
+      原文写作 `伤害类型变为<@ba.vup>真实</>`，所以必须先剥标签。
+    - 「造成 N 点真实伤害」= **一次附加伤害**，与本身是什么类型无关。
+      标本：装置自爆、脉冲波、「移动时受到正比于距离的真实伤害」、
+      「攻击时额外造成相当于 50% 攻击力的真实伤害」，以及敌人对**我方**
+      造成的真实伤害。
+
+    用「真实伤害」当判据会**双向出错**（2026-09-16 实测，全表 1590 条去重
+    技能等级描述）：旧写法命中 29 条，其中 **28 条是上述附加伤害的误判**
+    （会把整条技能的攻击都算成真实，严重高估），同时漏掉 8 条真正的类型
+    改写。改用下面这条后命中 9 条，逐条核对皆真。
     """
-    return "真实伤害" in (description or "")
-
-
-#: 「造成 N 次攻击力 X% 的伤害」——连击数写死在描述里的那一类。
-#: 必须先剥掉 `<@ba.vup>3</>` 这层富文本标签，否则 `3` 夹在标签之间扫不到。
-_TAG = re.compile(r"<[^>]+>")
+    return "伤害类型变为真实" in _TAG.sub("", description or "")
 _REPEAT_HITS = re.compile(r"造成(\d+)次攻击力")
 
 
@@ -189,6 +202,105 @@ def _repeat_hits(description: str) -> int:
     """
     m = _REPEAT_HITS.search(_TAG.sub("", description or ""))
     return int(m.group(1)) if m else 0
+
+
+#: 中文数字。语料里「攻击变为二连击」与「攻击变为2连击」两种写法并存。
+_CN_DIGIT = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+             "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+_MULTI_HIT = re.compile(r"攻击变为(?:特殊的)?([一二两三四五六七八九十]|\d{1,2})连击")
+
+
+def _wants_multi_hit(description: str) -> int:
+    """「攻击变为 N 连击」——技能期间每次普通攻击打 N 下。0 = 不是这一类。
+
+    **判据必须锚在"攻击变为"这四个字上**：数据里另有几种形近写法，语义
+    各不相同（2026-09-16 实测，全表 343 条含「连击」的技能描述）：
+
+    * 「攻击变为二连击」——每次普攻打两下。**这才是本函数要收的**。
+      标本：阿米娅(术战者)技1 影霄·奔夜、赤刃明霄陈技1。两者黑板里
+      **都没有 `times`**，只读黑板会把二连击按单发算，伤害少一半。
+    * 「……有 20% 概率**变成**二连击」——概率触发，不是稳定 N 连。
+      锚在"变为"（而非"变成"）即可避开。
+    * 「**下次**攻击变为三连击」——只作用于下一次攻击。当前也收：对
+      模拟器而言与"每次攻击"是同一件事（那次出手打 N 下）。
+    * 「攻击变为**{attack@times}连击**」——数值在黑板里，由 `times` 键
+      先行覆盖，本函数不必管（机械师技1 就是这一种，`attack@times=5`）。
+
+    `hit_count` 的优先级因此是：黑板 `times` → 本函数 → `repeat_hits`。
+    黑板里有确切数值时，不去猜描述。
+    """
+    m = _MULTI_HIT.search(_TAG.sub("", description or ""))
+    if not m:
+        return 0
+    tok = m.group(1)
+    return int(tok) if tok.isdigit() else _CN_DIGIT.get(tok, 0)
+
+
+def _wants_final_double(description: str) -> bool:
+    """是否「最后一击系数加倍」——**只认这一个措辞**。
+
+    为什么不认 `atk_scale_2` 键名：那个键是"第二个倍率槽"，十个干员有
+    六种互不相同的含义（另一个目标组、对非移动敌人、音符序号、第二段
+    攻击、灼痕那一段……），详见 `SkillEffects.final_hit_scale` 的注释。
+    描述里写明了才用，没写就一律按单倍率算。
+
+    全表实测：该措辞只出现在阿米娅(术战者)技2 影霄·绝影上，零波及。
+    """
+    return "最后一击系数加倍" in _TAG.sub("", description or "")
+
+
+def _wants_self_stun(description: str, bb: dict[str, float]) -> float:
+    """技能结束时**自身**晕眩的秒数，0 = 不是这一类。
+
+    两段判据，缺一不可：
+    ① 描述里「结束后」之后 30 字内出现「晕眩」——把"施加给敌人的晕眩"
+       （通常写在前半句，如"对范围内敌人造成伤害并晕眩 3 秒"）排除掉；
+    ② 黑板里有**裸** `stun` 键。对敌晕眩的值写在 `attack@stun` 上，
+       裸键往往是 None（卡达技2 即是）。
+
+    标本：阿米娅技2 精神爆发「技能自动开启，持续时间结束后自身晕眩 10 秒」。
+    同类的还有幽灵鲨、稀音、布洛卡、苍苔、森蚺、埃癸斯、极光、蚀清等。
+    """
+    text = _TAG.sub("", description or "")
+    if "晕眩" not in text:
+        return 0.0
+    for marker in ("技能结束后", "技能结束时", "持续时间结束后", "结束后"):
+        if marker in text:
+            tail = text.split(marker, 1)[1]
+            if "晕眩" in tail[:30]:
+                return float(bb.get("stun") or 0.0)
+            break
+    return 0.0
+
+
+#: 「技能结束后…强制退出战场」。锚在「技能结束后」上——另有
+#: 「N 秒后强制退出战场」是**别的**语义（阶段性的持续技能），不能一起收。
+_SELF_RETREAT = re.compile(r"技能结束后[^。\n]{0,16}?强制退出战场")
+
+
+def _wants_self_retreat(description: str) -> bool:
+    """技能结束后是否**强制退出战场**。标本：阿米娅技3 奇美拉。"""
+    return bool(_SELF_RETREAT.search(_TAG.sub("", description or "")))
+
+
+def _wants_true_from_final_hit(description: str) -> bool:
+    """是否「**末击起**为真实」而不是整条技能都真实。
+
+    判据要三个条件同时成立：写了「最后一击」、写了「真实伤害」、又写了
+    「伤害类型变为真实」。第三个条件把它与「最后一击系数加倍且为真实伤害」
+    这类**只描述末击**的写法分开——那种情况整条技能并不改类型。
+
+    全表 6 个命中「伤害类型变为真实」的技能里，只有阿米娅(术战者)技2
+    影霄·绝影同时带末击限定；其余 5 条（Mon3tr 技3、凯尔希技3、维娜技3、
+    耀骑士临光技3、阿米娅技3）都是整条技能，`true_damage` 对它们是对的。
+    """
+    t = _TAG.sub("", description or "")
+    return "最后一击" in t and "真实伤害" in t and "伤害类型变为真实" in t
+
+
+def _wants_once_per_battle(description: str) -> bool:
+    """「整场战斗中该技能只能释放一次」。标本：阿米娅技2 影霄·绝影。"""
+    return "整场战斗中该技能只能释放一次" in _TAG.sub("", description or "")
 
 
 def render_description(text: str, blackboard: dict[str, float]) -> str:
@@ -337,6 +449,55 @@ class SkillEffects:
     #: 连击数——描述里写"造成 N 次攻击力 X%"而黑板没有 `times` 时用，
     #: 由 `_repeat_hits` 从描述里取。0 = 不是这一类。
     repeat_hits: int = 0
+    #: 「攻击变为 N 连击」——技能期间**每次普通攻击**打 N 下，由
+    #: `_wants_multi_hit` 从描述里取。0 = 不是这一类。
+    #: 与 `repeat_hits` 的区别在出处：那个是"技能自己一次打 N 下"
+    #: （赤刃技3 的 3 连击），这个是"把普通攻击改造成 N 连击"
+    #: （阿米娅影霄·奔夜、赤刃技1）。对模拟器而言都是"一次出手打 N 下"，
+    #: 但刻意分开存——两者的判据与标本完全不同，合并会让追溯变难。
+    multi_hit: int = 0
+    #: 「最后一击系数加倍」——最后一击改用的倍率，没有就是 None。
+    #:
+    #: **只能按描述判，不能按 `atk_scale_2` 这个键名判。** 那个键在数据里
+    #: 是"第二个倍率槽"，含义随技能而变：空弦用它表示**另一个目标组**
+    #: （周围敌人）、雪猎表示**对非移动敌人**的加成、丰川祥子表示 8 个
+    #: 音符里的第 2 个、焰狐龙梓兰表示第二段攻击（刚连射）、菲亚梅塔
+    #: 表示灼痕那一段。照键名统一当成末击倍率会**同时搞错十个干员**。
+    #: 标本：阿米娅(术战者)技2 影霄·绝影，描述明写「最后一击系数加倍且为
+    #: 真实伤害」，其 `atk_scale_2` 恰为 `atk_scale` 的两倍（1.6 → 3.2）。
+    final_hit_scale: float | None = None
+    #: 技能结束时**自身**晕眩的秒数，0 = 无。
+    #:
+    #: 与 `control["stun"]` **不是一回事**：那个归在"控制敌人"里，而
+    #: **黑板根本分不出控制打在谁身上**（见 `CONTROL_KEYS` 上方的警告）。
+    #: 实测规律（2026-09-16，全表 100 条「技能结束后…晕眩」去重描述）：
+    #: **裸 `stun` 键 = 己方自身晕眩，`attack@stun` = 对敌晕眩**——
+    #: 幽灵鲨技2 `stun 10`「技能结束后干员晕眩10秒」、稀音技2 `stun 5`
+    #: 「技能结束后所有摄影车晕眩5秒」、阿米娅技2 `stun 10`「技能结束后
+    #: 自身晕眩10秒」；反例卡达技2 对敌晕眩时裸 `stun` 是 **None**，
+    #: 值在 `attack@stun` 里。
+    self_stun: float = 0.0
+    #: 技能结束后干员**强制退出战场**（阿米娅技3 奇美拉）。
+    #: 结算时令 `op.alive = False`——技能是"最后一搏"，用完全场即离场。
+    self_retreat: bool = False
+    #: 「**末击起**直到技能结束，伤害类型变为真实」——与 `true_damage` 区分：
+    #: 那个是整条技能的**每一次**都真实，这个只有末击与之后的普攻是真实。
+    #: 标本：阿米娅(术战者)技2 影霄·绝影。原文「进行 10 次攻击力 220% 的
+    #: **法术**斩击（最后一击系数加倍且为真实伤害）；……并且接下来的伤害类型
+    #: 变为真实」。博士 2026-09-17 裁定：「第十次斩击是真实伤害，之后直到
+    #: 技能结束都是真实伤害的普攻，技能结束后恢复正常算法」——所以
+    #: **前 9 次仍是法术**，不能按整条技能算真实。
+    #: 全表命中「伤害类型变为真实」的 6 个技能里，只有这一条带末击限定。
+    true_from_final_hit: bool = False
+    #: 「整场战斗中该技能只能释放一次」（阿米娅技2 影霄·绝影）。
+    once_per_battle: bool = False
+    #: 击杀叠层的**层数上限**（0 = 没有这类效果）。数值来自
+    #: `<前缀>[kill].max_stack_cnt`；每层的加成在 `variants["kill"]` 里
+    #: （`atk` 是比例、`res` 是绝对值）。标本：阿米娅技2 影霄·绝影——
+    #: 「斩击期间每击败一个敌人获得攻击力+40%和法术抗性+20（最多叠加 3 次）」，
+    #: 博士 2026-09-17 裁定「整个技能持续期叠层、技能结束时清零」，
+    #: 与游戏内注释「斩击杀敌获得的增益效果持续至技能结束」一致。
+    kill_max_stack: int = 0
     #: 变体取值：`{"second": {"atk": 1.8, "def": 1.2}}`。见 `with_variant`。
     variants: dict[str, dict[str, float]] = field(default_factory=dict)
     #: 变体里每项的量纲与归属类别
@@ -381,10 +542,12 @@ class SkillEffects:
 
         只认 `times` / `attack@times`——`cnt` 有 696 处使用，多数是
         "召唤 N 个""棋子 N 枚"，当成连击数会算出几倍的伤害。
-        黑板没有 `times` 时退到描述里的 `repeat_hits`（见 `_repeat_hits`，
-        赤刃明霄陈技3 的 3 连击就写死在正文里）。
+        黑板没有 `times` 时依次退到描述里的 `multi_hit`（「攻击变为
+        N 连击」，阿米娅影霄·奔夜）与 `repeat_hits`（「造成 N 次攻击力」，
+        赤刃明霄陈技3 的 3 连击）。
         """
-        return max(1, int(self.damage.get("times") or self.repeat_hits or 1))
+        return max(1, int(self.damage.get("times") or self.multi_hit
+                          or self.repeat_hits or 1))
 
     @property
     def max_target(self) -> int:
@@ -773,8 +936,26 @@ class SkillBook:
             raw = self.source.fetch_json("excel/character_table.json")
         except GamedataError as e:
             raise SkillError(f"取不到 excel/character_table.json：{e}") from e
-        self._chars = {k: v for k, v in raw.items() if k.startswith("char_")}
+        chars = {k: v for k, v in raw.items() if k.startswith("char_")}
         self.source.release("excel/character_table.json")
+
+        # 升变形态（阿米娅的近卫/医疗）**不在 character_table 里**，而在
+        # `char_patch_table.json` 的 `patchChars`，结构与干员本体完全相同。
+        # 不并进来则 `for_operator('char_1001_amiya2')` 直接报「没有这个干员」
+        # ——而森空岛名册引用的正是这些 charId，于是**术战者阿米娅的技能
+        # 一条也查不出来**。`OperatorCalculator` 与 `db/build.py` 早就并了，
+        # 这里是最后漏掉的一处（2026-09-16 补）。
+        # 取不到这张表不该让技能书哑火——少两个形态而已。
+        try:
+            patch = self.source.fetch_json("excel/char_patch_table.json")
+        except GamedataError:
+            patch = {}
+        else:
+            for cid, c in (patch.get("patchChars") or {}).items():
+                chars.setdefault(cid, c)
+            self.source.release("excel/char_patch_table.json")
+
+        self._chars = chars
         return self._chars
 
     # -------------------------------------------------------- 查询
@@ -874,6 +1055,24 @@ class SkillBook:
         # 连击数同理：黑板没有 `times` 时，描述正文里的"造成 3 次攻击力…"
         # 是唯一出处（赤刃明霄陈技3）。
         lv.effects.repeat_hits = _repeat_hits(lv.description)
+        # 「攻击变为 N 连击」同理：黑板没有 `times` 时，描述是唯一出处
+        # （阿米娅影霄·奔夜、赤刃明霄陈技1 都只写在正文里）。
+        lv.effects.multi_hit = _wants_multi_hit(lv.description)
+        # 「最后一击系数加倍」：末击改用 `damage` 里的 `atk_scale_2`。
+        # 判据是**描述**（见 `_wants_final_double`），不是键名——键名在
+        # 别的干员身上另有含义，不能通用。
+        if _wants_final_double(lv.description):
+            lv.effects.final_hit_scale = lv.effects.damage.get("atk_scale_2")
+        # 技能结束时的**自身**效果：晕眩与强制退场。两者的数值/语义都
+        # 只在描述里，且都与"打在敌人身上"的那套（`control`）无关。
+        lv.effects.self_stun = _wants_self_stun(lv.description, bb)
+        lv.effects.self_retreat = _wants_self_retreat(lv.description)
+        # 「末击起为真实」要**从 `true_damage` 里摘出来**：两者都靠
+        # 「伤害类型变为真实」这句话命中，但覆盖范围不同。前 9 次斩击是法术。
+        if _wants_true_from_final_hit(lv.description):
+            lv.effects.true_from_final_hit = True
+            lv.effects.true_damage = False
+        lv.effects.once_per_battle = _wants_once_per_battle(lv.description)
         return lv
 
     # -------------------------------------------------------- 概览
@@ -982,6 +1181,12 @@ def _parse_effects(bb: dict[str, float], duration_type: str) -> SkillEffects:
             continue
         eff.total += 1
         variant, bare = _split_variant(key)
+        # 击杀叠层的层数上限：属性名 `max_stack_cnt` 不在任何分类表里，
+        # `_classify` 归不了，否则会带着**全名**（`amiya2_s_2[kill].max_stack_cnt`）
+        # 落进 `other`，用起来得靠字符串匹配。这里收成规范字段。
+        if variant == "kill" and bare == "max_stack_cnt":
+            eff.kill_max_stack = int(value)
+            continue
         hit = _classify(bare)
         if hit is None:
             eff.other[key] = value

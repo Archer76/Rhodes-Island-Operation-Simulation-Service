@@ -226,8 +226,29 @@ class TalentBook:
             v = dict(v)
             v.setdefault("charId", k)
             chars[k] = v
-        self._chars = chars
         self.source.release("excel/character_table.json")
+
+        # 升变形态（阿米娅的近卫/医疗）**不在 character_table 里**，而在
+        # `char_patch_table.json` 的 `patchChars`，结构与干员本体完全相同。
+        # 不并进来则 `for_operator('char_1001_amiya2')` 报「没有这个干员」，
+        # 于是**术战者阿米娅的天赋「青色怒火」整条查不出来**。
+        # `OperatorCalculator` / `SkillBook` / `db/build.py` 都已并了，
+        # 这是最后漏掉的一处（2026-09-16 补）——三处同源漏洞至此收口。
+        # 取不到这张表只少两个形态，不该让天赋书哑火。
+        try:
+            patch = self.source.fetch_json("excel/char_patch_table.json")
+        except GamedataError:
+            patch = {}
+        else:
+            for cid, c in (patch.get("patchChars") or {}).items():
+                if not isinstance(c, dict):
+                    continue
+                c = dict(c)
+                c.setdefault("charId", cid)
+                chars.setdefault(cid, c)
+            self.source.release("excel/char_patch_table.json")
+
+        self._chars = chars
         return self._chars
 
     def character(self, char_id: str) -> dict:

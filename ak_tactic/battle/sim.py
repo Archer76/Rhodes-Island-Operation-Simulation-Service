@@ -50,7 +50,8 @@ from typing import Callable, Iterable
 
 from ..eta import leading_wait, route_plans
 from .damage import DamageType, resolve_damage
-from .talents import RegenAura, SnowField, find_regen, find_snow, squad_cost_bonus
+from .talents import (RegenAura, SnowField, TeamAura, find_regen, find_snow,
+                      find_sp_on_action, find_team_aura, squad_cost_bonus)
 from .p3r import BreakState, TotalAttackDevice, affinity_multiplier, damage_slot
 from .unit import EnemyUnit, OperatorUnit, point_at
 
@@ -268,6 +269,9 @@ class BattleSimulator:
         self.snow_fields: list[SnowField] = []
         #: 场上的增益治疗光环（「进入攻击范围时每秒回复」这类天赋）
         self.regen_auras: list[RegenAura] = []
+        #: 场上的**全场**光环（「青色怒火」这类给全场友方加攻防的天赋）。
+        #: 与 regen_auras 的差别是不看位置，且数值随主人技能状态每帧变。
+        self.team_auras: list[TeamAura] = []
         #: 「全场总攻击」装置（P3R 的结算端）。关卡没有这个装置就是 None。
         self.total_attack: TotalAttackDevice | None = (
             total_attack if total_attack is not False else None)
@@ -782,7 +786,13 @@ class BattleSimulator:
         """每帧的技能结算：回技力、够不够开、持续到点了没有。"""
         res = self.result
         for op in self.operators:
-            if not op.alive or op.skill is None:
+            if not op.alive:
+                continue
+            # 自晕倒计时（技能结束后自身晕眩）。递减挂在这里只是因为它
+            # 同样按帧走；晕眩本身与技能状态无关。
+            if op.stun_timer > 0:
+                op.stun_timer = max(0.0, op.stun_timer - dt)
+            if op.skill is None:
                 continue
             sk = op.skill
 
@@ -815,6 +825,10 @@ class BattleSimulator:
 
             ready = op.sp >= sk.sp_cost
             want = op.skill_request or sk.auto_trigger or op.auto_skill
+            # 「整场战斗中该技能只能释放一次」（阿米娅技2 影霄·绝影）：
+            # 放过一次就不再开，哪怕技力又攒满。`sp_charges` 是累计开启次数。
+            if sk.effects.once_per_battle and op.sp_charges >= 1:
+                want = False
             if ready and want:
                 self._activate(op, t)
             op.skill_request = False
@@ -831,8 +845,14 @@ class BattleSimulator:
         op.skill_timer = _INFINITE if dur is None else float(dur)
         op.ammo_left = int(sk.effects.ammo or 0)
         op.apply_max_hp_bonus(sk.effects.buffs.get("max_hp", 0.0))
-        # 技能把这一击的伤害类型改写了（目前只有"真实伤害"这一种判据）
-        op.skill_attack_type = "TRUE" if sk.effects.true_damage else None
+        # 技能把这一击的伤害类型改写了（"真实伤害"这一族判据）。两种要分开：
+        # `true_damage` 是整条技能每一次都真实；`true_from_final_hit` 只有
+        # 末击与之后的普攻是真实，前 N-1 击仍是本来的类型（见攻击循环里的
+        # `slash_pending`）。两者都置 `skill_attack_type`，差别在斩击那一次。
+        op.skill_attack_type = (
+            "TRUE" if (sk.effects.true_damage
+                       or sk.effects.true_from_final_hit) else None)
+        op.slash_pending = sk.effects.true_from_final_hit
         # 回费技能（德克萨斯、桃金娘这一类）：开启时直接给费用
         gain_cost = sk.effects.buffs.get("cost", 0.0)
         if gain_cost:
@@ -854,6 +874,25 @@ class BattleSimulator:
         op.skill_attack_type = None
         op.revert_max_hp_bonus()
         op.sp = 0.0
+        # 击杀叠层清零：「持续至技能结束」。技能结束就要掉回原样，
+        # 不能带到下一次开技能（阿米娅技2 整场只放一次，但机制上如此）。
+        op.kill_stacks = 0
+        op.slash_pending = False
+        # 技能结束时的**自身**效果，两条都只在描述里写明，判据在 skill.py。
+        if sk is not None:
+            if sk.effects.self_stun:
+                op.stun_timer = max(op.stun_timer, sk.effects.self_stun)
+                if self.verbose:
+                    self.result.log.append(
+                        f"{t:7.1f}s  {op.name} 技能结束，自身晕眩 "
+                        f"{sk.effects.self_stun:g}s")
+            if sk.effects.self_retreat:
+                # `alive` 已被 OperatorUnit 覆写成「血量 > 0 且未退场」，
+                # 所以这里只置标志，不去碰血条——退场不是阵亡。
+                op.retreated = True
+                if self.verbose:
+                    self.result.log.append(
+                        f"{t:7.1f}s  {op.name} 技能结束，强制退出战场")
         if self.verbose and sk is not None:
             self.result.log.append(f"{t:7.1f}s  {op.name} 技能「{sk.name}」结束")
 
@@ -942,6 +981,11 @@ class BattleSimulator:
             # 5. 技能（要排在我方出手之前：刚攒满技力的那一帧得算数）
             self._skill_tick(dt, t)
 
+            # 5.4 全场光环（青色怒火）：数值随光环主人的技能状态变，所以必须排在
+            # 技能之后——本帧刚开的技能，本帧就吃到加倍，不然会晚一帧。
+            if self.team_auras:
+                self._refresh_auras()
+
             # 5.5 增益治疗光环（放在技能之后：本帧刚上场的干员也能吃到）
             if self.regen_auras:
                 rng = self._range_of
@@ -986,7 +1030,9 @@ class BattleSimulator:
                         if not e.alive and not e.leaked and not e.pending_reborn)
         res.leaks = sum(1 for e in self.enemies if e.leaked)
         res.deployed = len(self.operators)
-        res.operator_deaths = sum(1 for o in self.operators if not o.alive)
+        # 「强制退场」（阿米娅技3 奇美拉）不是阵亡，分开数
+        res.operator_deaths = sum(1 for o in self.operators
+                                  if not o.alive and not o.retreated)
         if self.verbose:
             for o in self.operators:
                 if not o.alive:
@@ -1026,12 +1072,43 @@ class BattleSimulator:
                 duration=regen.value("buff_duration", 0.0),
                 operator=op,
             ))
+        # 天赋：情绪吸收（每次出手 / 每次击杀额外回技力）。落到干员身上，
+        # 由出手与击杀两处结算——它**叠加**在技能的 sp_type 之上，不是替代。
+        spa = find_sp_on_action(op.talents)
+        if spa is not None:
+            op.sp_per_attack_talent = spa.per_attack
+            op.sp_per_kill_talent = spa.per_kill
+        # 天赋：全场光环（「青色怒火」——全场友方攻防提升，主人开技能时加倍）
+        aura = find_team_aura(op.talents)
+        if aura is not None:
+            self.team_auras.append(TeamAura(
+                owner=op.name,
+                atk_pct=aura.value("atk", 0.0),
+                def_pct=aura.value("def", 0.0),
+                operator=op,
+            ))
+            self._refresh_auras()
         if self.verbose:
             sk = f" 带技能「{op.skill.name}」" if op.skill is not None else ""
             tal = "、".join(f"「{x.name}」" for x in op.talents)
             tal = f" 天赋 {tal}" if tal else ""
             self.result.log.append(
                 f"{t:7.1f}s  部署 {op.name} 于 {d.position} 朝 {d.direction}{sk}{tal}")
+
+    def _refresh_auras(self) -> None:
+        """把全场光环的当前数值刷到每个干员身上。
+
+        每帧做一次，因为「光环主人开技能期间效果加倍」是随时间变的。
+        多个光环**相加**（目前只有「青色怒火」一个来源）。
+        """
+        atk = def_ = 0.0
+        for a in self.team_auras:
+            x, y = a.current()
+            atk += x
+            def_ += y
+        for op in self.operators:
+            op.aura_atk_pct = atk
+            op.aura_def_pct = def_
 
     def _update_blocking(self) -> None:
         for op in self.operators:
@@ -1129,7 +1206,7 @@ class BattleSimulator:
         return pool[:n]
 
     def _adaptive_damage(self, power: float, scale: float, target: EnemyUnit,
-                         ignore_defense: float):
+                         ignore_defense: float, ignore_res: float = 0.0):
         """「弱点伤害」：物理与法术各算一遍，取最终伤害更高的那一系。
 
         赤刃明霄陈的天赋「形意洞照」写「攻击变为弱点伤害」，用户口径是
@@ -1141,7 +1218,8 @@ class BattleSimulator:
         for dt in (DamageType.PHYSICAL, DamageType.MAGIC):
             d = resolve_damage(power, damage_type=dt, scale=scale,
                                defense=target.defense, res=target.res,
-                               ignore_defense=ignore_defense)
+                               ignore_defense=ignore_defense,
+                               ignore_res=ignore_res)
             slot = damage_slot(dt)
             aff = target.affinity.get(slot) if slot else None
             val = d.final * affinity_multiplier(
@@ -1153,6 +1231,9 @@ class BattleSimulator:
     def _operators_attack(self, dt: float, t: float) -> None:
         for op in self.operators:
             if not op.alive:
+                continue
+            # 技能结束后自身晕眩期间不出手（阿米娅技2 那类的代价）
+            if op.stun_timer > 0:
                 continue
             cells = self._range_of(op)
             op.attack_timer += dt
@@ -1180,33 +1261,83 @@ class BattleSimulator:
 
             scale = skill_scale
             hits = eff.hit_count if eff is not None else 1
+            # 「最后一击系数加倍」的末击倍率，没有就是 None。判据在
+            # `skill._wants_final_double`（读描述）——**不按 `atk_scale_2`
+            # 键名认**，那个键在空弦/雪猎/丰川祥子等人身上另有含义。
+            final_scale = eff.final_hit_scale if eff is not None else None
             pierce_pct = eff.buffs.get("def_penetrate", 0.0) if eff is not None else 0.0
             pierce_fix = eff.buffs.get("def_penetrate_fixed", 0.0) if eff is not None else 0.0
+            # 法术穿透与物理穿透同构：`magic_resist_penetrate(_fixed)` 已由
+            # skill.BUFF_KEYS 归成 `res_penetrate(_fixed)`。此前这两个键是
+            # **解析了但从不结算**的死键——damage.resolve_damage 一直有
+            # `ignore_res` 参数，sim 却一次也没传过。
+            # 标本：圣聆初雪技3 的 `magic_resist_penetrate_fixed 10`。
+            res_pierce_pct = eff.buffs.get("res_penetrate", 0.0) if eff is not None else 0.0
+            res_pierce_fix = eff.buffs.get("res_penetrate_fixed", 0.0) if eff is not None else 0.0
             dmg_type = op.active_attack_type()
+            # 「末击起为真实」类（阿米娅技2 影霄·绝影）：**这一次出手本身就是
+            # 那 10 连斩**，前 9 击仍是法术，只有第 10 击转真实；打完置
+            # `slash_pending=False`，此后技能期内的普攻才整体走
+            # `skill_attack_type`（也是 "TRUE"）。博士 2026-09-17 裁定。
+            slashing = bool(eff is not None and eff.true_from_final_hit
+                            and op.slash_pending)
+            slash_type = op.attack_type
             power = op.current_atk()
 
             for target in targets:
                 ign = pierce_fix + target.defense * pierce_pct
-                for _ in range(hits):
+                ign_res = res_pierce_fix + target.res * res_pierce_pct
+                for i in range(hits):
                     if not target.alive:
                         break
+                    # 末击（第 `hits` 次）改用 `final_scale`。影霄·绝影的
+                    # 10 次斩击里只有最后那一次系数加倍。
+                    hit_scale = (final_scale
+                                 if (final_scale is not None and i == hits - 1)
+                                 else scale)
+                    hit_type = dmg_type
+                    if slashing:
+                        hit_type = ("TRUE" if i == hits - 1 else slash_type)
                     dmg = resolve_damage(
-                        power, damage_type=dmg_type, scale=scale,
+                        power, damage_type=hit_type, scale=hit_scale,
                         defense=target.defense, res=target.res,
                         ignore_defense=ign,
+                        ignore_res=ign_res,
                     )
+                    used_type = hit_type
                     if op.weakness_damage:
                         # 「弱点伤害」：两系都算、取更高的一系（用户口径）。
                         # 免疫侧被相性压成 0，故它会自动躲开当前被免疫的类型。
-                        dmg_type, dmg = self._adaptive_damage(power, scale, target, ign)
-                    dealt = self._damage_enemy(target, dmg.final, t, dmg_type)
+                        used_type, dmg = self._adaptive_damage(
+                            power, hit_scale, target, ign, ign_res)
+                    dealt = self._damage_enemy(target, dmg.final, t, used_type)
                     # 技能附带的【停顿】：不能移动，但照样能开火
                     if eff is not None and eff.control.get("sluggish"):
                         target.sluggish_timer = max(
                             target.sluggish_timer, eff.control["sluggish"])
-                    if not target.alive and self.verbose:
-                        self.result.log.append(
-                            f"{t:7.1f}s  {op.name} 击杀 {target.name}")
+                    if not target.alive:
+                        # 击杀叠层（阿米娅技2 影霄·绝影）：技能期间每击败一个
+                        # 敌人 +1 层，上限 `kill_max_stack`，**只在技能期间**叠。
+                        # 清零在 `_deactivate`——「持续至技能结束」（博士裁定 +
+                        # 游戏内注释）。放在目标循环**内部**，一次出手打死两个
+                        # 就叠两层。
+                        if (op.skill_active and eff is not None
+                                and eff.kill_max_stack):
+                            op.kill_stacks = min(eff.kill_max_stack,
+                                                 op.kill_stacks + 1)
+                        # 天赋「情绪吸收」：消灭敌人额外获得技力。放在目标循环
+                        # **内部**而不是出手后统一结算——一次出手打死两个就回两份。
+                        if op.sp_per_kill_talent and not op.skill_active \
+                                and op.skill is not None:
+                            op.sp = min(op.skill.sp_cost,
+                                        op.sp + op.sp_per_kill_talent)
+                        if self.verbose:
+                            self.result.log.append(
+                                f"{t:7.1f}s  {op.name} 击杀 {target.name}")
+
+            # 斩击打完了：此后技能期内的普攻整体走 `skill_attack_type`
+            if slashing:
+                op.slash_pending = False
 
             # 治疗量 = 当前攻击力 × 治疗倍率（医疗干员平A的倍率是 1）
             for ally in heal_targets:
@@ -1222,6 +1353,16 @@ class BattleSimulator:
                 gain = op.skill.sp_per_attack()
                 if gain and not op.skill_active:
                     op.sp = min(op.skill.sp_cost, op.sp + gain)
+            # 天赋「情绪吸收」：每次出手**再额外**回一份，与技能的 sp_type 无关。
+            # 阿米娅技1「战术咏唱·γ型」是自动回复型，`sp_per_attack()` 返回 0，
+            # 若只在上面那一支里加，这条天赋会被整条漏掉。
+            #
+            # 技能开启期间不回：与上面 `sp_per_attack` 的口径一致，也是游戏里
+            # 「技能期间 SP 条不涨」的常规。天赋正文没写这一条，属**未证实假设**，
+            # 已记进 docs/uncertainties.md 待博士裁定。
+            if op.sp_per_attack_talent and not op.skill_active \
+                    and op.skill is not None:
+                op.sp = min(op.skill.sp_cost, op.sp + op.sp_per_attack_talent)
             # 弹药类：每出手一次耗一发
             if op.skill_active and op.skill is not None \
                     and op.skill.duration_type == "AMMO" and op.ammo_left > 0:
@@ -1281,7 +1422,7 @@ class BattleSimulator:
             e.attack_pause = max(e.attack_pause, self.enemy_windup)
             dealt = op.take(resolve_damage(
                 e.atk, damage_type=e.attack_type,
-                defense=op.current_defense(), res=op.res,
+                defense=op.current_defense(), res=op.current_res(),
             ).final)
             # 受击回复的技力
             if dealt > 0 and op.skill is not None and not op.skill.is_passive \
