@@ -8,6 +8,7 @@
     stats   算干员属性：等级 + 信赖 + 潜能 + 模组
     skills  看干员技能：倍率、技力回转、持续、范围
     talents 看干员天赋
+    formula 正文 → 公式项：干员侧入口（敌人侧用 enemydb formula）
     db      干员库（gamedata）：建库与查询
     enemydb 敌人库（prts.wiki）：建库与查询（另一个文件，与干员库分开）
     cache   缓存管理
@@ -17,8 +18,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
+from typing import Any
 
 from .gamedata import (
     EnemyLibrary,
@@ -47,6 +50,7 @@ from .operator import (
 )
 from .db import (
     DB_SCHEMA_DOC,
+    DEFAULT_DB_PATH,
     ENEMY_DB_SCHEMA_DOC,
     DatabaseMissing,
     build_db,
@@ -971,7 +975,7 @@ def cmd_enemy_db(args: argparse.Namespace) -> int:
             if args.json:
                 out = dict(rep)
                 out["sections"] = [
-                    {**s, "terms": [t.as_dict() for t in s["terms"]]}
+                    {**s, "terms": [t.to_dict() for t in s["terms"]]}
                     for s in rep["sections"]]
                 print(json.dumps(out, ensure_ascii=False, indent=2))
                 return 0
@@ -1186,6 +1190,234 @@ def cmd_db(args: argparse.Namespace) -> int:
         conn.close()
 
 
+# ---------------------------------------------------------------- formula
+
+def _emit_terms(terms: list[Any], indent: str = "     ") -> None:
+    for t in terms:
+        print(f"{indent}· {t.line()}")
+
+
+def _parse_bb(spec: str) -> dict[str, Any]:
+    """解析 `--bb`：`atk=0.5,sluggish=6.5` 或一段 JSON 对象。
+
+    黑板负责填系数，而它的量纲**不统一**（同名键可能存的是别的量，
+    如 `attack@sluggish` 存的是持续秒数而不是减速幅度），所以这里只做
+    「数字转数字、其余原样当字符串」，不做任何推断。见 docs/formula-units.md。
+    """
+    s = (spec or "").strip()
+    if not s:
+        return {}
+    if s.startswith("{"):
+        try:
+            got = json.loads(s)
+        except ValueError as exc:
+            raise ValueError(f"--bb 不是合法 JSON：{exc}") from exc
+        if not isinstance(got, dict):
+            raise ValueError("--bb 的 JSON 必须是一个对象")
+        return got
+    out: dict[str, Any] = {}
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            raise ValueError(f"--bb 片段「{part}」缺 `=`，应写成 键=值")
+        k, v = part.split("=", 1)
+        v = v.strip()
+        val: Any = v
+        try:
+            val = int(v)
+        except ValueError:
+            try:
+                val = float(v)
+            except ValueError:
+                val = v
+        out[k.strip()] = val
+    return out
+
+
+def _resolve_skill(conn: sqlite3.Connection, keyword: str) -> tuple[str, str]:
+    """技能名或 skill_id → (skill_id, 显示名)。
+
+    先按 id 精确试（`db skill` 只按名字搜，`db skill skchr_wang_1` 会空手而归，
+    这里把那条路补上）；命中多个候选时**报错列出**，不替用户挑一个。
+    """
+    rows = skill_levels(conn, keyword)
+    if rows:
+        return keyword, f"{rows[0]['name']}（{keyword}）"
+    hits = search_skills(conn, keyword, limit=20)
+    if not hits:
+        raise DatabaseMissing(f"库里没有技能 {keyword!r}")
+    ids = list(dict.fromkeys(h["skill_id"] for h in hits))
+    if len(ids) > 1:
+        names = "、".join(f"{h['name']}（{h['skill_id']}）" for h in hits[:8])
+        raise DatabaseMissing(
+            f"{keyword!r} 命中 {len(ids)} 个技能，请用 skill_id 指定：{names}")
+    return ids[0], f"{hits[0]['name']}（{ids[0]}）"
+
+
+def _print_operator_scan(rep: dict[str, Any]) -> None:
+    print("干员语料编译覆盖")
+    print(f"    总条数 {rep['total']:,}   已编译 {rep['parsed']:,}   "
+          f"覆盖率 {rep['ratio'] * 100:.1f}%   公式项 {rep['terms']:,}")
+    print("    分来源：")
+    for k, v in rep["by_source"].items():
+        pct = v["parsed"] / v["total"] * 100 if v["total"] else 0.0
+        print(f"        {k:<14} {v['parsed']:>7,}/{v['total']:<7,}{pct:>6.1f}%")
+    if rep["unmatched"]:
+        print(f"    未命中的高频残句（{len(rep['unmatched'])} 条）：")
+        for skel, n in rep["unmatched"]:
+            print(f"        {n:>4}×  {skel}")
+
+
+def _print_enemy_scan(rep: dict[str, Any]) -> None:
+    total, hit = rep["rows"], rep["hit_rows"]
+    print("敌人语料编译覆盖")
+    print(f"    总条数 {total:,}   已编译 {hit:,}   "
+          f"覆盖率 {hit / total * 100 if total else 0.0:.1f}%")
+    print("    分来源：")
+    for k, v in rep["by_source"].items():
+        pct = v["hit"] / v["total"] * 100 if v["total"] else 0.0
+        print(f"        {k:<14} {v['hit']:>7,}/{v['total']:<7,}{pct:>6.1f}%")
+    if rep["top_rules"]:
+        print("    命中最多的规则（前几条）：")
+        for name, n in rep["top_rules"]:
+            print(f"        {n:>5}×  {name}")
+
+
+def _formula_text(args: argparse.Namespace, text: str,
+                  bb: dict[str, Any]) -> int:
+    """任意文本 → 公式项。不查库，纯函数。"""
+    from . import formula as F
+
+    if args.enemy:
+        from .enemy_formula import (RULES_ENEMY, detemplate, formulas_enemy,
+                                    parse_enemy)
+        flat = detemplate(text)
+        terms = parse_enemy(text, bb or None)
+        fx = formulas_enemy(text, bb or None)
+        note = (f"敌人规则 {len(RULES_ENEMY)} 条"
+                "，含 wiki 模板展开与带变量的算式")
+    else:
+        flat = F.normalize(text)[0]
+        terms = F.parse(text, bb or None)
+        fx = F.formulas(terms)
+        note = f"干员规则 {len(F.RULES)} 条"
+
+    if args.json:
+        print(json.dumps({
+            "mode": "text",
+            "rules": "enemy" if args.enemy else "operator",
+            "text": text, "flat": flat, "blackboard": bb,
+            "terms": [t.to_dict() for t in terms],
+            "formulas": fx,
+        }, ensure_ascii=False, indent=2))
+        return 0
+
+    print(f"文本 → 公式项（{note}）")
+    print(f"  原文：{text}")
+    if flat != text:
+        print(f"  洗净：{flat}")
+    if bb:
+        print(f"  黑板：{bb}")
+    if not terms:
+        print("     （未编译出公式项）")
+    _emit_terms(terms)
+    print(f"  {len(terms)} 个公式项")
+    if fx:
+        print("  表达式：")
+        for k, v in fx.items():
+            print(f"     {k}: {v}")
+    return 0
+
+
+def cmd_formula(args: argparse.Namespace) -> int:
+    """正文 → 公式项。三种用法：任意文本 / 库内一个干员或技能 / 扫全库。
+
+    这是**干员侧**的入口，与 `enemydb formula`（敌人侧）对称；`--enemy`
+    可临时改用敌人规则编译任意文本。只做识别与结构化，**不做数值推断**——
+    带变量的算式只保留结构（`amount` 为空），谁给它算出个值就是错的。
+    详见 docs/formula-maintenance.md 与 docs/enemy-formula.md。
+    """
+    from . import formula as F
+
+    path = Path(args.path) if args.path else None
+    try:
+        bb = _parse_bb(args.bb)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    if args.scan:
+        if args.enemy:
+            from .db import DEFAULT_ENEMY_DB_PATH
+            from .enemy_formula import enemy_scan
+            rep = enemy_scan(path or DEFAULT_ENEMY_DB_PATH, top=args.top)
+            if args.json:
+                print(json.dumps(rep, ensure_ascii=False, indent=2))
+                return 0
+            _print_enemy_scan(rep)
+            return 0
+        rep = F.scan(path or DEFAULT_DB_PATH, top=args.top)
+        if args.json:
+            print(json.dumps(rep, ensure_ascii=False, indent=2))
+            return 0
+        _print_operator_scan(rep)
+        return 0
+
+    if args.char and args.skill:
+        print("--char 与 --skill 只能给一个", file=sys.stderr)
+        return 2
+
+    if not (args.char or args.skill):
+        text = (args.text or "").strip()
+        if not text:
+            print('要给一段正文，例如 `formula "攻击力+50%，攻击速度+30"`；'
+                  "或用 --char / --skill / --scan", file=sys.stderr)
+            return 2
+        return _formula_text(args, text, bb)
+
+    db_path = path or DEFAULT_DB_PATH
+    conn = connect(db_path)
+    try:
+        if args.char:
+            d = char_detail(conn, args.char)     # 撞名会列出候选并报错
+            key, label = d["char_id"], f"{d['name']}（{d['char_id']}）"
+        else:
+            key, label = _resolve_skill(conn, args.skill)
+    finally:
+        conn.close()
+
+    rows = F.describe_row(db_path, key)
+    if args.json:
+        print(json.dumps({
+            "mode": "char" if args.char else "skill",
+            "key": key, "name": label,
+            "sections": [{**s, "terms": [t.to_dict() for t in s["terms"]]}
+                         for s in rows],
+        }, ensure_ascii=False, indent=2))
+        return 0
+
+    total = sum(len(s["terms"]) for s in rows)
+    print(f"{label}")
+    print(f"{len(rows)} 段正文，编译出 {total} 个公式项\n")
+    for s in rows:
+        head = str(s["kind"])
+        if s.get("id"):
+            head += f"  {s['id']}"
+        if s.get("level") is not None:
+            head += f"  L{s['level']}"
+        if s.get("name"):
+            head += f"  {s['name']}"
+        print(f"── {head}")
+        print(f"   {s['text']}")
+        if not s["terms"]:
+            print("     （未编译出公式项）")
+        _emit_terms(s["terms"])
+        print()
+    return 0
+
+
 # ---------------------------------------------------------------- cache
 
 def cmd_cache(args: argparse.Namespace) -> int:
@@ -1354,6 +1586,30 @@ def build_parser() -> argparse.ArgumentParser:
                    help="tile-fetch 时忽略缓存强制重取")
     d.add_argument("--json", action="store_true")
     d.set_defaults(func=cmd_db)
+
+    fm = sub.add_parser(
+        "formula", help="正文 → 公式项：把中文描述编译成结构化公式")
+    fm.add_argument("text", nargs="?", default="",
+                    help="要编译的正文（任意文本）；也可改用 "
+                         "--char / --skill / --scan")
+    fm.add_argument("--char", default="",
+                    help="编译一个干员的全部天赋（名字或 char_id）")
+    fm.add_argument("--skill", default="",
+                    help="编译一个技能的全部等级（技能名或 skill_id）")
+    fm.add_argument("--scan", action="store_true",
+                    help="统计全库覆盖率与未命中的高频残句")
+    fm.add_argument("--enemy", action="store_true",
+                    help="改用敌人规则（含 wiki 模板展开与带变量的算式）；"
+                         "配 --scan 时统计敌人库")
+    fm.add_argument("--bb", default="",
+                    help='黑板系数，如 "atk=0.5,sluggish=6.5"（也接受 JSON 对象）')
+    fm.add_argument("--top", type=int, default=25,
+                    help="scan 时列几条高频残句/规则（默认 25）")
+    fm.add_argument("--path", default="",
+                    help="库文件路径（默认 data/akdb.sqlite；"
+                         "--enemy --scan 时是 data/enemydb.sqlite）")
+    fm.add_argument("--json", action="store_true")
+    fm.set_defaults(func=cmd_formula)
 
     vf = sub.add_parser(
         "verify", help="验证一份打法：能不能三星，不能又是为什么")

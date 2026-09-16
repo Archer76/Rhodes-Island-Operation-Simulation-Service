@@ -958,20 +958,23 @@ def enemy_scan(db: Path | str, *, rules: Iterable | None = None,
                top: int = 20) -> dict[str, Any]:
     """跑一遍全量语料，统计命中率与规则使用频次。
 
-    `rules` 默认是**敌人完整规则表**（干员 130 条 + 敌人规则）。
-    传 `formula.RULES` 可单独看"只靠干员规则能覆盖多少"——这是衡量
-    敌人规则到底补了多少的基准线。
+    `rules` 默认是**敌人完整规则表**（干员 130 条 + 敌人规则），此时
+    与 `parse_enemy` 逐条等价（含 `expr_terms` 那个算式钩子）。传
+    `formula.RULES` 可单独看"只靠干员规则能覆盖多少"——这是衡量敌人规则
+    到底补了多少的基准线，**基准线不挂算式钩子**（那是敌人侧自己的追加，
+    挂上就不再是"只靠干员规则"了）。
     """
     from . import formula
 
     use = RULES_ENEMY if rules is None else rules
+    extra = expr_terms if rules is None else None
     corpus = load_enemy_corpus(db)
     by_source: dict[str, list[int]] = {}
     terms: dict[str, int] = {}
     misses: dict[str, list[str]] = {}
     for row in corpus:
         flat = detemplate(row["text"])
-        got = formula.parse(flat, row["blackboard"], rules=use)
+        got = formula.parse(flat, row["blackboard"], rules=use, extra=extra)
         hit, tot = by_source.setdefault(row["source"], [0, 0])
         by_source[row["source"]] = [hit + (1 if got else 0), tot + 1]
         for t in got:

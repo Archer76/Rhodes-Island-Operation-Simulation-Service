@@ -272,6 +272,15 @@ def check_coverage() -> None:
     check("命中的语料条数 > 未命中（基本盘已过半数）",
           full["hit_rows"] > full["rows"] - full["hit_rows"])
 
+    # 统计函数必须与真编译器**逐行同口径**：`enemy_scan` 早先漏挂了算式钩子
+    # （`expr_terms`），报 68.4% 而 `parse_enemy` 实为 69.3%——差的 63 行全是
+    # "只被算式救回"的行。CLI 照它打印，等于把编译器的成绩报低。谁再把钩子摘掉，
+    # 这一条就红。
+    recount = sum(1 for row in load_enemy_corpus(DEFAULT_ENEMY_DB_PATH)
+                  if parse_enemy(detemplate(row["text"]), row["blackboard"]))
+    check("enemy_scan 与 parse_enemy 逐行同口径（统计不许漏挂钩子）",
+          recount == ft, f"scan {ft} / 逐行 {recount}")
+
 
 def check_second_wave() -> None:                                      # noqa: C901
     """第二轮补的家族规则 + 两条本轮真踩到的坑。"""
