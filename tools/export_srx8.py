@@ -43,7 +43,7 @@ from run_srx8 import make_provider, run_plan, PlanError                   # noqa
 from squad import Roster                                                  # noqa: E402
 
 STAGE_ID = "act54side_ex08"
-OUT_DIR = pathlib.Path(r"<仓库目录>\out")
+OUT_DIR = pathlib.Path(__file__).resolve().parents[1] / "out"
 
 #: 落点是**本项目坐标 = MAA 口径**（原点左上、y 向下），导出时原样写入
 #: `location: [x, y]`，不做任何换算。（改口径前的注释写的是「y 从下往上」，
