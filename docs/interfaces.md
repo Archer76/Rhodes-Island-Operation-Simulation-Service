@@ -1,6 +1,6 @@
 # 接口总览
 
-> **这份文档覆盖本项目的全部对外接口**：14 个命令行子命令、整个 Python 包的公开面、
+> **这份文档覆盖本项目的全部对外接口**：15 个命令行子命令、整个 Python 包的公开面、
 > 23 个 `tools/` 脚本、三种交换文件格式、环境变量与退出码。
 >
 > 分工：本文讲**怎么调用**；某个子系统内部的原理见对应专项文档
@@ -15,7 +15,7 @@
 
 ```
                    ┌─────────────────────────────────────────┐
-   命令行 ────────►│  ak_tactic.cli（14 个子命令）            │
+   命令行 ────────►│  ak_tactic.cli（15 个子命令）            │
                    ├─────────────────────────────────────────┤
    Python ───────►│  ak_tactic.*（5 个子包 / 38 个模块）      │──► 两个本地库
                    ├─────────────────────────────────────────┤      data/akdb.sqlite
@@ -255,7 +255,7 @@ python -m ak_tactic [--no-cache] <子命令> [参数]
 | `build` | 重建库（联网，首次约 51s） |
 | `find` | 找敌人 |
 | `show` | 敌人详情 |
-| `formula` | **把正文编译成公式项**（调试公式解析的主入口） |
+| `formula` | **把正文编译成公式项**（敌人侧；干员侧走顶层的 `formula`，见 3.11） |
 | `sql` | 只读查询 |
 | `schema` | 表说明 |
 
@@ -270,7 +270,38 @@ python -m ak_tactic [--no-cache] <子命令> [参数]
 
 ---
 
-### 3.11 `verify` —— 验证一份打法
+### 3.11 `formula` —— 正文 → 公式项（干员侧）
+
+`python -m ak_tactic formula [正文] [选项]`
+
+把中文描述编译成**结构化公式项**。这是干员侧的编译入口，与 `enemydb formula`
+（敌人侧）对称；**不需要数据库也能用**——给一段文本即可。
+
+| 用法 | 含义 |
+| --- | --- |
+| `formula "攻击力+50%"` | 编译**任意文本**（干员规则） |
+| `formula --enemy "移动速度提升至150%"` | 改用**敌人规则**（含 wiki 模板展开与带变量的算式） |
+| `formula --char 望` | 库里某个干员的**全部天赋**（名字或 `char_id`） |
+| `formula --skill 取势` | 某个技能的**全部等级**（技能名或 `skill_id`；撞名时报错列出候选） |
+| `formula --scan` | 全库覆盖率 + 未命中的高频残句 |
+| `formula --scan --enemy` | 同上，统计敌人库 |
+
+| 选项 | 默认 | 含义 |
+| --- | --- | --- |
+| `--bb` | — | 黑板系数，如 `"atk=0.5,sluggish=6.5"`（也接受 JSON 对象） |
+| `--top` | `25` | `--scan` 时列几条高频残句/规则 |
+| `--path` | `data/akdb.sqlite` | 库路径（`--enemy --scan` 时是 `data/enemydb.sqlite`） |
+| `--json` | 关 | 输出 JSON（逐项含 `to_dict()` 的全部字段，可溯源 `evidence`） |
+
+> **只做识别与结构化，不做数值推断。** 带变量的算式只保留结构
+> （`expr` 是算式、`vars` 是依赖、`amount` 一律为空）；正文没写幅度就如实标
+> 「（幅度未写明）」，不编一个。给算式算出个值就是错的。
+>
+> 退出码：正常 `0`；缺少参数、`--bb` 格式错、干员/技能查不到或撞名，都返回 `2`。
+
+---
+
+### 3.12 `verify` —— 验证一份打法
 
 `python -m ak_tactic verify <stage> [选项]`
 
@@ -293,7 +324,7 @@ python -m ak_tactic [--no-cache] <子命令> [参数]
 
 ---
 
-### 3.12 `search` —— 搜一套能三星的阵容
+### 3.13 `search` —— 搜一套能三星的阵容
 
 `python -m ak_tactic search <stage> [选项]`
 
@@ -312,7 +343,7 @@ python -m ak_tactic [--no-cache] <子命令> [参数]
 
 ---
 
-### 3.13 `team` —— 组队建议
+### 3.14 `team` —— 组队建议
 
 `python -m ak_tactic team [选项]`
 
@@ -327,7 +358,7 @@ python -m ak_tactic [--no-cache] <子命令> [参数]
 
 ---
 
-### 3.14 `cache` —— 缓存管理
+### 3.15 `cache` —— 缓存管理
 
 `python -m ak_tactic cache [选项]`
 
@@ -451,6 +482,9 @@ python -m ak_tactic [--no-cache] <子命令> [参数]
 | `enemy_formula.enemy_scan(db, *, rules=…)` | 全量语料命中率统计 |
 | `enemy_formula.load_enemy_corpus(db)` / `expr_terms(flat, used)` / `CorpusRow` | 语料 / 算式钩子 / 语料行 |
 
+> **命令行入口**：干员侧 `python -m ak_tactic formula`（见 3.11），
+> 敌人侧 `python -m ak_tactic enemydb formula`（见 3.10）。
+>
 > **要改这一层，先读 [`formula-maintenance.md`](formula-maintenance.md)。**
 
 ### 4.7 `ak_tactic.db` —— 两个库
@@ -513,8 +547,8 @@ python -m ak_tactic [--no-cache] <子命令> [参数]
 | `check_enemy_db.py` | 敌人库完整性与一致性 |
 | `check_battle.py` | 战斗与技能回归（含三条基线） |
 | `check_p3r.py` | 伤害相性 / 击破值 / 倒地 / 全场总攻击 |
-| `check_formula.py` | 干员侧公式：锚点、覆盖率、量纲不变量（`-v` 详细） |
-| `check_enemy_formula.py` | 敌人侧公式：清洗、语料、锚点、量纲、精度守卫、覆盖率、算式 |
+| `check_formula.py` | 干员侧公式：锚点、覆盖率、量纲不变量、结算层、序列化冒烟（`-v` 详细） |
+| `check_enemy_formula.py` | 敌人侧公式：清洗、语料、锚点、量纲、精度守卫、覆盖率（含与编译器逐行同口径）、算式 |
 | `check_verify.py` | 通用验证器 |
 | `check_search.py` | 搜索器 |
 | `check_eta.py` | 敌人到达时刻 |
