@@ -275,6 +275,14 @@ def check_coverage(conn: sqlite3.Connection) -> None:
     special = _count(conn, "SELECT COUNT(*) FROM module WHERE is_special_equip=1")
     check("特限/特勤证章被标出来（21 条）", special == 21, f"实得 {special}")
 
+    # 风味文本不入库（2026-09-17 裁定）：`module.description` 是模组故事
+    # （麦哲伦的探险日记那类，905 行约 42 万字），全仓无一处读取——喂公式语料的
+    # 是 `module_level.parts`，不是这一列。删掉零影响；这道守卫防的是"顺手加回来"
+    # （上游 `uniequipDesc` 还在，加回来只要一行）。
+    mod_cols = {r[1] for r in conn.execute("PRAGMA table_info(module)")}
+    check("module 表不存模组风味文本（无 description 列）",
+          "description" not in mod_cols, f"实得列 {sorted(mod_cols)}")
+
     # 攻击范围：1-1 必须是「自身格 + 正前方一格」
     cells = conn.execute("SELECT cells FROM attack_range WHERE range_id='1-1'"
                          ).fetchone()

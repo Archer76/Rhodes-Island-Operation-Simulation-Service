@@ -60,7 +60,11 @@ from __future__ import annotations
 #:   * enemy_level 增 `description_fixed`——档位描述的内联勘误（6 档有）；
 #:   * enemy_resist 增 `source` / `is_effective`，主键并入 `source`——
 #:     `抗性覆写` 压过 `*抗性` 字段，同名条目必须能并存。
-ENEMY_DB_VERSION = 2
+#: v3（2026-09-17）：删掉 `enemy.description`——图鉴**剧情文案**（1710 行，
+#:     无一含机制模板）。**`enemy_level.description` 不在此列**：它混着能力正文
+#:     （「未被阻挡时受到的物理或法术伤害减少50%」只写在那里）且是公式语料
+#:     `desc` 的来源，删它会静默丢机制。
+ENEMY_DB_VERSION = 3
 
 ENEMY_SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -85,7 +89,6 @@ CREATE TABLE IF NOT EXISTS enemy (
     attack_way   TEXT,               -- 攻击方式：近战 / 远程 / 不攻击
     move_way     TEXT,               -- 行动方式：地面 / 飞行
     camp         TEXT,               -- 阵营
-    description  TEXT,
     ability      TEXT,               -- 图鉴「能力」一栏，**游戏内原文**
     ability_fixed TEXT,              -- 同上，**站方勘误后**（展开 修正lite；空=无勘误）
     ability_errata TEXT,             -- 勘误原文（带 修正lite 标记），留作追溯

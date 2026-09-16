@@ -58,7 +58,10 @@ from __future__ import annotations
 #:     （v3 与 v2 的表结构相同，改版本号是为了让手上的旧文件主动认出来）
 #: v4：新增 tile（地块字典，95 条）——本库**第一张非 gamedata 来源的表**，
 #:     来源是 theresa.wiki 的地图数据接口，见 db/tiles.py
-DB_VERSION = 4
+#: v5（2026-09-17）：删掉 `module.description`——模组**故事**（905 行约 42 万字，
+#:     麦哲伦的探险日记那类）。喂公式语料的从来是 `module_level.parts` 而非这一列，
+#:     且全仓无一处读取它，故按"库只装战斗数据"删掉。守卫见 check_db 对应两项。
+DB_VERSION = 5
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -230,8 +233,7 @@ CREATE TABLE IF NOT EXISTS module (
     show_evolve_phase INTEGER,
     show_level    INTEGER,
     has_unlock_mission INTEGER,
-    mission_count INTEGER,
-    description   TEXT
+    mission_count INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS module_level (

@@ -708,9 +708,6 @@ def _print_enemy(d: dict) -> None:
           f"行动方式 {d['move_way'] or '—'}  阵营 {d['camp'] or '—'}")
     if d["debut_event"]:
         print(f"  登场活动：{d['debut_event']}")
-    if d["description"]:
-        print("  描述：")
-        print(_enemy_text(d["description"], "      "))
     if d["ability"]:
         print("  能力：")
         print(_enemy_text(d["ability"], "      "))

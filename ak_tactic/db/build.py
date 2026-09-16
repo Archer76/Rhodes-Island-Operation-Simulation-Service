@@ -464,8 +464,8 @@ def build_db(path: Path | str | None = None, *,
                    (module_id, char_id, name, type, type_name1, type_name2,
                     is_special_equip, special_equip_desc, unlock_evolve_phase,
                     unlock_level, show_evolve_phase, show_level,
-                    has_unlock_mission, mission_count, description)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    has_unlock_mission, mission_count)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (mid, owner.get(mid) or eq.get("charId"), eq.get("uniEquipName"),
                  eq.get("type"),
                  eq.get("typeName1"), eq.get("typeName2"),
@@ -473,8 +473,7 @@ def build_db(path: Path | str | None = None, *,
                  _phase_index(eq.get("unlockEvolvePhase")), eq.get("unlockLevel"),
                  _phase_index(eq.get("showEvolvePhase")), eq.get("showLevel"),
                  int(bool(eq.get("hasUnlockMission"))),
-                 len(eq.get("missionList") or []) or 0,
-                 eq.get("uniEquipDesc")),
+                 len(eq.get("missionList") or []) or 0),
             )
             for ph in phases:
                 conn.execute(
