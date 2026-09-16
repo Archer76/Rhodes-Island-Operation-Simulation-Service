@@ -39,6 +39,7 @@ from ak_tactic.gamedata import (                                          # noqa
     EnemyLibrary, GameDataSource, RangeTable, load_stage,
 )
 from ak_tactic.operator import SkillBook, TalentBook                      # noqa: E402
+from ak_tactic.parallel import pmap                                       # noqa: E402
 from run_srx8 import make_provider, run_plan, PlanError                   # noqa: E402
 from squad import Roster                                                  # noqa: E402
 
@@ -189,12 +190,14 @@ def to_maa(stage, roster: Roster, plan, detail, *, title: str, details: str) -> 
     }
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--plan", type=int, default=0, help="只导出第 N 个候选（1 起算）")
-    ap.add_argument("--verbose", action="store_true")
-    args = ap.parse_args()
+def build_context():
+    """把关卡 / 敌人库 / 范围提供者 / 名册 / 技能书 / 天赋书建起来。
 
+    抽成函数是为了**让并行 worker 用与主进程逐字同源的构造代码**。这些东西
+    **全都不可 pickle**（`EnemyLibrary`/`SkillBook`/`TalentBook` 内部有
+    `_thread.lock`，`RangeProvider` 是闭包），所以扫描不能把它们当参数投给
+    子进程，只能让子进程自己重建一遍。
+    """
     src = GameDataSource()
     stage = load_stage(STAGE_ID, source=src)
     lib = EnemyLibrary(source=src)
@@ -202,6 +205,64 @@ def main() -> int:
     talents = TalentBook()
     roster = Roster()
     provider = make_provider(roster.calc, RangeTable())
+    return stage, lib, provider, roster, book, talents
+
+
+#: worker 进程里建一次的共同前提。键与 `build_context` 的返回值对应。
+_SWEEP_CTX: dict = {}
+
+
+def _sweep_init() -> None:
+    """每个 worker 建一次扫描前提——**不是每个扫描点建一次**。"""
+    (stage, lib, provider, roster, book,
+     talents) = build_context()
+    _SWEEP_CTX.update(stage=stage, lib=lib, provider=provider,
+                      roster=roster, book=book, talents=talents)
+
+
+def _sweep_one(spec):
+    """跑一个扫描点。
+
+    `spec = (kind, value, plan)`：`kind` 是 speed / qi / mode，`plan` 是候选
+    编队（它本身就是纯 tuple 列表，可 pickle）。返回**只有标量**——`run_plan`
+    还回一个 `sim`，那是活对象，不能跨进程传。
+
+    主结果与敏感性用的是**同一个 `run_plan`、同一套开关**，并行只改变
+    "在哪个进程里跑"，不改变算法。
+    """
+    kind, value, plan = spec
+    kw: dict = {"ranged_enemies": True, "boss_mode_switch": "knock",
+                "affinity_blocks_damage": True}
+    if kind == "speed":
+        kw["speed_scale"] = value
+    elif kind == "qi":
+        kw["sword_qi_speed"] = value
+    elif kind == "mode":
+        kw["boss_mode_switch"] = value
+    else:
+        raise ValueError(f"未知的扫描维度：{kind}")
+    _sim, r, _d, _w = run_plan(_SWEEP_CTX["stage"], _SWEEP_CTX["lib"],
+                               _SWEEP_CTX["provider"], _SWEEP_CTX["roster"],
+                               _SWEEP_CTX["book"], _SWEEP_CTX["talents"],
+                               plan, **kw)
+    return (kind, value, r.won, r.leaks, r.kills)
+
+
+#: 扫描点。三组放在一起投递，是为了**跨过并行的最小批量门槛**——单独一组
+#: （剑速 10 点、敌速 7 点、形态 3 点）都太小，进程池的开销盖过收益。
+SPEED_SCALES = (0.85, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5)
+QI_SPEEDS = (1.0, 1.1, 1.2, 1.22, 1.25, 1.3, 1.4, 1.5, 2.0, 4.0)
+BOSS_MODES = (("knock", "每倒地一次★"), ("none", "不换"), ("time", "每30秒"))
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--plan", type=int, default=0, help="只导出第 N 个候选（1 起算）")
+    ap.add_argument("--verbose", action="store_true")
+    args = ap.parse_args()
+
+    (stage, lib, provider, roster, book,
+     talents) = build_context()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     H = stage.map.height
@@ -256,37 +317,33 @@ def main() -> int:
             head_note += f"；阵亡 {dead}"
         # 敌速敏感性：0.85–1.5 全胜才算"稳"。校准误差是 1.4%（1-7 实机对齐），
         # 所以这个区间远宽于误差。**这一列也在 knock 读法下跑**，与主结果同规则。
-        band = []
-        for s in (0.85, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5):
-            s_sim, s_r, _d, _w = run_plan(stage, lib, provider, roster, book,
-                                          talents, plan, ranged_enemies=True,
-                                          speed_scale=s,
-                                          boss_mode_switch="knock")
-            band.append(f"×{s:g}:{'胜' if s_r.won else '败'}漏{s_r.leaks}")
+        # 三组扫描点**一次投出去并行跑**。它们与主结果共用同一个 `run_plan`
+        # 和同一套开关，并行只改"在哪个进程里跑"，不改算法，所以逐点结果与
+        # 串行完全一致（下面 check_search 的对照断言钉住这一点）。
+        # 合并投递还有个理由：单独一组都跨不过并行的最小批量门槛
+        # （剑速 10 / 敌速 7 / 形态 3 个点），合成 20 个点才值得开池。
+        swept = {(k, v): (won, leaks, kills) for k, v, won, leaks, kills in
+                 pmap(_sweep_one,
+                      [("speed", s, plan) for s in SPEED_SCALES]
+                      + [("qi", v, plan) for v in QI_SPEEDS]
+                      + [("mode", m, plan) for m, _ in BOSS_MODES],
+                      init=_sweep_init, key="srx8-sweep")}
+        band = [f"×{s:g}:{'胜' if swept[('speed', s)][0] else '败'}"
+                f"漏{swept[('speed', s)][1]}" for s in SPEED_SCALES]
         band_note = "敌速鲁棒性（knock 读法）" + " ".join(band)
         # 剑气速度不在 gamedata 里（原文只写"向前/遇障碍右转/技能结束消失"）。
         # 2026-09-16 由录像实测为 1.2 格/秒（见 BattleSimulator.sword_qi_speed），
         # 旧默认值 4.0 是估的。敏感性必须逐点跑：1.2 附近会漏 1 只，而 4.0 不漏——
         # 不扫就看不见这个边界。
-        qi = []
-        for v in (1.0, 1.1, 1.2, 1.22, 1.25, 1.3, 1.4, 1.5, 2.0, 4.0):
-            _q_sim, q_r, _qd, _qw = run_plan(stage, lib, provider, roster, book,
-                                             talents, plan, ranged_enemies=True,
-                                             boss_mode_switch="knock",
-                                             sword_qi_speed=v)
-            qi.append(f"{v:g}:{'胜' if q_r.won else '败'}漏{q_r.leaks}")
+        qi = [f"{v:g}:{'胜' if swept[('qi', v)][0] else '败'}漏{swept[('qi', v)][1]}"
+              for v in QI_SPEEDS]
         qi_note = "剑气速度敏感性（格/秒，实测 1.2）" + " ".join(qi)
         # 形态假设扫描：三种读法都跑一遍，把结论摊开——这比挑一个读法报"胜"诚实。
         # 注意 `knock` 现在的实现是**每倒地一次就换**（博士实机确认），
         # 标签里不再写"每倒地 2 次"——那是我早先从 `trigger_cnt` 反推错的读法。
-        modes = []
-        for ms, label in (("knock", "每倒地一次★"), ("none", "不换"),
-                          ("time", "每30秒")):
-            _m_sim, m_r, _md, _mw = run_plan(stage, lib, provider, roster, book,
-                                             talents, plan, ranged_enemies=True,
-                                             boss_mode_switch=ms)
-            modes.append(f"{label}:{'胜' if m_r.won else '败'}"
-                         f"{m_r.kills}杀{m_r.leaks}漏")
+        modes = [f"{label}:{'胜' if swept[('mode', m)][0] else '败'}"
+                 f"{swept[('mode', m)][2]}杀{swept[('mode', m)][1]}漏"
+                 for m, label in BOSS_MODES]
         mode_note = "BOSS 换相性读法 " + "  ".join(modes)
         print(f"    {mode_note}")
         print(f"    {qi_note}")

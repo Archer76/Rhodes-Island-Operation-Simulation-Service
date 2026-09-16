@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Sequence
 
 from .eta import ArrivalIndex, enemy_arrivals, route_plans
+from .parallel import PARALLEL_MIN_TASKS, eval_states
 from .plan import DeployOrder, Plan, PlanError, Roster
 from .verify import Verdict, Verifier
 
@@ -192,11 +193,25 @@ class Searcher:
     """两层搜索：几何剪枝 → beam search。"""
 
     def __init__(self, verifier: Verifier | None = None, *,
-                 verbose: bool = False, sim_kwargs: dict | None = None) -> None:
+                 verbose: bool = False, sim_kwargs: dict | None = None,
+                 workers: int | None = None,
+                 verifier_kwargs: dict | None = None) -> None:
         self.verifier = verifier or Verifier()
         self.verbose = verbose
         #: 透传给模拟器的开关（`boss_mode_switch` / `speed_scale` 之类）
         self.sim_kwargs = dict(sim_kwargs or {})
+        #: 用几个进程跑这一轮搜索。`None` = 按每层候选数自动定，`1` = 强制串行。
+        self.workers = workers
+        #: **worker 必须用与主进程完全相同的开关建 Verifier**，否则并行结果会
+        #: 与串行分叉——`effect_source` 从 merge 换成 desc 就改了伤害口径，
+        #: `use_range_table` 一关攻击范围就退化。从现成的 Verifier 反推，
+        #: 不要求调用方重复声明；显式传入则以传入的为准。
+        self.verifier_kwargs = (dict(verifier_kwargs) if verifier_kwargs
+                                is not None else {
+                                    "effect_source": self.verifier.effect_source,
+                                    "use_range_table": self.verifier.use_range_table,
+                                    "verbose": self.verifier.verbose,
+                                })
         self.evaluated = 0
 
     # -------------------------------------------------- 内部
@@ -241,6 +256,37 @@ class Searcher:
         # 状态必须跟着一起回来：排序键是 rank，不是状态本身
         return (v.rank(), tuple(state), plan, v)
 
+    def _eval_many(self, stage_id: str, states: Sequence[Sequence[Candidate]],
+                   roster: Roster) -> list:
+        """求值一层里的全部状态，返回成功项（失败项按串行的语义丢弃）。
+
+        并行与串行**必须给出同一组结果**，所以这里只有一处分支差异：走进程池
+        还是走本进程。`eval_states` 保证「与输入同序、失败为 None」，
+        `_eval` 保证「失败返回 None」，两条路的输出因此同构。
+        """
+        from .parallel import plan_workers
+
+        states = list(states)
+        if not states:
+            return []
+        n = plan_workers(len(states), workers=self.workers)
+        if n <= 1:
+            out = []
+            for st in states:
+                got = self._eval(stage_id, st, roster)
+                if got is not None:
+                    out.append(got)
+            return out
+        # `evaluated` 在串行路里由 `_eval` 自己加，并行路里 worker 加不到主进程
+        # 的计数器上，只能在这里补——两条路的计数口径都是「成功求值的条数」。
+        results = eval_states(stage_id, states, roster,
+                              sim_kwargs=self.sim_kwargs,
+                              verifier_kwargs=self.verifier_kwargs,
+                              workers=n)
+        ok = [g for g in results if g is not None]
+        self.evaluated += len(ok)
+        return ok
+
     # -------------------------------------------------- 主入口
 
     def search(
@@ -281,11 +327,15 @@ class Searcher:
         overall: tuple[tuple, tuple, Plan, Verdict] | None = None
         depth = 0
         for depth in range(1, max_ops + 1):
-            pool: list[tuple[tuple, tuple, Plan, Verdict]] = []
             tried = 0
             # 空状态用 () 起步，之后每层从上一层的 beam 展开
             seeds: list[tuple] = ([tuple()] if not beam_states
                                   else [s[1] for s in beam_states])
+            # 先把这一层**所有**待求值状态收集起来，再整批投出去。
+            # 逐条求值会把并行退化成「一次一条」，IPC 往返与进程调度会盖过
+            # 收益（实测只有 1.5×）；整批投递后同一批任务能到 4.8–7.4×。
+            # 这一层是搜索里唯一的重活，也是唯一值得并行的位置。
+            states: list[tuple] = []
             for seed in seeds:
                 used_ops = {c.operator for c in seed}
                 used_pos = {c.position for c in seed}
@@ -293,9 +343,8 @@ class Searcher:
                     if cand.operator in used_ops or cand.position in used_pos:
                         continue
                     tried += 1
-                    got = self._eval(stage_id, seed + (cand,), roster)
-                    if got is not None:
-                        pool.append(got)
+                    states.append(seed + (cand,))
+            pool = self._eval_many(stage_id, states, roster)
             if not pool:
                 result.note = f"第 {depth} 人时已经没有可加的位置了"
                 break
@@ -348,5 +397,7 @@ class Searcher:
 def search(stage_id: str, roster: Roster, operators: Sequence[str],
            **kw) -> SearchResult:
     """一次性的便捷入口（会现建 Verifier，适合单次调用）。"""
-    return Searcher(**{k: kw.pop(k) for k in ("verbose", "sim_kwargs")
+    return Searcher(**{k: kw.pop(k)
+                       for k in ("verbose", "sim_kwargs", "workers",
+                                 "verifier_kwargs")
                        if k in kw}).search(stage_id, roster, operators, **kw)
