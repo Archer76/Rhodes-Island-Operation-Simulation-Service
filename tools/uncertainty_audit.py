@@ -1,0 +1,487 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""生成 `docs/uncertainties.md` —— 给博士**逐项回填**的待裁定清单。
+
+跑法：`python tools/uncertainty_audit.py`
+
+## 为什么要生成而不是手写
+
+清单里的数据（哪些算式认不出属性、各占多少、原文长什么样）会随语料与规则变，
+手写必然过期。但**裁定是人写的**，重新生成时绝不能冲掉——所以每张表都留一栏
+`裁定`，生成前先把上一版已填的读回来续用（与 `tools/unit_audit.py` 同一套做法）。
+
+## 填完之后怎么落地
+
+裁定不会自动生效。填好后我来读 `docs/uncertainties.md`，把裁定接进：
+- **属性词表** → `ak_tactic/enemy_formula.py` 的 `_EXPR_ATTR`
+- **误读复查** → 对应的规则或守卫（可能同时改 `ak_tactic/formula.py`）
+- **项目级** → 一处一处改代码，改完跑全套自检
+
+## 行是怎么排序的
+
+按频次降序——**频次高的先裁**，收益最大。低频长尾一律列在后面，
+可以整段跳过，也可以一条条来。
+"""
+from __future__ import annotations
+
+import argparse
+import collections
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from ak_tactic import formula                                      # noqa: E402
+from ak_tactic.db import DEFAULT_ENEMY_DB_PATH                     # noqa: E402
+from ak_tactic.enemy_formula import (RULES_ENEMY, detemplate,      # noqa: E402
+                                     expr_terms, load_enemy_corpus)
+
+OUT = ROOT / "docs" / "uncertainties.md"
+
+_RULING = "裁定"
+
+
+# ------------------------------------------------------------ 裁定栏的续用
+
+def load_rulings(path: pathlib.Path) -> dict[tuple[str, str], str]:
+    """把上一版已填的 `裁定` 读回来，按 (节名, 首列) 索引。
+
+    只认**带 `裁定` 列**的表：旧版或别处的表最后一栏是建议，不能被当答案读进来。
+    人若在 markdown 里直接敲了裸 `|`，表格会多切出几栏，把尾部并回最后一栏
+    ——不并回去，裁定值会被悄悄截断成半截，比报错更难发现。
+    """
+    if not path.exists():
+        return {}
+    out: dict[tuple[str, str], str] = {}
+    section, has_col, ncol = "", False, 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            section, has_col, ncol = line[3:].strip(), False, 0
+            continue
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in re.split(r"(?<!\\)\|", line)[1:-1]]
+        if not cells:
+            continue
+        if _RULING in cells or any(c.startswith(_RULING) for c in cells):
+            has_col, ncol = True, len(cells)
+            continue
+        if set("".join(cells)) <= set("-: ") or not has_col:
+            continue
+        if len(cells) > ncol:
+            cells = cells[:ncol - 1] + ["|".join(cells[ncol - 1:])]
+        key, val = cells[0].strip("`"), cells[-1].replace("\\|", "|")
+        if key and val:
+            out[(section, key)] = val
+    return out
+
+
+def _cell(text: str, keep_tick: bool = False) -> str:
+    """markdown 单元格转义：`|` 切断表格，换行切断行。
+
+    **不要动反引号**——正文里的 `battle/damage.py` 这类代码路径就靠它可读；
+    键栏的反引号由 `load_rulings` 自己 `strip("`")` 处理，与这里无关。
+    """
+    return re.sub(r"\s+", " ", (text or "").replace("|", "\\|")).strip()
+
+
+def _rb(rules: dict, section: str, key: str) -> str:
+    return _cell(rules.get((section, key), ""))
+
+
+# ------------------------------------------------------------ 语料抽取
+
+#: 「左词」里出现这些就是散文碎片，不是属性名。判据同 `formula._VERB` 的思路：
+#: 属性名是名词短语，含动词或含数量词的都是从正文里切歪的。
+_PROSE = re.compile(
+    r"^(·|※|\d)"                      # 前导项目符号 / 数字
+    r"|^[sS]后|^秒生效|^清空|^切换|^随后|^则|^否则|^使其$|^然后|^并在|^每次|^每次普通"
+    r"|^短暂使|^携带此技能|^攻击范围内所有|^阻挡的敌人|^与活性源石风暴"
+    r"|x$|[xX]-|范围x|视野x|半径x"
+)
+#: 与位移/角度/记法有关的，一律不是属性增减。
+_MISREAD = re.compile(r"发射|角度|°|^[sS]$|^x$|^Lv$|百分比|^则|^否则")
+
+#: 已知该认成什么的词。**这是建议不是结论**——最终由博士裁定。
+_SUGGEST: dict[str, str] = {
+    # —— 伤害减免（A1：规则漏了「-N%」写法，见第三节）——
+    "法术伤害": "认成 减伤（buff/减伤）",
+    "物理和法术伤害": "认成 减伤",
+    "物理与法术伤害": "认成 减伤",
+    "来源于正面的物理和法术伤害": "认成 减伤",
+    "来源于正面的物理/法术伤害": "认成 减伤",
+    "来自正面的物理/法术伤害": "认成 减伤",
+    "来自背面的物理/法术伤害": "认成 减伤",
+    "伤害来源位于自身左侧的物理/法术伤害": "认成 减伤",
+    "伤害来源位于自身右侧的物理/法术伤害": "认成 减伤",
+    "非来源于自身的物理/法术伤害": "认成 减伤",
+    "无来源或来源非矿工游击队的物理/法术伤害": "认成 减伤",
+    "伤害": "认成 减伤",
+    # —— 真属性，加进 `_EXPR_ATTR` 即可 ——
+    "技能优先级": "认成 buff/技能优先级",
+    "优先级": "认成 buff/技能优先级",
+    "嘲讽等级": "认成 buff/嘲讽等级",
+    "阻挡数": "认成 buff/阻挡数",
+    "短暂使我方干员阻挡": "认成 debuff/阻挡数（作用于我方，op=enemy）",
+    "攻击间隔": "认成 buff/攻击间隔",
+    "攻击速度": "认成 buff/攻击速度",
+    "攻击距离": "认成 buff/攻击距离",
+    "攻击半径": "认成 buff/攻击半径",
+    "攻击范围半径": "认成 buff/攻击半径",
+    "目标影响半径": "认成 buff/攻击半径",
+    "速度倍率": "认成 buff/速度倍率",
+    "可抵抗状态生效时间倍率": "认成 buff/状态生效时间倍率",
+    "退场时本次再部署时间": "认成 buff/再部署时间",
+    "部署费用": "认成 buff/部署费用",
+    "我方费用上限": "认成 buff/费用上限",
+    "SP再": "认成 buff/SP（敌我双方都吃技力）",
+    "当前移动速度": "留空（它是**系数**，不是被改的属性——见第一节算式口径）",
+    "摩擦力": "留空（物理引擎参数，非战斗属性）",
+    "累计伤害阈值": "留空（阈值，不是被改的属性）",
+    # —— 生息演算 / 足球：按既定口径不收 ——
+    "范围内的田地地块病害值": "排除（生息演算，按既定口径不收）",
+    "场上球员类敌人总数": "排除（足球模式，按既定口径不收）",
+    "待处理目标计数": "留空（计数，非属性）",
+    # —— 位移/角度/记法：收进来是噪声 ——
+    "发射": "排除（发射角度，不是属性增减）",
+    "然后发射": "排除（同上）",
+    "范围x": "排除（范围记法）",
+    "对大范围x": "排除（同上）",
+    "对更大范围x": "排除（同上）",
+    "对十字范围x": "排除（同上）",
+    "强制撤退范围x": "排除（同上）",
+    "光弹对范围x": "排除（同上）",
+    "自身所在地块周围的视野x": "排除（视野记法）",
+    "对目标所在地块及周围四格x": "排除（同上）",
+    "对目标所在地块及周围八格x": "排除（同上）",
+    "对目标周围四格x": "排除（同上）",
+    "并在影响范围x": "排除（散文碎片）",
+    "每次普通攻击以攻击主目标位置": "排除（散文碎片）",
+    "清空范围内L": "排除（散文碎片）",
+    "与活性源石风暴之间距离不超过": "排除（散文碎片）",
+    # —— 公式系数：不是一个属性，留空本就对 ——
+    "Lv": "留空（等级系数，不是一个属性）",
+    "百分比": "留空（占位符）",
+    "s": "留空（秒数记法）",
+    "场上结晶数量": "留空（分子，非属性）",
+    "场上球员类敌人总数": "排除（足球模式，按既定口径不收）",
+    "待处理目标计数": "留空（计数，非属性）",
+    "随后自身拾取数": "排除（散文碎片）",
+    "随后自身储存数": "排除（散文碎片）",
+    "自身退场并令拾取计数": "排除（散文碎片）",
+    "则计数": "排除（散文碎片）",
+    "否则": "排除（散文碎片）",
+    "切换目标": "排除（散文碎片）",
+    "让其": "排除（散文碎片）",
+    "使其": "排除（散文碎片）",
+    "短暂使我方干员阻挡": "排除（散文碎片）",
+    "每次普通攻击使自身攻击间隔": "排除（散文碎片）",
+}
+
+
+# ------------------------------------------------------------ 抽取
+
+def collect() -> tuple[collections.Counter, collections.Counter, dict, dict]:
+    """返回 (左词频次, 左词种类数, 例句, 该词下最常见的算式)。"""
+    corpus = load_enemy_corpus(DEFAULT_ENEMY_DB_PATH)
+    freq: collections.Counter = collections.Counter()
+    forms: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+    sample: dict[str, str] = {}
+    for c in corpus:
+        flat = detemplate(c["text"])
+        for t in formula.parse(flat, c["blackboard"], rules=RULES_ENEMY,
+                               extra=expr_terms):
+            if t.source != "expr_var" or t.attr:
+                continue
+            body = t.formula.lstrip("(（")
+            m = re.match(r"^([^\d\s（()）+\-×/]+)", body)
+            word = (m.group(1) if m else body)[:18] or body[:18]
+            freq[word] += 1
+            forms[word][t.formula[:40]] += 1
+            sample.setdefault(word, flat[:120])
+    return freq, forms, sample
+
+
+def suggest(word: str) -> str:
+    """给一个左词的建议。**是建议不是结论**——最终由博士裁定后写回。
+
+    先剥掉前导的项目符号再查表：`※技能优先级` 是**真属性**，不剥的话会被
+    下面的散文启发式当成碎片排除，把一条该收的判成不该收。
+    """
+    w = word.lstrip("※·＊*☆")
+    if w in _SUGGEST:
+        return _SUGGEST[w]
+    if word in _SUGGEST:
+        return _SUGGEST[word]
+    if _MISREAD.search(w) or _PROSE.search(word) or len(w) > 10:
+        return "排除（疑似散文碎片/记法，待博士确认）"
+    return "**待定**"
+
+
+# ------------------------------------------------------------ 各节
+
+_Q: list[tuple[str, str, str, str]] = [
+    ("法术伤害有没有 5% 保底",
+     "wiki.gg 的 Damage 页原文说「不论伤害类型，最终伤害至少为攻击力的 5%」；"
+     "xulai1001/akdata 也实现了；但 wxhwwla/calc-framework 只对物理保底",
+     "本项目 `battle/damage.py` 现在**无保底**（法术 = ATK×scale×(1−RES/100)）。"
+     "影响 SR-EX-8 的吓人路灯（RES 99）：有保底是 5%，无保底是 1%",
+     "维持无保底（跟随 calc-framework）／改为有保底（跟随 wiki 与 akdata）"),
+    ("攻速下限取多少",
+     "wiki 写 20，akdata 写 10",
+     "现无夹取。攻速只影响攻击间隔换算，下限越低越容易打出高频",
+     "取 10 或 20，或明确「不夹取」"),
+    ("攻击力取整方式",
+     "wiki 明确两处 FLOOR；calc-framework 不取整",
+     "默认 floor，另有 `rounding` 构造参数可换 round/ceil/none。"
+     "只在整数属性上取整，浮点属性（法抗/移速/攻速/攻击间隔）不取",
+     "维持 floor"),
+    ("`tile_forbidden` 与 `tile_empty` 哪个对应哪种不可部署地块",
+     "两者 `(heightType, buildableType, passableMask)` 完全一致，都是 NONE/FLY_ONLY，"
+     "**字段分不出来**",
+     "现按「不可部署地块」统一处理，不区分。若要区分只能靠名字猜",
+     "维持不区分"),
+    ("算式认领：属性表扩到哪一层",
+     "第二节列了全部 169 个候选词。扩得越宽，认错的机会越多",
+     "当前 `_EXPR_ATTR` 只有 11 项",
+     "**只收战斗结算真正用到的**（阻挡/移速/攻防/攻速/重量/再部署），其余留空"),
+    ("干员侧要不要也接算式 pass",
+     "实测干员侧 10392 条技能描述里，纯常数片段 561 处、**真变量只有 8 处**，"
+     "且 8 处**全部**是 `速度+0.25/秒` 的 `/秒` 被当除号",
+     "目前只有敌人侧接了",
+     "**不接**——零收益，只多出 7 种误读。此口径须写进文档，"
+     "免得日后有人「顺手对称一下」"),
+    ("`防御力/法术抗性最终×0` 怎么读",
+     "斜杠是**并列**（「防御力和法术抗性都归零」），不是除法。两侧不是伤害类型词，"
+     "现有判据拦不住",
+     "共 4 处。现产出 `算式 法术抗性最终×0 ⟨变量：法术抗性最终⟩`："
+     "字符串忠实、语义读错",
+     "补判据（如「最终」+乘 0 视为并列）／接受现状"),
+    ("规则抢先导致算式不出一项，是否可接受",
+     "规则已咬走的区间，算式不再重复出项（这是「不可能重复计数」的保证）",
+     "代价：`攻击力/防御力降低至已处理目标数量/待处理目标总数量×100%` 只留下"
+     "「降低（幅度未写明）」，而正文其实写了幅度。1 类",
+     "接受（保证不重复计数）／改成「算式优先于规则」"),
+]
+
+
+def render(rules: dict) -> str:
+    freq, forms, sample = collect()
+    L: list[str] = []
+    add = L.append
+
+    add("# 待裁定清单")
+    add("")
+    add("> 这份文件由 `python tools/uncertainty_audit.py` 生成。")
+    add("> **每一张表的最后一栏 `裁定` 是给人填的**，重新生成时会被读回续用，不会冲掉。")
+    add("> 表中其余各栏都是实测数据，请不要改（改了下次生成就没了）。")
+    add("")
+    add("## 怎么填")
+    add("")
+    add("1. 在 `裁定` 栏写结论。词表那一节可以直接写 `认成 buff/减伤`、`排除`、`留空`。")
+    add("2. 写 `|` 会切断表格——要写字面竖线请写成 `\\|`。")
+    add("3. **表格里行序按频次降序**，从高到低裁收益最大；低频长尾可以整段跳过。")
+    add("4. 一节里若想批量同意，可以在该节第一行写 `以下全部同意建议`，我会按建议逐条落地。")
+    add("5. 填完告诉我，我读回裁定并接进代码，然后跑全套自检。")
+    add("")
+
+    # ---------------- 一、项目级 ----------------
+    # **第一列必须是键**：`load_rulings` 按第一列取值，若把编号放第一列，
+    # 读回来的键是 `1` 而渲染时按问题名查，裁定会静默丢失（真踩过）。
+    sec = "一、项目级问题（答一句即可）"
+    add(f"## {sec}")
+    add("")
+    add("| 问题（键） | 分歧在哪 | 现状与影响 | 我的建议 | 裁定 |")
+    add("|---|---|---|---|---|")
+    for q, why, now, sug in _Q:
+        add(f"| {_cell(q)} | {_cell(why)} | {_cell(now)} | {_cell(sug)} "
+            f"| {_rb(rules, sec, q)} |")
+    add("")
+
+    # ---------------- 二、属性词表 ----------------
+    sec = "二、算式认领：属性词表"
+    add(f"## {sec}")
+    add("")
+    hi = [w for w, n in freq.items() if n >= 2]
+    lo = [w for w, n in freq.items() if n == 1]
+    ntot = sum(freq.values())
+    add(f"算式认出来、但**认不出作用在哪个属性**的共 **{ntot} 项**，"
+        f"归到 **{len(freq)} 个不同的左词**。当前 `_EXPR_ATTR` 只有 11 项，"
+        f"这张表就是它的候选扩展。")
+    add("")
+    add(f"**高频词（出现 ≥2 次，共 {sum(freq[w] for w in hi)} 项 / {len(hi)} 词）**"
+        "——建议优先裁这一张。")
+    add("")
+    add("| 左词（键） | 频次 | 最常见形态 | 我的建议 | 裁定 |")
+    add("|---|---|---|---|---|")
+    for w in sorted(hi, key=lambda x: (-freq[x], x)):
+        form = forms[w].most_common(1)[0][0]
+        add(f"| `{_cell(w, True)}` | {freq[w]} | {_cell(form)} | {_cell(suggest(w))} "
+            f"| {_rb(rules, sec, w)} |")
+    add("")
+    add(f"**低频长尾（出现 1 次，共 {len(lo)} 词）**——可整段跳过；"
+        "想逐条来也留了裁定栏。")
+    add("")
+    add("| 左词（键） | 频次 | 最常见形态 | 我的建议 | 裁定 |")
+    add("|---|---|---|---|---|")
+    for w in sorted(lo):
+        form = forms[w].most_common(1)[0][0]
+        add(f"| `{_cell(w, True)}` | 1 | {_cell(form)} | {_cell(suggest(w))} "
+            f"| {_rb(rules, sec, w)} |")
+    add("")
+
+    # ---------------- 三、误读复查 ----------------
+    sec = "三、算式误读：具体句子复查"
+    add(f"## {sec}")
+    add("")
+    add("下面是**具体句子**层面的复查，每条都附原文与当前读法。"
+        "与第二节不同：第二节裁「词归哪一类」，这里裁「这句话有没有被读错」。")
+    add("")
+    add("| 原文（节选） | 当前读法 | 问题 | 我的建议 | 裁定 |")
+    add("|---|---|---|---|---|")
+    cases = [
+        ("受到的物理/法术伤害-80%", "算式 pass → `法术伤害-80%`（无属性）",
+         "**规则表完全没匹配**——写成「降低80%」能认，写成「-80%」不认。"
+         "91 处同类，是唯一会**伪装成已解析**的一类",
+         "补规则字形 `受到…伤害-N%` → 减伤"),
+        ("受到的物理/法术伤害降低80%", "`e_damage_reduce_pct 减伤 -80% (物理/法术)`",
+         "这条是对的", "保持"),
+        ("受到的物理和法术伤害-60%", "同上（无匹配）",
+         "「和」「与」写法的 `-N%` 也漏", "与第一条一并补"),
+        ("防御力/法术抗性最终×0", "`算式 法术抗性最终×0 ⟨变量：法术抗性最终⟩`",
+         "斜杠是并列不是除法；现状字符串忠实、语义错", "4 处，见第一节第 7 问"),
+        ("发射-20°、±0°、+20°", "`算式 发射-20`（无属性）",
+         "发射角度，不是属性增减——9 处噪声", "排除"),
+        ("Lv×0 / (百分比)+0.1", "`算式 Lv×0`（无属性）",
+         "公式系数，本来就不是一个属性", "留空（现状即可）"),
+        ("(场上球员类敌人总数+1)", "`算式 …`（无属性）",
+         "足球模式", "排除（既定口径不收）"),
+    ]
+    for src, cur, prob, sug in cases:
+        add(f"| {_cell(src)} | {_cell(cur)} | {_cell(prob)} | {_cell(sug)} "
+            f"| {_rb(rules, sec, src)} |")
+    add("")
+
+    # ---------------- 四、需要我拿不到的数据 ----------------
+    sec = "四、要实机数据、我取不到的"
+    add(f"## {sec}")
+    add("")
+    add("这些不是口径分歧，是**数据缺口**——只能靠实机录像或您告知。")
+    add("")
+    add("| 事项 | 为什么取不到 | 现状 | 我的建议 | 裁定 |")
+    add("|---|---|---|---|---|")
+    gaps = [
+        ("赤刃明霄陈技3 的剑气速度",
+         "技能原文没写速度；gamedata 黑板里也没有",
+         "2026-09-16 由攻略录像实测为 **1.2 格/秒**，已写成默认值（构造参数，可调）",
+         "**已定案**，不需要裁定。细扫显示 1.2–1.25 会漏 1 只，而旧默认 4.0 恰好不漏——"
+         "编出来的数不一定偏保守"),
+        ("敌人攻击动作时长",
+         "gamedata 里没有该字段", "模拟器假设 0.5s（`enemy_windup`）",
+         "已做敏感性：0–1.0s 结论全同，60s 复现 37 杀 4 漏"),
+        ("干员抬手 prepDuration 与动画帧补正",
+         "gamedata 无对应数据；PRTS 的 Module 命名空间持续 403",
+         "**攻击间隔已定案否**（2026-09-16 实机：1.25×100/124 的预测 15.12 帧"
+         "与实测 15.11 帧吻合到 0.07%）；仍缺的只有**首刀时机**（抬手本身）",
+         "周期不必再接数据；抬手要拿只能实机逐帧"),
+    ]
+    for a, b, c, d in gaps:
+        add(f"| {_cell(a)} | {_cell(b)} | {_cell(c)} | {_cell(d)} "
+            f"| {_rb(rules, sec, a)} |")
+    add("")
+
+    # ---------------- 五、数据缺口 ----------------
+    sec = "五、数据缺口（量小，可缓）"
+    add(f"## {sec}")
+    add("")
+    add("| 事项 | 缺什么 | 现状 | 我的建议 | 裁定 |")
+    add("|---|---|---|---|---|")
+    for a, b, c, d in [
+        ("量纲未定的 3 个键", "`exp` / `attack@exp` / `sell_card_gold`",
+         "都是装置键、来历未定，`check_formula` 已把上限锁在 3",
+         "按「只补战斗相关」豁免；删表即红，不会悄悄变多"),
+        ("元素损伤的结算", "数据侧已认得种类与算式，战斗侧没有模型",
+         "未建模", "工程量，非不确定；排在 A1 之后"),
+        ("SR-EX-8 的敌人技能 / 飞行不可阻挡 / 反射 / BOSS 双形态重生",
+         "4 件都未建模", "四人剑气方案已在现有模型下取胜（38 杀 1 漏，非三星）",
+         "只有要打更难的关才需要"),
+    ]:
+        add(f"| {_cell(a)} | {_cell(b)} | {_cell(c)} | {_cell(d)} "
+            f"| {_rb(rules, sec, a)} |")
+    add("")
+
+    # ---------------- 六、已填未采纳 ----------------
+    add("## 六、填了但还没落地的裁定")
+    add("")
+    add("生成时有内容、但代码里还没生效的裁定会列在这里（我落地后自动消失）。")
+    add("")
+    add("「已落地」由 `uncertainty_audit.py` 的 `LANDED` 表判定（人工维护，")
+    add("记的是这条裁定进了哪段代码）——它不能自动判，但也正因如此，")
+    add("某条裁定日后被改动悄悄回退时，这里会重新把它标回待落地。")
+    add("")
+    add("| 节 | 键 | 您填的裁定 | 状态 |")
+    add("|---|---|---|---|")
+    pend = _pending(rules)
+    if pend:
+        for s, k, v in pend:
+            add(f"| {_cell(s)} | `{_cell(k, True)}` | {_cell(v)} | 待落地 |")
+    else:
+        add("| — | — | — | 暂无 |")
+    add("")
+    return "\n".join(L) + "\n"
+
+
+def _pending(rules: dict) -> list[tuple[str, str, str]]:
+    """已填但代码尚未采纳的。落地后由 `LANDED` 消去。
+
+    `LANDED` 是「键 → 落地凭证」的表：值是**说明这条裁定进了哪段代码**的一句话。
+    它不能自动判定——「20 是不是真成了攻速下限」不是语料能回答的问题，
+    只有读过 `skill.py` 的人知道。所以这里是人工维护的，而**这正是它有用的原因**：
+    某条裁定被后来的改动悄悄回退时，这份台账会重新把它标成待落地。
+
+    为什么不自作聪明去正则扫源码：那会把「注释里提了一句」当成「已实现」，
+    比不判还坏。
+    """
+    return sorted((s, k, v) for (s, k), v in rules.items()
+                  if v and k not in LANDED)
+
+
+# —— 已落地的裁定（键 → 落地位置），2026-09-16 本轮 ——
+LANDED: dict[str, str] = {
+    "法术伤害有没有 5% 保底": "battle/damage.py DAMAGE_FLOOR=0.05（法抗≥100 仍免疫）",
+    "攻速下限取多少": "operator/skill.py ASPD_MIN=20.0",
+    "攻击力取整方式": "维持 floor，未改动（结论即现状）",
+    "算式认领：属性表扩到哪一层": "enemy_formula.py _EXPR_ATTR 11→31 项",
+    "防御力/法术抗性最终×0 怎么说": "enemy_formula.py _expr_kind 并列分支",
+    "受到的物理/法术伤害-80%": "enemy_formula.py 规则 e_damage_reduce_sign",
+    "规则抢先导致算式不出一项，是否可接受":
+        "enemy_formula.py expr_terms 切段重试",
+    "干员侧要不要也接算式 pass":
+        "结论=只补规则不挂钩子；check_formula 第 [7] 节钉「干员侧不得出 expr_var」",
+    "10×充能层数)": "已查清出处：瘴/鄙瘴（怀黍离），非缺口",
+    "2+Lv×2)": "已查清出处：信使安洁莉娜技1/3，Lv=敌人档位",
+    "【绒毛屏障】的屏障值": "已查清出处：BOSS 多利「羊之主」天赋，非缺口",
+    "额外对以取消伤害的对象为中心周围四格":
+        "整节按建议落地：93 词排除，未收进 _EXPR_ATTR",
+}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="生成待裁定清单")
+    ap.add_argument("-o", "--out", type=pathlib.Path, default=OUT)
+    args = ap.parse_args()
+    rules = load_rulings(args.out)
+    text = render(rules)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(text, encoding="utf-8", newline="\n")
+    freq, _, _ = collect()
+    print(f"续用上一版已填的裁定 {len(rules)} 条")
+    print(f"待裁左词 {len(freq)} 个 / 无属性算式 {sum(freq.values())} 项")
+    print(f"已写 {args.out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
