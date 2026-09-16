@@ -262,6 +262,47 @@ python tools/export_srx8.py
 
 ---
 
+### 性能与并行 ✅ 已完成
+
+一次 1-7 模拟约 270 ms，搜索一层要评估上百条候选、参数扫描动辄上千个点——
+**同一个核反复跑、每次之间零依赖**，这是并行最理想的形状。
+
+`ak_tactic/parallel.py` 把批量摊到多个进程上。两条纪律写死在代码里：
+
+* **结果与串行逐字一致**。并行只改变「在哪个进程里跑」，不改变算法。返回值
+  按输入顺序排好——搜索靠 `Verdict.rank()` 做 beam 截断，顺序一变就可能选出
+  不同的状态，而且跑出来的还是一份「看着能过」的方案。
+* **worker 自己重建上下文**。`Verifier` / `EnemyLibrary` / `SkillBook` /
+  `TalentBook` / `GameDataSource` **全都不可 pickle**（内部有 `_thread.lock`），
+  `RangeProvider` 是闭包。所以任务里只传纯数据（关卡号、候选、名册），那些
+  「载入一次就够」的东西由每个 worker 建一次。
+
+实测（AMD Ryzen 7 6800H，8 物理核 / 16 逻辑核）：
+
+| 场景 | 串行 | 并行 | 提速 |
+|---|---|---|---|
+| 搜索 1-7（143 次评估，`max_ops=3 beam=4`） | 37.1 s | 8.1 s | **4.6×** |
+| 纯批量求值（91 次） | 25.3 s | 4.9 s | **5.2×** |
+| `tools/export_srx8.py`（含 20 点敏感性扫描） | 38.2 s | 18.1 s | 2.1× |
+
+进程数扫描显示效率随核数递减（2 进程 1.9×、4 进程 3.2×、8 进程 4.2×、15 进程
+5.2×）——8 个物理核之后是 SMT 与内存带宽在限制，且每个 worker 有约 1.3 s 的
+建单位预热；批量越大，这笔固定开销摊得越薄。
+
+用法：
+
+```python
+from ak_tactic.parallel import eval_states, pmap
+
+# 搜索器：workers=None 自动定，workers=1 强制串行
+Searcher(workers=None).search("main_01-07", roster, ops)
+
+# 参数扫描：func 必须是模块级函数（Windows 只有 spawn）
+pmap(sweep_one, [(k, v, plan) for ...], init=sweep_init, key="srx8-sweep")
+```
+
+自检：`python tools/check_parallel.py`（16 项：调度契约 + `pmap` + 串并行逐字等价）。
+
 ## 二、现在能做什么
 
 ```bash
@@ -478,6 +519,7 @@ ak-tactic/
 │  ├─ eta.py             ★  敌人到达时刻：速度+路线 → 几点到哪一格（解析式）
 │  ├─ verify.py          ★  通用验证器：打法 → 三星判定 + 归因
 │  ├─ search.py          ★  搜索器：几何剪枝 → beam search（落位/朝向/顺序）
+│  ├─ parallel.py        ★  批量并行：进程池 + 跨调用复用（搜索 / 参数扫描）
 │  ├─ team.py            ★  组队建议：按角色位挑人（回费先锋 / 骗伤 / 低费位）
 │  ├─ diagram.py         ★  输出：摆位图 / 路线热度图 / 时间轴表格 / 完整报告
 │  └─ battle/                战斗模型
