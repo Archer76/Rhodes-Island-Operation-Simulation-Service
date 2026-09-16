@@ -31,6 +31,14 @@ ASPD_MIN = 20.0
 #: 攻击间隔下限，与 `SkillEffects.attack_interval` 的 `max(0.05, …)` 同源。
 MIN_INTERVAL = 0.05
 
+#: 「已经走进某格中心附近」的距离容差（格），`EnemyUnit.is_at` 用。
+#:
+#: 单独提出来是为了让**热路径上的就地展开**能和它共用同一个数：模拟器
+#: `_update_blocking` 每帧要判 41 次进入，改成平方比较（省掉 `math.dist`
+#: 的开方）后必须与这里保持一致，否则两处判定会各说各话。
+#: 平方形式见 `sim.POSITION_TOL2`。
+POSITION_TOL = 0.35
+
 
 def path_length(points: list[tuple[float, float]]) -> float:
     """折线总长（格）。"""
@@ -41,6 +49,12 @@ def point_at(points: list[tuple[float, float]], travelled: float) -> tuple[float
     """沿折线走 `travelled` 格之后的位置。
 
     超出末端则停在末端（调用方应在此之前判定漏怪）。
+
+    ⚠️ 这里**保留** `zip(points, points[1:])` 与 `math.dist`，别"顺手优化"成
+    下标循环 + `sqrt(dx*dx+dy*dy)`：本函数一场 1-7 要跑约 1.8 万次，看着
+    像是该省掉那次切片复制，实测却**慢了 3.6%**（1-7 端到端 219.9 → 227.9 ms）。
+    `math.dist` 是一次 C 调用，而手写平方和要跑六条字节码，两点的切片复制
+    远比它便宜。剖面读数看着这里占 0.038s，但"占得多"不等于"有便宜的改法"。
     """
     if not points:
         return (0.0, 0.0)
@@ -551,7 +565,9 @@ class EnemyUnit(Combatant):
                 step = can if can < room else room
                 self.leg_u += step
                 self.progress += step
-                self.position = point_at(list(leg.points), self.leg_u)
+                # 直接传 `leg.points`：`point_at` 只读不写，原先的 `list(...)`
+                # 是每次调用白抄一份（本行每帧跑一次、一场上万次）。
+                self.position = point_at(leg.points, self.leg_u)
                 left -= step / speed
                 # 判据是"这一步有没有把剩余量走完"，**不能**写成 leg_u >= room
                 # ——room 是剩余量、leg_u 是已走量，那样会让段落在走到一半时
@@ -589,6 +605,10 @@ class EnemyUnit(Combatant):
         """所在格（四舍五入到整数格）。"""
         return (int(round(self.position[0])), int(round(self.position[1])))
 
-    def is_at(self, cell: tuple[int, int], tol: float = 0.35) -> bool:
-        """是否已经进入某一格的中心附近——用于判定被阻挡。"""
+    def is_at(self, cell: tuple[int, int], tol: float = POSITION_TOL) -> bool:
+        """是否已经进入某一格的中心附近——用于判定被阻挡。
+
+        热路径（模拟器 `_update_blocking`）已就地展开成平方比较，不走这里；
+        本方法留给外部调用与自检，两者共用 `POSITION_TOL`。
+        """
         return (math.dist(self.position, (float(cell[0]), float(cell[1]))) <= tol)
