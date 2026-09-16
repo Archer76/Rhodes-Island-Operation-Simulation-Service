@@ -1,0 +1,26 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+
+# ---- 数据缓存：可再生的纯派生物 ----
+data/cache/
+data/gamedata/
+data/ranges.json
+
+# ---- 数据库：建库只需数秒，不入库 ----
+# 注意必须写成 data/*.sqlite 而不是逐个列名字：
+# 原先只忽略 akdb.sqlite，enemydb.sqlite（20 MB）因此漏网。
+data/*.sqlite
+data/*.sqlite-journal
+data/*.sqlite-wal
+
+# ---- 隐私：森空岛名册含 uid / 昵称 / 完整练度 ----
+data/skland/
+
+# ---- 临时与导出产物 ----
+_t*.json
+out/
+
+# ---- B 站视频处理残留（抽帧图 / 中间文件）----
+_vid*/
