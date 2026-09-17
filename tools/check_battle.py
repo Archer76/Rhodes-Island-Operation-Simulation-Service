@@ -1054,6 +1054,151 @@ def check_summons_battle(stage, lib, calc, book_t) -> None:
     check("召唤物计数为 0", r5.summons_deployed == 0 and r5.summon_rejected == [])
 
 
+def check_barrier(stage, lib, calc, book, book_t) -> None:
+    """[16] 屏障。
+
+    批次二「屏障」这一项。技能交互的第一个落点，选它是因为电弧技1 正好
+    同时需要两件事：**屏障机制**与**效果发给召唤物**（召唤物没有技能槽）。
+
+    ## 判据为什么不能按黑板键
+
+    这条**踩过坑，钉在这里**：直觉会想用 `hp_ratio` 这个键，但全表核验下来
+    它同名反义——47 个技能有它却与屏障无关（它是「流失/回复/治疗目标 X% 生命」），
+    而且即便同时出现「屏障」也不一定是屏障的量：摩根 `hp_ratio=1.5` 确是屏障
+    150%，**左乐 `hp_ratio=0.5` 却是流失量**（屏障 120% 只写在正文里）。
+    所以判据只能按**渲染后的描述**取，并且要挡住"给别人"的写法。
+    """
+    print("\n[16] 屏障（技能授予 / 先于生命值消耗 / 发给召唤物）")
+
+    from ak_tactic.battle.summons import (SummonDeployment,       # noqa: E402
+                                          build_summon_unit)
+
+    print("     —— 判据的全表指纹：命中谁、放过谁 ——")
+    raw = book._load()
+    hit: dict[str, float] = {}
+    for sid in raw:
+        if not book.exists(sid):
+            continue
+        vals = [lv.effects.barrier_pct for lv in book.levels(sid)]
+        if any(vals):
+            hit[sid] = max(vals)
+    want = {"skchr_radian_1", "skchr_mcnist_2", "skchr_angel2_2",
+            "skchr_cairn_2", "skchr_gravel_2", "skchr_judge_3",
+            "skchr_morgan_2", "skchr_nasti_2", "skchr_zuole_2",
+            "sktok_acspell008_1"}
+    check(f"命中恰好 {len(want)} 个技能（多一个少一个都说明判据漂了）",
+          set(hit) == want,
+          f"多出 {sorted(set(hit) - want)}；少 {sorted(want - set(hit))}")
+    check("**电弧在名单里**（本项的主标本）", "skchr_radian_1" in hit)
+    check("**机械师也在**（同一条判据顺带覆盖，名单里的第二人）",
+          "skchr_mcnist_2" in hit)
+    print("       以下四条是「屏障给了别人」——判据必须放过，否则会把队友的算到自己头上：")
+    for sid, why in [("skchr_svash2_1", "屏障给待部署区新下的那名干员"),
+                     ("skchr_cathy_2", "给目标干员，量纲取的是凯瑟琳自己的生命上限"),
+                     ("sktok_cdshield", "「添加相当于其生命上限」——其＝队友"),
+                     ("sktok_cdshieldb", "同上")]:
+        check(f"放过 {sid}（{why}）", sid not in hit)
+    check("傀影技1 是**只吸物理**的屏障，故意不认",
+          "skchr_phatom_1" not in hit and "sktok_phatom_1" not in hit)
+
+    print("     —— 电弧技1 的解析（7 级 / 专精 0）——")
+    lv = book.levels("skchr_radian_1")[6]
+    check("屏障 70% 最大生命值", close(lv.effects.barrier_pct, 0.70, 1e-9),
+          f"实得 {lv.effects.barrier_pct}")
+    check("防御力 +60%", close(lv.effects.buffs.get("def", 0), 0.60, 1e-9),
+          f"实得 {lv.effects.buffs.get('def', 0)}")
+    check("主语是「自身和召唤物」→ 效果要发一份给召唤物",
+          lv.effects.affects_summons)
+    check("满级（10 级）是 100% / 防御 +80%，逐级递增不是常数",
+          close(book.levels("skchr_radian_1")[9].effects.barrier_pct, 1.0, 1e-9)
+          and close(book.levels("skchr_radian_1")[0].effects.barrier_pct, 0.2,
+                    1e-9))
+    check("技2/技3 不该有屏障（它们只给攻击力）",
+          all(book.levels(s)[6].effects.barrier_pct == 0.0
+              for s in ("skchr_radian_2", "skchr_radian_3")))
+
+    print("     —— 机制本体：屏障先扛，扛完才动血条 ——")
+    u = OperatorUnit(name="试验体", max_hp=1000.0, atk=10.0, defense=0.0,
+                     res=0.0, attack_interval=1.0)
+    u.grant_barrier(0.5)
+    check("授予 = 50% × **生命上限**（1000） = 500",
+          close(u.barrier, 500.0, 1e-9), f"实得 {u.barrier}")
+    check("挨 200：血一点不掉", close(u.take(200.0), 0.0) and close(u.hp, 1000.0),
+          f"实得 dealt={u.take(0.0)} hp={u.hp}")
+    check("屏障剩 300", close(u.barrier, 300.0, 1e-9), f"实得 {u.barrier}")
+    dealt = u.take(400.0)
+    check("再挨 400：屏障挡 300、血掉 100", close(dealt, 100.0, 1e-9)
+          and close(u.hp, 900.0, 1e-9) and u.barrier == 0.0,
+          f"实得 dealt={dealt} hp={u.hp} 屏障={u.barrier}")
+    check("累计吸收 500（对账用，且**不计入** damage_taken）",
+          close(u.barrier_absorbed, 500.0, 1e-9)
+          and close(u.damage_taken, 100.0, 1e-9),
+          f"实得 吸收={u.barrier_absorbed} damage_taken={u.damage_taken}")
+    check("重复授予取较大值、不累加（同一技能不该叠上去）",
+          (lambda v: (v.grant_barrier(0.3), v.grant_barrier(0.2),
+                      close(v.barrier, 300.0, 1e-9))[2])(u))
+
+    print("     —— 进战斗：发给自己**和召唤物** ——")
+    R_TAL = book_t.for_operator("char_4195_radian")
+    sim = BattleSimulator(stage, enemy_at=lib.get, skill_book=book)
+    op = make_unit(calc, "char_4195_radian", elite=2, level=90)
+    sim.plan(Deployment(1.0, op, (5, 2), "Left", skill=1, skill_level=7,
+                        talents=R_TAL))
+    sim.plan_summon(SummonDeployment(2.0, "token_10051_radian_tower1", (4, 3),
+                                     "Right", owner="char_4195_radian"))
+    ok = True
+    try:
+        r = sim.run()
+    except Exception as exc:                                    # noqa: BLE001
+        ok = False
+        check("开技1 跑得完（不抛错）", False, f"{type(exc).__name__}: {exc}")
+    tower = [o for o in sim.operators if o.is_summon]
+    if ok:
+        check("开技1 跑得完（不抛错）", True)
+        check("技能确实开成了", r.skill_activations >= 1,
+              f"实得 {r.skill_activations}")
+        if tower:
+            sm = tower[0]
+            check("戴乌也拿到了屏障（效果发下去了）",
+                  sm.barrier_absorbed > 0.0 or sm.barrier > 0.0,
+                  f"实得 吸收={sm.barrier_absorbed:.1f} 剩={sm.barrier:.1f}")
+            check("两边至少一边真吸收了伤害",
+                  sm.barrier_absorbed > 0.0 or op.barrier_absorbed > 0.0,
+                  f"主人 {op.barrier_absorbed:.1f} / 召唤物 "
+                  f"{sm.barrier_absorbed:.1f}")
+
+    # 技能结束清零：**直接调** `_activate` / `_deactivate`，不走帧网格。
+    # 第一版把这条挂在整场跑完去看 `op.barrier`，结果是假红——电弧技1 是自动
+    # 技能，跑完时她正好开着第二次，屏障是新授予的那一份。这类"结束态"的断言
+    # 不该依赖"跑完那一刻恰好是什么状态"。
+    print("     —— 技能结束：屏障一起清（直接调，不依赖帧网格）——")
+    sim2 = BattleSimulator(stage, enemy_at=lib.get, skill_book=book)
+    op2 = make_unit(calc, "char_4195_radian", elite=2, level=90)
+    op2.skill = book.levels("skchr_radian_1")[6]
+    op2.talents = list(R_TAL)
+    op2.position, op2.direction = (5, 2), "Left"
+    sm2 = build_summon_unit(SummonDeployment(
+        0.0, "token_10051_radian_tower1", (4, 3), "Right",
+        owner="char_4195_radian"))
+    sim2.operators.extend([op2, sm2])
+    sim2._activate(op2, 0.0)
+    check("开着技能时：主人有屏障、召唤物也有",
+          op2.barrier > 0.0 and sm2.barrier > 0.0,
+          f"实得 主人={op2.barrier:.1f} 召唤物={sm2.barrier:.1f}")
+    check("主人屏障 = 70% × 她自己的生命上限",
+          close(op2.barrier, 0.70 * op2.max_hp, 1e-6),
+          f"实得 {op2.barrier:.1f} vs {0.70 * op2.max_hp:.1f}")
+    check("召唤物屏障 = 70% × **它自己的**生命上限（不是主人的）",
+          close(sm2.barrier, 0.70 * sm2.max_hp, 1e-6)
+          and abs(sm2.max_hp - op2.max_hp) > 1.0,
+          f"实得 {sm2.barrier:.1f} vs {0.70 * sm2.max_hp:.1f}"
+          f"（主人 {0.70 * op2.max_hp:.1f}）")
+    sim2._deactivate(op2, 25.0)
+    check("技能结束：两边屏障一起归零",
+          op2.barrier == 0.0 and sm2.barrier == 0.0,
+          f"实得 主人={op2.barrier} 召唤物={sm2.barrier}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="战斗与技能的回归检查")
     ap.parse_args()
@@ -1084,6 +1229,7 @@ def main() -> int:
     check_dodge(book)
     check_summons(sbook)
     check_summons_battle(stage, lib, calc, book_t)
+    check_barrier(stage, lib, calc, book, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

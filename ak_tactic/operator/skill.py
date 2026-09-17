@@ -347,6 +347,72 @@ def _wants_dodge(description: str) -> tuple[float, float]:
     return 0.0, val
 
 
+#: 紧邻「最大生命 / 生命上限」的**前一个字符必须是这些**——它们都表明这个量是
+#: **自己的**：己（自己）/ 身（自身）/ 得（获得）/ 的 / 于（相当于）/ 并 / 和 /
+#: 即（立即）/ % / 数字。
+#:
+#: 别人的量写的是**名字或第三人称**，前一个字符就是那个名字的末字：
+#:   相当于「娜斯提」生命上限 80%    → 提 ✗
+#:   相当于「凯瑟琳」生命上限  6%    → 琳 ✗
+#:   添加相当于「其」生命上限 100%   → 其 ✗
+#: 2026-09-18 全表核验：这一条把 14 个命中里「给别人」的摘干净，真自己的一个
+#: 都没误伤。**方向是宁可漏、不可错**——漏了顶多少算一个屏障，错了会把队友的
+#: 屏障算到自己头上。
+_BARRIER_SELF_LEAD = r"[己身得的于并和即%\d]"
+
+#: 屏障：「自己最大生命值 N%」的两种语序，都锚在「最大生命 / 生命上限」上。
+#:
+#: **只能按渲染后的描述取数，不能按黑板键取**——2026-09-18 全表核验过：
+#: `hp_ratio` 这个键在 47 个技能里与屏障毫无关系（它是「流失/回复/治疗目标
+#: X% 生命」），而且**即便同时出现「屏障」，它也不一定就是屏障的量**：
+#: 摩根 `hp_ratio=1.5` 确是屏障 150%，左乐 `hp_ratio=0.5` 却是**流失量**，
+#: 屏障 120% 只写在正文里。键名同名反义，与 `prob` 那条是同一类坑。
+#:
+#:   「获得70%最大生命值的屏障」                    电弧技1      → 序②
+#:   「立刻获得最大生命10%的屏障」                  机械师技2    → 序①
+#:   「可吸收相当于自己最大生命180%的屏障」          砾技2        → 序①
+#:   「获得相当于生命上限100%的屏障」                斥罪技3      → 序①
+_BARRIER_RATIO = re.compile(
+    # 序①：百分号在「最大生命」**之后**
+    r"(?<=" + _BARRIER_SELF_LEAD + r")"
+    r"(?:最大生命(?:值|上限)?|生命上限)\s*(\d+(?:\.\d+)?)\s*%\s*的?\s*屏障"
+    # 序②：百分号在「最大生命」**之前**（此时前一字是 %，天然合规）
+    r"|(\d+(?:\.\d+)?)\s*%\s*(?:最大生命(?:值|上限)?|生命上限)\s*的?\s*屏障"
+)
+
+#: **故意不认**的屏障写法（2026-09-18 全表核验后逐条登记）。它们的共同点是
+#: "屏障"这个词都在，但**量与归属都不是"自己最大生命值的比例"**：
+#:
+#: * 按施法者攻击力：「屏障能吸收相当于闪灵攻击力 300% 的伤害」——量纲是攻击力；
+#: * 固定点数：「施加可吸收 800 点伤害的屏障」——没有比例；
+#: * 只吸某一系：「可吸收相当于自己最大生命 80% **物理伤害**的屏障」（傀影技1）
+#:   ——隔了「物理伤害」，正则不收，这一条是**故意**的：它只挡物理；
+#: * 给别人的：「部署后获得相当于**凛御银灰**最大生命值 50% 的屏障」（凛御银灰技1）
+#:   ——屏障给的是**新部署的那名干员**，不是银灰自己。这条语序与电弧的完全一样，
+#:   正则**分不出来**，只能靠这条名单把它摘掉；
+#: * 损伤屏障：「获得 200 点损伤屏障」——另一套机制（元素损伤），不是生命屏障；
+#: * 叠加上限：「屏障最高叠加至最大生命值的 100%」——那是**上限**不是授予量。
+_BARRIER_NOT_SELF = frozenset({
+    "skchr_svash2_1",   # 屏障给待部署区新下的那名干员，不是自己
+})
+
+#: 「自身和召唤物……」这类**主语是集合**的写法。命中意味着这条技能的效果
+#: 要发一份给主人的召唤物（召唤物自己没有技能槽）。
+_SELF_AND_SUMMON = re.compile(r"自身和(?:召唤物|结构性原理)")
+
+
+def _wants_barrier(description: str) -> float:
+    """从描述里取技能给**自己**的屏障量，返回**最大生命值的比例**，没有就是 0。
+
+    描述传入的应是 `render_description` **渲染后**的文本（占位符已换成数字）。
+    """
+    text = _TAG.sub("", description or "")
+    m = _BARRIER_RATIO.search(text)
+    if m is None:
+        return 0.0
+    return float(m.group(1) or m.group(2)) / 100.0
+
+
 def render_description(text: str, blackboard: dict[str, float]) -> str:
     """把 `攻击力<@ba.vup>+{atk:0%}</>` 渲染成 `攻击力+50%`。
 
@@ -542,6 +608,13 @@ class SkillEffects:
     #: 里是 `attack@prob` = 40% 概率晕眩。键名同名反义，只有正文说得清。
     #: 见 `_wants_dodge`（那里同时列了三种**故意不认**的限定写法）。
     dodge_phys: float = 0.0
+    #: 技能给的**自身**屏障，量纲是**最大生命值的比例**（1.0 = 100%）。
+    #: 判据见 `_wants_barrier`：只能按描述取，黑板键 `hp_ratio` 同名反义。
+    barrier_pct: float = 0.0
+    #: 这条技能的效果**也发给召唤物**。判据是描述里的主语写的是
+    #: 「自身和召唤物」（电弧技1/2/3）或「自身和结构性原理」（机械师技2）。
+    #: 召唤物自己没有技能槽，所以要由主人开技能时**发下去**。
+    affects_summons: bool = False
     dodge_arts: float = 0.0
     #: 击杀叠层的**层数上限**（0 = 没有这类效果）。数值来自
     #: `<前缀>[kill].max_stack_cnt`；每层的加成在 `variants["kill"]` 里
@@ -1061,12 +1134,13 @@ class SkillBook:
         entry = self.skill(skill_id)
         out: list[SkillLevel] = []
         for i, raw in enumerate(entry.get("levels") or []):
-            out.append(self._parse_level(i, raw))
+            out.append(self._parse_level(i, raw, skill_id))
         return out
 
     # -------------------------------------------------------- 解析
 
-    def _parse_level(self, index: int, raw: dict) -> SkillLevel:
+    def _parse_level(self, index: int, raw: dict,
+                     skill_id: str = "") -> SkillLevel:
         bb = {b.get("key"): float(b.get("value") or 0.0)
               for b in (raw.get("blackboard") or []) if b.get("key")}
         # 真值可能在 valueStr 里（range_id 就是典型：value 恒为 0）
@@ -1128,6 +1202,13 @@ class SkillBook:
         # 闪避：值写在黑板（键名可能是 `prob`，与"概率晕眩"同名），
         # **认哪个键只能靠描述**，所以这里判的是描述、拿的是渲染后的数字。
         lv.effects.dodge_phys, lv.effects.dodge_arts = _wants_dodge(lv.description)
+        # 屏障：值只在**渲染后的描述**里（黑板 `hp_ratio` 同名反义，见
+        # `_wants_barrier`）。凛御银灰技1 语序与电弧的一模一样但屏障是给别人的，
+        # 用 `_BARRIER_NOT_SELF` 摘掉。
+        if skill_id not in _BARRIER_NOT_SELF:
+            lv.effects.barrier_pct = _wants_barrier(lv.description)
+        lv.effects.affects_summons = bool(
+            _SELF_AND_SUMMON.search(_TAG.sub("", lv.description or "")))
         return lv
 
     # -------------------------------------------------------- 概览
