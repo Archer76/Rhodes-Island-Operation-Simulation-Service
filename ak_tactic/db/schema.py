@@ -61,7 +61,24 @@ from __future__ import annotations
 #: v5（2026-09-17）：删掉 `module.description`——模组**故事**（905 行约 42 万字，
 #:     麦哲伦的探险日记那类）。喂公式语料的从来是 `module_level.parts` 而非这一列，
 #:     且全仓无一处读取它，故按"库只装战斗数据"删掉。守卫见 check_db 对应两项。
-DB_VERSION = 5
+#: v6（2026-09-17）：新增 `stage`（关卡索引）——本库**第二张非 gamedata 来源的表**
+#:     （第一张是 v4 的 tile）。来源是 map.ark-nights.com 编译进 JS bundle 的那份
+#:     索引（gamedata 的 `excel/` 两个镜像都没有关卡表），见 db/stages.py。
+#:     它由 `db stage-fetch` **单独建**（要联网）；`db build` 保持"不联网"的既有
+#:     性质，重建时把旧库里的 stage 原样搬过去，**不会把它清空**。
+#: v7（2026-09-17）：加上「关卡叫什么、属于哪一章、什么环境」。
+#:     `stage` 增 4 列（name / stage_type / diff_group / hard_level_id），
+#:     新增 `zone` 表（477 条章节与分部）。来源是 GitHub 镜像的
+#:     `excel/stage_table.json`（3549 条）与 `excel/zone_table.json`——**同一张
+#:     `db stage-fetch` 里一起取**，因为它们和关卡索引是同一件事的三面：
+#:     索引给「SR-EX-8 ↔ act54side_ex08」，stage_table 给「act54side_ex08 = 虚无之顶」，
+#:     zone_table 给「act54side_zone2 = 殡仪堂」。三样缺一样，选关界面就只能显示 levelId
+#:     （博士明确要求不显示它）。
+#:     注意两表要 **join 而不是替代**：索引 4694 条 vs stage_table 3549 条，
+#:     索引独有 1346 条（生息演算等），那些 name 留空。
+#:     旧库（v6）搬运时新列一律为空——**搬不搬得动都不影响已有数据**，
+#:     想要名字再跑一次 `db stage-fetch` 即可。
+DB_VERSION = 7
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -254,9 +271,9 @@ CREATE TABLE IF NOT EXISTS attack_range (
 );
 
 -- 地块字典：tileKey → 中文名与说明。
--- **唯一不是 gamedata 来源的表**：gamedata 里没有地块表（tile_table.json 两个
--- 镜像都 404），关卡 JSON 只给 tileKey 不给名字。来源是 theresa.wiki 的地图数据
--- 接口，取数与缓存见 ak_tactic/db/tiles.py。
+-- **不是 gamedata 来源的表之一**（另一张见下面的 stage）：gamedata 里没有地块表
+-- （tile_table.json 两个镜像都 404），关卡 JSON 只给 tileKey 不给名字。来源是
+-- theresa.wiki 的地图数据接口，取数与缓存见 ak_tactic/db/tiles.py。
 -- 两份实测事实要跟着这张表一起记住：**它是全局表**（不同活动取到的逐字节相同），
 -- 但**不全**（`tile_xbdpsea` 缺失，见 tiles.KNOWN_GAPS），所以别当全集用。
 CREATE TABLE IF NOT EXISTS tile (
@@ -264,6 +281,65 @@ CREATE TABLE IF NOT EXISTS tile (
     name          TEXT NOT NULL DEFAULT '',
     description   TEXT NOT NULL DEFAULT '',
     is_functional INTEGER NOT NULL DEFAULT 0
+);
+
+-- 关卡索引：levelId → 显示名（`SR-EX-8` 这种）、难度、所属区域、数据路径。
+--
+-- **第二张非 gamedata 来源的表**（第一张是上面的 tile）。gamedata 的 `excel/`
+-- 两个镜像都没有关卡表，而活动关的显示名与 levelId 之间**没有可推导关系**
+-- （`SR-EX-8` ↔ `act54side_ex08` 猜不出来），所以这份索引是换算显示名的唯一途径。
+-- 来源、扒法与缓存见 ak_tactic/db/stages.py。
+--
+-- **主键必须是 levelId 而不是 code**：同一关卡号下还有 `#f#` 后缀的四星限定版，
+-- 两者**共用同一个 code**（如 `main_00-01` 与 `main_00-01#f#` 的 code 都是 `0-1`），
+-- 拿 code 当主键会直接撞掉一批。
+--
+-- 由 `db stage-fetch` **单独建**（要联网）；`db build` 全程不联网，重建时把旧库的
+-- stage 原样搬过去，**不会清空它**——这一点与 tile 不同（tile 缺了只是少点名字，
+-- 关卡表空了整个选关界面就没东西可选）。
+CREATE TABLE IF NOT EXISTS stage (
+    level_id      TEXT PRIMARY KEY,
+    code          TEXT NOT NULL DEFAULT '',
+    difficulty    TEXT NOT NULL DEFAULT 'NORMAL',
+    zone_id       TEXT NOT NULL DEFAULT '',
+    data_path     TEXT NOT NULL DEFAULT '',
+    -- 以下四列来自 GitHub 镜像的 excel/stage_table.json（ark-nights 没有 excel/ 目录）。
+    -- `name` 是**关卡中文名**（SR-EX-8 = 虚无之顶）；关卡索引本身不带名字，
+    -- 而名字散在 4694 个关卡文件里，逐个拉不现实，所以从这张汇总表取。
+    -- 索引独有、stage_table 没有的条目（写这段时 1346 条，生息演算那类）name 留空。
+    name          TEXT NOT NULL DEFAULT '',
+    stage_type    TEXT NOT NULL DEFAULT '',
+    -- diff_group 是**环境分层**：EASY=剧情体验 / NORMAL=标准实战 / TOUGH=磨难险地 /
+    -- ALL=通用（剧情与教学关）/ NONE=无分层。主线第 9-14 章靠它分环境，
+    -- 第 0-8 章与第 15-17 章全是 NONE（后者的环境在 difficulty 上）。
+    diff_group    TEXT NOT NULL DEFAULT '',
+    hard_level_id TEXT NOT NULL DEFAULT ''
+);
+
+-- 章节/区域（`zone_table.json`，477 条）。**第三张非 gamedata 来源的表**。
+-- 关卡索引只有 zone_id，没有章节名与分部名，靠这张表补：
+--   第 1-14 章 type=MAINLINE，name_first 直接写着「第一章」…「第十四章」；
+--   **第 15-17 章是 MAINLINE_ACTIVITY**，name_first 是英文，中文副标题在
+--   name_second，章号只在 name_title（"17"）——「第十七章」得自己拼；
+--   side story 的分部名也在 name_second（act54side_zone1=通学路、zone2=殡仪堂）。
+CREATE TABLE IF NOT EXISTS zone (
+    -- NOT NULL 不是装饰：`zone_id` 是「按字典键取值」最容易漏的一列，
+    -- 漏了会写出 NULL 主键，而 SQLite 允许 PRIMARY KEY 列为 NULL，
+    -- 477 行会静默地全挤在同一个 None 键上、读回来只剩 1 条。这个坑真踩过。
+    zone_id    TEXT PRIMARY KEY NOT NULL,
+    zone_index INTEGER,
+    type       TEXT NOT NULL DEFAULT '',
+    name_first  TEXT NOT NULL DEFAULT '',
+    name_second TEXT NOT NULL DEFAULT '',
+    name_title  TEXT NOT NULL DEFAULT '',
+    name_third  TEXT NOT NULL DEFAULT '',
+    -- 上面两列来自 `excel/activity_table.json` 的 zoneToActivity 与 basicInfo。
+    -- **这层是「活动」不是「章节」**：一个活动可能含多个 zone（写这段时实测
+    -- 103 个活动如此，如 act54side「月行水上」= act54side_zone1 通学路 +
+    -- act54side_zone2 殡仪堂），选关界面因此需要「先选活动、再选分部、再选关卡」。
+    -- 主线 zone（main_1 那类）查不到活动，两列留空、直接按章节名展示。
+    activity_id   TEXT NOT NULL DEFAULT '',
+    activity_name TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_op_name      ON operator(name);
@@ -274,6 +350,9 @@ CREATE INDEX IF NOT EXISTS idx_module_char  ON module(char_id);
 CREATE INDEX IF NOT EXISTS idx_talent_name  ON operator_talent(name);
 CREATE INDEX IF NOT EXISTS idx_opskill_char ON operator_skill(char_id, slot);
 CREATE INDEX IF NOT EXISTS idx_tile_name    ON tile(name);
+CREATE INDEX IF NOT EXISTS idx_stage_code   ON stage(code);
+CREATE INDEX IF NOT EXISTS idx_stage_zone   ON stage(zone_id);
+CREATE INDEX IF NOT EXISTS idx_stage_name   ON stage(name);
 """
 
 #: meta 表里必须有值的键

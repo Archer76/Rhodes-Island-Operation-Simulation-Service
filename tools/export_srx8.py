@@ -38,6 +38,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from ak_tactic.gamedata import (                                          # noqa: E402
     EnemyLibrary, GameDataSource, RangeTable, load_stage,
 )
+from ak_tactic import maa_export as maa                                   # noqa: E402
 from ak_tactic.operator import SkillBook, TalentBook                      # noqa: E402
 from ak_tactic.parallel import pmap                                       # noqa: E402
 from run_srx8 import make_provider, run_plan, PlanError                   # noqa: E402
@@ -89,105 +90,40 @@ PLANS: list[tuple[str, list]] = [
 ]
 
 
-#: 模组**类型字母** → MAA 的 `module` 编号（见 `module_slot`）。
-MODULE_SLOT = {"X": 1, "Y": 2, "Z": 3}
+#: 模组**类型字母** → MAA 的 `module` 编号。判据与对应表见 `ak_tactic.maa_export` 的模块文档。
+#:
+#: 老实现写的是 `{"X": 1, "Y": 2, "Z": 3}`，**两处错**：`Z` 在 905 条模组里一次都没出现过
+#: （死项），而 `D` 漏了。那 6 条 D 型（黑键/艾拉/**逻各斯**/伊芙利特/薇薇安娜/棘刺）
+#: 全是 `classify == ok` 的普通专属模组，照旧写法它们的模组要求会被静默丢掉。
+#: 一直没暴露，是因为撞见过的干员（赤刃明霄陈 X、圣聆初雪 Y、阿斯卡纶 X、望 X）全在 X/Y 上。
+MODULE_SLOT = maa.MODULE_SLOT
 
 
-def module_slot(roster: Roster, name: str) -> int | None:
-    """返回 MAA 的 `module` 编号；**没有生效模组时返回 `None`（该键必须整个省略）**。
+def roster_module_slot(roster: Roster, name: str) -> int | None:
+    """名册里的干员 → MAA 的 `module` 编号；**没有生效模组时返回 `None`（该键整个省略）**。
 
-    ## 编号取的是模组**类型字母**，不是 id 里的数字
+    两道门：① `equipped_status == "ok"`——模组三道门（非基础证章、非特限/特勤、有战斗数值）
+    由 `tools/roster.py` 建名册时就判好了；② 类型字母在 `MODULE_SLOT` 里。
+    编号的取法、为什么不能解析 id 里的数字，全在 `ak_tactic.maa_export` 的模块文档里。
 
-    游戏把模组分三型 **X / Y / Z**，MAA 用 **1 / 2 / 3** 指代它们。
-    所以判据是 `uniequip_table.equipDict[<id>].typeName2` 那个字母：
-
-    | 干员 | 模组 id | `typeName2` | MAA 写法 |
-    |---|---|---|---|
-    | 赤刃明霄陈 | `uniequip_002_chen3` | **X** | `1` |
-    | 圣聆初雪 | `uniequip_002_sbell2` | **Y** | `2` |
-    | 阿斯卡纶 | `uniequip_002_ascln` | **X** | `1` |
-
-    **别解析 id**：`uniequip_00N_xxx` 里的 N 只是全表序号——上面两条的 N 都是 2，
-    编号却一个是 1、一个是 2。我先前用正则抓 id 里的数字当编号，赤刃明霄陈被写成 2，
-    博士实机指出来了。
-
-    两道限制：① 只有 `equipped_status == "ok"`（过了模组三道门）才算数；
-    ② 字母不在 X/Y/Z 里的一律返回 `None`（特限/特勤那种 D/A/B 本来就被第①条挡住，
-    这里再兜一层）。
-
-    ## 为什么没有模组时连键都不能写
-
-    MAA 对 `requirements.module` 的取值是有语义的（1/2/3 = X/Y/Z），写 `0` 之类的
-    越界值会让**整份作业解析失败**——不是"忽略这一条要求"，是**不识别**。
-    所以宁可省略：省略 = 不校验模组，写错 = 整个文件用不了。
-    博士实机确认过这条。
+    **没有模组时必须整个省略 `module` 键**，不能写 `0`——博士实机确认写 `0` 会让
+    **整份作业不被 MAA 识别**（不是"忽略这一条要求"，是"不识别"）。
+    省略 = 不作要求，在两种读法下都安全。
     """
     r = roster.get(name)
     if r.get("equipped_status") != "ok":
         return None
     # `module` 是"算符该用的那个"，`equipped_module` 是账号实际装着的；
     # 上面那道 status 门保证两者在 ok 时是同一个 id，取谁都行。
-    eq = r.get("module") or r.get("equipped_module")
-    if not eq:
-        return None
-    entry = (roster.calc._load_uniequip() or {}).get(eq) or {}
-    letter = str(entry.get("typeName2") or "").strip().upper()
-    return MODULE_SLOT.get(letter)
+    return maa.module_slot(r.get("module") or r.get("equipped_module"))
 
 
 def skill_usage(roster: Roster, name: str, slot: int) -> int:
-    """MAA 的技能用法。
+    """MAA 的技能用法。转发到 `ak_tactic.maa_export.skill_usage`——那边是唯一实现。
 
-    MAA 官方口径：`1` = 好了就用，`0` = 不自动使用；并注明
-    「**如果是全自动的技能，填 0**」。所以这里按触发方式分流：
-    手动触发的（如予愿安洁莉娜 3 技能）填 1 让 MAA 点；自动触发的
-    （机械师 1 技能、圣聆初雪 2 技能）填 0，游戏自己会开。
+    原先这里和 `to_maa` 各有一份判 `自动触发` 的代码，与包内那份迟早要漂。
     """
-    if not slot:
-        return 0
-    for s in roster.slots(name):
-        if s.slot == slot:
-            lv = s.level(7, roster.mastery(name, slot))
-            return 0 if "自动触发" in (lv.skill_type_cn or "") else 1
-    return 1
-
-
-def to_maa(stage, roster: Roster, plan, detail, *, title: str, details: str) -> dict:
-    """组装 MAA copilot JSON。y 轴翻成 MAA 的「从上往下」。"""
-    h = stage.map.height
-    opers = []
-    for name, _pos, _d, slot in plan:
-        r = roster.get(name)
-        mastery = roster.mastery(name, slot) if slot else 0
-        req = {"elite": r["elite"], "level": r["level"],
-               # 官方口径：1–7 是技能等级，8/9/10 即专一/专二/专三
-               "skill_level": 7 + mastery}
-        # 没有生效模组的干员**不能写这个键**（写 0 会让 MAA 整份作业不识别），
-        # 见 `module_slot`。键序保持 elite → level → skill_level → module → potential。
-        mod = module_slot(roster, name)
-        if mod:
-            req["module"] = mod
-        req["potential"] = r["potential"]
-        opers.append({"name": name, "skill": slot or 0,
-                      "skill_usage": skill_usage(roster, name, slot),
-                      "requirements": req})
-    actions = []
-    for wait, name, (x, y), direction, slot, mastery, cost in detail:
-        actions.append({
-            "type": "Deploy", "name": name,
-            "location": [x, y], "direction": direction,
-            "doc": f"{name}  技能{slot or '—'}（专{mastery}）  费用{cost}",
-        })
-    actions.append({"type": "SpeedUp"})
-    actions.append({"type": "SkillDaemon"})
-    return {
-        "stage_name": STAGE_ID,
-        "opers": opers,
-        "groups": [],
-        "actions": actions,
-        "minimum_required": "v6.0.0",
-        "doc": {"title": title, "details": details},
-    }
+    return maa.skill_usage(roster, name, slot)
 
 
 def build_context():
@@ -268,12 +204,12 @@ def main() -> int:
     H = stage.map.height
     print(f"=== {stage.summary()} ===")
     print(f"名册 {roster.path.name}  uid={roster.uid} [{roster.nick}]")
-    print("模组判定（MAA 的 module = 类型字母 X/Y/Z → 1/2/3；无生效模组则省略该键）：")
+    print("模组判定（MAA 的 module = 类型字母 X/Y/A/D/B → 1/2/3/4/5；无生效模组则省略该键）：")
     for n in dict.fromkeys(n for n, *_ in sum((p for _t, p in PLANS), [])):
         r0 = roster.get(n)
         eq = r0.get("equipped_module")
         entry = (roster.calc._load_uniequip() or {}).get(eq or "") or {}
-        slot = module_slot(roster, n)
+        slot = roster_module_slot(roster, n)
         print(f"    {n:<12} {eq or '—':<26} typeName2={entry.get('typeName2') or '—':<3} "
               f"status={r0.get('equipped_status')} → "
               f"{'module=' + str(slot) if slot else '省略 module'}")
@@ -375,8 +311,8 @@ def main() -> int:
             f"{n} E{roster.get(n)['elite']}{roster.get(n)['level']}"
             f"专{roster.mastery(n, s) if s else '-'}"
             + (f"模组{(roster.get(n).get('equipped_module') or '无')}"
-               f"→MAA module={module_slot(roster, n)}"
-               if module_slot(roster, n) else "不需要模组")
+               f"→MAA module={roster_module_slot(roster, n)}"
+               if roster_module_slot(roster, n) else "不需要模组")
             for n, _p, _d, s in plan)
         details = (
             f"由 ak-tactic 模拟器导出（干员口径取自森空岛名册，含真实专精/模组/信赖），"
@@ -420,8 +356,13 @@ def main() -> int:
             f"翻倍按不加处理——两处都偏保守）、圣聆初雪技1「可充能2次」的第二层充能、"
             f"结城理天赋2 的 450% 真实伤害。"
         )
-        data = to_maa(stage, roster, plan, detail,
-                      title=f"SR-EX-8 {title}", details=details)
+        # 组装走包内的 `ak_tactic.maa_export`——那边是 TUI 导出用的同一个实现，
+        # 两处各写一份 to_maa 必然漂（本轮就是这么发现 `module` 编号漏了 D 型的）。
+        # `stage_name` 用 levelId：官方文档说 code/levelId 皆可，**但 code 不唯一**
+        # （774 条 `#f#` 突袭变体与普通版共用同一个 code），所以取唯一的那个。
+        job = maa.plan_from_rows(STAGE_ID, plan, detail, title=title)
+        data = maa.to_maa(job, roster, stage_name=STAGE_ID, difficulty="NORMAL",
+                          title=f"SR-EX-8 {title}", details=details)
         path = OUT_DIR / f"srx8-{chr(64+idx).lower()}.json"
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n",
                         encoding="utf-8")
