@@ -6,7 +6,7 @@
 
 > 权限校验通过。演算申请已受理。
 
-这不是一个小工程。从「情报不足」到「方案成立」，中间隔着四道坎：**把数据收全 → 把数值核定 → 把时间轴推演出来 → 在巨大的方案空间里找到可行解**。四道坎均已跨越，各成一节；节点之间由 **823 项复核**与**三条基线记录**固定——任何一处改动，都必须让那三个数逐字复现。
+这不是一个小工程。从「情报不足」到「方案成立」，中间隔着四道坎：**把数据收全 → 把数值核定 → 把时间轴推演出来 → 在巨大的方案空间里找到可行解**。四道坎均已跨越，各成一节；节点之间由 **全套自检**与**三条基线记录**固定——任何一处改动，都必须让那三个数逐字复现。
 
 编号得自游戏内的 PRTS 系统：Primitive Rhodes Island Terminal Service。它曾为一次搜救自行演算，留下 167 份过程记录与 3,711 个执行节点，而其中仅有两个结果能导向成功。本服务做的是同一件事——将那类「可能导向胜利的计算」做成可复现的程序。区别只在演算对象：一次是博士的搜救，一次是你自己的作战。
 
@@ -45,17 +45,19 @@ cd <仓库目录>
 python -m ak_tactic db build          # 干员库，不联网，约 3.4s
 python -m ak_tactic enemydb build     # 敌人库，要联网，首次约 53s（prts.wiki 限速 1.2s/请求）
 
-# 2) 跑全套自检 —— 十套共 823 项，全绿才算没退化
-python tools/check_db.py              # 64
-python tools/check_enemy_db.py        # 62
-python tools/check_battle.py          #117
-python tools/check_p3r.py             # 65
-python tools/check_formula.py         #100
-python tools/check_enemy_formula.py   #162
-python tools/check_verify.py          # 68
-python tools/check_eta.py             # 35
-python tools/check_search.py          # 71
-python tools/check_diagram.py         # 49
+# 2) 跑全套自检 —— 十一套，全绿才算没退化
+#    各套的项数会随规则增删而变，本文件不写死；每套末行会自报当前项数
+python tools/check_db.py              # 干员库（含地块字典）
+python tools/check_enemy_db.py        # 敌人库
+python tools/check_battle.py          # 战斗模型 + 三关基线 + 攻速链路 + 口径断言
+python tools/check_p3r.py             # 相性与全场总攻击
+python tools/check_formula.py         # 干员正文 → 公式项（含算式解析器）
+python tools/check_enemy_formula.py   # 敌人正文 → 公式项（含带变量的算式）
+python tools/check_verify.py          # 验证器（含跨局复用可重复性）
+python tools/check_eta.py             # 到达时刻（与模拟器逐只对拍）
+python tools/check_search.py          # 搜索器 + 组队建议
+python tools/check_diagram.py         # 摆位图 / 热度图 / 时间轴 / 报告
+python tools/check_parallel.py        # 并行等价性（串并行逐字一致）
 
 # 3) 复现三条回归基线（改战斗模型后必须逐字不变）
 python -m ak_tactic verify main_01-07 \
@@ -93,7 +95,7 @@ python tools/export_srx8.py
 | 部署参数 | ✅ | 再部署、部署费用、阻挡数、攻击间隔、所属势力、隐藏势力 |
 | 天赋 | ✅ | 每个天赋的各阶段效果，含模组强化版与潜能增强版，条件已结构化 |
 | 技能 | ✅ | 每个技能的 7 级 + 专精 1/2/3：描述、初始 SP、消耗 SP、持续、回复/触发类型、开放条件 |
-| 模组 | ✅ | 1/2/3 级四维增量、特性追加、天赋改写、解锁等级与信赖 |
+| 模组 | ✅ | 1/2/3 级四维**总加成**、特性追加、天赋改写、解锁等级与信赖 |
 | 攻击范围 | ✅ | `Widget:Range` SVG → 相对自身格坐标集合，支持旋转与覆盖判定 |
 | 潜能 | ✅ | 潜能 2–6 的效果文本与数值 |
 
@@ -145,11 +147,11 @@ python tools/export_srx8.py
 
 ### 阶段 4 · 战斗模型 ✅ 完成
 
-代码在 `ak_tactic/battle/`（`damage.py` / `unit.py` / `range.py` / `sim.py`，
-模拟器本体约 67 KB），自检 `tools/check_battle.py`（117 项）、
-`tools/check_p3r.py`（65 项）。
+代码在 `ak_tactic/battle/`（`damage.py` / `unit.py` / `range.py` / `sim.py`），
+自检 `tools/check_battle.py`、`tools/check_p3r.py`。
 
-- 伤害结算：物理（ATK−DEF，下限为 ATK×5%）、法术（ATK×(1−RES/100)）、真实、治疗
+- 伤害结算：物理（ATK−DEF，下限为 ATK×5%）、法术（ATK×(1−RES/100)，**同样有
+  5% 保底**；法抗 ≥100 仍结算为 0——「法抗满值 = 免疫」是独立规则，优先于保底）、真实、治疗
 - 攻速与攻击间隔：干员攻击间隔、**总攻速**（基础 100 + 天赋 + 模组特性改写；
   其中「未阻挡敌人时」是条件加成，按当前是否挡住敌人**逐帧**判定）、技能改间隔
 - SP 回转：自动回复/攻击回复/受击回复 + 初始 SP + 消耗 SP + 持续
@@ -157,7 +159,7 @@ python tools/export_srx8.py
 - 另外还多做了原计划没写的三块：**天赋与特性**（含从文本推的攻法类型、
   治疗、弱点伤害）、**模组**、**关卡装置**（SR 系列的「全场总攻击」几乎
   是那两关的输出主轴）
-- 已知未建模：元素损伤结算、浮游单元叠加、火环 ticks —— 见第七节
+- 已知未建模：元素损伤结算、浮游单元叠加、火环 ticks —— 见阶段 7 的「第二批」清单
 
 ### 阶段 5 · 求解与搜索 ✅ 完成
 
@@ -202,7 +204,7 @@ python tools/export_srx8.py
 - **实测**：1-7 上 30 秒 / 98 次评估，自己找出一套 **2 人三星方案**
   （拉普兰德(2,3)朝左 + 能天使(3,5)朝上 → 137.1s / 41 杀 / 0 漏），
   比手写的三人基线少一个人。搜索结果存下的打法**自带练度**，不带名册也能复跑。
-- 自检 `tools/check_search.py`（71 项）。
+- 自检 `tools/check_search.py`。
 
 **组队建议**（2026-09-16）：
 
@@ -258,7 +260,7 @@ python tools/export_srx8.py
 - ✅ 路线热度图：`route_heat()` —— 每格的敌人·秒（`dwell`）或经过的路线条数
   （`routes`）。**摆位先看这张图**
 - ✅ 一键完整报告：`verify --report out/report.md`（摆位 + 热度 + 时间轴 + 战报）
-- 自检 `tools/check_diagram.py`（49 项）
+- 自检 `tools/check_diagram.py`
 
 ---
 
@@ -284,7 +286,7 @@ python tools/export_srx8.py
 | 击杀叠层 | ✅ | `unit.OperatorUnit.kill_stacks`，技能结束时清零 |
 | 可充能次数 | ✅ | `maxChargeTime` → 技能连开 |
 | 自身治疗 | ✅ | — |
-| SP 获取 | ⚠️ 部分 | 只有「受击回复」`sp_per_hit`；自然回复与攻击回复待补 |
+| SP 获取 | ✅ | 自动回复 / 攻击回复 / 受击回复三种齐全（`sp_per_second` / `sp_per_attack` / `sp_per_hit`），含天赋的额外回能 |
 | **闪避** | ✅ **本批次完成** | 全链路新建，见下节 |
 
 **闪避为什么此前一直是零**：这条链路**三处全断**，任何一处都足以让它静默失效。
@@ -408,7 +410,7 @@ Searcher(workers=None).search("main_01-07", roster, ops)
 pmap(sweep_one, [(k, v, plan) for ...], init=sweep_init, key="srx8-sweep")
 ```
 
-自检：`python tools/check_parallel.py`（16 项：调度契约 + `pmap` + 串并行逐字等价）。
+自检：`python tools/check_parallel.py`（调度契约 + `pmap` + 串并行逐字等价）。
 
 ### 战斗循环的就地展开（纯 Python，1.18×）
 
@@ -444,40 +446,6 @@ pmap(sweep_one, [(k, v, plan) for ...], init=sweep_init, key="srx8-sweep")
 那次切片"，实测改写后**慢了 3.6%**（219.9 → 227.9 ms）——`math.dist` 是一次 C 调用，
 手写 `sqrt(dx*dx+dy*dy)` 要跑六条字节码。**剖面说"这里耗时多"，不等于"这里有便宜的改法"。**
 该函数现在带着一条注释守护这个结论。
-
-### 换 C 能拿多少？——实测，不是估算
-
-`_proto/` 里有一个**只用于测量、不属于包**的 C 原型（`fast.c` + `measure.py`）。
-它把 `_update_blocking` 抄成 C，用真实 1-7 的 4127 帧做三方对拍（校验和必须
-一致才计时）并分别量三种做法：
-
-| 做法 | 每帧耗时 | 相对现场 Python |
-|---|---|---|
-| Python 原版（带对象属性访问，在现场） | 14.6 µs | 1× |
-| Python 重放（同构算法，扁平列表） | 8.0 µs | 1.83× |
-| C · 每帧把状态搬过边界 | 2.3 µs | 6.4× |
-| C · 数据常驻 C 侧（SoA） | 0.30 µs | **48.6×** |
-
-三条结论：
-
-1. **逐函数替换几乎白做。** 这一个函数占整场的 18%，即便 C 版快 6.4×，整场
-   也只从 328.0 → 277.3 ms（**1.18×**）。
-2. **边界搬运才是主要成本。** 同一份 C 算法，每帧搬一次数据是 2.3 µs，数据
-   常驻是 0.30 µs——**差 7.5×**。「把热点函数逐个换成 C」这条路，收益基本被
-   Python↔C 的转换吃掉。
-3. **只有全面重写（SoA）才真有收益。** 若 78% 的热点路径都按常驻效率搬进 C，
-   整场约 **4.2×**；逐函数替换则只有 2.9×。
-
-⚠️ 我先前凭剖面估算过「C 内核 5–10×」，实测把它压到 **4× 上下**——估算偏乐观
-了约一倍。这就是写原型的理由：**编出来的区间不一定偏保守，它可能正好偏在
-好看的那一边。**
-
-还有一条副产品值得记：**同构的 Python 重放比现场快 1.83×**，差的全部是对象
-属性访问。把数据改成扁平表示、把 `alive` 这类取值器展平，**不写一行 C 就能
-拿到这段收益的一大半**。
-
-复现：`cd _proto && python setup.py build_ext --inplace && python measure.py`
-（`/utf-8` 编译参数是必需的，否则 MSVC 按 GBK 读 UTF-8 源码会报 C2001）。
 
 ## 二、现在能做什么
 
@@ -543,7 +511,7 @@ python -m ak_tactic verify main_01-07 --team "阿米娅:5,2:Left:0@1" --json
 python -m ak_tactic search main_01-07 --box 名册.json --team "能天使;银灰"
 python -m ak_tactic search act54side_06 --box 名册.json --top 10 \
         --max-ops 4 --beam 6 --per-op 8 --save-plan out/p.json
-#   不指定 --team 就取名册前 --top 名；--beam/--per-op 是预算旋钮
+#   --beam/--per-op 是预算旋钮；不指定 --team 时阵容由组队建议层给（见「组队建议」）
 #   存下来的打法自带练度，之后 verify --plan 不带 --box 也能复跑
 
 # ── 输出：摆位图 / 时间轴 / 完整报告（阶段 6）
@@ -552,17 +520,19 @@ python -m ak_tactic verify main_01-07 --team "阿米娅:5,2:Left:0@1" --box 名�
 python -m ak_tactic verify --plan out/p.json --report out/report.md
 #   --heat-metric routes 把热度图从「敌人·秒」换成「经过的路线条数」
 
-# ── 自检（十套，共 823 项；全绿才算没退化）
-python tools/check_db.py              # 64  干员库（含地块字典）
-python tools/check_enemy_db.py        # 62  敌人库
-python tools/check_battle.py          #117  战斗模型 + 三关基线 + 攻速链路 + 口径断言
-python tools/check_p3r.py             # 65  相性与全场总攻击
-python tools/check_formula.py         #100  干员正文 → 公式项（含算式解析器）
-python tools/check_enemy_formula.py   #162  敌人正文 → 公式项（含带变量的算式）
-python tools/check_verify.py          # 68  验证器（含跨局复用可重复性）
-python tools/check_eta.py             # 35  到达时刻（与模拟器逐只对拍）
-python tools/check_search.py          # 71  搜索器 + 组队建议
-python tools/check_diagram.py         # 49  摆位图 / 热度图 / 时间轴 / 报告
+# ── 自检（十一套；全绿才算没退化）
+#    各套项数会随规则增删而变，本文件不写死——每套末行自报当前项数
+python tools/check_db.py              # 干员库（含地块字典）
+python tools/check_enemy_db.py        # 敌人库
+python tools/check_battle.py          # 战斗模型 + 三关基线 + 攻速链路 + 口径断言
+python tools/check_p3r.py             # 相性与全场总攻击
+python tools/check_formula.py         # 干员正文 → 公式项（含算式解析器）
+python tools/check_enemy_formula.py   # 敌人正文 → 公式项（含带变量的算式）
+python tools/check_verify.py          # 验证器（含跨局复用可重复性）
+python tools/check_eta.py             # 到达时刻（与模拟器逐只对拍）
+python tools/check_search.py          # 搜索器 + 组队建议
+python tools/check_diagram.py         # 摆位图 / 热度图 / 时间轴 / 报告
+python tools/check_parallel.py        # 并行等价性（串并行逐字一致）
 python tools/enemy_field_audit.py     #     敌人字段总账（非 0 退出即有字段没入库）
 
 # ── 缓存
@@ -580,7 +550,7 @@ python -m ak_tactic cache --clear-gamedata               # 清 gamedata 缓存�
 | 主键 | `char_id` | prts.wiki 页名（`“死志的凝结”`） |
 | 数值口径 | 只存**关键帧原文**，面板另算 | 存**算好继承的逐档数值** |
 | 建库 | `db build`（不联网） | `enemydb build`（要联网，有 7 天缓存） |
-| 自检 | `tools/check_db.py`（64 项） | `tools/check_enemy_db.py`（62 项） |
+| 自检 | `tools/check_db.py` | `tools/check_enemy_db.py` |
 
 两者**不共用文件、不共用结构版本、不互相引用**。最要紧的理由不是"来源不同"，
 而是**数值口径正好相反**：干员那边只搬原文、插值与潜能留在计算层（两处各算
@@ -704,10 +674,11 @@ ak-tactic/
 │     ├─ range.py            攻击范围 → 实际覆盖格（朝向旋转）
 │     ├─ talents.py          战斗内天赋（积雪、费用加成…）
 │     ├─ p3r.py              相性（P3R）与「全场总攻击」装置
-│     └─ sim.py              模拟器本体（帧级推进，~67 KB）
+│     └─ sim.py              模拟器本体（帧级推进）
 ├─ tools/
-│  ├─ check_*.py             十套自检：db / enemy_db / battle / p3r / formula
+│  ├─ check_*.py             十一套自检：db / enemy_db / battle / p3r / formula
 │  │                         / enemy_formula / verify / eta / search / diagram
+│  │                         / parallel
 │  ├─ squad.py               森空岛名册 → 战斗单位（保真度基准）
 │  ├─ roster.py / skland.py  森空岛登录与名册拉取
 │  ├─ run_sr6.py              SR-6 关卡专属跑法（含落位合法性守卫）
@@ -1105,51 +1076,39 @@ calc.calibrate("char_002_amiya", elite=0, level=3, attr="atk", observed=280)
 
 ## 七、已知局限
 
-1. ~~**技能效果还是自然语言**~~ —— **已解决**（2026-09-15）。`ak_tactic/formula.py`
-   把技能/天赋/特性/模组的正文编译成可结算的公式项，另加 `ak_tactic/enemy_formula.py`
-   （敌人规则表 + wiki 模板清洗）。**要改这套解析器，先读 `docs/formula-maintenance.md`**
-   —— 维护者手册：接口清单、加一条规则的配方、必须守住的不变量、逐条踩过的坑。
-   模拟器有 `effect_source` 三档（`blackboard` / `merge` 默认 / `desc`）。
-   仍未对齐的是**对手**：抬手 `prepDuration` 与敌人的攻击动作时长（gamedata
-   里没有，后者是模拟器给的 0.5s 假设）。**但「攻击间隔要不要动画帧补正」
-   已定案否**（2026-09-16 实机核对）：间隔 = 基础间隔 × 100 / 总攻速，
-   实测误差 0.07%，帧补正只影响首刀时机、不影响出手周期。
-   详见 `docs/formula-model.md`。
-2. ~~**移速换算还没校准**~~ —— **已定案**（2026-09-14）：`格/秒 =
-   moveSpeed × move_multiplier × speed_scale`，不要再乘任何额外系数。
-   用 1-7 实机录像（怒潮凛冬精2 60 单干员、2 倍速回放，战斗区间 140s 游戏时间）
-   对齐，模拟 142.0s，误差 1.4%。
-3. ~~**干员范围与地图还没联动**~~ —— **已解决**。`battle/range.py` 的
-   `RangeProvider` 把「干员 + 精英阶段 + 朝向 + 位置」换算成实际攻击格，
-   走 gamedata 的 `excel/range_table.json`（73 个代号，纵向对称、自带自身格）。
-   **注意它会影响结果**：1-7 无技能基线给真实范围是 `133.0s`，
-   不给（退回到「自身格 + 朝向前方三格」的近似）是 `137.0s`——
-   `tools/check_battle.py` 锚的是后者，那条防的是"新代码改坏旧路径"而非精度；
-   `tools/check_verify.py` 两条都锚。用 `Verifier(use_range_table=False)` 切换。
-4. **传送与等待还没并进时间轴**。SR-EX-8 的路线里有 `WAIT_FOR_SECONDS`（最长一条等 61 秒）和 `tile_telin → tile_telout` 的传送，目前只解析出来、没有并入出怪时刻，所以算不出「某只敌人几点出现在中央那个格子」。
-5. **`tile_replace_wall` / `tile_replace_road` 的触发条件未验证**。SR-EX-8 的 13 个可部署格里有 12 个标着 `tile_replace_*`——它们当前可部署，但会被关卡机制改写，改写后是否还站得住人需要对着实机确认。
-6. **关卡里还有没解析的字段**：`predefines`（1-7 有预置 token，位置在 `(3,3)` 朝上）、`runes`（四星限定词条）、`levelscripts`（关卡脚本）。目前只取了地图、路线、波次、基本参数。
-7. **干员数据只覆盖 prts.wiki 上有的**。新干员上线到 prts.wiki 更新之间有窗口期。
-8. **还没做等级经验表**。`arknights-toolbox-data` 的 `assets/data/level.json` 里有完整的
+1. **对手侧的时间量仍未对齐**：抬手 `prepDuration` 与敌人的攻击动作时长（gamedata
+   里没有，后者是模拟器给的 0.5s 假设）。**但「攻击间隔要不要动画帧补正」已定案否**
+   （2026-09-16 实机核对）：间隔 = 基础间隔 × 100 / 总攻速，实测误差 0.07%，
+   帧补正只影响首刀时机、不影响出手周期。要改正文解析器，先读
+   `docs/formula-maintenance.md`（维护者手册），细节见 `docs/formula-model.md`。
+2. **范围表的开关会改变结果**。1-7 无技能基线走 gamedata 的
+   `excel/range_table.json`（73 个代号，纵向对称、自带自身格）是 `133.0s`，
+   退回「自身格 + 朝向前方三格」的近似是 `137.0s`——`tools/check_battle.py` 锚的
+   是后者，那条防的是"新代码改坏旧路径"而非精度；`tools/check_verify.py` 两条都锚。
+   用 `Verifier(use_range_table=False)` 切换。
+3. **`tile_replace_wall` / `tile_replace_road` 的触发条件未验证**。SR-EX-8 的 13 个可部署格里有 12 个标着 `tile_replace_*`——它们当前可部署，但会被关卡机制改写，改写后是否还站得住人需要对着实机确认。
+4. **关卡里还有没解析的字段**：`runes`（四星限定词条）、`levelscripts`（关卡脚本）。已取的是地图、路线、波次、基本参数，以及 `predefines.tokenInsts` 里的关卡装置（`battle/p3r.py` 的「全场总攻击」）。
+5. **干员数据只覆盖 prts.wiki 上有的**。新干员上线到 prts.wiki 更新之间有窗口期。
+6. **还没做等级经验表**。`arknights-toolbox-data` 的 `assets/data/level.json` 里有完整的
    `characterExp` / `characterUpgradeCost`（按稀有度与精英段逐级列出经验、龙门币消耗），
    要算「从 1 级练到 90 级要多少」时取它就行，但本项目目前只关心战斗数值，没有接入。
-9. **属性计算的取整方式仍是假设**（详见第六章末），默认向下取整。若日后用实测值标定出
+7. **属性计算的取整方式仍是假设**（详见第六章末），默认向下取整。若日后用实测值标定出
    是四舍五入，`OperatorCalculator(rounding="round")` 一行即可改，不必动代码。
-10. **属性计算固定走 GitHub 镜像**，用不了 ark-nights 那个更精简的首选源——`excel/`
+8. **属性计算固定走 GitHub 镜像**，用不了 ark-nights 那个更精简的首选源——`excel/`
     三张表只有 GitHub 有。所以一旦 GitHub 直链不通，`stats` 会整体不可用，
     而 `stage` / `enemy` 不受影响。
-11. **prts.wiki 缓存是朴素的 7 天 TTL**，没有做条件请求（ETag / Last-Modified）；gamedata 缓存则干脆不过期（它是版本化快照，要更新就删）。关卡索引有 7 天 TTL——它跟着游戏版本走，但比游戏本体更新得晚。
-12. **prts.wiki 限速 1.2 秒/请求**意味着全库冷启动约 10 分钟（461 个干员）。批量抓取应该放在夜间一次性做完、落到本地仓库，而不是每次现抓。gamedata 没这个问题——关卡按需取，索引一次扒完能用一周。
-13. **三星判定是一条假设，不是从数据里读出来的**。`verify.stars_of()` 现在按
+9. **prts.wiki 缓存是朴素的 7 天 TTL**，没有做条件请求（ETag / Last-Modified）；gamedata 缓存则干脆不过期（它是版本化快照，要更新就删）。关卡索引有 7 天 TTL——它跟着游戏版本走，但比游戏本体更新得晚。
+10. **prts.wiki 限速 1.2 秒/请求**意味着全库冷启动约 10 分钟（461 个干员）。批量抓取应该放在夜间一次性做完、落到本地仓库，而不是每次现抓。gamedata 没这个问题——关卡按需取，索引一次扒完能用一周。
+11. **三星判定是一条假设，不是从数据里读出来的**。`verify.stars_of()` 现在按
     「不漏怪 3 星、漏 1 只 2 星、漏 ≥2 只 1 星、打输 0 星」判，
     **没有用实机验证过这条规则**。所以 `Verdict` 把 `won` / `life` / `max_life` /
     `leaks` 原样带出来——真要按别的口径判，用那几个字段即可，不必改 `stars_of`。
-14. **验证器不支持同一名干员的二次部署**。`Plan.validate()` 会把「同一人下两次」
+12. **验证器不支持同一名干员的二次部署**。`Plan.validate()` 会把「同一人下两次」
     直接拦下。要支持（撤退再上）得改模拟器的部署表结构，本版没做。
-15. **`Plan` 里的技能时刻是"请求"不是"保证"**。`sim.use_skill(position, time)`
+13. **`Plan` 里的技能时刻是"请求"不是"保证"**。`sim.use_skill(position, time)`
     排的是一次请求；技力不够就等够了再开。所以战报里的"出手次数"才是实际发生的事，
     想确认技能到底几点开，要看模拟器日志而不是 Plan。
-16. **显式部署时刻是"请求"，而且模拟器照办——包括付不起费的时候。** 部署的显式
+14. **显式部署时刻是"请求"，而且模拟器照办——包括付不起费的时候。** 部署的显式
     时刻走 `at = time; cost += (at-now)/rate; cost = max(0, cost - deploy_cost)`，
     也就是**费用夹到 0、人照样落地**。后果是「付不起也下」被静默放过。
     验证器现在会在归因里如实写出来（「这一手在游戏里做不出来」），但**不改行为**
@@ -1159,10 +1118,7 @@ calc.calibrate("char_002_amiya", elite=0, level=3, attr="atk", observed=280)
     当时 4 费）。它是地图/路线/伤害的**回归锚点**，不是一套可执行的作业。
     真正能执行的方案见搜索器的输出（`out/search-17.json`：拉普兰德 9.0s / 能天使
     23.0s，两人的费用都是刚好够，自动排程保证可行）。
-17. **移速为 0 的敌人此前会被兜底成 1.0**（`sim._spawn` 的 `or 1.0`）。库里
-    1803 页有 23 页最低档移速为 0，本项目已建模的三关都不含这种敌人，所以一直
-    没暴露。已修，并在 `eta.enemy_speed` 与 `tools/check_eta.py` 里留了守卫。
-18. **ETA 的「预估到终点」是无人拦截前提下的理论值**。它是摆位判断的依据
+15. **ETA 的「预估到终点」是无人拦截前提下的理论值**。它是摆位判断的依据
     （敌人几点会压到防线），不是实际漏怪——实际漏怪看「漏怪」行。两者同源，
     自检里逐只对拍到一帧以内。
 
