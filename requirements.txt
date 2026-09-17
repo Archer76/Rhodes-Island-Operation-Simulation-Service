@@ -1,0 +1,23 @@
+# R.I.O.S. 的运行依赖
+#
+# 本项目**只有两个**第三方依赖，其余全部是标准库。两者的角色差别很大：
+#
+#   - textual  终端界面（ak_tactic/tui/）。**只在 `python -m ak_tactic tui`
+#              这一条子命令上用到**，缺了它别的子命令照跑（守卫见
+#              tools/check_tui.py 第 [1] 节：它开子进程真断言"建 CLI parser
+#              不会导入 textual"）。
+#   - qrcode   扫码登录时在终端里画二维码（ak_tactic/qrterm.py）。同样惰性导入，
+#              只在 `tools/skland.py qr` 与 TUI 的登录屏上用到。
+#
+# 两者都是宽松许可（textual/rich 为 MIT、qrcode 为 BSD），与仓库的 MIT 相容。
+# 详见 THIRD-PARTY.md。
+#
+# 安装：
+#     pip install -r requirements.txt
+#
+# 只跑模拟与自检（不需要界面、不需要扫码）的话，这两个都不装也行：
+#     python -m ak_tactic verify --stage 1-7 ...
+#     python tools/check_battle.py
+
+textual>=8.0
+qrcode>=8.0

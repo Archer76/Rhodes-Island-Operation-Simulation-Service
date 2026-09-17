@@ -1,0 +1,1803 @@
+"""R.I.O.S. 的终端界面：五屏向导。
+
+    python -m ak_tactic tui
+
+    [0] 准备 → [1] 选关卡 → [2] 选编队 → [3] 解算 → [4] 结果
+
+## 两个刻意的设计
+
+**一、进度反馈不动核心代码。** 规划里原本要往 `ak_tactic/search.py` 加回调，
+但那会让搜索逻辑与三条基线（1-7 / SR-6 / SR-EX-8）的可比性受影响。实际不需要：
+`Searcher` 本来就维护 `self.evaluated` 计数器，本模块用一个 0.25 秒的定时器读它，
+就能给出**真实的**"已评估 N 个候选"。搜索本身在后台线程里跑，界面不卡。
+
+**二、登录态不是闸门。** `[0]` 屏会显示名册从哪来、新不新，但**允许跳过**。
+登录只决定"名册要不要刷新"，不决定"流程能不能走完"——名册有离线兜底
+（森空岛缓存 → OperBox → 手动选择）。`--no-login` 直接跳过这一步，
+用于测试全新启动的流程。
+"""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+from textual import work
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
+from textual.message import Message
+from textual.screen import ModalScreen, Screen
+from textual.widgets import (Button, DataTable, Footer, Header, Input, Label,
+                             ProgressBar, Select, SelectionList, Static)
+from textual.widgets.selection_list import Selection
+
+from rich.text import Text
+
+from .. import maa_export as maa
+from . import data as D
+from . import theme
+
+__all__ = ["RiosApp", "run", "both_cases"]
+
+
+def both_cases(rows: list[Binding]) -> list[Binding]:
+    """把**单字母**绑定展开成大小写两份。
+
+    ## 这一步为什么必需
+
+    `Binding("h", "home", "主界面", key_display="H")` 里的 `key_display` **只管
+    显示**：Footer 上印的是 `H`，真正注册的键却只有小写 `h`。而 Textual 的键
+    匹配**区分大小写**——用户照着 Footer 按 Shift+H，送过来的是大写 `H`，
+    一个绑定都不匹配，**界面上明明写着 H 却按不动**。实测：
+    `press("h")` 命中 1 次，`press("H")` 与 `press("shift+h")` 各命中 0 次。
+
+    反过来把键写成 `Binding("H", …)` 也不行——那就变成"必须按住 Shift"。
+
+    唯一的解法是**两份都收**：显示沿用大写（需求「字母改大写」说的是提示文字），
+    同时补一个 `show=False` 的大写孪生。非字母键（enter/escape/space/tab、
+    ctrl+c 这类带修饰的）原样返回。
+    """
+    out: list[Binding] = []
+    for b in rows:
+        out.append(b)
+        k = b.key
+        if len(k) == 1 and k.isalpha() and k.islower():
+            out.append(Binding(k.upper(), b.action, b.description or "",
+                               show=False, priority=b.priority))
+    return out
+
+
+# ================================================================ 状态
+
+class State:
+    """整个向导共享的一份状态。刻意做成简单字典式，便于调试时直接看。"""
+
+    def __init__(self) -> None:
+        self.roster: D.Roster | None = None
+        self.stage: dict | None = None
+        self.squad: list[str] = []
+        self.mode: str = "auto"          # auto = 允许程序补充；only = 只用我选的
+        self.searcher = None             # 解算中用来读 evaluated
+        #: 解算用的 `ak_tactic.plan.Roster`。结果屏导出时要靠它取练度与模组，
+        #: 而它和 `roster`（TUI 自己的轻量名册）不是同一个类——见 `SolveScreen._run`。
+        self.plan_roster = None
+        self.result = None
+        self.error: str = ""
+        self.export_path: Path | None = None
+
+
+# ================================================================ [0] 准备
+
+class WelcomeScreen(Screen):
+    """[0] 准备：说明程序要做什么、数据目录在哪、名册从哪来。"""
+
+    #: `key_display` 让 Footer 显示**大写字母**；而**实际能被按下的**不只小写——
+    #: 每个单字母绑定都由 `both_cases()` 补了大写孪生，所以照着 Footer 按
+    #: Shift+H 也能用（只写小写键、只印大写提示，是"看着有、按不动"的坑，
+    #: 博士实测踩到过）。见 `both_cases()` 的说明。
+    #: 提示只留 Footer 这一处：自己再画一行 `#hint` 会与它重复
+    #: （截图上底部就是**两行一样的东西**）。
+    BINDINGS = both_cases([
+        Binding("enter", "go", "开始", key_display="Enter"),
+        Binding("d", "dir", "改目录", key_display="D"),
+        Binding("l", "login", "登录", key_display="L"),
+        Binding("u", "game_uid", "取账号 uid", key_display="U"),
+        Binding("o", "logout", "退出账号", key_display="O"),
+        Binding("q", "quit", "退出程序", key_display="Q"),
+    ])
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(theme.step_bar(0), id="steps")
+        with Vertical(classes="block"):
+            yield Label(theme.APP_TITLE, classes="block-title")
+            yield Static(theme.APP_SUBTITLE + "\n", classes="muted")
+            yield Static(
+                "把「某个关卡」算出一份能过的编队，导出成 MAA 认得的作业 JSON。\n"
+                "四步：选关卡 → 指定编队 → 解算 → 导出。", id="intro")
+        with Vertical(classes="block"):
+            yield Label("数据目录", classes="block-title")
+            yield Static("", id="dir-line")
+        with Vertical(classes="block"):
+            yield Label("登录账号", classes="block-title")
+            yield Static("", id="account-line")
+        with Vertical(classes="block"):
+            yield Label("名册", classes="block-title")
+            yield Static("", id="roster-line")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        #: 上一步动作留下的失败原因（如退出账号写盘失败）。只给下一帧看一眼。
+        self._note = ""
+        self._refresh()
+
+    def _known_accounts(self) -> list[dict]:
+        """本机登录过的账号。取不到就当空的——这是显示用的信息，不该拖垮一屏。"""
+        try:
+            from ak_tactic import skland
+            return skland.known_accounts()
+        except Exception:                                     # noqa: BLE001
+            return []
+
+    def _account_line(self) -> str:
+        uid = D.skland_uid()
+        others = [a for a in self._known_accounts() if a["uid"] != uid]
+        if not uid:
+            tail = (f"；本机另存着 {len(others)} 个登过的账号，"
+                    "按 L 进登录屏后按 S 可切回。" if others else "。按 L 扫码登录。")
+            return "[warn]当前没有登录的账号[/]" + tail
+        meta = D.roster_meta(uid)
+        nick = str(meta.get("nickName") or "")
+        head = f"uid={uid}" + (f"　{nick}" if nick else "")
+        if others:
+            head += f"　[dim]（本机另有 {len(others)} 个登过的账号）[/]"
+        return head + "\n[dim]按 O 退出账号——凭据文件保留，之后可切回，不必重扫。[/]"
+
+    def _refresh(self) -> None:
+        g = D.guides_dir()
+        exists = "存在" if g.exists() else "还不存在（导出时自动建）"
+        self.query_one("#dir-line", Static).update(
+            f"{g}\n[dim]{exists}；MAA 作业默认输出到 <数据目录>/<关卡名>/[/]")
+
+        note = f"[warn]{self._note}[/]\n" if self._note else ""
+        self._note = ""
+        self.query_one("#account-line", Static).update(note + self._account_line())
+
+        r = self.app.state.roster
+        if r is None:
+            self.query_one("#roster-line", Static).update(
+                "[warn]没有找到名册。[/]\n" + self._no_roster_hint())
+            return
+        tone = "ok" if r.complete else "warn"
+        src = "森空岛缓存" if r.source == "skland" else "MAA OperBox（降级）"
+        head = (f"[{tone}]{src}[/] 共 {len(r.operators)} 名"
+                f"{f'　uid={r.uid}　{r.nick}' if r.uid else ''}")
+        self.query_one("#roster-line", Static).update(
+            f"{head}\n[dim]{r.note}[/]\n[dim]{r.path}[/]")
+
+    def _no_roster_hint(self) -> str:
+        """没名册时怎么说。
+
+        要说清是**哪一种**没名册——"这个号没拉过"、"还不知道这个账号的游戏
+        uid"、"本来就没登"是三回事，混成一句「没有找到名册」会让人看着磁盘上
+        明明躺着一份名册文件发愣。切换账号之后这一屏是最先看到的地方，
+        所以这句话在这里最要紧。
+        """
+        uid = D.skland_uid()
+        game = D.skland_game_uid()
+        cached = D.cached_roster_uids()
+        if uid and not game:
+            who = "、".join(cached[:3])
+            more = " 等" if len(cached) > 3 else ""
+            return ("[warn]还不知道这个账号的游戏 uid[/]"
+                    "（登录账号 ≠ 游戏 uid，名册按后者存）。\n"
+                    f"[dim]按 U 问一次森空岛就能定下来"
+                    f"{f'；本机现有缓存：{who}{more}' if who else ''}。[/]")
+        if game and cached:
+            who = "、".join(f"uid={u}" for u in cached[:3])
+            more = " 等" if len(cached) > 3 else ""
+            return (f"[warn]游戏 uid={game} 还没有名册缓存[/]，"
+                    f"本机拉过的是 {who}{more}。\n"
+                    "[dim]要么跑一次名册拉取，要么按 S 切回那个号（凭据还在）。[/]")
+        if uid:
+            return ("[dim]这个号还没有名册缓存。跑一次名册拉取即可；"
+                    "在此之前编队那一步可以手动输名字。[/]")
+        return ("[dim]当前没有登录的账号。可以继续，"
+                "编队那一步手动输名字；或按 L 扫码登录。[/]")
+
+    def action_go(self) -> None:
+        self.app.goto_stage_pick()
+
+    def action_dir(self) -> None:
+        self.app.push_screen(GuidesDirScreen(), self._dir_done)
+
+    def _dir_done(self, path: Path | None) -> None:
+        if path:
+            D.save_config(guides_dir=str(path))
+        self._refresh()
+
+    def action_login(self) -> None:
+        # 登录回来要把名册行重画一遍：登录可能刚落下一份新凭据，
+        # 这一行原先是按旧状态画的。
+        self.app.push_screen(LoginScreen(), lambda _r: self._refresh())
+
+    def action_game_uid(self) -> None:
+        """按 `U`：问一次森空岛，把这个账号的**游戏 uid** 定下来。
+
+        ## 为什么非问不可
+
+        凭据里的 `userId` 是**通行证账号 id**，名册却是按**游戏 uid** 存的，
+        两者通常不相等（前者 13 位、后者 8 位）。而账号 id
+        **不出现在任何一份森空岛数据里**（player_info / opers / roster 三份
+        全查过），所以这个映射**离线推不出来**，只能问一次再记住。
+        博士 2026-09-17 的裁定就是这条：识别要用森空岛给的 uid。
+
+        ## 为什么是按键而不是开机自动问
+
+        它是**联网**的。悄悄在挂载时打一次接口，既会让人对着界面等，
+        也会在没网时把一次失败糊进启动过程。按一下更诚实：他知道自己在请求什么。
+
+        线程里跑、结果用 `call_from_thread` 送回来——`resolve_game_uid` 要发
+        HTTP，在 UI 线程里做会把界面钉住。
+        """
+        if not D.skland_uid():
+            self._note = "当前没有登录的账号，先按 L 扫码登录。"
+            self._refresh()
+            return
+        self._note = "[dim]正在问森空岛要游戏 uid…[/]"
+        self._refresh()
+        self._resolve_game_uid()
+
+    @work(thread=True, exclusive=True)
+    def _resolve_game_uid(self) -> None:
+        try:
+            from ak_tactic import skland
+            res = skland.resolve_game_uid()
+        except Exception as exc:                              # noqa: BLE001
+            self.app.call_from_thread(self._uid_failed, str(exc))
+            return
+        self.app.call_from_thread(self._uid_resolved, res)
+
+    def _uid_failed(self, why: str) -> None:
+        self._note = f"取账号 uid 失败：{why}"
+        self._refresh()
+
+    def _uid_resolved(self, res: dict) -> None:
+        self._note = (f"游戏 uid={res['gameUid']}"
+                      f"　{res.get('nickName') or ''}".rstrip())
+        self.app.state.roster = D.load_roster()
+        self._refresh()
+
+    def action_logout(self) -> None:
+        """退出账号。**一个文件都不删**——只把"当前账号"这个指向清空。
+
+        博士 2026-09-17 裁定：退出账号是为了**换号**，所以凭据与名册全都留着，
+        之后在登录屏按 S 就能切回登过的号，不必重扫。
+        """
+        uid = D.skland_uid()
+        if not uid:
+            self.app.push_screen(AskScreen(
+                "没有可退出的账号",
+                "当前本来就没有登录的账号。\n"
+                "按 L 扫码登录；登过的号按 L 再按 S 可以切回。",
+                [("ok", "知道了")]))
+            return
+        others = [a for a in self._known_accounts() if a["uid"] != uid]
+        body = ("退出后当前账号的名册不再显示，会降级成 MAA OperBox"
+                "（没有专精与模组等级）。\n"
+                "**凭据与名册文件一个都不删。**")
+        body += (f"\n本机另存着 {len(others)} 个登过的账号，之后按 S 可以切回。"
+                 if others else "\n之后按 L 重新扫码即可登回。")
+        self.app.push_screen(
+            AskScreen("退出账号", body,
+                      [("yes", "退出账号"), ("no", "不退出")]),
+            self._logout_answered)
+
+    def _logout_answered(self, choice: str | None) -> None:
+        if choice == "yes":
+            try:
+                from ak_tactic import skland
+                skland.logout()
+            except Exception as exc:                          # noqa: BLE001
+                self._note = f"退出账号失败：{exc}"
+            else:
+                # 退出账号 = 他想换号，那条「以后都不登录」就不该再拦着他
+                D.save_config(login_prompt="")
+                self.app.state.roster = D.load_roster()
+        self._refresh()
+
+    def action_quit(self) -> None:
+        self.app.exit()
+
+
+class PathInput(Input):
+    """带 Tab 补全的路径输入框。
+
+    `Input` 自己不占 Tab（默认用来移焦点），所以补全得挂在本子类上。
+    **`priority=True` 是必要的**：不然 Tab 会先被屏幕的焦点切换抢走，
+    按下毫无反应（这个坑与 `SquadPickScreen` 的 Enter 同源）。
+    """
+
+    BINDINGS = [Binding("tab", "complete", "补全", key_display="Tab",
+                        priority=True)]
+
+    class Completed(Message):
+        """补全后把候选交回界面——**不替用户猜**，多个匹配就都列出来。"""
+
+        def __init__(self, candidates: list[str]) -> None:
+            super().__init__()
+            self.candidates = candidates
+
+    def action_complete(self) -> None:
+        new, cands = D.complete_dir(self.value)
+        if new != self.value:
+            self.value = new
+            self.cursor_position = len(new)
+        self.post_message(self.Completed(cands))
+
+
+class GuidesDirScreen(Screen):
+    """可跳过的"重设默认目录"。Esc 不改就回去。"""
+
+    BINDINGS = both_cases([Binding("escape", "cancel", "返回", key_display="Esc")])
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Vertical(classes="block"):
+            yield Label("数据目录", classes="block-title")
+            yield Static("MAA 作业的输出根目录。默认在**本工具根目录**下的 Guides/。\n"
+                         "按 Tab 补全路径；留空或按 Esc 则不修改。", classes="muted")
+            yield PathInput(value=str(D.guides_dir()), id="dir")
+            yield Static("", id="cands", classes="muted")
+        yield Footer()
+
+    def on_path_input_completed(self, event: PathInput.Completed) -> None:
+        box = self.query_one("#cands", Static)
+        if not event.candidates:
+            box.update("")
+            return
+        shown = "　".join(event.candidates[:12])
+        more = f"　…（共 {len(event.candidates)} 项）" if len(event.candidates) > 12 else ""
+        box.update(f"[dim]候选：{shown}{more}[/]")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        raw = (event.value or "").strip()
+        self.dismiss(Path(raw).expanduser() if raw else None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class AskScreen(ModalScreen):
+    """一个通用的一问一答屏。**只问，不做事**——按下的那一行原样回给调用方。
+
+    为什么做成通用的：本项目有两处要问（「不登录？本次还是以后都不」、
+    「确认退出账号？」），它们除了文字完全同构。各写一个屏，迟早会把
+    「Esc 是什么意思」写飘一处——而"取消"的语义漂了，是要出事的那种漂。
+
+    ## 选项画在正文里，不画在 Footer
+
+    选项**本身就是问题的一部分**（「1　本次不登录」读起来是一句话），
+    不是一个附加的动作提示；所以 Footer 只留那一行 `Esc 返回`，编号列在
+    正文里。两处都印一遍，就是博士指出过的"底部两行一样的东西"。
+
+    返回给调用方的是**行里的值**（字符串），按 Esc 时是 `None`。
+    """
+
+    BINDINGS = [
+        # 1–9 是选项键，**不上 Footer**（见类文档）。数字键不需要
+        # `both_cases()`——那是给单字母键补大写孪生的，数字没有大小写。
+        *[Binding(str(i), f"pick({i})", show=False) for i in range(1, 10)],
+        Binding("escape", "cancel", "返回", key_display="Esc"),
+    ]
+
+    CSS = """
+    AskScreen { align: center middle; }
+    #ask-box { width: 68; height: auto; border: round $primary; padding: 1 2; }
+    #ask-title { text-style: bold; }
+    """
+
+    def __init__(self, title: str, body: str,
+                 rows: list[tuple[str, str]]) -> None:
+        super().__init__()
+        self._title = title
+        self._body = body
+        self._rows = list(rows)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="ask-box"):
+            yield Static(self._title, id="ask-title")
+            yield Static(f"\n{self._body}\n", classes="muted")
+            for i, (_value, label) in enumerate(self._rows, start=1):
+                yield Static(f"  [bold]{i}[/]　{label}")
+        yield Footer()
+
+    def action_pick(self, which) -> None:
+        idx = int(which) - 1
+        if 0 <= idx < len(self._rows):
+            self.dismiss(self._rows[idx][0])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class QrScreen(ModalScreen):
+    """扫码用的**全屏居中**二维码。
+
+    ## 为什么单独一屏
+
+    原先二维码是登录屏里的一块 `Static`，被上下几个 `Vertical` 挤着，高度不够
+    就被裁掉一截——博士实测「显示不完整扫不了」。二维码**缺一个角就彻底作废**，
+    不能靠"大概看得见"来交付。
+
+    现在它独占一屏、由屏幕的 `align: center middle` 居中，尺寸随内容自适应。
+
+    ## 静默区按规范给足
+
+    二维码四周必须有**至少 4 格纯白静默区**，否则识别率骤降。终端里 2 格
+    通常够用（终端本身有行距），但既然空间允许就给足 4 格；屏幕实在小的时候
+    才逐级退让（见 `_pick_border`）——**宁可小一点，也不能缺角**。
+
+    画法仍是 `▄` 上下半格，但**不在这里拼 ANSI**：Textual 会把 `\\x1b[38;5;…`
+    里的方括号当标记解析，所以逐格给字符上色。
+    """
+
+    BINDINGS = both_cases([Binding("escape", "close", "返回", key_display="Esc")])
+
+    #: 居中区里**只放二维码**：标题与状态行都 dock 到底部。
+    #: 挤在同一个块里会白吃掉四五行，而那几行往往正是静默区放不下的原因。
+    CSS = """
+    QrScreen { align: center middle; }
+    #qr-box { width: auto; height: auto; border: round $primary; padding: 0 1; }
+    #qr { width: auto; height: auto; }
+    #qr-note { dock: bottom; width: 100%; height: auto; text-align: center; }
+    """
+
+    _DARK = "#000000"
+    _LIGHT = "#ffffff"
+
+    def __init__(self, content: str) -> None:
+        super().__init__()
+        self.content = content
+        self.note = "等待扫码……"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="qr-box"):
+            yield Static("", id="qr")
+        yield Static(self.note, id="qr-note")
+
+    def on_mount(self) -> None:
+        self._draw()
+
+    def on_resize(self) -> None:
+        # 窗口变了就按新尺寸重挑静默区，别让图被裁掉
+        self._draw()
+
+    def _pick_border(self) -> int:
+        """在「放得下」的前提下取最大的静默区。
+
+        `matrix(border=b)` 的边长是 `模块数 + 2b`，画成 `▄` 后占
+        `ceil(边长/2)` 行、`边长` 列。中心区只放二维码，所以要给出去的
+        只有：框的上下边框 2 行、贴底状态行 2 行、左右各留 2 列余量。
+
+        按规范静默区**至少 4 格**，所以只有真的塞不下才退让。
+        """
+        from ak_tactic.qrterm import matrix
+
+        base = len(matrix(self.content, border=0))
+        avail_rows = max(1, self.size.height - 4)
+        avail_cols = max(1, self.size.width - 4)
+        for b in (4, 3, 2, 1, 0):
+            side = base + 2 * b
+            if side <= avail_cols and (side + 1) // 2 <= avail_rows:
+                return b
+        return 0
+
+    def _draw(self) -> None:
+        from ak_tactic.qrterm import matrix
+
+        b = self._pick_border()
+        m = matrix(self.content, border=b)
+        out = Text(no_wrap=True)          # **绝不能让二维码换行**：一折就废
+        h = len(m)
+        for y in range(0, h, 2):
+            top = m[y]
+            bottom = m[y + 1] if y + 1 < h else [False] * len(top)
+            for x, t in enumerate(top):
+                # `▄` 画的是下半格 → 前景取下格、背景取上格
+                out.append("\u2584",
+                           style=f"{self._DARK if bottom[x] else self._LIGHT} "
+                                 f"on {self._DARK if t else self._LIGHT}")
+            out.append("\n")
+        self.query_one("#qr", Static).update(out)
+        # 静默区被压过就说出来：与其让人对着扫不出的码发愣，
+        # 不如直接告诉他"把窗口拉大点就能扫"。
+        if b < 4:
+            self.set_note(self.note
+                          + f"\n[warn]终端偏小，静默区已压到 {b} 格"
+                            "——扫不出来的话把窗口拉大一点再按 L。[/]")
+            self.note = self.note          # 保留原文，下次重画不要越接越长
+
+    def set_note(self, text: str) -> None:
+        self.note = text
+        self.query_one("#qr-note", Static).update(text)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class LoginScreen(Screen):
+    """[0b] 登录态：**真的能扫码登录**，也允许跳过。
+
+    ## 走的是哪条路
+
+    `ak_tactic.skland.login_by_qr()` —— 官方 `as.hypergryph.com` 三步
+    （`gen_scan/login` → `scan_status` → `token_by_scan_code`）。
+    扫码换到的是**鹰角通行证 token（hgToken）**，与官网个人页那条路是同一类
+    东西，过期都能用 `cred` 子命令静默重铸。所以扫码既省事又持久，
+    而且完全不必让用户去官网复制那串「敏感度不亚于账号密码」的 token。
+
+    ## 三件必须做对的事
+
+    **一、轮询必须在后台线程。** `login_by_qr` 默认 2 秒一次、最长 180 秒，
+    放在 UI 线程里界面整整三分钟不动，二维码也画不出来。
+
+    **二、回调里不许直接碰界面。** `on_qr` / `on_status` 是在那个后台线程里
+    被调的，Textual 的控件只能在 UI 线程改；所以它们只 `post_message`，
+    真正动界面的是消息处理函数。
+
+    **三、二维码不能用 ANSI 转义串画。** `ak_tactic/qrterm.py` 的
+    `_render_ansi` 是给 `print()` 用的，直接塞进 `Static` 会被 Textual 当成
+    标记语言解析（`\\x1b[38;5;16m` 里的方括号正好长得像标记）。这里改成
+    从 `qrterm.matrix()` 取矩阵，**逐格给字符上色**，效果与终端版一致：
+    用 `▄` 上下半格拼，高度减半。
+
+    登录成功后**不自动拉名册**：拉名册要走 `skland fetch` + `roster.py`
+    两个真网络步骤，那是 `[0]` 屏上另一件事。这里只负责把凭据落盘，
+    顺带**重读一遍本机缓存的名册**（读盘，不联网）——因为刚落下的凭据可能
+    属于另一个账号，而名册是按当前账号取的。
+
+    ## `Esc` 在这里是「不登录」，所以要补问一句
+
+    博士 2026-09-17 的裁定：在登录屏按 `Esc` 一律先问「本次不登录 / 以后都不
+    登录」。差别是真的——答「以后都不」写进 `~/.rios/tui.json`，此后启动不再
+    自动进这个向导；答「本次」什么都不写，下一次干净启动还会问。问屏上再按
+    `Esc` 是**取消这一问**（回登录屏继续扫码），不是答"不登录"。
+
+    `S` 列出本机登过的账号并切过去。**不联网、不重扫**——退出账号不删文件，
+    所以凭据与名册都还在本地，这正是"切号不必重扫"的根据。
+    """
+
+    BINDINGS = both_cases([
+        Binding("l", "login", "扫码登录", key_display="L"),
+        Binding("s", "switch", "切换账号", key_display="S"),
+        Binding("escape", "close", "返回", key_display="Esc"),
+    ])
+
+    #: 二维码每格用的两种颜色，与 `qrterm` 的终端版取同一组（纯黑 16 / 纯白 231）
+    _DARK = "#000000"
+    _LIGHT = "#ffffff"
+
+    class QrReady(Message):
+        """二维码申请到了。"""
+
+        def __init__(self, content: str) -> None:
+            super().__init__()
+            self.content = content
+
+    class QrStatus(Message):
+        """一次轮询的结果。"""
+
+        def __init__(self, status: int, text: str) -> None:
+            super().__init__()
+            self.status = status
+            self.text = text
+
+    class LoginDone(Message):
+        """登录流程结束（成功或失败）。"""
+
+        def __init__(self, ok: bool, text: str) -> None:
+            super().__init__()
+            self.ok = ok
+            self.text = text
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Vertical(classes="block"):
+            yield Label("登录态", classes="block-title")
+            yield Static(self._status(), id="login-status")
+        with Vertical(classes="block"):
+            yield Label("本机登录过的账号", classes="block-title")
+            yield Static("", id="login-accounts")
+        with Vertical(classes="block"):
+            yield Label("扫码登录", classes="block-title")
+            yield Static("[dim]按 L 申请二维码，然后用**森空岛 APP** 扫。[/]",
+                         id="login-note")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._abort = False
+        self._busy = False
+        #: 正在问"本次不登录还是以后都不"。问的时候再按 Esc 不该再叠一层问。
+        self._asking = False
+        self._refresh_accounts()
+
+    def _refresh_accounts(self) -> None:
+        """画"本机登录过的账号"那一块。**离线**——读的都是本地文件。
+
+        退出账号不删文件，所以这里通常不止一行；"切回不必重扫"的根据就是它。
+        """
+        try:
+            from ak_tactic import skland
+            rows = skland.known_accounts()
+        except Exception as exc:                              # noqa: BLE001
+            self.query_one("#login-accounts", Static).update(f"[warn]{exc}[/]")
+            return
+        cur = D.skland_uid()
+        if not rows:
+            self.query_one("#login-accounts", Static).update(
+                "[dim]本机还没有登录过的账号。[/]")
+            return
+        lines = []
+        for a in rows:
+            nick = str(D.roster_meta(a["uid"]).get("nickName") or "")
+            cached = "有名册缓存" if D.roster_file(a["uid"]).exists() else "无名册缓存"
+            mark = "　[ok]←当前[/]" if a["uid"] == cur else ""
+            lines.append(f"uid={a['uid']}"
+                         f"{f'　{nick}' if nick else ''}　[dim]{cached}[/]{mark}")
+        self.query_one("#login-accounts", Static).update(
+            "\n".join(lines) + "\n[dim]按 S 切换账号（不必重扫）。[/]")
+
+    @property
+    def _qr_screen(self) -> QrScreen | None:
+        """栈顶是不是那个二维码屏（状态更新要落到它身上）。"""
+        scr = self.app.screen
+        return scr if isinstance(scr, QrScreen) else None
+
+    def _status(self) -> str:
+        r = self.app.state.roster
+        uid = D.skland_uid()
+        head = ""
+        try:
+            from ak_tactic import skland
+            st = skland.load_cred()
+            who = f"当前账号 uid={uid}。" if uid else ""
+            if st.get("cred"):
+                head = (f"{who}已保存凭据：有效期内可直接 `status` 校验；"
+                        "过期会由 hgToken 静默重铸。\n")
+            elif st.get("hgToken"):
+                head = f"{who}已保存 hgToken（尚未铸成 cred）。\n"
+            else:
+                head = f"{who}本机还没有任何森空岛凭据。\n"
+        except Exception as exc:                              # noqa: BLE001
+            if uid:
+                head = f"[warn]读凭据失败：{exc}[/]\n"
+            else:
+                head = ("[warn]当前没有登录的账号。[/]\n"
+                        "[dim]按 L 扫码登录；登过的号按 S 切回。[/]\n")
+        if r is None:
+            return head + "[warn]没有名册。[/]跳过登录不影响流程，编队那一步手动输名字即可。"
+        return (head + f"名册来源：{r.source}，共 {len(r.operators)} 名。\n"
+                "[dim]登录只决定名册要不要刷新，不决定流程能不能走完。[/]")
+
+    # ---- 交互 ----
+
+    def action_login(self) -> None:
+        if self._busy:
+            return
+        self._busy = True
+        self._abort = False
+        self.query_one("#login-note", Static).update("正在申请二维码……")
+        self._run_login()
+
+    @work(thread=True, exclusive=True)
+    def _run_login(self) -> None:
+        """后台线程里跑完整条登录链；只回 UI 线程发消息。"""
+        try:
+            from ak_tactic import skland
+
+            def on_qr(scan_id: str, content: str) -> None:
+                self.post_message(self.QrReady(content))
+
+            def on_status(status: int, text: str) -> None:
+                if self._abort:
+                    # 靠回调抛出来中止轮询——`login_by_qr` 没有取消参数，
+                    # 而它每 2 秒一定会调一次这里。
+                    raise skland.SklandError("已取消")
+                self.post_message(self.QrStatus(status, text))
+
+            skland.login_by_qr(on_qr=on_qr, on_status=on_status)
+        except Exception as exc:                              # noqa: BLE001
+            self.post_message(self.LoginDone(False, str(exc)))
+            return
+        self.post_message(self.LoginDone(True, "登录成功，凭据已保存。"))
+
+    def on_login_screen_qr_ready(self, event: QrReady) -> None:
+        # 二维码**另开一屏**全屏居中显示：嵌在本屏的块里会被挤到、裁掉一截，
+        # 而二维码缺一个角就彻底作废（博士实测「显示不完整扫不了」）。
+        self.query_one("#login-note", Static).update(
+            "二维码已弹出（全屏居中）。\n[dim]有效期约 2 分钟；Esc 关掉它，"
+            "按 L 可重新申请。[/]")
+        self.app.push_screen(QrScreen(event.content))
+
+    def on_login_screen_qr_status(self, event: QrStatus) -> None:
+        scr = self._qr_screen
+        if scr is not None:
+            scr.set_note(f"[bold]{event.text}[/]　[dim]（Esc 关掉这张码）[/]")
+        else:
+            self.query_one("#login-note", Static).update(f"[bold]{event.text}[/]")
+
+    def on_login_screen_login_done(self, event: LoginDone) -> None:
+        self._busy = False
+        # 结果一出来就把二维码收掉：一张已经作废的码留在屏幕上，只会诱人白扫
+        if self._qr_screen is not None:
+            self.app.pop_screen()
+        if event.ok:
+            # 他既然登了，那条「以后都不登录」就不该再拦着他
+            D.save_config(login_prompt="")
+            self.app.state.roster = D.load_roster()
+            self._refresh_accounts()
+            self.query_one("#login-note", Static).update(
+                f"[bold]{event.text}[/]\n"
+                "[dim]名册要另走 `skland fetch` 才会刷新（本屏只负责落凭据）。[/]")
+            self.query_one("#login-status", Static).update(self._status())
+            return
+        self.query_one("#login-note", Static).update(
+            f"[warn]{event.text}[/]\n[dim]按 L 可以重新申请一个二维码。[/]")
+
+    def action_switch(self) -> None:
+        """切回本机登过的某个账号。**不联网、不重扫**——凭据与名册都在本地。"""
+        try:
+            from ak_tactic import skland
+            accts = skland.known_accounts()
+        except Exception as exc:                              # noqa: BLE001
+            accts = []
+            self.query_one("#login-note", Static).update(f"[warn]{exc}[/]")
+        if not accts:
+            self.query_one("#login-note", Static).update(
+                "[warn]本机没有登录过的账号。[/]\n[dim]按 L 扫码登录。[/]")
+            return
+        cur = D.skland_uid()
+        rows = []
+        for a in accts:
+            nick = str(D.roster_meta(a["uid"]).get("nickName") or "")
+            label = f"uid={a['uid']}" + (f"　{nick}" if nick else "")
+            label += "　（当前）" if a["uid"] == cur else ""
+            rows.append((a["uid"], label))
+        self.app.push_screen(
+            AskScreen("切换账号",
+                      "凭据与名册都在这台机器上，切换不需要重新扫码。",
+                      rows),
+            self._switched)
+
+    def _switched(self, uid: str | None) -> None:
+        if not uid:
+            return
+        try:
+            from ak_tactic import skland
+            skland.activate(uid)
+        except Exception as exc:                              # noqa: BLE001
+            self.query_one("#login-note", Static).update(f"[warn]{exc}[/]")
+            return
+        # 名册必须**重读**：`load_roster()` 认的是当前账号，不重读就还是上一个号的
+        self.app.state.roster = D.load_roster()
+        self.query_one("#login-status", Static).update(self._status())
+        self._refresh_accounts()
+        self.query_one("#login-note", Static).update(
+            f"[ok]已切到 uid={uid}[/]\n[dim]名册已按这个账号重读。[/]")
+
+    def action_close(self) -> None:
+        """Esc = **不登录**。按博士 2026-09-17 的裁定，先补问一句。
+
+        问这一次还是以后都——差别是真的：答「以后都不登录」写进
+        `~/.rios/tui.json`，此后启动不再自动进登录向导；答「本次不登录」
+        什么都不写，下一次全新启动还会问。
+        """
+        if self._asking:
+            return
+        self._asking = True
+        self.app.push_screen(
+            AskScreen(
+                "不登录也可以",
+                "登录只决定名册要不要刷新，不决定流程能不能走完。\n"
+                "没有名册时，编队那一步可以手动输名字。",
+                [("once", "本次不登录"),
+                 ("never", "以后都不登录（此后启动不再问你）")]),
+            self._answered)
+
+    def _answered(self, choice: str | None) -> None:
+        self._asking = False
+        if choice is None:
+            # Esc 回到登录屏。后台轮询**不停**——他可能只是按错了，
+            # 而停掉之后二维码就废了，得重新申请一个。
+            self.query_one("#login-note", Static).update("[dim]按 L 申请二维码。[/]")
+            return
+        if choice == "never":
+            D.save_config(login_prompt="never")
+        # 真正离开：走之前把后台轮询叫停，否则它会一直跑到 180 秒超时才罢休
+        self._abort = True
+        self.dismiss(None)
+
+
+# ================================================================ [1] 选关卡
+#
+# 选关卡是**三层**，不是一层：
+#   [1a] 章／活动   —— 114 条。「月行水上」在这一层，它含两个分部。
+#   [1b] 分部／环境 —— **只在需要时才出现**：活动含多个 zone（实测 59 条），
+#                      或该章有多个环境分层（第 9-14 章）。
+#   [1c] 关卡       —— 「SR-EX-8　虚无之顶」，配一个难度筛选。
+#
+# 为什么必须有第二层：`zone_table` 的 477 条里有 103 个活动含多个 zone，而
+# **「月行水上」这个名字根本不在 `zone_table` 里**——它在 `activity_table.json`
+# 的 `basicInfo`，靠 `zoneToActivity` 才把 `act54side_zone1/2` 归到一起。
+# 平铺成 477 行等于让用户自己认前缀。
+
+class ChapterPickScreen(Screen):
+    """[1a] 选章节／活动。"""
+
+    BINDINGS = both_cases([
+        Binding("enter", "pick", "选定", key_display="Enter"),
+        Binding("escape", "back", "返回", key_display="Esc"),
+    ])
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(theme.step_bar(1), id="steps")
+        yield Static("选章节／活动", id="title")
+        yield Input(placeholder="输关键词筛：月行水上 / 第九章 / SR …（回车看全部）",
+                    id="kw")
+        yield DataTable(id="chapters")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        t = self.query_one("#chapters", DataTable)
+        t.cursor_type = "row"                     # 默认是 cell，高亮不动
+        t.add_columns("章节／活动", "关卡", "分部")
+        self._rows: list[dict] = D.chapter_rows()
+        self._shown: list[dict] = []
+        self._fill("")
+        t.focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._fill(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """输入框里的回车：焦点交给表格；只剩一行就直接选定。"""
+        if len(self._shown) == 1:
+            self.dismiss(self._shown[0])
+            return
+        self.query_one("#chapters", DataTable).focus()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """**Enter 由 DataTable 自己吃掉**，Screen 上的 Binding("enter") 不会触发——
+        必须挂这个事件。（踩过：binding 看着对，按下去毫无反应。）"""
+        self._pick_key(str(event.row_key.value))
+
+    def _fill(self, kw: str) -> None:
+        t = self.query_one("#chapters", DataTable)
+        t.clear()
+        k = kw.strip().upper()
+        self._shown = [
+            c for c in self._rows
+            if not k or k in c["title"].upper() or k in c["key"].upper()
+            or any(k in p["title"].upper() for p in c["parts"])
+            or any(k in p["zone_id"].upper() for p in c["parts"])
+        ]
+        for c in self._shown:
+            parts = ("、".join(p["title"] for p in c["parts"])
+                     if len(c["parts"]) > 1 else "")
+            t.add_row(c["title"], str(c["levels"]), parts, key=c["key"])
+
+    def _pick_key(self, key: str) -> None:
+        for c in self._shown:
+            if c["key"] == key:
+                self.dismiss(c)
+                return
+
+    def action_pick(self) -> None:
+        t = self.query_one("#chapters", DataTable)
+        idx = t.cursor_row
+        if 0 <= idx < len(self._shown):
+            self.dismiss(self._shown[idx])
+
+    def action_back(self) -> None:
+        self.dismiss(None)
+
+
+class PartPickScreen(Screen):
+    """[1b-1] 选哪一部分：一个活动含多个 zone 时才有这一层。"""
+
+    BINDINGS = both_cases([
+        Binding("enter", "pick", "选定", key_display="Enter"),
+        Binding("escape", "back", "返回", key_display="Esc"),
+    ])
+
+    def __init__(self, chapter: dict) -> None:
+        super().__init__()
+        self.chapter = chapter
+        self.parts = list(chapter["parts"])
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(theme.step_bar(1), id="steps")
+        yield Static(f"{self.chapter['title']}　选哪一部分", id="title")
+        yield DataTable(id="parts")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        t = self.query_one("#parts", DataTable)
+        t.cursor_type = "row"
+        t.add_columns("部分", "关卡")
+        for p in self.parts:
+            t.add_row(p["title"], str(p["levels"]), key=p["zone_id"])
+        t.focus()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        self._pick(str(event.row_key.value))
+
+    def _pick(self, zone_id: str) -> None:
+        for p in self.parts:
+            if p["zone_id"] == zone_id:
+                self.dismiss(p)
+                return
+
+    def action_pick(self) -> None:
+        t = self.query_one("#parts", DataTable)
+        idx = t.cursor_row
+        if 0 <= idx < len(self.parts):
+            self.dismiss(self.parts[idx])
+
+    def action_back(self) -> None:
+        self.dismiss(None)
+
+
+class EnvPickScreen(Screen):
+    """[1b-2] 选环境：主线第 9-14 章才有这一层。
+
+    第 9 章只有剧情体验／标准实战（**没有磨难险地**），第 10-14 章三档齐全，
+    而第 0-8 章与第 15-17 章全是 NONE——那些章这一层根本不出现，
+    它们的「常规作战／险地作战」落在**难度**上（第 15 章 NORMAL 23 / SIX_STAR 16）。
+    """
+
+    BINDINGS = both_cases([
+        Binding("enter", "pick", "选定", key_display="Enter"),
+        Binding("escape", "back", "返回", key_display="Esc"),
+    ])
+
+    def __init__(self, zone_id: str, heading: str, envs: list[dict]) -> None:
+        super().__init__()
+        self.zone_id = zone_id
+        self.heading = heading
+        self.envs = list(envs)
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(theme.step_bar(1), id="steps")
+        yield Static(f"{self.heading}　选环境", id="title")
+        yield DataTable(id="envs")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        t = self.query_one("#envs", DataTable)
+        t.cursor_type = "row"
+        t.add_columns("环境", "关卡")
+        for e in self.envs:
+            t.add_row(e["label"], str(e["levels"]), key=e["env"])
+        t.focus()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        self._pick(str(event.row_key.value))
+
+    def _pick(self, env: str) -> None:
+        for e in self.envs:
+            if e["env"] == env:
+                self.dismiss(e)
+                return
+
+    def action_pick(self) -> None:
+        t = self.query_one("#envs", DataTable)
+        idx = t.cursor_row
+        if 0 <= idx < len(self.envs):
+            self.dismiss(self.envs[idx])
+
+    def action_back(self) -> None:
+        self.dismiss(None)
+
+
+class StagePickScreen(Screen):
+    """[1c] 选关卡。
+
+    只显示**关卡代号 + 关卡中文名**（「SR-EX-8　虚无之顶」）——博士明确要求
+    **不显示 levelId、不显示区域**：前者是内部编号，后者已经在上一层选过了。
+
+    难度是一个**筛选器**而不是常量：同一关常有普通版与 `#f#` 四星限定版并存
+    （774 条），第 15-17 章则是普通与险地作战各占一半。只有一个难度档时不显示
+    那一列，也不给筛选器——留着反而让人以为有得选。
+    """
+
+    BINDINGS = both_cases([
+        Binding("enter", "pick", "选定", key_display="Enter"),
+        Binding("escape", "back", "返回", key_display="Esc"),
+    ])
+
+    def __init__(self, *, zone_id: str = "", env: str = "",
+                 heading: str = "") -> None:
+        super().__init__()
+        self.zone_id = zone_id
+        self.env = env
+        self.heading = heading or "全部关卡"
+        self._diff = ""
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(theme.step_bar(1), id="steps")
+        yield Static(f"{self.heading}　选关卡", id="title")
+        diffs = D.zone_diffs(self.zone_id, self.env) if self.zone_id else []
+        if len(diffs) > 1:
+            yield Select([(f"{d['label']}（{d['levels']} 关）", d["diff"])
+                          for d in diffs], prompt="难度",
+                         id="diff", allow_blank=True)
+        yield Input(placeholder="输关键词筛：SR-EX / 虚无之顶 …（回车看全部）",
+                    id="kw")
+        yield DataTable(id="stages")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        t = self.query_one("#stages", DataTable)
+        t.cursor_type = "row"
+        t.add_columns("关卡", "难度")
+        self._rows: list[dict] = []
+        self._fill()
+        t.focus()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        self._diff = "" if event.value is Select.BLANK else str(event.value)
+        self._fill()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._fill()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if len(self._rows) == 1:
+            self.dismiss(self._rows[0])
+            return
+        self.query_one("#stages", DataTable).focus()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        self._pick_key(str(event.row_key.value))
+
+    def _fill(self) -> None:
+        from ..db.stages import DIFFICULTY_LABELS
+        t = self.query_one("#stages", DataTable)
+        t.clear()
+        kw = self.query_one("#kw", Input).value
+        self._rows = D.stage_rows(keyword=kw, limit=400, zone_id=self.zone_id,
+                                  env=self.env, difficulty=self._diff)
+        one = len({r["difficulty"] for r in self._rows}) <= 1
+        for r in self._rows:
+            name = r.get("name") or ""
+            code = r["code"] or r["level_id"]
+            four = r["level_id"].endswith("#f#")
+            label = f"{code}　{name}" if name else code
+            if four and "突袭" not in name:
+                label += "（四星）"           # 中文名一样，标出来才分得清
+            diff = "" if one else DIFFICULTY_LABELS.get(
+                r["difficulty"], r["difficulty"])
+            t.add_row(label, diff, key=r["level_id"])
+
+    def _pick_key(self, level_id: str) -> None:
+        for r in self._rows:
+            if r["level_id"] == level_id:
+                self.dismiss(r)
+                return
+
+    def action_pick(self) -> None:
+        t = self.query_one("#stages", DataTable)
+        idx = t.cursor_row
+        if 0 <= idx < len(self._rows):
+            self.dismiss(self._rows[idx])
+
+    def action_back(self) -> None:
+        self.dismiss(None)
+
+
+def _resolve_stage(query: str) -> dict | None:
+    """把 `SR-EX-8` 这种写法解析成一条 stage 记录（供 `--stage` 用）。"""
+    from ..db import DEFAULT_DB_PATH, connect
+    from ..db.stages import resolve_code
+    if not Path(DEFAULT_DB_PATH).exists():
+        return None
+    conn = connect()
+    try:
+        hit = resolve_code(conn, query)
+    finally:
+        conn.close()
+    return hit
+
+
+# ================================================================ [2] 选编队
+
+class SquadList(SelectionList[str]):
+    """选人用的列表框：只把「空格 勾选」露给 Footer，行为一字不改。
+
+    `SelectionList` 的 `space → select` 与父类 `OptionList` 的 `enter → select`
+    都是 `show=False`（Textual 想让调用方自己写提示），于是底部只剩
+    Enter / M / Esc——**用户根本看不出空格能勾人**。子类只改 `show`。
+    """
+
+    BINDINGS = both_cases([
+        Binding("space", "select", "勾选", key_display="空格", show=True),
+    ])
+
+
+class SquadAskScreen(Screen):
+    """[2a] 先决定**要不要手动加人**，再决定要不要进选人界面。
+
+    不手动加人时**根本不进选人界面**：直接空手进解算，由搜索自己在名册里挑
+    （模式 `auto`）。以前无论谁都要先滚一遍两百多人的列表，而「我不指定人」
+    是更常见的那一种。
+    """
+
+    BINDINGS = both_cases([
+        Binding("enter", "pick", "选定", key_display="Enter"),
+        Binding("escape", "back", "返回", key_display="Esc"),
+    ])
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(theme.step_bar(2), id="steps")
+        yield Static("选编队　要不要手动加人", id="title")
+        yield DataTable(id="ask")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        t = self.query_one("#ask", DataTable)
+        t.cursor_type = "row"
+        t.add_columns("做法", "说明")
+        r = self.app.state.roster
+        n = len(r.top()) if r is not None else 0
+        self._choices = [
+            {"manual": False, "label": "不用，让程序自己挑",
+             "hint": "直接从名册里找组合，这一轮你不指定人"},
+            {"manual": True, "label": "我自己选",
+             "hint": (f"进选人界面，从名册的 {n} 人里勾"
+                      if n else "进选人界面（现在没有名册，只能手输）")},
+        ]
+        for c in self._choices:
+            t.add_row(c["label"], c["hint"], key="T" if c["manual"] else "F")
+        t.focus()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        self._pick(str(event.row_key.value) == "T")
+
+    def _pick(self, manual: bool) -> None:
+        for c in self._choices:
+            if c["manual"] is manual:
+                self.dismiss(c)
+                return
+
+    def action_pick(self) -> None:
+        t = self.query_one("#ask", DataTable)
+        idx = t.cursor_row
+        if 0 <= idx < len(self._choices):
+            self.dismiss(self._choices[idx])
+
+    def action_back(self) -> None:
+        self.dismiss(None)
+
+
+class SquadPickScreen(Screen):
+    """[2b] 选编队：按职业分类 + 练度门槛 + 两种模式。
+
+    三条交互都是博士定的（2026-09-17）：
+
+    - **按主职业分类展示**，按 `G` 循环切换成「主职业-子职业」；
+    - 练度门槛做成**一个三档下拉**（不限 / ≥精英二60 / 精英二90），
+      而不是「精英化」「等级」两个独立下拉——独立的两个会让人去凑
+      「精英 0 且 90 级」这种筛不出东西的组合；
+    - `M` 仍然切「允许程序补充 / 只用我选的」。
+
+    **换分类或换门槛都不能丢已勾的人**：勾选状态另存一份 `_picked`，
+    列表重建后逐条选回来。否则用户勾了五个人、手一抖切了下分类，
+    五个勾全没了——而列表看上去只是「重排了一下」。
+    """
+
+    BINDINGS = both_cases([
+        # **priority=True 是必需的**：`SelectionList` 自己会吃掉回车，
+        # 不加这一个参数，回车只会反复切换勾选、永远进不了解算
+        # （博士实测到的 bug：「回车与空格都是选人」）。
+        Binding("enter", "go", "开始解算", key_display="Enter", priority=True),
+        Binding("m", "toggle_mode", "切换模式", key_display="M"),
+        Binding("g", "toggle_group", "切换分类", key_display="G"),
+        Binding("escape", "back", "返回", key_display="Esc"),
+    ])
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(theme.step_bar(2), id="steps")
+        yield Static("", id="mode-line")
+        with Horizontal(id="filters"):
+            yield Select([(label, str(i))
+                          for i, (label, _e, _l) in enumerate(D.TRAINED_FILTERS)],
+                         prompt="练度门槛", id="f-trained", allow_blank=True)
+        yield SquadList(id="squad")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._group = "prof"                  # prof | sub
+        self._min = (0, 1)                    # (精英段下限, 段内等级下限)
+        self._picked: set[str] = set(self.app.state.squad)
+        self._fill()
+        self._render_mode()
+
+    # ---- 列表构建 ----
+
+    def _visible(self) -> list:
+        r = self.app.state.roster
+        if r is None:
+            return []
+        elite_min, level_min = self._min
+        ops = [o for o in r.top() if D.meets_trained(o, elite_min, level_min)]
+        # 先按主职业、再按子职业**稳定排序**：`sorted` 是稳定的，而 `r.top()`
+        # 已经是练度降序，所以组内会自动保持「练度高的在前」。
+        ops.sort(key=lambda o: (
+            D.PROFESSION_ORDER.index(o.profession)
+            if o.profession in D.PROFESSION_ORDER else 99,
+            o.sub_profession or ""))
+        return ops
+
+    def _fill(self) -> None:
+        lst = self.query_one("#squad", SelectionList)
+        lst.clear_options()
+        last = None
+        for op in self._visible():
+            head = D.group_label(op, self._group)
+            if head != last:
+                # 分组表头：一条**不可选**的哑行。用 `disabled` 而不是普通项，
+                # 否则它会被算进 `selected`、混进最终编队里。
+                lst.add_option(Selection(f"── {head} ──", f"__head__{head}",
+                                         disabled=True))
+                last = head
+            lst.add_option(Selection(op.label(), op.name))
+        for name in self._picked:                 # 把已勾的选回来
+            try:
+                lst.select(name)
+            except Exception:                     # noqa: BLE001
+                pass                              # 被门槛筛掉或名册里没这个人
+        lst.focus()
+        # **上车就要把光标落在第一项**：`SelectionList` 初始 `highlighted=None`，
+        # 此时按空格**什么都不会发生**（`action_select` 找不到落点），
+        # 症状正是博士说的「空格也是选人/按了没反应」——其实一个都没勾上。
+        lst.action_first()
+
+    def on_selection_list_selected_changed(
+            self, event: SelectionList.SelectedChanged) -> None:
+        self._picked = set(event.selection_list.selected)
+        self._render_mode()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id != "f-trained":
+            return
+        if event.value is Select.BLANK:
+            self._min = (0, 1)
+        else:
+            _label, e, lv = D.TRAINED_FILTERS[int(str(event.value))]
+            self._min = (e, lv)
+        self._fill()
+        self._render_mode()
+
+    # ---- 顶上的两行说明 ----
+
+    def _render_mode(self) -> None:
+        st = self.app.state
+        head = ("分组：[bold]主职业[/]" if self._group == "prof"
+                else "分组：[bold]主职业-子职业[/]")
+        shown = len([o for o in (self._visible())])
+        txt = (f"{head}　"
+               f"筛出 [bold]{shown}[/] 人　"
+               f"已勾 [bold]{len(self._picked)}[/] 人\n")
+        if st.mode == "auto":
+            txt += ("模式：[bold]允许程序补充[/]　"
+                    "[dim]你勾的是「必须上场」的人，程序还可以再挑人补位[/]")
+        else:
+            txt += ("模式：[bold]只用我选的[/]　"
+                    "[dim]只在这几个人里找组合，找不到就如实说找不到[/]")
+        self.query_one("#mode-line", Static).update(txt)
+
+    def action_toggle_mode(self) -> None:
+        st = self.app.state
+        st.mode = "only" if st.mode == "auto" else "auto"
+        self._render_mode()
+
+    def action_toggle_group(self) -> None:
+        self._group = "sub" if self._group == "prof" else "prof"
+        self._fill()
+        self._render_mode()
+
+    def action_go(self) -> None:
+        self.dismiss(sorted(self._picked))
+
+    def action_back(self) -> None:
+        self.dismiss(None)
+
+
+# ================================================================ [3] 解算
+
+class SolveScreen(Screen):
+    """[3] 解算：进度条 + 真实计数 + 日志。
+
+    进度条的百分比**不是编的**：搜索有上限 `max_depth`/候选规模，这里用
+    `evaluated` 的增长给一个"还在动"的脉动，并把真实计数原样打出来。
+    没有精确分母就不假装有分母——这比一条匀速爬到 90% 再卡住的假进度条诚实。
+    """
+
+    BINDINGS = both_cases([Binding("q", "cancel", "中止", key_display="Q")])
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(theme.step_bar(3), id="steps")
+        with Vertical(classes="block"):
+            yield Label("解算中", classes="block-title")
+            yield Static("", id="solve-head")
+        yield ProgressBar(total=100, show_eta=False, id="prog")
+        yield Static("", id="log")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        st = self.app.state
+        squad = "、".join(st.squad) if st.squad else "（不指定，全名册）"
+        mode = "允许补充" if st.mode == "auto" else "只用我选的"
+        self.query_one("#solve-head", Static).update(
+            f"关卡：{st.stage['code']}（{st.stage['level_id']}）\n"
+            f"编队：{squad}\n模式：{mode}")
+        self._t0 = time.time()
+        self._lines: list[str] = []
+        self._aborted = False
+        self._log("开始解算……")
+        self.set_interval(0.25, self._tick)
+        self._worker = self._run()
+
+    def _log(self, msg: str) -> None:
+        self._lines.append(f"[dim]{time.time() - self._t0:6.1f}s[/]  {msg}")
+        self.query_one("#log", Static).update("\n".join(self._lines[-14:]))
+
+    def _tick(self) -> None:
+        st = self.app.state
+        n = getattr(st.searcher, "evaluated", 0)
+        elapsed = time.time() - self._t0
+        self.query_one("#prog", ProgressBar).update(
+            progress=min(95.0, 5.0 + n * 0.6))
+        self.query_one("#solve-head", Static).update(
+            f"关卡：{st.stage['code']}（{st.stage['level_id']}）\n"
+            f"已评估 [bold]{n}[/] 个候选　已用 {elapsed:.0f} 秒")
+
+    @work(thread=True, exclusive=True)
+    def _run(self) -> None:
+        """在后台线程里跑搜索。界面线程只负责读计数器。"""
+        st = self.app.state
+        try:
+            from ..plan import Roster as PlanRoster
+            from ..search import Searcher
+            roster = PlanRoster.from_json(st.roster.path)
+            st.plan_roster = roster
+            searcher = Searcher(verbose=False)
+            st.searcher = searcher
+            result = searcher.search(st.stage["level_id"], roster, st.squad)
+        except Exception as exc:                          # noqa: BLE001
+            st.error = f"{type(exc).__name__}: {exc}"
+            self.app.call_from_thread(self._done, None)
+            return
+        st.result = result
+        self.app.call_from_thread(self._done, result)
+
+    def _done(self, result) -> None:
+        # 已经中止了就别再推结果屏：后台线程拦不住（Python 杀不掉线程），
+        # 它跑完照样会 `call_from_thread` 回到这里。
+        if self._aborted:
+            return
+        self.query_one("#prog", ProgressBar).update(progress=100.0)
+        self._log("完成。" if result else f"失败：{self.app.state.error}")
+        self.app.push_screen(ResultScreen())
+
+    def action_cancel(self) -> None:
+        """中止这次解算，**退回上一步**（编队那一屏）。
+
+        原先这里是 `self.app.exit()`——Footer 上写着「中止」，按下去却把
+        整个程序关掉。博士 2026-09-17 裁定：「结算中止退回上一步」。
+
+        三件事都得做：① 标已中止，挡住后台线程回来后推结果屏；
+        ② `cancel()` 那个 Worker，免得它的结果回调再触发一次；
+        ③ 退回上一步——走 `back_to_step()`，因为解算屏**不是** `push_step`
+        推的，路径顶格就是它的上一步，不能像向导屏那样先丢掉自己。
+        """
+        self._aborted = True
+        w = getattr(self, "_worker", None)
+        if w is not None:
+            w.cancel()
+        self.app.back_to_step()
+
+
+# ================================================================ [4] 结果
+
+class ResultScreen(Screen):
+    """[4] 结果：通过的编队、模组、技能，以及导出。
+
+    ## 这一屏**不挂 Esc**（博士 2026-09-17 裁定）
+
+    原话：「结果屏只留退出程序和回主界面」。所以出口就两个：
+    `Q` 退出程序、`H` 回主界面；原先 `Esc` 也指向「结束」，与 `Q` 完全重复，
+    已去掉。**别再给它补 Esc**——这一屏已经是向导的终点，没有"上一步"可退，
+    而 Esc 在这里唯一能做的就是退出程序，那正好是 `Q` 的事。
+
+    `E` 导出保留：它不是出口，是这一屏存在的理由（产出 MAA 作业）。
+    """
+
+    BINDINGS = both_cases([
+        Binding("e", "export", "导出", key_display="E"),
+        Binding("h", "home", "主界面", key_display="H"),
+        Binding("q", "quit", "退出程序", key_display="Q"),
+    ])
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(theme.step_bar(4), id="steps")
+        yield Static(self._body(), id="result")
+        yield Static("", id="msg")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._msg()
+
+    def _msg(self) -> None:
+        self.query_one("#msg", Static).update(
+            "[dim]E 导出作业到 " + str(D.guides_dir()) + "/<关卡名>/[/]")
+
+    def _body(self) -> str:
+        st = self.app.state
+        if st.error:
+            return f"[bad]解算失败[/]\n\n{st.error}"
+        r = st.result
+        if r is None:
+            return "[warn]没有结果。[/]"
+        rows = [f"[bold]{st.stage['code']}[/]　{st.stage['level_id']}", ""]
+        v = getattr(r, "verdict", None)
+        if v is None:
+            rows.append("[warn]这次没找到三星方案。[/]")
+        else:
+            stars = int(getattr(v, "stars", 0) or 0)
+            rows.append(f"  评价　　　{'★' * max(0, stars)}{'☆' * max(0, 3 - stars)}"
+                        f"（{'胜利' if getattr(v, 'won', False) else '失败'}）")
+            for label, attr, fmt in (("时长", "elapsed", "{:.1f}s"),
+                                     ("击杀", "kills", "{}"),
+                                     ("漏怪", "leaks", "{}"),
+                                     ("剩余生命", "life", "{}"),
+                                     ("总伤害", "damage", "{:,.0f}")):
+                x = getattr(v, attr, None)
+                if x is not None:
+                    rows.append(f"  {label}　　　{fmt.format(x)}")
+        plan = getattr(r, "plan", None)
+        rows.append("")
+        if plan is None:
+            rows.append("[warn]没有可导出的编队。[/]")
+        else:
+            ops = getattr(plan, "deploys", []) or []
+            # 「用了哪些干员」——与写进作业 doc.details 的是**同一份取数**
+            # （`maa_export.used_operators`），这里只是换了排版。
+            rows.append(f"[bold]用到的干员（{len(ops)} 人，按部署顺序）[/]")
+            rows.extend("  " + ln for ln in maa.operators_lines(plan, st.plan_roster))
+            rows.append("")
+            rows.append("[dim]编制要求取自名册（真实专精 / 模组 / 信赖）。[/]")
+        rows.append("")
+        rows.append(f"[dim]已评估 {getattr(r, 'evaluated', 0)} 个方案，"
+                    f"最深 {getattr(r, 'depth', 0)} 人。[/]")
+        return "\n".join(rows)
+
+    def action_export(self) -> None:
+        """把结果编队写成 MAA 认得的作业，落到 `<Guides>/<关卡名>/<关卡名>-<序号>.json`。"""
+        st = self.app.state
+        plan = getattr(st.result, "plan", None) if st.result is not None else None
+        if plan is None:
+            self._say("[warn]没有可导出的编队。[/]")
+            return
+        try:
+            v = getattr(st.result, "verdict", None)
+            note = ""
+            if v is not None:
+                stars = int(getattr(v, "stars", 0) or 0)
+                note = (f"模拟预测：{'胜利' if getattr(v, 'won', False) else '失败'}，"
+                        f"{getattr(v, 'elapsed', 0):.1f}s，击杀 {getattr(v, 'kills', 0)}，"
+                        f"漏怪 {getattr(v, 'leaks', 0)}，剩余生命 "
+                        f"{getattr(v, 'life', 0)}/{getattr(v, 'max_life', 0)}，"
+                        f"总伤害 {getattr(v, 'damage', 0):,.0f}。\n")
+                if stars < 3:
+                    note += ("**注意：这份方案不是三星**（有漏怪或掉命），"
+                             "放进 MAA 之前请先自行确认。\n")
+            data = maa.to_maa(
+                plan, st.plan_roster,
+                stage_name=st.stage["level_id"],
+                difficulty=st.stage.get("difficulty"),
+                title=f"{st.stage['code']} {' '.join(st.squad) or '自动编队'}",
+                details=note + "由 R.I.O.S. 解算导出；编制要求取自名册，含真实专精与模组。")
+            path = maa.write_job(data, D.guides_dir(), st.stage["code"])
+        except Exception as exc:                          # noqa: BLE001
+            self._say(f"[bad]导出失败：{type(exc).__name__}: {exc}[/]")
+            return
+        st.export_path = path
+        self._say(f"[good]已导出[/] {path}\n"
+                  f"  用了 {len(plan.deploys)} 名干员：{maa.operators_brief(plan, st.plan_roster)}")
+
+    def _say(self, text: str) -> None:
+        self.query_one("#msg", Static).update(text)
+
+    def action_quit(self) -> None:
+        """退出程序（`Q`）。结果屏的另一个出口是 `H` 回主界面。"""
+        self.app.exit()
+
+    def action_home(self) -> None:
+        """回 [0] 准备屏，接着算下一关。
+
+        算完一关还想算下一关是常态，为此退出重开一遍、再让程序重新读一次名册，
+        没有道理。
+        """
+        self.app.goto_home()
+
+
+# ================================================================ App
+
+class RiosApp(App):
+    CSS = theme.CSS
+    TITLE = theme.APP_TITLE
+    SUB_TITLE = theme.APP_SUBTITLE
+    BINDINGS = both_cases([Binding("ctrl+c", "quit", "退出")])
+
+    def __init__(self, *, skip_login: bool = False,
+                 stage: str = "", squad: str = "") -> None:
+        super().__init__()
+        self.state = State()
+        self.skip_login = skip_login
+        self.preset_stage = stage
+        self.preset_squad = [s for s in squad.replace("，", ",").split(",") if s.strip()]
+        #: 向导的**路径**：从最初一屏到当前一屏。见 `push_step`。
+        self._path: list[tuple] = []
+
+    def on_mount(self) -> None:
+        self.state.roster = D.load_roster()
+        if self.preset_stage:
+            # --stage 给了就跳过 [1]
+            row = _resolve_stage(self.preset_stage)
+            if row is None:
+                self.state.error = f"认不出关卡「{self.preset_stage}」"
+            else:
+                self.state.stage = row
+                if self.preset_squad:
+                    # `--squad` 已经替用户决定了「要手动加人」，不必再问一遍
+                    self.state.squad = self.preset_squad
+                    self.push_screen(SquadPickScreen(), self._squad_picked)
+                else:
+                    self.push_screen(SquadAskScreen(), self._squad_asked)
+                return
+        if self.skip_login:
+            # 测试全新启动的流程：不经过 [0]，直接进选关卡。
+            self.goto_stage_pick()
+        elif self._needs_login_wizard():
+            # **初次干净启动先进登录向导**（博士 2026-09-17）。
+            # 它不是路径上的一步：向导退出来直接落在 [0]，不构成"上一步"。
+            self.push_screen(LoginScreen(), self._login_wizard_done)
+        else:
+            self.push_screen(WelcomeScreen())
+
+    def _needs_login_wizard(self) -> bool:
+        """是否该在启动时进登录向导：**配置里没记录过登录选择，且当前没有账号**。
+
+        两个条件都要，缺一不可：
+          * 只看"没有凭据"——凭据约 2 天过期，那会变成每次过期都拦一下；
+          * 只看"配置没记录"——已经登着号的人每次启动都被拦一下。
+
+        答过「以后都不登录」就写进 `~/.rios/tui.json`，从此不再问；
+        答「本次不登录」什么都不写，下一次干净启动还会问——这正是"本次"的意思。
+        """
+        if D.load_config().get("login_prompt"):
+            return False
+        return not D.skland_uid()
+
+    def _login_wizard_done(self, _result) -> None:
+        """向导退出来了（登了、没登、或退出了账号），落到 [0]。
+
+        名册**必须重读**：向导里可能刚落下一份新凭据（换成新账号），
+        而 `state.roster` 是启动那一刻按旧账号读的。
+        """
+        self.state.roster = D.load_roster()
+        self.push_screen(WelcomeScreen())
+
+    # ---- 向导的推进 ----
+    #
+    # ## 为什么「路径」要自己记
+    #
+    # 各屏选完是 `dismiss(值)` 把**自己**弹掉的（弹出时触发回调，回调再推下一屏），
+    # 所以屏幕栈里始终只有「当前屏」——**上一层早就不在了**。于是 `pop_screen`
+    # 退不回上一层：实测在关卡层按 Esc 会一路掉回主界面。
+    #
+    # 博士 2026-09-17 要求「过程中按 esc 应当返回上一步」，所以来路必须自己存成
+    # 一条**路径**：`push_step` 压一屏的同时把「怎么把它重建出来」追加到路径尾，
+    # `step_back` 丢掉尾巴（自己）后把新的尾巴重新推出来。
+
+    def push_step(self, make, callback=None) -> None:
+        """推一屏，并把它记进路径。
+
+        `make` 是**无参工厂**而不是现成实例：退回来时要的是一张新屏——旧的那张
+        早被 `dismiss` 掉了，而 Textual 的 Screen 用过一次不能再压。
+        """
+        self._path.append((make, callback))
+        self.push_screen(make(), callback)
+
+    def step_back(self) -> None:
+        """向导屏按 Esc：**退回上一层**。
+
+        路径里最后一格是**自己**，所以先把自己丢掉，上一层才浮上来。
+        早先写成「弹出自己那一格、再把它推回来」，结果是**按一次 Esc 什么都不变、
+        要按两次才退一层**——因为弹掉的正是当前这一屏，推回来的还是它。
+        已经在最初一步（路径里只剩自己）就回 [0]。
+        """
+        if self._path:
+            self._path.pop()
+        self.back_to_step()
+
+    def back_to_step(self) -> None:
+        """退回路径的最后一层。**不丢任何东西**。
+
+        给不在路径上的屏用（解算屏不是 `push_step` 推的，所以路径顶格就是它的
+        上一步）。博士 2026-09-17 裁定「结算中止退回上一步」走这里。
+        """
+        if not self._path:
+            self.goto_home()
+            return
+        make, callback = self._path[-1]
+        self.push_screen(make(), callback)
+
+    def goto_stage_pick(self) -> None:
+        if D.chapter_rows():
+            self.push_step(ChapterPickScreen, self._chapter_picked)
+            return
+        if D.stage_rows(limit=1):
+            # 有 stage 但归不出章（旧库没跑过带 zone 的 `db stage-fetch`）：
+            # 退回平铺列表，总比甩一句「没有数据」强。
+            self.push_step(
+                lambda: StagePickScreen(heading="全部关卡（没有章节数据）"),
+                self._stage_picked)
+            return
+        self.push_screen(NoStageScreen())
+
+    # ---- [1] 的三层推进 ----
+
+    def _chapter_picked(self, chapter: dict | None) -> None:
+        if chapter is None:
+            self.step_back()
+            return
+        if len(chapter["parts"]) > 1:
+            self.push_step(lambda: PartPickScreen(chapter), self._part_picked)
+            return
+        self._enter_zone(chapter["parts"][0]["zone_id"], chapter["title"])
+
+    def _part_picked(self, part: dict | None) -> None:
+        if part is None:
+            self.step_back()
+            return
+        # 分部的名字要带上活动名，否则「通学路」孤零零看不出是哪一章
+        head = part["title"]
+        self._enter_zone(part["zone_id"], head)
+
+    def _enter_zone(self, zone_id: str, heading: str) -> None:
+        """进关卡层之前先看这个 zone 有没有环境分层——有就先问。
+
+        第 9-14 章有、其余章没有；判据是**数据库里真的存在几个 diff_group**，
+        不是章号。硬编码「9 到 14」会在下次更新时过期。
+        """
+        envs = D.zone_envs(zone_id)
+        if len(envs) > 1:
+            self.push_step(
+                lambda: EnvPickScreen(zone_id, heading, envs),
+                lambda env: self._env_picked(zone_id, heading, env))
+            return
+        self.push_step(lambda: StagePickScreen(zone_id=zone_id, heading=heading),
+                       self._stage_picked)
+
+    def _env_picked(self, zone_id: str, heading: str, env: dict | None) -> None:
+        if env is None:
+            self.step_back()
+            return
+        label = env["label"]
+        self.push_step(
+            lambda: StagePickScreen(zone_id=zone_id, env=env["env"],
+                                    heading=f"{heading} › {label}"),
+            self._stage_picked)
+
+    def goto_home(self) -> None:
+        """回到向导的起点（[0] 准备屏），可以接着算下一关。
+
+        向导是一层层 `push_screen` 压上来的，所以「回主界面」= 把压上去的屏
+        **全部弹掉**，再放一张干净的 [0]。被弹掉的屏若带回调，会收到 `None`——
+        本项目每个回调都在开头对 `None` 直接返回，所以这一趟是安全的。
+
+        顺手清空上一轮的结果。不清的话下一轮会带着上一次的 stage/squad 从半路
+        开始，而屏幕上却写着「准备」——那是假的。
+
+        `state.roster` **留着**：它和这一轮算哪一关无关，重读一遍是白费。
+        """
+        while len(self.screen_stack) > 1:
+            self.pop_screen()
+        # 路径一并作废：下一轮是全新的向导，不该还能退回上一轮的屏
+        self._path.clear()
+        st = self.state
+        st.stage = None
+        st.squad = []
+        st.searcher = None
+        st.plan_roster = None
+        st.result = None
+        st.error = ""
+        st.export_path = None
+        self.push_screen(WelcomeScreen())
+
+    def _stage_picked(self, row: dict | None) -> None:
+        if row is None:
+            self.step_back()
+            return
+        self.state.stage = row
+        if self.preset_squad and self.preset_stage:
+            # `--squad` 已经替用户决定了「要手动加人」，不必再问一遍
+            self.state.squad = self.preset_squad
+            self.push_step(SquadPickScreen, self._squad_picked)
+            return
+        self.push_step(SquadAskScreen, self._squad_asked)
+
+    def _squad_asked(self, answer: dict | None) -> None:
+        """[2a] 的答复：要手动加人才进选人界面，否则空手进解算。"""
+        if answer is None:
+            self.step_back()
+            return
+        if answer["manual"]:
+            self.push_step(SquadPickScreen, self._squad_picked)
+            return
+        self.state.squad = []
+        self.state.mode = "auto"          # 不指定人 = 让搜索自己挑
+        self.push_screen(SolveScreen())
+
+    def _squad_picked(self, picked: list[str] | None) -> None:
+        if picked is None:
+            self.step_back()
+            return
+        self.state.squad = picked
+        self.push_screen(SolveScreen())
+
+
+class NoStageScreen(Screen):
+    """关卡表是空的。**给一句能照做的话，不是一句"没有数据"。**"""
+
+    BINDINGS = both_cases([Binding("escape", "back", "返回", key_display="Esc"),
+                           Binding("q", "quit", "退出程序", key_display="Q")])
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Vertical(classes="block"):
+            yield Label("关卡名获取失败", classes="block-title")
+            yield Static(
+                "本地库里的关卡表是空的，选不了关卡。\n\n"
+                "取一次（要联网，约 7 MB / 十秒上下）：\n"
+                "    python -m ak_tactic db stage-fetch\n\n"
+                "[dim]取不到时它会明确报「关卡名获取失败」，并保留上一版表。[/]",
+                id="nostage")
+        yield Footer()
+
+    def action_back(self) -> None:
+        """返回 [0]。这一屏是「关卡表空」的提示，不该把人逼到只剩退出。"""
+        self.app.goto_home()
+
+    def action_quit(self) -> None:
+        self.app.exit()
+
+
+def run(*, skip_login: bool = False, stage: str = "",
+        squad: str = "") -> int:
+    """CLI 入口。`textual` 只在这里被用到，且是**惰性导入**的。"""
+    RiosApp(skip_login=skip_login, stage=stage, squad=squad).run()
+    return 0
