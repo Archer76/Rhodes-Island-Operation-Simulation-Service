@@ -31,6 +31,7 @@ from typing import Any
 
 from ..gamedata.source import GITHUB_BASE, GameDataSource, GamedataError
 from .schema import DB_VERSION, SCHEMA_SQL
+from .stages import carry_over
 from .tiles import KNOWN_GAPS, fetch_tile_info, insert_tiles
 
 __all__ = ["DEFAULT_DB_PATH", "BuildReport", "build_db", "DEFAULT_SOURCE"]
@@ -310,6 +311,26 @@ def build_db(path: Path | str | None = None, *,
     try:
         conn.executescript(SCHEMA_SQL)
 
+        # ---- 0. 关卡索引与章节：**从旧库原样搬过来，不重新取**
+        # 这两张表要联网才拿得到（`db stage-fetch`），而本函数必须保持"不联网"的
+        # 既有性质；但最后那句 `os.replace` 会把整份库文件换掉——不搬的话，
+        # 每建一次库就把关卡索引与章节名清空一次，选关界面直接没东西可选。
+        # 搬不动（旧库没有这两张表 / 旧库里也是空的）不是错误，只是还没取过。
+        # 旧库是 v6 时 stage 只有 5 列，carry_over 会退回旧列并给名字列补空串
+        # ——搬过来暂时没中文名，再跑一次 db stage-fetch 就有了。
+        stage_count = carry_over(target, conn)
+        if stage_count:
+            named = conn.execute(
+                "SELECT COUNT(*) FROM stage WHERE name != ''").fetchone()[0]
+            zone_count = conn.execute("SELECT COUNT(*) FROM zone").fetchone()[0]
+            tail = (f"，其中 {named} 条有关卡中文名、章节 {zone_count} 条"
+                    if named or zone_count else "（**没有名字**，跑一次 db stage-fetch 取）")
+            note(f"关卡索引沿用旧库 {stage_count} 条{tail}")
+        else:
+            report.warnings.append(
+                "stage 表为空（旧库没有这张表，或旧库里也是空的）："
+                "跑 `db stage-fetch` 取一次，要联网")
+
         # ---- 1. 干员本体 + 阶段 + 属性 + 潜能 + 天赋 + 特性 + 技能引用
         note("灌干员……")
         operators = 0
@@ -528,7 +549,11 @@ def build_db(path: Path | str | None = None, *,
             "tables": "character_table + char_patch_table + skill_table + "
                       "uniequip_table + battle_equip_table + range_table"
                       "（生息演算装置按其 sandbox 表剔除）"
-                      "+ tile（地块字典，**非 gamedata 来源**，取自 theresa.wiki）",
+                      "+ tile（地块字典，**非 gamedata 来源**，取自 theresa.wiki）"
+                      "+ stage（关卡索引，**非 gamedata 来源**，取自 map.ark-nights.com "
+                      "的 JS bundle；由 db stage-fetch 单独建，建库时从旧库沿用）"
+                      "+ zone（章节/区域，取自 GitHub 镜像的 excel/zone_table.json）"
+                      "+ stage 的中文名等四列（取自 excel/stage_table.json）",
             "schema_note": "只含战斗相关数据；见 ak_tactic/db/schema.py 顶部说明。"
                            "敌人另有一库 data/enemydb.sqlite",
             "tile_source": "theresa.wiki 地图数据接口（gamedata 无地块表）；"
@@ -562,6 +587,7 @@ def build_db(path: Path | str | None = None, *,
             "module_level": module_levels,
             "attack_range": range_count,
             "tile": tile_count,
+            "stage": stage_count,
         }
         report.meta = build_meta
         assert operators, "一个真干员都没灌进去，说明表结构变了"

@@ -57,8 +57,15 @@ PROBE_ROUTES: tuple[tuple[str, str], ...] = (
 )
 
 #: 已知缺口：本地关卡用得到、但 theresa 表里没有的地块键。
-#: `tile_xbdpsea` 只在生息演算 `sandbox1_02` 出现（子玩法，按口径忽视）。
-KNOWN_GAPS: tuple[str, ...] = ("tile_xbdpsea",)
+#: 两者都是**上游缺口**，不是本项目漏抓——这张表本身是全局的（95 条），
+#: 而它是从 theresa 那份快照取的，更新活动用的新地块键不在里面。
+#:
+#: - `tile_xbdpsea`：只在生息演算 `sandbox1_02` 出现（子玩法，按口径忽视）。
+#: - `tile_act48side`：`act48side_05`（ME-5「汇流」）用到。**是 2026-09-17
+#:   补关卡索引后新露出来的**：本地缓存的关卡变多，用到 20 种地块键而字典只有
+#:   95 条、不含这一个。当日按纪律**如实补进本表**，而不是把自检放宽成
+#:   "有几个缺口都行"——那等于把守卫关掉。
+KNOWN_GAPS: tuple[str, ...] = ("tile_xbdpsea", "tile_act48side")
 
 
 class TileTableError(RuntimeError):

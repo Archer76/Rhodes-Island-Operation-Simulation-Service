@@ -35,6 +35,9 @@ from ak_tactic.db.build import (                                    # noqa: E402
     SHARED_BATTLE_TRAPS, ra_dropped_skills, sandbox_device_ids,
 )
 from ak_tactic.db.tiles import KNOWN_GAPS, load_tiles               # noqa: E402
+from ak_tactic.db.stages import (                                   # noqa: E402
+    FOUR_STAR_SUFFIX, load_stages, resolve_code,
+)
 from ak_tactic.gamedata.source import GITHUB_BASE, GameDataSource   # noqa: E402
 from ak_tactic.operator import OperatorCalculator, SkillBook            # noqa: E402
 
@@ -670,6 +673,65 @@ def check_tiles(conn: sqlite3.Connection) -> None:
           str(farm) if farm else "0 条")
 
 
+def check_stages(conn: sqlite3.Connection) -> None:
+    """[8] 关卡索引（stage 表）。
+
+    这张表与 tile 的关键差别：**它要联网才建得起来**（`db stage-fetch`），
+    `db build` 只是从旧库沿用。所以新克隆的仓库里它必然是空的——
+    **空表在这里不算失败**，但要如实报出来，别让人以为"查过了、没问题"。
+    """
+    print("\n[8] 关卡索引（stage 表，来源 map.ark-nights.com 的 JS bundle）")
+    table = load_stages(conn)
+    if not table:
+        check("stage 表非空（空表**不算失败**：它要联网建，见 db stage-fetch）",
+              True, "空表——跑 `python -m ak_tactic db stage-fetch` 取一次（要联网）")
+        return
+
+    # 水位会随游戏版本长，所以断的是**下限**不是等号（与 tile 那节的写法一致：
+    # 写死一个会漂的条数，下一个人读到就是错的）。
+    check("条数在合理量级（≥4000，水位随版本涨）", len(table) >= 4000,
+          f"{len(table)} 条")
+    codes = {v["code"] for v in table.values() if v["code"]}
+    check("能去重出 2000 个以上的关卡号（≥2000）", len(codes) >= 2000,
+          f"{len(codes)} 个关卡号")
+
+    # 下面这条是这张表**主键必须用 levelId** 的理由，也是最容易踩的坑：
+    # 同一个关卡号下还有一份 `#f#` 四星限定版，它的 code 与普通版**完全相同**。
+    four = {k: v for k, v in table.items() if k.endswith(FOUR_STAR_SUFFIX)}
+    check("存在 #f# 后缀的四星限定版", bool(four), f"{len(four)} 条")
+    collide = [k for k, v in four.items()
+               if v["code"] and v["code"] == (table.get(k[:-len(FOUR_STAR_SUFFIX)]) or {}).get("code")]
+    check("四星限定版与普通版**共用同一个 code**（故主键只能是 levelId）",
+          bool(four) and len(collide) == len(four),
+          f"{len(collide)}/{len(four)} 条与普通版同 code")
+
+    check("level_id 无重复（主键约束）",
+          len(table) == _count(conn, "SELECT COUNT(DISTINCT level_id) FROM stage"),
+          f"{len(table)} 条")
+
+    dset = {v["difficulty"] for v in table.values()}
+    check("难度只有四档（NORMAL / FOUR_STAR / RUNE / SIX_STAR）",
+          dset <= {"NORMAL", "FOUR_STAR", "RUNE", "SIX_STAR"}, "、".join(sorted(dset)))
+    no_path = [k for k, v in table.items() if not v["data_path"]]
+    check("每条都有 data_path（没有它取不了关卡 JSON）", not no_path,
+          f"{len(no_path)} 条缺" if no_path else "0 条缺")
+
+    # 取关卡的第一步就是这个换算，拿项目自己的三个已知关卡当锚点。
+    anchors = {"SR-EX-8": "act54side_ex08", "SR-6": "act54side_06", "1-7": "main_01-07"}
+    got = {q: (resolve_code(conn, q) or {}).get("level_id") for q in anchors}
+    check("三个已知关卡号解析正确（SR-EX-8 / SR-6 / 1-7）", got == anchors, str(got))
+
+    hit = resolve_code(conn, "SR-EX-8")
+    check("同 code 撞车时普通难度优先（不是四星限定版）",
+          bool(hit) and hit["difficulty"] == "NORMAL"
+          and not hit["level_id"].endswith(FOUR_STAR_SUFFIX),
+          f"{hit.get('level_id')} / {hit.get('difficulty')}" if hit else "解析失败")
+    full = resolve_code(conn, "act54side_ex08#f#")
+    check("写全 levelId 能精确命中四星限定版",
+          bool(full) and full["level_id"] == "act54side_ex08#f#",
+          full["level_id"] if full else "解析失败")
+
+
 def main() -> int:
     print(f"检查本地库：{DEFAULT_DB_PATH}")
     if not DEFAULT_DB_PATH.exists():
@@ -689,6 +751,7 @@ def main() -> int:
         check_stat_anchors(calc)
         check_api(conn)
         check_tiles(conn)
+        check_stages(conn)
     finally:
         conn.close()
 

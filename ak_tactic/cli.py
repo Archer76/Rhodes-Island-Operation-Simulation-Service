@@ -1020,9 +1020,128 @@ def cmd_db(args: argparse.Namespace) -> int:
         return 0
 
     if args.action == "build":
-        print("从 gamedata 重建干员库……")
-        report = build_db(path, verbose=args.verbose)
+        import time as _time
+
+        from .db.build import DEFAULT_SOURCE
+        from .fetchplan import (GAMEDATA_STATS_KEY, EstimateReport, dir_bytes,
+                                estimate_gamedata, record)
+        from .gamedata.source import GameDataSource
+
+        target = path or DEFAULT_DB_PATH
+        est, pending = estimate_gamedata()
+        rep = EstimateReport(title=f"重建干员库 → {target}")
+        rep.items.append(est)
+        rep.notes.append("建库全程不联网；要下多少只取决于缓存里还缺哪几张表。")
+        rep.notes.append("关卡索引不在这里取（要联网，走 `db stage-fetch`）；"
+                         "重建时它从旧库沿用，不会被清空。")
+        print(rep.render())
+        if args.dry_run:
+            print("\n（--dry-run：只估算，没有建库。）")
+            return 0
+
+        src = GameDataSource(base=DEFAULT_SOURCE)
+        before = dir_bytes(src.cache_dir)
+        t0 = _time.time()
+        print("\n从 gamedata 重建干员库……")
+        report = build_db(target, verbose=args.verbose)
+        secs = _time.time() - t0
+        got = max(0, dir_bytes(src.cache_dir) - before)
+        record(GAMEDATA_STATS_KEY, hits=len(pending), bytes_=got or None,
+               seconds=secs, bytes_basis="建库前后的缓存目录增量")
         print(report.summary())
+        print(f"耗时 {secs:.1f} 秒，其中新下载约 {got / 1048576:.1f} MB"
+              f"（实测吞吐会用于下次预估）。")
+        return 0
+
+    if args.action == "stage-fetch":
+        import time as _time
+
+        from .db.stages import (STATS_KEY, StageTableError, estimate_fetch,
+                                fetch_level_index, fetch_names, insert_stages,
+                                zone_title)
+        from .fetchplan import EstimateReport, record
+
+        target = path or DEFAULT_DB_PATH
+        est = estimate_fetch(refresh=args.force)
+        rep = EstimateReport(title=f"取关卡索引与名字（联网）→ {target}")
+        rep.items.append(est)
+        rep.notes.append("取不到时会明确报「关卡名获取失败」，并**保留上一版表**"
+                         "——绝不写一张空表下去。")
+        rep.notes.append("重复取是幂等的：同一个 levelId 覆盖写。")
+        rep.notes.append("同时取**关卡中文名与章节名**：索引来自 map.ark-nights.com，"
+                         "而名字只在 GitHub 镜像的 excel/ 里（ark-nights 没有该目录）。"
+                         "名字那一项取不到**不算硬失败**——索引照写、名字栏留空。")
+        print(rep.render())
+        if args.dry_run:
+            print("\n（--dry-run：只估算，没有真取、没有写库。）")
+            return 0
+
+        print("\n开始取……")
+        t0 = _time.time()
+        try:
+            index = fetch_level_index(refresh=args.force)
+        except StageTableError as exc:
+            record(STATS_KEY, hits=est.hits, bytes_=None,
+                   seconds=_time.time() - t0, ok=False)
+            print(f"\n{exc}")
+            print("库没有被改动，上一版关卡表原样保留。")
+            return 1
+
+        names: dict = {}
+        zones: dict = {}
+        name_err = ""
+        try:
+            names, zones = fetch_names(refresh=args.force)
+        except StageTableError as exc:
+            name_err = str(exc)
+
+        conn = connect(target, readonly=False)
+        try:
+            count = insert_stages(conn, index, names, zones)
+        finally:
+            conn.close()
+        secs = _time.time() - t0
+        # 耗时是本次真取的实测；体积沿用**本次预估里那次 HEAD 探测**的值
+        # （本函数不统计真正下了多少字节，绝不假装它是下载量）。
+        record(STATS_KEY, hits=est.hits, bytes_=est.bytes_,
+               bytes_basis="本关卡索引的 HEAD 探测", seconds=secs)
+        codes = {v.get("code") for v in index.values() if v.get("code")}
+        print(f"\n取到 {count} 个关卡（{len(codes)} 个关卡号），耗时 {secs:.1f} 秒，"
+              f"已写入 {target}")
+        if name_err:
+            print(f"\n[警告] {name_err}")
+            print("      索引已照常写入，但**关卡中文名与章节名是空的**"
+                  "——选关界面会退回显示 levelId。")
+        else:
+            named = sum(1 for n in names.values() if n.get("name"))
+            print(f"关卡中文名 {named} 条（索引独有、stage_table 里没有的留空），"
+                  f"章节/区域 {len(zones)} 条")
+            samples = [(zid, {**z, "zone_id": zid}) for zid, z in zones.items()
+                       if z.get("type") in ("MAINLINE", "MAINLINE_ACTIVITY")]
+
+            def _chap(kv: tuple) -> tuple:
+                """按「主线 → 主线活动」再按章号排。
+
+                不能按 `zone_index` 排——那是游戏内部的**分段序号**（0–5 循环），
+                第 15–17 章与序章、第四章同号，排出来会把它们埋在中间看不见。
+                """
+                z = kv[1]
+                t = (z.get("name_title") or "").strip()
+                return (0 if z.get("type") == "MAINLINE" else 1,
+                        int(t) if t.isdigit() else 99)
+
+            samples.sort(key=_chap)
+            if samples:
+                picked = samples[:3] + samples[-2:]
+                print("  章名样例：" + "、".join(
+                    zone_title(z) for _zid, z in picked))
+            act = [(zid, {**z, "zone_id": zid}) for zid, z in zones.items()
+                   if z.get("type") == "ACTIVITY"
+                   and (zid or "").startswith("act54side")]
+            if act:
+                print("  月行水上的分部：" + "、".join(
+                    f"{zone_title(z)}（{zid}）" for zid, z in sorted(act)))
+        print("看几个：`db stages SR-EX`")
         return 0
 
     if args.action == "tile-fetch":
@@ -1074,6 +1193,35 @@ def cmd_db(args: argparse.Namespace) -> int:
             gap = [g for g in KNOWN_GAPS if g not in table]
             if gap:
                 print(f"    已知缺口（在关卡里出现过但字典没有）：{'、'.join(gap)}")
+            return 0
+
+        if args.action == "stages":
+            from .db.stages import (ENV_LABELS, FOUR_STAR_SUFFIX, list_stages,
+                                    load_zones, zone_title)
+            hits = list_stages(conn, keyword=args.key,
+                               difficulty=args.difficulty, limit=args.limit)
+            if args.json:
+                print(json.dumps(hits, ensure_ascii=False, indent=2))
+                return 0
+            if not hits:
+                print("关卡索引是空的（或没有匹配）。"
+                      "跑 `db stage-fetch` 取一次，要联网。")
+                return 1
+            print(f"关卡索引：命中 {len(hits)} 条")
+            if not any(e.get("name") for e in hits):
+                print("    注：这一批没有关卡中文名。名字与章节要跑一次 "
+                      "`db stage-fetch`（要联网，取自 GitHub 镜像的 excel/）。")
+            zones = load_zones(conn)
+            for e in hits:
+                star = " [四星限定]" if e["level_id"].endswith(FOUR_STAR_SUFFIX) else ""
+                diff = "" if e["difficulty"] == "NORMAL" else f" [{e['difficulty']}]"
+                env = ENV_LABELS.get(e.get("diff_group") or "", "")
+                env = f" [{env}]" if env else ""
+                z = zones.get(e.get("zone_id") or "")
+                zt = zone_title(z) if z else ""
+                print(f"    {e['code'] or '(无名)':<13} {(e.get('name') or '—'):<13}"
+                      f"{e['level_id']:<31}{e['zone_id']:<18}"
+                      f"{zt:<20}{diff}{env}{star}")
             return 0
 
         if args.action == "find":
@@ -1473,7 +1621,6 @@ def cmd_activity(args: argparse.Namespace) -> int:
     return 1 if rep.unknown else 0
 
 
-
 def cmd_mechanics(args: argparse.Namespace) -> int:
     """地图机制：取术语表／关卡机制文本，并编译成公式项。
 
@@ -1553,6 +1700,25 @@ def cmd_mechanics(args: argparse.Namespace) -> int:
         _emit_terms(terms)
         print()
     return 0
+
+
+# ---------------------------------------------------------------- tui
+
+def cmd_tui(args: argparse.Namespace) -> int:
+    """终端界面。
+
+    `textual` **在这个函数里才被导入**——它是本项目唯一的重依赖，
+    不能因为没装它就让 `db` / `formula` / `verify` 一起跑不起来。
+    （守卫见 `tools/check_tui.py`：它真的去断言"跑别的子命令不会导入 textual"。）
+    """
+    try:
+        from .tui.app import run
+    except ImportError as exc:                       # pragma: no cover
+        print("终端界面需要 textual（本项目唯一的重依赖）：", file=sys.stderr)
+        print("    pip install textual", file=sys.stderr)
+        print(f"  导入失败：{exc}", file=sys.stderr)
+        return 2
+    return run(skip_login=args.no_login, stage=args.stage, squad=args.squad)
 
 
 # ---------------------------------------------------------------- cache
@@ -1704,14 +1870,16 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("db", help="干员库（gamedata）：建库与查询")
     d.add_argument("action", nargs="?", default="info",
                    choices=["build", "info", "char", "find", "skill", "talent",
-                            "levels", "sql", "schema", "tiles", "tile-fetch"],
+                            "levels", "sql", "schema", "tiles", "tile-fetch",
+                            "stages", "stage-fetch"],
                    help="build 重建库 / info 版本与行数 / char 干员详情 / "
                         "find 找干员 / skill 搜技能 / talent 搜天赋 / "
                         "levels 一个技能的全等级 / sql 只读查询 / schema 表说明 / "
-                        "tiles 查地块字典 / tile-fetch 重取地块字典")
+                        "tiles 查地块字典 / tile-fetch 重取地块字典 / "
+                        "stages 查关卡索引 / stage-fetch 取关卡索引（要联网）")
     d.add_argument("key", nargs="?", default="",
                    help="动作的对象：干员 id 或名字 / 关键词 / 技能 id / SQL /"
-                        " 地块关键词或 tileKey")
+                        " 地块关键词或 tileKey / 关卡关键词")
     d.add_argument("--key", dest="bb_key", default="",
                    help="按黑板键过滤，如 atk_scale / sluggish / ammo")
     d.add_argument("--limit", type=int, default=30)
@@ -1720,7 +1888,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="find 时把召唤物与装置也列出来")
     d.add_argument("--verbose", action="store_true", help="build 时打印进度")
     d.add_argument("--force", action="store_true",
-                   help="tile-fetch 时忽略缓存强制重取")
+                   help="tile-fetch / stage-fetch 时忽略缓存强制重取")
+    d.add_argument("--difficulty", default="",
+                   help="stages 时按难度筛：NORMAL / FOUR_STAR / RUNE / SIX_STAR")
+    d.add_argument("--dry-run", action="store_true",
+                   help="只报预估时间与体积，不真的取数、不写库")
     d.add_argument("--json", action="store_true")
     d.set_defaults(func=cmd_db)
 
@@ -1761,8 +1933,6 @@ def build_parser() -> argparse.ArgumentParser:
                     help="scan 时列几条残句（默认 25）")
     mc.add_argument("--json", action="store_true")
     mc.set_defaults(func=cmd_mechanics)
-
-
 
     ac = sub.add_parser(
         "activity",
@@ -1850,6 +2020,17 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--verbose", action="store_true", help="build 时打印进度")
     e.add_argument("--json", action="store_true")
     e.set_defaults(func=cmd_enemy_db)
+
+    tu = sub.add_parser("tui", help="终端界面：选关卡 → 指定编队 → 解算 → 导出")
+    tu.add_argument("--no-login", action="store_true",
+                    help="跳过 [0] 登录屏，直接进选关卡。"
+                         "**测试全新启动的流程时用这个**——登录只决定名册要不要刷新，"
+                         "不是流程的闸门")
+    tu.add_argument("--stage", default="",
+                    help="预填关卡（如 SR-EX-8），给了就跳过选关卡那一步")
+    tu.add_argument("--squad", default="",
+                    help="预填编队，逗号分隔（如 赤刃明霄陈,圣聆初雪）")
+    tu.set_defaults(func=cmd_tui)
 
     c = sub.add_parser("cache", help="缓存管理")
     c.add_argument("--clear", action="store_true", help="清空 prts HTTP 缓存")
