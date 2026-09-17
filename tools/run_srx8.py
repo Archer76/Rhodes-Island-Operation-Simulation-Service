@@ -1,4 +1,12 @@
-"""SR-EX-8 试跑台：给定编队与落位，跑一遍并报告 P3R 与总攻击的情况。
+"""SR-EX-8 的共用层：编队校验、试跑函数与落位表。
+
+`tools/export_srx8.py` 从这里 import `make_provider` / `run_plan` / `PlanError`；
+落位表 `GROUND` / `HIGHLAND` 由 `assert_spots()` 钉死在关卡自身上（手抄的集合最容易
+在改坐标口径时漏改，而且抄错不报错）。
+
+**它不内置任何方案。** 先前那四组（三人 92%、圣聆初雪技2、四人 79%、三人 38%）都建立在
+「BOSS 从不换相性」这条**已被推翻**的读法上，跑出来是失败，2026-09-17 已删。现行答案由
+`export_srx8.py` 产出，见 `docs/srx8-qi-solution.md`。
 
 **干员数据走森空岛名册**（`tools/squad.py` 的 `Roster`），也就是真实专精、
 真实模组、真实信赖。先前这一层吃的是 MAA 的 OperBox 导出，那份数据里
@@ -6,10 +14,8 @@
 假口径上——差距很大，见 `tools/squad.py` 的说明。
 
 用法：
-    python tools/run_srx8.py                 # 跑内置的几个方案
-    python tools/run_srx8.py --verbose       # 带战斗日志
+    python tools/run_srx8.py                 # 关卡事实：地图、可部署格、敌人、名册
     python tools/run_srx8.py --rank 30       # 按练度列前 30 名候选
-    python tools/run_srx8.py --check         # 只做编队合法性校验
 
 这一版**还没有**建模的机制（会影响结论的可信度，报告里必须带出来）：
 元素损伤、敌人技能（咆哮铳炸膛 / 吓人路灯屏障）、BOSS 双形态与重生、
@@ -191,56 +197,9 @@ def run_plan(stage, lib, provider, roster: Roster, book, talents, plan: Plan,
     return sim, sim.run(max_time=900), detail, warns
 
 
-def report(title, sim, r, plan, warns) -> None:
-    dev = sim.total_attack
-    print(f"\n【{title}】{'胜利' if r.won else '失败'}  {r.elapsed:.1f}s  "
-          f"击杀 {r.kills}  漏怪 {r.leaks}  剩余生命 {r.life}  总伤害 {r.damage_dealt:,.0f}")
-    for w in warns:
-        print(f"     {w}")
-    print("     编队: " + " | ".join(f"{n}{p}朝{d}技{s or '—'}" for n, p, d, s in plan))
-    if dev is not None:
-        d = dev.to_dict()
-        print(f"     总攻击: 触发 {d['triggers']} 次，累计真伤 {d['total_damage']:,.0f}，"
-              f"被卡住 {d['blocked_checks']} 次（最近卡在：{d['last_blocker'] or '—'}）")
-
-
-#: 候选方案。落点是**本项目坐标**，而项目内部已按 MAA 口径（原点左上、y 向下），
-#: 所以这些数就是屏幕上看到的位置，与 MAA 作业的 `location` 同口径。
-#:
-#: 前两条是**反例**，故意留着：它们都曾被我当成答案。
-#:  - 三人版 92% 余量好看，但坐在悬崖上：BOSS 的停点偏一格就崩，敌速
-#:    0.85–0.9 与 1.2–1.4 全败。
-#:  - 圣聆初雪技2 的输出低三分之一，BOSS 走得到停点，余量只剩 19%。
-#:
-#: **注**：2026-09-16 改口径前这四组数写在 y 向上的旧坐标系里
-#: （`(6,1)` / `(8,5)` 等），现已按 `y_新 = 8 - y_旧` 换成新编号；
-#: `(x,4)` 那几个是 `y=4` 的不动点，所以看着没变。
-PLANS: list[tuple[str, Plan]] = [
-    ("反例：三人·高余量但怕敌速（92%）",
-     [("机械师", (6, 7), "Right", 1),
-      ("圣聆初雪", (2, 4), "Right", 1),
-      ("予愿安洁莉娜", (11, 4), "Left", 3)]),
-    ("反例：圣聆初雪技2（余量 19%）",
-     [("机械师", (6, 7), "Right", 1),
-      ("圣聆初雪", (2, 4), "Right", 2),
-      ("予愿安洁莉娜", (11, 4), "Left", 3)]),
-    ("答案：四人·主方案（余量 79%）",
-     [("机械师", (6, 7), "Right", 1),
-      ("圣聆初雪", (10, 4), "Right", 1),
-      ("予愿安洁莉娜", (1, 4), "Right", 3),
-      ("凯尔希·思衡托", (8, 3), "Right", 2)]),
-    ("答案：三人·人数下限（余量 38%）",
-     [("机械师", (6, 7), "Right", 1),
-      ("圣聆初雪", (10, 4), "Right", 1),
-      ("予愿安洁莉娜", (1, 4), "Right", 3)]),
-]
-
-
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--rank", type=int, default=0, help="按练度列前 N 名候选")
-    ap.add_argument("--check", action="store_true", help="只做编队校验")
     args = ap.parse_args()
 
     src = GameDataSource()
@@ -264,29 +223,6 @@ def main() -> int:
         print(f"\n=== 练度前 {args.rank} 名（需求：优先从练度最高的干员里选）===")
         for i, (n, sc) in enumerate(roster.rank(limit=args.rank), 1):
             print(f"{i:2d}. {roster.profile(n)}   分 {sc:.0f}")
-
-    for idx, (title, plan) in enumerate(PLANS, 1):
-        missing = [n for n, *_ in plan if not roster.has(n)]
-        if missing:
-            print(f"\n【{title}】跳过——名册里没有：{missing}")
-            continue
-        try:
-            sim, r, detail, warns = run_plan(stage, lib, provider, roster, book,
-                                             talents, plan, verbose=args.verbose)
-        except PlanError as e:
-            print(f"\n【{title}】{e}")
-            continue
-        if args.check:
-            print(f"\n【{title}】校验通过")
-            for w in warns:
-                print(f"     {w}")
-            continue
-        report(f"{idx} {title}", sim, r, plan, warns)
-        t = 0.0
-        for wait, name, pos, d, slot, mastery, cost in detail:
-            t += wait
-            print(f"      {t:6.1f}s  {name:<12}{pos} 朝{d} 技能{slot or '—'}"
-                  f"(专精{mastery})  费用{cost}")
     return 0
 
 

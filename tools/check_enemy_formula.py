@@ -55,7 +55,7 @@ def kinds_of(text: str) -> set[str]:
 # ---------------------------------------------------------------- 1 清洗
 
 def check_detemplate() -> None:
-    print("\n[1] 清洗：PRTS wikitext → 纯文本")
+    print("\n[1] 清洗：prts.wiki wikitext → 纯文本")
     check("`{{术语|ba.stun|晕眩}}` 取位置参数 1（丢掉内部术语 id）",
           detemplate("免疫{{术语|ba.stun|晕眩}}") == "免疫晕眩",
           repr(detemplate("免疫{{术语|ba.stun|晕眩}}")))
@@ -141,7 +141,7 @@ ANCHORS: tuple[tuple[str, str, str], ...] = (
     ("生命值首次低于25%时，获得屏障", "e_hp_trigger", "flag"),
     ("技能结束时自身强制退场", "e_retreat_forced", "flag"),
     ("攻击数次，偷取我方3费用，并回复5%生命值", "e_steal_cost", "cost"),
-    # 干员的 `buff_*` 只认游戏内 `+N` 记法，PRTS 手写正文用的是「提升N」
+    # 干员的 `buff_*` 只认游戏内 `+N` 记法，prts.wiki 手写正文用的是「提升N」
     ("攻击力提升50", "e_attr_up", "buff"),
     ("防御力降低30%", "e_attr_down", "debuff"),
     ("被阻挡时立即变为随机敌人", "e_form_become", "form"),

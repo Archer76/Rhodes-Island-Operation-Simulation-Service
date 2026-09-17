@@ -4,7 +4,7 @@
 |---|---|---|
 | 文件 | `data/akdb.sqlite` | `data/enemydb.sqlite` |
 | 来源 | 游戏本体 gamedata 的 `excel/` | prts.wiki 的「分类:敌人」 |
-| 主键 | `char_id` | PRTS 页名 |
+| 主键 | `char_id` | prts.wiki 页名 |
 | 数值口径 | 只存**关键帧原文**，面板另算 | 存**算好继承的逐档数值** |
 | 建库 | `python -m ak_tactic db build` | `python -m ak_tactic enemy build` |
 | 自检 | `tools/check_db.py` | `tools/check_enemy_db.py` |

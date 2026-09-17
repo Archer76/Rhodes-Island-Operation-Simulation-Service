@@ -7,7 +7,7 @@
 |---|---|---|
 | 来源 | 游戏本体 gamedata 的 `excel/`（只有 GitHub 镜像有） | prts.wiki 的「分类:敌人」 |
 | 更新节奏 | 跟着游戏版本走 | 跟着站内编辑走 |
-| 主键口径 | `char_id`（`char_002_amiya`） | PRTS 页名（`“死志的凝结”`） |
+| 主键口径 | `char_id`（`char_002_amiya`） | prts.wiki 页名（`“死志的凝结”`） |
 | 数值口径 | 只存**关键帧原文**，插值/信赖/潜能/模组另算 | 存**算好继承的逐档数值** |
 
 混在一个文件里，只会让人以为它们同源、可以按同一套口径读。
@@ -26,10 +26,10 @@
 
 ## 四个事实（都踩过）
 
-1. **高档位只写被改写的字段**，其余向上一档继承（PRTS 模板靠 SMW `#ask` 做，
+1. **高档位只写被改写的字段**，其余向上一档继承（prts.wiki 模板靠 SMW `#ask` 做，
    本库在建库时就算好，落在 `enemy_level` 的列里）。`explicit_params` 单独留着，
    用来分辨"这一档真的改了没有"。
-2. **黑板藏在 PRTS 页面的 HTML 注释里**，含 P3R 相性（`TotalAttack.*` /
+2. **黑板藏在 prts.wiki 页面的 HTML 注释里**，含 P3R 相性（`TotalAttack.*` /
    `Mode_A|B.*`）、倒地阈值与重生参数。它是**逐档**的，别只取第一档。
 3. **注释掉的参数不能丢**：BOSS 页写着 `|index=1<!--|名称=死志暗影-->`，
    页面上这一档仍显示「“死志的凝结”」，而游戏数据里的名字是「死志暗影」。
@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS meta (
 -- 图鉴级。**页名做主键**：敌人的中文名会撞车
 -- （「“阿米娅”」与「阿米娅」是两回事），页名才是唯一的。
 CREATE TABLE IF NOT EXISTS enemy (
-    page         TEXT PRIMARY KEY,   -- PRTS 页名
+    page         TEXT PRIMARY KEY,   -- prts.wiki 页名
     prts_id      INTEGER,            -- 模板 |id=
     name         TEXT NOT NULL,      -- |名称=
     display_name TEXT,               -- |显示名=
@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS enemy (
 );
 
 -- 逐档数值。列里的值**已经算好继承**（本档没写的字段取自上一档），
--- 这一点与干员库的"只存关键帧原文"不同——PRTS 页面里没有
+-- 这一点与干员库的"只存关键帧原文"不同——prts.wiki 页面里没有
 -- "显式/继承"的标志位，只有"写了/没写"，继承由模板的 SMW 查询完成。
 CREATE TABLE IF NOT EXISTS enemy_level (
     page        TEXT NOT NULL,
@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS enemy_level (
     PRIMARY KEY (page, level)
 );
 
--- 抗性。以 `抗性` 结尾的参数一律收进来（不写死名单，PRTS 加一项这里自动跟上）
+-- 抗性。以 `抗性` 结尾的参数一律收进来（不写死名单，prts.wiki 加一项这里自动跟上）
 -- `source` 两种取值语义不同：`字段` 是标准 `*抗性` 参数，`覆写` 来自 `抗性覆写`
 -- （`{{异常效果|失衡免疫}}` 这种写法能表达标准字段表里根本没有的免疫项）。
 -- **`覆写` 压过同名的 `字段`**——主键并入 source 就是为了让两者并存而不互相顶掉。

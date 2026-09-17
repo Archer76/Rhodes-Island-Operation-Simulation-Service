@@ -191,7 +191,7 @@ class OperatorError(RuntimeError):
 
 
 #: character_table 里的稀有度是 `"TIER_5"` 这种字符串，不是数字。
-#: （顺带一提，PRTS 的 SMW 那条路走的是 0 起算的整数，两套别搞混。）
+#: （顺带一提，prts.wiki 的 SMW 那条路走的是 0 起算的整数，两套别搞混。）
 _TIER_RE = re.compile(r"TIER_(\d+)")
 
 
