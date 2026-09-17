@@ -88,6 +88,61 @@ def main() -> int:
     check("天桩仍标为待实现（没被顺手标成完成）",
           any("dhdcr" in k for k in todo_dev), str(todo_dev))
 
+    print("\n[5] ★ 每个 DONE 都必须指到兑现它的那段代码（锚点）")
+    # 这一节补的是一个**真发生过的漏洞**：`enemy_attribute_mul` 与
+    # `global_lifepoint` 两条长期标着 DONE，而代码里根本没有它们的消费者——
+    # 而 [4] 只查 DONE 的**装置**有没有常量，rune 与黑板前缀**一条都不查**，
+    # 于是这两个假的 DONE 一路绿灯。
+    #
+    # 判据三条，都是客观可判的（不靠人读注释相信）：
+    #   ① 锚点 `模块:符号` 必须能解析出来；
+    #   ② 符号是字符串时**等于** key；是容器时**包含** key；
+    #   ③ 其余情况（函数/类/元组常量）key 必须出现在该符号的**源码**里。
+    import importlib
+    import inspect
+
+    all_entries = (list(DEVICE_REGISTRY.items()) + list(ENEMY_BB_REGISTRY.items())
+                   + list(RUNES_REGISTRY.items()))
+    no_anchor = [k for k, e in all_entries if e.status == DONE and not e.anchor]
+    check("标 DONE 的条目都写了 anchor", not no_anchor, str(no_anchor[:4]))
+    bad_anchor, missing = [], []
+    for k, e in all_entries:
+        if e.status != DONE or not e.anchor:
+            continue
+        mod_name, _, attr = e.anchor.partition(":")
+        try:
+            sym = getattr(importlib.import_module(mod_name), attr)
+        except Exception as exc:                                  # noqa: BLE001
+            bad_anchor.append(f"{k} → {e.anchor}（{exc}）")
+            continue
+        if isinstance(sym, str):
+            hit = sym == k
+        elif isinstance(sym, (tuple, list, set, frozenset, dict)):
+            hit = k in sym
+        else:
+            hit = False
+        if not hit:
+            # 回退到"这个键出现在该符号的源码里吗"。
+            # 元组常量（`_REBORN_SPECS` 是 `(("Reborn.", …), ("Reborning.", …))`）
+            # 走的就是这一条：直接 `in` 只比最外层，比不到里层的字符串。
+            try:
+                hit = k in inspect.getsource(sym)
+            except Exception:                                     # noqa: BLE001
+                hit = True          # 取不到源码（内建）就不冤判
+        if not hit:
+            missing.append(f"{k} → {e.anchor}")
+    check("★ 每个 DONE 的 anchor 都能解析到真实符号", not bad_anchor,
+          str(bad_anchor[:3]))
+    check("★ 每个 DONE 的 key 都真的出现在锚点那段代码里", not missing,
+          str(missing[:3]))
+    # 反面：TODO 里写明"数据已改、但无消费者"的那条，不许被标成 DONE
+    check("敌方技能黑板乘数仍待实现（改写了数据但没有消费者）",
+          RUNES_REGISTRY["enemy_skill_blackb_mul"].status == TODO)
+    check("被击倒给装置的机制仍待实现（模拟器没有部署装置这一层）",
+          ENEMY_BB_REGISTRY["DeathPassive."].status == TODO)
+    check("进入阻流阀真伤仍待实现（装置没有血量/被摧毁这一层）",
+          ENEMY_BB_REGISTRY["AuraHit."].status == TODO)
+
     print("\n" + "=" * 68)
     tail = f"通过 {_PASSED} 项，失败 {len(_FAILED)} 项"
     print(tail + "：")
