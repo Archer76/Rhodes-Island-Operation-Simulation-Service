@@ -1174,8 +1174,22 @@ def _phase_to_int(phase: Any) -> int:
 def _normalize_sp_type(sp_type: Any, skill_type: str) -> str:
     """技力回复方式归一化。
 
-    `spType` 取 8 时不是"第四种回复"，而是**被动技能用的哨兵值**——
-    630 个技能全是 PASSIVE 且 spCost 恒为 0，所以归一成 PASSIVE。
+    `spType` 取 8 时不是"第四种回复"，而是**被动技能用的哨兵值**。
+
+    实测（2026-09-17 全表核过；条数会随技能更新而漂，别抄这里的整数）：
+    `sp_type='8'` 共 523 个技能，其中 PASSIVE 451（`skchr_` 56 + `sktok_` 395），
+    **非 PASSIVE 72 个、全部是 `sktok_`**（AUTO 62 + MANUAL 10）；且 spCost
+    **并非**恒为 0（PASSIVE 最大 999、AUTO 最大 100，如 `sktok_cjbtow_1`
+    「灶火灭」cost=10、`sktok_dublst`「爆破」cost=25）。
+
+    所以这个分支的真实作用域是**召唤物技能**：干员侧 `sp_type=8` 的技能
+    （`skchr_aglna2_1`「极速送达」等 30 个）**全部是 PASSIVE**，
+    靠 `skill_type == "PASSIVE"` 那半边就已正确归一，`sp_type == 8` 半边对干员是空的。
+
+    ⚠️ **批次二做召唤物时会撞上这里**：`sktok_` 里那 72 个是**真的要攒技力并
+    自动/手动触发**的，一并归一成 PASSIVE 会让"该攒技力的召唤物"永远常亮。
+    届时应改为「只有 `skill_type == PASSIVE` 才归一，`sp_type == 8` 单独判」，
+    并用召唤物用例回归 SR-EX-8 的装置链路。
     """
     if skill_type == "PASSIVE" or sp_type == 8:
         return SP_NONE

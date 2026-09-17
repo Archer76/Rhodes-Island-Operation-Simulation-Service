@@ -110,7 +110,12 @@ SP    : 自动回复 1/s；攻击回复每次攻击 1 点（含治疗）；受�
    → 与本项目 `battle/damage.py` 现在的写法（法术无保底）相反。若确有保底，SR-EX-8「吓人路灯 RES 99」就是稳定 5% 而非 1%。
    简易判据：用固定攻击力干员打高法抗敌人，看飘字伤害是否被 5% 卡住（法抗 ≥95 时飘字不再变化即为有保底）。
 2. **攻速下限**：wiki 说最终 ASPD 不低于 **20**；AKData 代码夹到 **10**。
-3. **攻击力取整**：wiki 明确 `FLOOR` 两处；calc-framework 无取整。本项目 `rounding` 参数默认 floor，与 wiki 一致。
+3. **攻击力取整**：wiki 明确的 `FLOOR` 两处是**伤害结算**里的，与**面板**取整不是一回事。
+   面板取整 2026-09-17 已由实机定案为**四舍五入**（见 `docs/uncertainties.md` 第一节与
+   `tools/check_db.py` 的 [4b] 节：红豆 1185/510、怒潮凛冬 2981/1307/473 逐位命中 round）。
+   旁证：prts.wiki 干员页内嵌的「属性计算器」用的也是 `Math.round`。
+   故本项目 `operator/stats.py` 的 `rounding` 默认已改为 `round`，
+   而 `battle/damage.py` 的伤害侧**仍是 floor**——两者各自成立。
 
 ## 六、对 ak-tactic 的落地建议
 
@@ -143,10 +148,15 @@ SP    : 自动回复 1/s；攻击回复每次攻击 1 点（含治疗）；受�
 | 潜能 | `potentialRanks` | 只有 **5 项**，对应**潜能 2–6**；取前 `potential - 1` 项。`buff.attributes.attributeModifiers` 里 `formulaItem=ADDITION` 加算、`MULTIPLIER` 乘算 |
 | 模组 | `battle_equip_table` | `attributeBlackboard` 是**该等级的总加成，不是增量**（阿米娅 1/2/3 级 = max_hp 100/130/150、atk 30/40/50） |
 
-**取整是唯一未证实的假设。** wiki 的 `Attribute` 页明确写了 `FLOOR`，社区的
-三个开源实现要么没取整、要么方式不一，而 prts.wiki 的模板命名空间常年 403，拿不到
-更多的实测端点。项目把取整做成 `rounding` 参数（默认 `floor`），并留了
-`calibrate()` 用一条实机面板反推。
+**取整已于 2026-09-17 定案为四舍五入（`round`）。** 早先的依据是 wiki 的
+`Attribute` 页写的 `FLOOR`——但那说的是**伤害结算**里的取整，与**面板**不是一回事，
+两者被混在一行里问过。面板侧靠两份独立证据定案：
+① prts.wiki 干员页内嵌的「属性计算器」（`static.prts.wiki/charinfo/charinfo_*.min.js`
+注入的那段内联脚本）用的就是 `Math.round`；此前以为「prts.wiki 拿不到更多端点」，
+但**403 的是模板命名空间，干员页整页 HTML 走 `action=parse&prop=text` 一直拿得到**；
+② 博士实机面板逐位命中：红豆 生命 1185 / 攻击 510，怒潮凛冬 2981 / 1307 / 473。
+项目把取整做成 `rounding` 参数（**默认 `round`**），并留了 `calibrate()`
+用一条实机面板反推——留作日后遇到反例时的校准口。
 
 **验过的锚点**（都是外部数据，不是从库里反推的）：
 

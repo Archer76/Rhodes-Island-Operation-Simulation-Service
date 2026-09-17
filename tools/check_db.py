@@ -293,6 +293,52 @@ def check_coverage(conn: sqlite3.Connection) -> None:
     check("没有空的攻击范围", empty == 0, f"实得 {empty}")
 
 
+# ------------------------------------------------------------------ 3b 技力回复口径
+
+
+def check_sp_type(conn: sqlite3.Connection) -> None:
+    """技力回复方式的安全边界。
+
+    `skill._normalize_sp_type` 对 `sp_type == 8` 一律返回 PASSIVE（常亮）。
+    这条归一**只在「干员侧不存在 sp_type=8 的非被动技能」时才成立**：
+    `sktok_`（召唤物）里恰有 72 个技能是 8 + AUTO/MANUAL 且真的带 spCost
+    （`sktok_cjbtow_1` cost=10、`sktok_dublst` cost=25），它们一旦进入
+    `operator_skill`，就会被静默改成常亮技能，症状是「技能开了但看不出在转」。
+
+    这两条断言把「批次二做召唤物时该改哪里」钉成红灯，而不是留一句注释。
+    """
+    print("\n[3c] 技力回复口径")
+
+    #: `operator` 表里有 915 行**不是真干员**（召唤物 / 生息演算建筑，is_operator=0），
+    #: `sktok_*` 技能正是挂在它们名下。第一版漏了 `is_operator=1` 这道，
+    #: 于是把 72 个召唤物技能一并算成「干员侧的例外」，自检当场红——**红的对**，
+    #: 错的是查询：它问的不是「干员侧」，而是「operator 表侧」。
+    bad = [r[0] for r in conn.execute(
+        "SELECT DISTINCT sl.skill_id FROM operator_skill os "
+        "JOIN operator o ON o.char_id = os.char_id "
+        "JOIN skill_level sl ON sl.skill_id = os.skill_id "
+        "WHERE o.is_operator = 1 AND sl.sp_type = '8' "
+        "AND sl.skill_type <> 'PASSIVE'")]
+    check("真干员侧 sp_type=8 的技能全是 PASSIVE（否则会被归一成常亮）",
+          not bad, f"例外：{bad[:6]}")
+
+    stray = [r[0] for r in conn.execute(
+        "SELECT DISTINCT sl.skill_id FROM skill_level sl "
+        "WHERE sl.sp_type = '8' AND sl.skill_type <> 'PASSIVE' "
+        "AND sl.skill_id NOT LIKE 'sktok_%'")]
+    check("sp_type=8 的非被动技能全在召唤物（sktok_）名下",
+          not stray, f"例外：{stray[:6]}")
+
+    #: 三条 SP 通道各须有真身，否则批次一 ② 的接线是空转。
+    for label, st in (("自动回复", "INCREASE_WITH_TIME"),
+                      ("攻击回复", "INCREASE_WHEN_ATTACK"),
+                      ("受击回复", "INCREASE_WHEN_TAKEN_DAMAGE")):
+        n = _count(conn, "SELECT COUNT(DISTINCT sl.skill_id) FROM operator_skill os "
+                         "JOIN skill_level sl ON sl.skill_id = os.skill_id "
+                         "WHERE sl.sp_type = ?", (st,))
+        check(f"{label}技能存在（批次一 ② 的三通道之一）", n > 0, f"{n} 个")
+
+
 # ------------------------------------------------------------------ 4 取值
 
 #: 外部锚点：PRTS「属性」模板给的阿米娅端点（精英, 阶段内等级）
@@ -327,13 +373,21 @@ def check_values(conn: sqlite3.Connection, calc: OperatorCalculator,
           close(trust[50]["hp"], 200, 0.5) and close(trust[50]["atk"], 70, 0.5),
           f"实得 {trust[50]['hp']}/{trust[50]['atk']}")
 
-    # 怒潮凛冬精2 60：实机录像的面板，靠**阶段内线性插值**得到
+    # 怒潮凛冬精2 60（零信赖、无模组）：实机面板，靠**阶段内线性插值**得到
     # （关键帧只有 1 级与 90 级）。这条同时验库里的帧与计算器的插值口径。
+    #
+    # ⚠️ 容差已从 ±1 收到 0。原先写 `close(..., 1)` 时它**分辨不出取整方式**：
+    # 攻击 floor=1193 / round=1194 恰好相差 1，容差 1 把两者一起放过，于是
+    # 2026-09-17 把默认取整从 floor 改成 round 时，这一条**毫无反应**。
+    # 口径定案后必须锚死具体整数，否则守卫等于没有。
+    #
+    # 录像读数（2026-09-15）记的是 1193，与 round 差 1；同日博士给出的
+    # 完整面板（信赖 200% + 模组 Lv1）三个数全部精确命中 round，见 [4b] 节。
     st = calc.stats("char_1051_headb2", elite=2, level=60, trust=0, potential=1)
     t = st.total
-    check("怒潮凛冬 精2 60 = 2731/1193/387/0（实机录像面板）",
-          close(t["maxHp"], 2731, 1) and close(t["atk"], 1193, 1)
-          and close(t["def"], 387, 1) and close(t["magicResistance"], 0, 0.5),
+    check("怒潮凛冬 精2 60 零信赖 = 2731/1194/387/0",
+          t["maxHp"] == 2731 and t["atk"] == 1194 and t["def"] == 387
+          and close(t["magicResistance"], 0, 0.5),
           f"实得 {t['maxHp']}/{t['atk']}/{t['def']}/{t['magicResistance']}")
 
     # 同源抽查：库里每个阶段的第一帧，与计算器读到的关键帧必须一致。
@@ -387,6 +441,53 @@ def check_values(conn: sqlite3.Connection, calc: OperatorCalculator,
     bb = json.loads(row[0]) if row else {}
     check("怒潮凛冬的结构化特性含 attack@atk_scale_2=0.5",
           close(bb.get("attack@atk_scale_2"), 0.5, 1e-9), f"实得 {bb}")
+
+
+def check_stat_anchors(calc: OperatorCalculator) -> None:
+    """[4b] 属性口径的**实机锚点**——信赖映射与取整方式的定案依据。
+
+    2026-09-17 定案，两条都是博士提供的实机面板、逐位精确：
+
+    * **取整 = 四舍五入（round）**。旁证：prts.wiki 干员页内嵌的
+      「属性计算器」用的就是 `Math.round`，插值写法与本项目同构。
+    * **信赖**：`favorKeyFrames` 的 level = **显示信赖 ÷ 2**，且**显示信赖到
+      100% 即封顶**（prts.wiki「信赖值」页：「干员信赖值达到100%后，属性加成
+      达到上限」）。名册的 `trust` 字段本身就是「森空岛 favorPercent ÷ 2」，
+      即显示 ÷ 2，所以它**直接就是 level，不能再除一次**。
+
+    这两条以前都写错过：取整曾默认 floor；信赖曾写成 `level = trust / 2`
+    （把**助战干员**的旧换算当成了通用规则，那条 2025/12/5 已取消），
+    症状是 154% 信赖只给 +46.2 攻击而非满值 +60。
+    """
+    print("\n[4b] 属性口径的实机锚点（2026-09-17 定案）")
+
+    check("默认取整 = round（四舍五入）",
+          calc.rounding == "round", f"实得 {calc.rounding!r}")
+
+    # 红豆：她的信赖只加攻击、潜 4 也只加攻击 ⇒ **生命是纯基础值的试纸**，
+    # 不掺信赖与潜能。攻击那一栏则能把 floor 排除（floor 只能到 509）。
+    v = calc.stats("char_290_vigna", elite=1, level=38, trust=77.0,
+                   potential=6).total
+    check("红豆 精1 38 潜6 信赖154% = 生命 1185 / 攻击 510（实机）",
+          v["maxHp"] == 1185 and v["atk"] == 510,
+          f"实得 {v['maxHp']}/{v['atk']}")
+
+    # 信赖封顶的守卫：显示 100% 与显示 200% 必须给**完全一样**的加成。
+    lo = calc.stats("char_290_vigna", elite=1, level=38, trust=50.0,
+                    potential=6).total
+    hi = calc.stats("char_290_vigna", elite=1, level=38, trust=100.0,
+                    potential=6).total
+    check("信赖封顶：内部 50（显示100%）与内部 100（显示200%）加成相同",
+          lo["atk"] == hi["atk"], f"实得 {lo['atk']} vs {hi['atk']}")
+
+    # 怒潮凛冬满配：三个数一起对。攻击一栏是决定性的——
+    # round(1193.91 + 50 + 63) = 1307，而 floor 给 1306。
+    w = calc.stats("char_1051_headb2", elite=2, level=60, trust=100.0,
+                   potential=1, module="uniequip_002_headb2",
+                   module_level=1).total
+    check("怒潮凛冬 精2 60 信赖200% 模组Lv1 = 2981/1307/473（实机）",
+          w["maxHp"] == 2981 and w["atk"] == 1307 and w["def"] == 473,
+          f"实得 {w['maxHp']}/{w['atk']}/{w['def']}")
 
 
 def check_roster(conn: sqlite3.Connection) -> None:
@@ -582,8 +683,10 @@ def main() -> int:
         check_provenance(conn, src)
         check_references(conn, src)
         check_coverage(conn)
+        check_sp_type(conn)
         check_roster(conn)
         check_values(conn, calc, book)
+        check_stat_anchors(calc)
         check_api(conn)
         check_tiles(conn)
     finally:
