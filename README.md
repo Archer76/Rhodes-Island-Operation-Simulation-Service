@@ -652,6 +652,16 @@ ak-tactic/
 │  │  └─ talent.py           天赋按练度取值（潜能门槛）
 │  ├─ formula.py             正文 → 公式项（解析器 + 干员规则表）
 │  ├─ enemy_formula.py       正文 → 公式项（敌人规则表 + wiki 模板清洗）
+│  ├─ mechanics.py           地图机制 → 公式项（活动术语表 + 关卡页锚点）
+│  ├─ activity.py            活动机制完整性盘点（已实现 / 待实现 / 不需要）
+│  ├─ skland.py              森空岛登录与名册拉取（凭据按 uid 分文件，可切号）
+│  ├─ qrterm.py              终端二维码渲染（▄ 逐格上色，不塞 ANSI 串）
+│  ├─ maa_export.py          打法 → MAA copilot JSON（模组编号 / 计时条件口径）
+│  ├─ fetchplan.py           取数预估：体积现测、耗时用实测值
+│  ├─ tui/                   终端界面（Textual 只在这里惰性导入）
+│  │  ├─ app.py              各屏与向导推进（`Esc` 逐层返回靠自记路径）
+│  │  ├─ data.py             名册 / 关卡 / 配置的取数（名册按当前账号取）
+│  │  └─ theme.py            配色与步骤条
 │  ├─ db/                    两个本地库（建库 + 查询，共用 store.py）
 │  │  ├─ store.py            连接与公共工具（默认只读连接）
 │  │  ├─ schema.py           干员库表结构（含 DB_VERSION）
@@ -676,11 +686,12 @@ ak-tactic/
 │     ├─ p3r.py              相性（P3R）与「全场总攻击」装置
 │     └─ sim.py              模拟器本体（帧级推进）
 ├─ tools/
-│  ├─ check_*.py             十一套自检：db / enemy_db / battle / p3r / formula
+│  ├─ check_*.py             自检套件（db / enemy_db / battle / p3r / formula
 │  │                         / enemy_formula / verify / eta / search / diagram
-│  │                         / parallel
+│  │                         / mechanics / tui）；清单以目录为准，别写死套数
 │  ├─ squad.py               森空岛名册 → 战斗单位（保真度基准）
-│  ├─ roster.py / skland.py  森空岛登录与名册拉取
+│  ├─ roster.py              名册拉取（实现在 ak_tactic/skland.py，这里只转调）
+│  ├─ skland.py              同上的兼容入口（`python tools/skland.py <子命令>`）
 │  ├─ run_sr6.py              SR-6 关卡专属跑法（含落位合法性守卫）
 │  ├─ run_srx8.py             SR-EX-8 共用层（编队校验 / 试跑 / 落位表）
 │  ├─ export_srx8.py          SR-EX-8 导出 MAA copilot JSON（现行答案出处）

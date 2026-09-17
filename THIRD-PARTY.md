@@ -19,17 +19,19 @@
 
 ---
 
-## 二、唯一的第三方依赖
+## 二、第三方依赖（三个）
 
 | 包 | 协议 | 用在哪 | 说明 |
 | --- | --- | --- | --- |
-| `pycryptodome` | **BSD-2-Clause / Public Domain**（PyPI 分类器原文） | 仅 `tools/skland_did.py` | **惰性导入**，没装也能用其余全部功能；缺了会打印一条能照做的提示 |
+| `textual`（含 `rich`） | **MIT** | `ak_tactic/tui/`，仅 `python -m ak_tactic tui` | **惰性导入**——建 CLI parser、跑其他任何子命令都不导入它，守卫在 `tools/check_tui.py` 第 [1] 节 |
+| `qrcode` | **BSD**（PyPI 分类器原文） | `ak_tactic/qrterm.py`，仅 `ak_tactic/skland.py qr`（`tools/skland.py` 是同一份的兼容入口）与 TUI 的登录屏 | **惰性导入**；终端渲染只用它的矩阵，**不需要 Pillow** |
+| `pycryptodome` | **BSD-2-Clause / Public Domain**（PyPI 分类器原文） | 仅 `ak_tactic/skland_did.py`（`tools/skland_did.py` 是兼容入口） | **惰性导入**，没装也能用其余全部功能；缺了会打印一条能照做的提示 |
 
-**除此之外没有任何第三方依赖。** `ak_tactic/` 包与大多数 `tools/` 脚本是**纯标准库**，
-仓库里也**没有** `requirements.txt` / `pyproject.toml`——所以不存在"依赖树里藏着 GPL"的问题。
+三条都是宽松许可，与 MIT 相容，**无附加义务**。清单见 `requirements.txt`（2026-09-17 起）。
 （`tools/` 里的 `import squad`、`import run_srx8`、`import operbox_path` 是同目录模块，不是外部包。）
 
-`pycryptodome` 是 BSD/公有领域，与 MIT 兼容，**无附加义务**。
+**注意别把上表读成"项目很重"**：`ak_tactic/` 包与大多数 `tools/` 脚本仍是**纯标准库**，
+上面三个都只在特定子命令上用到——不装 `textual` 与 `qrcode` 照样能跑模拟与全部自检。
 
 ---
 
@@ -43,6 +45,8 @@
 | [wxhwwla/calc-framework](https://github.com/wxhwwla/calc-framework) | ⚠️ **AGPL-3.0 或商业授权（双许可，须择一）** | 仅在「法术是否 5% 保底、攻速下限取 20 还是 10、攻击力是否取整」三处分歧上作为**反面对照** | **否** | **无**——但见下方警告 |
 | [arkntools/arknights-toolbox](https://github.com/arkntools/arknights-toolbox) | **MIT** | 查证「它的 `Level.vue` 只算经验与龙门币、不含属性」，以确定属性必须自算 | 否 | 无。其 `level.json`（经验/龙门币）**尚未接入** |
 | [MaaAssistantArknights](https://github.com/MaaAssistantArknights/MaaAssistantArknights) | ⚠️ **AGPL-3.0** | 只按它**公开的 copilot JSON 格式**导出作业文件（`tools/export_srx8.py`） | **否** | 无——数据格式互通不构成衍生作品 |
+| [Arknights-yituliu/BackEndV3](https://github.com/Arknights-yituliu/BackEndV3) | ⚠️ **未声明许可**（见下） | 森空岛**扫码登录**的接口与流程：`gen_scan/login` → `scan_status` → `token_by_scan_code` 三步，以及 status `100/101/102/0` 的语义。据此在 `ak_tactic/skland.py` **自行实现** | **否** | 无——但见下方警告 |
+| [Arknights-yituliu/frontend-v2-plus](https://github.com/Arknights-yituliu/frontend-v2-plus) | ⚠️ **`LICENSE` 文件不是许可证**（见下） | 只用于确认扫码的 UI 行为（**2 秒**轮询一次、二维码内容用 deep link 渲染）与三种导入方式的划分 | **否** | 无——但见下方警告 |
 
 ### ⚠️ 关于 calc-framework，必须说清楚
 
@@ -56,6 +60,28 @@ AGPL-3.0 的传染性会覆盖整个仓库，MIT 就不再成立（除非另行�
 
 同理，MAA 是 AGPL-3.0：本项目只**生成**符合其格式的 JSON 文件，**不链接、不复制、不修改**它的代码。
 如果你将来要把 MAA 的代码并入本仓库，同样会触发 AGPL。
+
+### ⚠️ 关于一图流的两个仓库：它们根本没有授权
+
+与 calc-framework 那条的性质不同——那条是"有许可，但传染"，**这条是"没有许可"**。
+
+- 前端 `frontend-v2-plus` 的仓库根确实有一个叫 `LICENSE` 的文件。但打开看，它是一段
+  「本项目缺少开源许可证声明，建议添加一个」的说明文字，后面附了 MIT / GPL 的简介——
+  **那不是许可证，是模板生成的占位内容。**
+- 后端 `BackEndV3` **没有任何许可文件**。
+
+按著作权默认规则，两边都是**保留全部权利**。
+
+**红线：不要把一图流的任何代码复制进本仓库。** 要用只有一条路：**只读思路，自己实现。**
+
+本仓库确实采用了它透露的**事实性信息**——`as.hypergryph.com` 的三个官方端点、
+status `100/101/102/0` 的语义、deep link 前缀 `hypergryph://scan_login?scanId=`。
+这些是**鹰角网络公开服务的事实**，不在一图流的著作权范围内，可以照用；
+`ak_tactic/skland.py` 与 `ak_tactic/qrterm.py` 里的实现代码**一行未抄**（请求层、签名、
+渲染、轮询都是本项目自己原有的或新写的）。
+
+另有一点值得记下：一图流是在**它自己的服务器**上调这三个接口（请求 IP 是它的），
+本项目是在**用户自己的机器**上调（IP 是用户的）——后者更接近真实官方客户端的行为。
 
 ---
 
