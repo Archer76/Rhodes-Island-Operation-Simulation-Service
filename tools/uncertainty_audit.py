@@ -234,10 +234,12 @@ _Q: list[tuple[str, str, str, str]] = [
      "现无夹取。攻速只影响攻击间隔换算，下限越低越容易打出高频",
      "取 10 或 20，或明确「不夹取」"),
     ("攻击力取整方式",
-     "wiki 明确两处 FLOOR；calc-framework 不取整",
-     "默认 floor，另有 `rounding` 构造参数可换 round/ceil/none。"
-     "只在整数属性上取整，浮点属性（法抗/移速/攻速/攻击间隔）不取",
-     "维持 floor"),
+     "面板取整与伤害结算取整是两回事，原先混在一行问。wiki 明确的是**伤害**里的 FLOOR",
+     "**2026-09-17 分两处定案**：面板 = 四舍五入（`operator/stats.py` 默认已由 floor "
+     "改为 round）；伤害结算 = floor（`battle/damage.py`，不动）。判据见 `check_db` "
+     "的 [4b] 节（红豆 1185/510、怒潮凛冬 2981/1307/473 命中 round；攻击 1307 一栏 "
+     "floor 给 1306，直接排除），旁证是 prts.wiki 干员页计算器亦用 `Math.round`",
+     "面板 round、伤害 floor，两者各自成立"),
     ("`tile_forbidden` 与 `tile_empty` 哪个对应哪种不可部署地块",
      "两者 `(heightType, buildableType, passableMask)` 完全一致，都是 NONE/FLY_ONLY，"
      "**字段分不出来**",

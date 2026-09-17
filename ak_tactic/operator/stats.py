@@ -40,25 +40,61 @@
 3. **模组的 `attributeBlackboard` 是该等级的总加成，不是增量**——1/2/3 级分别是
    `{max_hp:100, atk:30}` / `{max_hp:130, atk:40}` / `{max_hp:150, atk:50}`，
    取对应等级那一份即可，别再累加。
-4. **信赖的 level 是 0–50，对应游戏内**显示**信赖 0%–200%**（每 level 4 点），
-   所以 `level = trust / 2`：参数 `trust` 是 **0–100 的内部标度**，等于显示信赖 ÷ 2，
-   `trust=100` 即满信赖（游戏内 200%）。`tools/roster.py` 用的是同一条换算
-   （森空岛 `favorPercent` 0–200 直接 `/2`）。
+4. **信赖的 level 是 0–50，对应游戏内**显示**信赖 0%–100%**（每 level 2 点，即
+   `level = 显示信赖 ÷ 2`）。**显示信赖到 100% 就封顶**，再往上（游戏可显示到
+   200%）只解锁资料与语音、不再加属性——prts.wiki「信赖值」页原文：「干员信赖值
+   达到100%后，属性加成达到上限」。参数 `trust` 是 **0–100 的内部标度**，等于
+   显示信赖 ÷ 2（`tools/roster.py` 把森空岛 `favorPercent` 0–200 直接 `/2`），
+   所以**它就是 level 本身，不要再除一次**。`trust >= 50`（显示 100%）即满加成，
+   `interpolate_keyframes` 的越界夹取会自然封顶。
 
-## 取整——这里有一处必须诚实交代的假设
+   ⚠️ 曾经的写法是 `level = trust / 2`，依据是「level 0–50 对应显示 0%–200%」。
+   那是把**助战干员**的换算当成了通用规则——助战的旧规则「信赖值除以 2 再向下
+   取整」（200% 的干员以 100% 加成供好友使用）已在 2025/12/5 取消，且从来只管
+   助战。连除两次的症状：154% 信赖只算出 +46.2 攻击，而实机是满值 +60。
+
+## 取整——2026-09-17 实测定案：四舍五入
 
 关键帧是精确值，但插值出来的中间值几乎都是小数，而游戏面板显示整数。
-**取整方式（向下取整还是四舍五入）没有公开资料，第三方工具也都没有实现属性插值**
-（`arknights-toolbox` 的 `Level.vue` 只算经验和龙门币，不含属性；
-PRTS 的属性模板只给端点值，自己也是靠插值）。
+取整方式**已由实机定案为四舍五入（`round`）**，三条独立证据：
+
+1. **prts.wiki 干员页内嵌的「属性计算器」用的就是 `Math.round`。**
+   它在 `static.prts.wiki/charinfo/charinfo_*.min.js` 注入的内联脚本里，
+   核心一行是
+   `Math.round(parseInt(v[ve]) + (vl-1)*(v[ve+1]-v[ve])/(ll[ve]-1))`
+   ——插值写法与本模块逐字同构，取整是四舍五入。它只对**基础值**取整，
+   信赖另算一次 `Math.round`，最后相加时**不再取整**。
+2. **红豆 精英1 38级 潜6 信赖154%（显示）→ 实机 攻击 510 / 生命 1185。**
+   攻击：`round(425.864)=426` + 满信赖 60 + 潜能 24 = **510**（floor 只能到 509）；
+   生命：`round(1184.729)=1185`（floor 是 1184）。生命既不随信赖也不随潜能变
+   （红豆的信赖只加攻击、潜4 只加攻击），所以它是**纯基础值的试纸**。
+3. **怒潮凛冬 精英2 60级 潜1 信赖200% 模组 Lv1 → 实机 2981 / 1307 / 473。**
+   `round(2731.24 + 0 + 0 + 250) = 2981`、
+   `round(1193.91 + 50 + 0 + 63) = 1307`、`round(387.10 + 65 + 0 + 21) = 473`
+   ——攻击一栏 floor 给 1306，**直接排除 floor**。
+
+⚠️ **别与伤害结算的取整混淆。** wiki 的伤害页写明伤害结算里有 FLOOR，
+那是 `battle/damage.py` 的事，**与面板无关**。面板四舍五入、伤害向下取整，
+两者各自成立，不矛盾。改造面板取整时不要去动伤害那一侧。
 
 本模块的做法：
 
-* 对**整数属性**（生命/攻击/防御/费用/阻挡数/再部署）默认**向下取整**——
-  Unity 里整数属性的惯例是截断，这也是社区通行写法；
+* 对**整数属性**（生命/攻击/防御/费用/阻挡数/再部署）默认**四舍五入**；
 * 对**浮点属性**（法抗/移速/攻速/攻击间隔）不取整；
-* 取整策略是构造参数 `rounding`，可切 `"floor"` / `"round"` / `"none"`，
-  于是万一实测对不上，**不必改代码，换个参数就能校准**。
+* 取整策略仍是构造参数 `rounding`，可切 `"floor"` / `"round"` / `"ceil"` / `"none"`，
+  留作日后遇到反例时的校准口。
+
+⚠️ **取整被用了两次**：先在 `interpolate_keyframes()` 里对**等级插值出来的
+基础值**取整，再在 `stats()` 里对**加上信赖/潜能/模组之后的总和**取整。
+两点留意：
+
+1. `"ceil"` 的结果可能比 `"floor"` **高 2 点**（两处各进一位），
+   所以不能拿「插值原值的小数部分」去反推三种取整的差别——那样推必错
+   （2026-09-17 就是这么写错一版校准脚本的）。要分辨取整方式，
+   **只能直接比各模式算出来的数**。
+2. 实际数据里信赖与潜能/模组的贡献各自取整后基本都是整数，故第二次取整
+   通常是无操作。**唯一可能被它咬到的是中间值的浮点误差**（如 `x.9999999`）——
+   真要排查「端点对得上、中间等级差 1」，先怀疑这里。
 
 末尾的 `calibrate()` 就是为这件事准备的：喂进一条游戏内实测的数值，
 它把两种取整方式都算一遍，直接告诉你是哪一种。
@@ -184,7 +220,7 @@ def interpolate_keyframes(
     frames: Iterable[dict],
     level: float,
     *,
-    rounding: str = "floor",
+    rounding: str = "round",
 ) -> dict[str, Any]:
     """在关键帧之间按等级线性插值。
 
@@ -338,7 +374,7 @@ class OperatorCalculator:
         calc = OperatorCalculator(rounding="round")       # 换成四舍五入
     """
 
-    def __init__(self, source: GameDataSource | None = None, *, rounding: str = "floor"):
+    def __init__(self, source: GameDataSource | None = None, *, rounding: str = "round"):
         if rounding not in ("floor", "round", "ceil", "none"):
             raise OperatorError(f"未知的取整方式：{rounding}")
         self.source = source or GameDataSource(base=GITHUB_BASE)
@@ -513,8 +549,9 @@ class OperatorCalculator:
 
         :param elite: 精英阶段 0/1/2
         :param level: **阶段内**等级，从 1 开始
-        :param trust: 内部信赖标度 0–100（= 游戏内**显示**信赖 ÷ 2，100 即满信赖 200%；
-            内部按 `level = trust / 2` 在 favorKeyFrames 的 0–50 上插值）
+        :param trust: 内部信赖标度 0–100（= 游戏内**显示**信赖 ÷ 2）。它就是
+            favorKeyFrames 的 level（0–50）；**显示信赖 100% 即封顶**，
+            再往上不再加属性
         :param potential: 潜能 1–6
         :param module: 模组 id，如 `uniequip_002_amiya`
         :param module_level: 模组等级 1–3，0 表示不装
@@ -536,11 +573,13 @@ class OperatorCalculator:
         st.base = interpolate_keyframes(ph.get("attributesKeyFrames") or [],
                                         level, rounding=self.rounding)
 
-        # 信赖：favorKeyFrames 的 level 是 0–50，对应游戏内显示信赖 0%–200%，
-        # 故 level = trust / 2（trust 是 0–100 的内部标度）
+        # 信赖：favorKeyFrames 的 level 是 0–50，对应游戏内显示信赖 0%–100%，
+        # 100% 即封顶（prts.wiki「信赖值」页），故 level = 显示信赖 / 2。
+        # 而 trust 本身已是「显示 ÷ 2」的内部标度——**直接当 level 用，不要
+        # 再除一次**；超过 50 时由 interpolate_keyframes 的越界夹取封顶。
         st.trust_bonus = {
             k: v for k, v in interpolate_keyframes(
-                char.get("favorKeyFrames") or [], trust / 2.0,
+                char.get("favorKeyFrames") or [], trust,
                 rounding=self.rounding).items() if v
         }
 

@@ -1523,9 +1523,9 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--module", default="", help="模组 id，如 uniequip_002_amiya")
     st.add_argument("--module-level", type=int, default=0, help="模组等级 1/2/3")
     st.add_argument("--modules", action="store_true", help="只列出该干员的模组")
-    st.add_argument("--rounding", default="floor",
+    st.add_argument("--rounding", default="round",
                     choices=["floor", "round", "ceil", "none"],
-                    help="插值取整方式，默认 floor（向下取整）")
+                    help="插值取整方式，默认 round（四舍五入，2026-09-17 实测定案）")
     st.add_argument("--search", default="", help="按 id 或中文名找干员（不计算）")
     st.add_argument("--limit", type=int, default=20)
     st.add_argument("--json", action="store_true")
