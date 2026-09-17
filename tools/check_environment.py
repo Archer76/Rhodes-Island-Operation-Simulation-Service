@@ -618,6 +618,447 @@ def check_pump() -> None:
 
 
 
+def check_enemy_mech() -> None:
+    """敌人侧关卡机制（怀黍离）：死亡污染、加速、蜕皮、召唤、明识形态、
+    以及 runes 的**敌人修饰层**（属性乘数 / 黑板乘数 / 生命点 / 费用回复）。
+
+    ⚠ 这一节全部是**构造场景**：怀黍离不在三条回归基线里（1-7 / SR-6 /
+    SR-EX-8 都没有这些机制），拿不到"真关卡里跑出来的数"来对。
+    凡是在真实关卡数据里**不可达**的分支，这里会明说，而不是假装跑过。
+    """
+    print("\n[10] 敌人侧机制（怀黍离）")
+    from ak_tactic.battle import stage_mul as M                            # noqa: PLC0415
+    from ak_tactic.battle.damage import DamageType                         # noqa: PLC0415
+    from ak_tactic.battle.sim import BattleSimulator                       # noqa: PLC0415
+    from ak_tactic.gamedata.enemy import EnemyLibrary                      # noqa: PLC0415
+
+    try:
+        lib = EnemyLibrary()
+    except Exception as exc:                                              # noqa: BLE001
+        skip("敌人侧机制", f"敌人库不可用：{type(exc).__name__}: {exc}")
+        return
+
+    # ---------------------------------------------------------- 10.1 黑板
+    # 逐键对真数据。这些数**不是**从 prts 正文抄的，是 gamedata 黑板里的原值
+    # （正文与黑板拼法不一致的地方已在 mech_fields 的文档里写明）。
+    spec = [
+        # (敌人, 档, 字段, 期望)
+        ("enemy_1390_dhsbr_2", 0, "passive_pollut", 5.0),      # 除秽
+        ("enemy_1392_dhshld_2", 0, "passive_pollut", 15.0),    # 厌肮
+        ("enemy_1396_dhdts_2", 0, "speedup_move", 3.0),        # 田鼷猛士
+        ("enemy_1397_dhtsxt_2", 0, "speedup_move", 4.0),       # 田鼷大盗
+        ("enemy_1397_dhtsxt_2", 0, "speedup_duration", 5.0),
+        ("enemy_1397_dhtsxt_2", 0, "speedup_cooldown", 10.0),
+        ("enemy_1397_dhtsxt", 0, "death_cnt", 2),              # 田鼷飞贼
+        ("enemy_1396_dhdts", 0, "aura_hit_ratio", 0.5),        # 田鼷力士
+        ("enemy_1396_dhdts_2", 0, "aura_hit_ratio", 0.7),
+        ("enemy_1550_dhnzzh", 1, "phit_cnt", 4),
+        ("enemy_1550_dhnzzh", 1, "phit_atk", -40.0),
+        ("enemy_1550_dhnzzh", 1, "phit_max_stack", 80),
+        ("enemy_1550_dhnzzh", 1, "pm2_atk", -0.6),
+        ("enemy_1550_dhnzzh", 1, "pm2_mark_pollut", 40.0),
+        ("enemy_1550_dhnzzh", 1, "pm2_invincible", 5.0),
+    ]
+    bad = []
+    for eid, lv, field, want in spec:
+        got = getattr(lib.get(eid, lv), field, None)
+        if got != want:
+            bad.append(f"{eid}.{field}={got!r}≠{want!r}")
+    check("★ 六个黑板前缀逐键取到真值", not bad, "; ".join(bad[:3]) or f"{len(spec)} 项")
+    check("死亡给装置点名的是阻流阀",
+          lib.get("enemy_1397_dhtsxt").death_token == "trap_139_dhtl")
+    check("★ 两代前缀拼法都认（瘴走 Reborning、死志走 Reborn）",
+          lib.get("enemy_1394_dhzts").reborn_prefix == "Reborning."
+          and lib.get("enemy_1394_dhzts").reborn_interval == 0.5,
+          f"瘴 interval={lib.get('enemy_1394_dhzts').reborn_interval:g}")
+
+    # ★ 充能与召唤是**两条互不相干的分支**：瘴只有充能、祟只有召唤。
+    #   混起来的读法（"有 interval 就是充能"）会把祟算成「每次扣 0 点病害值」
+    #   的充能怪，而召唤整支静默消失——所以这两条要同时钉住。
+    check("★ 瘴有充能无召唤", lib.get("enemy_1394_dhzts").reborn_summons == ()
+          and lib.get("enemy_1394_dhzts").reborn_pollut == 10.0)
+    summon = lib.get("enemy_1550_dhnzzh", 1).reborn_summons
+    check("★ 祟有召唤无充能（两条分支没被合并）",
+          len(summon) == 2 and lib.get("enemy_1550_dhnzzh", 1).reborn_interval == 0.0,
+          str(summon))
+    def _exists(eid: str) -> bool:
+        try:
+            lib.get(eid)
+            return True
+        except Exception:                                                 # noqa: BLE001
+            return False
+
+    check("召唤点名的敌人都真实存在",
+          all(_exists(eid) for _i, _c, eid in
+              tuple(summon) + tuple(lib.get("enemy_1550_dhnzzh", 0).reborn_summons)),
+          str([e for _i, _c, e in summon]))
+
+    # ---------------------------------------------------------- 10.2 runes
+    st7 = stage("act31side_ex07") or load_stage("act31side_ex07")
+    m7 = M.parse_rune_muls(st7.raw.get("runes"), "FOUR_STAR")
+    base5 = lib.get("enemy_1390_dhsbr_2").passive_pollut
+    got10 = M.apply_rune_muls(lib.get("enemy_1390_dhsbr_2"), m7).passive_pollut
+    got30 = M.apply_rune_muls(lib.get("enemy_1392_dhshld_2"), m7).passive_pollut
+    check("★ 天赋黑板乘数生效：+5 → +10、+15 → +30（ex07 四星档）",
+          (got10, got30) == (10.0, 30.0), f"{got10:g} / {got30:g}")
+    check("★ 乘数**不改库**（下一关不会跟着变强）",
+          lib.get("enemy_1390_dhsbr_2").passive_pollut == base5, f"{base5:g}")
+    check("NORMAL 档不吃四星乘数",
+          M.apply_rune_muls(lib.get("enemy_1390_dhsbr_2"),
+                            M.parse_rune_muls(st7.raw.get("runes"), "NORMAL")
+                            ).passive_pollut == base5)
+    # ★ 但真正要验的是**模拟器走的那条路**：乘数包在 `enemy_at` 的出口上，
+    #   不是手动调一下 `apply_rune_muls` 就算接了线。
+    s7f = BattleSimulator(stage("act31side_ex07#f#"), enemy_at=lib.get,
+                          environment_difficulty="FOUR_STAR")
+    s7n = BattleSimulator(stage("act31side_ex07"), enemy_at=lib.get)
+    check("★ 走模拟器自己的取数口：四星档 +10、普通档仍是 +5",
+          s7f.enemy_at("enemy_1390_dhsbr_2", 0).passive_pollut == 10.0
+          and s7n.enemy_at("enemy_1390_dhsbr_2", 0).passive_pollut == 5.0,
+          f"{s7f.enemy_at('enemy_1390_dhsbr_2', 0).passive_pollut:g} / "
+          f"{s7n.enemy_at('enemy_1390_dhsbr_2', 0).passive_pollut:g}")
+    check("乘数层不改库（模拟器跑完，库里还是原值）",
+          lib.get("enemy_1390_dhsbr_2").passive_pollut == base5)
+
+    st2 = load_stage("act31side_ex02")
+    m2 = M.parse_rune_muls(st2.raw.get("runes"), "FOUR_STAR")
+    a = M.apply_rune_muls(lib.get("enemy_1395_dhxts_2"), m2)
+    b = lib.get("enemy_1395_dhxts_2")
+    check("★ 属性乘数生效：点名条叠在全局条之上（1.2 × 1.5）",
+          a.max_hp == b.max_hp * 1.8 and a.atk == b.atk * 1.2,
+          f"hp {b.max_hp:g}→{a.max_hp:g}、atk {b.atk:g}→{a.atk:g}")
+    check("点名条只动它点名的敌人（别的敌人只吃全局 1.2，不吃 1.5）",
+          abs(M.apply_rune_muls(lib.get("enemy_1390_dhsbr_2"), m2).max_hp
+              - lib.get("enemy_1390_dhsbr_2").max_hp * 1.2) < 1e-9)
+
+    st4 = load_stage("act31side_ex04")
+    m4 = M.parse_rune_muls(st4.raw.get("runes"), "FOUR_STAR")
+    sk = M.apply_rune_muls(lib.get("enemy_1393_dhele_2"), m4)
+    v = [x for x in sk.skills_raw[0]["blackboard"] if x["key"] == "atk_scale_magic"][0]
+    check("技能黑板乘数按 prefabKey 点名改写（0.8 × 1.3 = 1.04）",
+          abs(v["value"] - 1.04) < 1e-9, f"{v['value']!r}")
+    check("⚠ 但它**没有消费者**（模拟器不驱动敌方技能，故仍标 TODO）",
+          lib.get("enemy_1393_dhele_2").skills_raw[0]["blackboard"][0]["value"] == 0.8)
+
+    # 生命点与费用回复：两代键名（`global_lifepoint` / `gbuff_lifepoint`）
+    st1 = load_stage("act31side_ex01")
+    check("★ 生命点改写：ex01 四星档 = 1、普通档 = 3",
+          M.global_lifepoint(st1, "FOUR_STAR") == 1
+          and M.global_lifepoint(st1, "NORMAL") is None)
+    s_lp, _ = BattleSimulator(load_stage("act31side_ex01#f#"), enemy_at=lib.get,
+                              environment_difficulty="FOUR_STAR"), None
+    check("★ 模拟器真的按 rune 覆写生命点（四星 1 条命）", s_lp.life == 1,
+          f"life={s_lp.life}")
+    check("普通档不覆写（用关卡自己的 3）",
+          BattleSimulator(load_stage("act31side_ex01"), enemy_at=lib.get).life == 3)
+
+    st17 = stage("1-7")
+    if st17 is not None:
+        check("★ 老键名同样认（1-7 四星档用的是 gbuff_lifepoint）",
+              M.global_lifepoint(st17, "FOUR_STAR") == 1,
+              f"lp={M.global_lifepoint(st17, 'FOUR_STAR')}")
+        check("费用回复乘数：1-7 四星档 scale=2 → 每点费用 0.5 秒",
+              M.cost_recovery_scale(st17, "FOUR_STAR") == 2.0
+              and BattleSimulator(st17, enemy_at=lib.get,
+                                  environment_difficulty="FOUR_STAR"
+                                  ).cost_time == 0.5)
+    # ★ 三条回归基线都是**普通档**、且这一层对它们是空的 —— 钉住"没动基线"。
+    for lid in ("main_01-07", "act54side_06", "act54side_ex08"):
+        s0 = BattleSimulator(load_stage(lid), enemy_at=lib.get)
+        check(f"  回归基线 {lid} 上没有修饰层（零改动）",
+              not s0.rune_muls and M.global_lifepoint(load_stage(lid)) is None)
+
+    # ------------------------------------------------- 10.3 死亡污染（走真链路）
+    st = stage("act31side_08")
+    if st is None:
+        return
+    fs0 = E.FarmlandSystem(st, E.PolluteParams.from_stage(st, "NORMAL"))
+    cells = sorted(fs0.fields[0].cells) if fs0.fields else []
+    if not cells:
+        skip("死亡污染落点", "这一关没有田地")
+        return
+    cell = cells[0]
+
+    def mech_sim(enemy_id, level, at, **kw):
+        stx = load_stage("act31side_08")
+        s = BattleSimulator(stx, enemy_at=lib.get, **kw)
+        e = s._build_enemy(enemy_id, level, [(float(at[0]), float(at[1]))], [],
+                           0.0, 0.0)
+        e.position = (float(at[0]), float(at[1]))
+        s.enemies.append(e)
+        return s, e
+
+    s, e = mech_sim("enemy_1390_dhsbr_2", 0, cell)
+    before = s.farmland.actual_at(*cell)
+    mx_before = s.farmland.maximum_at(*cell)
+    s._damage_enemy(e, e.max_hp + 1, 1.0, DamageType.PHYSICAL)
+    check("构造场景里敌人确实被打死了", not e.alive)
+    s._enemy_mech_tick(0.05, 1.05)
+    after = s.farmland.actual_at(*cell)
+    check("★ 未被阻挡时：污染落在**自身**那格的田地上（+5）",
+          abs(after - before - 5.0) < 1e-9, f"{before:g}→{after:g}")
+    check("★ 同一格【最大】也被顶上去（否则下一秒就被靠拢拉回去）",
+          s.farmland.maximum_at(*cell) >= max(mx_before, after),
+          f"最大 {mx_before:g}→{s.farmland.maximum_at(*cell):g}")
+    check("死亡效果只结一次（第二帧不再加）",
+          (s._enemy_mech_tick(0.05, 1.10)
+           or s.farmland.actual_at(*cell)) == after)
+
+    # 被阻挡时：圆心挪到**挡它的那个干员**脚下那一格（原文的括号条件）
+    other = cells[-1] if cells[-1] != cell else (cell[0] + 1, cell[1])
+
+    class _Stub:
+        """只有「还活着 / 在哪」的干员桩。
+
+        这一节测的是**污染落点与标记**，不是阻挡判定本身——阻挡关系由
+        `check_battle.py` 管，这里只需一个能塞进 `blocked_by` 的位置。
+        """
+
+        def __init__(self, pos):
+            self.position = (float(pos[0]), float(pos[1]))
+            self.alive = True
+            self.retreated = False
+
+    s2, e2 = mech_sim("enemy_1390_dhsbr_2", 0, cell)
+    e2.blocked_by = _Stub(other)
+    b_self, b_op = s2.farmland.actual_at(*cell), s2.farmland.actual_at(*other)
+    s2._damage_enemy(e2, e2.max_hp + 1, 1.0, DamageType.PHYSICAL)
+    s2._enemy_mech_tick(0.05, 1.05)
+    check("★ 被阻挡时：圆心是阻挡者那一格（自身那格不动）",
+          s2.farmland.actual_at(*other) > b_op
+          and abs(s2.farmland.actual_at(*cell) - b_self) < 1e-9,
+          f"干员格 {b_op:g}→{s2.farmland.actual_at(*other):g}、"
+          f"自身格 {b_self:g}→{s2.farmland.actual_at(*cell):g}")
+
+    # 半径 1.0 的**圆**：十字五格，够不到斜角
+    check("★ 半径 1.0 是圆不是方（斜角 √2 够不到）",
+          set(E.cells_in_radius(5, 5, 1.0))
+          == {(5, 5), (4, 5), (6, 5), (5, 4), (5, 6)})
+    check("半径 0.5 只覆盖自身那一格（阻流阀那条用的是 0.5）",
+          E.cells_in_radius(5, 5, 0.5) == [(5, 5)])
+
+    # ------------------------------------------------------- 10.4 加速
+    s3, e3 = mech_sim("enemy_1397_dhtsxt", 0, cell)
+    check("开场无增益", e3.haste_multiplier == 1.0)
+    s3._damage_enemy(e3, 10.0, 1.0, DamageType.PHYSICAL)
+    check("★ 受击且未被阻挡 → 移速 ×(1+4.0)",
+          e3.haste_multiplier == 5.0 and e3.speedup_timer == 5.0,
+          f"haste={e3.haste_multiplier:g}")
+    e3.reborn_at = -1.0
+    e3.blocked_by = _Stub(cell)
+    s3._enemy_mech_tick(0.1, 1.1)
+    check("★ 被阻挡**立刻**解除（不是等持续时间走完）",
+          e3.haste_multiplier == 1.0)
+    e3.blocked_by = None
+    s3._damage_enemy(e3, 10.0, 1.5, DamageType.PHYSICAL)
+    check("★ 冷却期内（10 秒）不能再获得", e3.haste_multiplier == 1.0)
+    s3._damage_enemy(e3, 10.0, 11.5, DamageType.PHYSICAL)
+    check("冷却过后可以再获得", e3.haste_multiplier == 5.0)
+    s3._enemy_mech_tick(5.0, 16.5)
+    check("持续时间到点自动收回", e3.haste_multiplier == 1.0)
+    check("★ 增益不写在 `speed_multiplier` 上（那个被积雪每帧重写）",
+          e3.speedup_move > 0 and hasattr(e3, "haste_multiplier"))
+
+    # ------------------------------------------------------- 10.5 蜕皮
+    s4, e4 = mech_sim("enemy_1550_dhnzzh", 1, cell)
+    atk0 = e4.atk
+    for i in range(4):
+        s4._damage_enemy(e4, 100.0, 1.0 + i * 0.1, DamageType.PHYSICAL)
+    check("★ 每 4 次伤害蜕皮一层（次数不是伤害量）", e4.phit_stacks == 1,
+          f"stacks={e4.phit_stacks} hits={e4.phit_hits}")
+    check("★ 一层改属性：攻击 −40 / 防御 −50 / 法抗 −1 / 移速 +0.01",
+          (e4.atk, e4.defense, e4.res)
+          == (atk0 - 40, 4000 - 50, 80 - 1), f"atk={e4.atk:g}")
+    s4._damage_enemy(e4, 100.0, 1.5, DamageType.PHYSICAL)
+    check("满 4 次即触发，第 5 次只累计不叠层",
+          (e4.phit_stacks, e4.phit_hits) == (1, 1),
+          f"stacks={e4.phit_stacks} hits={e4.phit_hits}")
+    # 上限：一路打到 80 层就不再叠（也不能把攻击力叠成负数）
+    for i in range(4 * 100):
+        s4._damage_enemy(e4, 1.0, 2.0 + i * 0.001, DamageType.PHYSICAL)
+    check("★ 蜕皮封顶 80 层（继续挨打也不再加）", e4.phit_stacks == 80,
+          f"stacks={e4.phit_stacks} atk={e4.atk:g}")
+    check("每 10 层重量 −1（80 层即 −8）", e4.weight == 10 - 8,
+          f"weight={e4.weight:g}")
+
+    # ------------------------------------------------- 10.6 召唤与明识形态
+    s5, e5 = mech_sim("enemy_1550_dhnzzh", 1, cell)
+    check("祟带两路召唤（8 秒 2 个 / 20 秒 1 个）",
+          len(e5.reborn_summons) == 2 and e5.reborn_summons[0][:2] == (8.0, 2),
+          str(e5.reborn_summons))
+    e5.reborn_delay = 1.0
+    s5._damage_enemy(e5, e5.max_hp + 1, 1.0, DamageType.PHYSICAL)
+    s5._reborn_tick(1.0)
+    check("★ 倒下进入重生窗口、排好两路召唤",
+          e5.pending_reborn and list(e5.reborn_summon_at) == [9.0, 21.0],
+          f"{e5.reborn_summon_at}")
+    check("★ 重生完成即切**明识形态**：攻击 ×0.4、2 连击、5 秒无敌",
+          (s5._reborn_tick(2.0), e5.pm2_active, e5.atk, e5.attack_times,
+           e5.invincible_until)[1:] == (True, 4000 * 0.4, 2, 7.0),
+          f"atk={e5.atk:g} 连击={e5.attack_times} 无敌到 {e5.invincible_until:g}")
+    check("明识形态下防御 ×0.3、法抗 −30、移速 +200%",
+          abs(e5.defense - 4000 * (1.0 + e5.pm2_def)) < 1e-9
+          and abs(e5.res - 50) < 1e-9 and e5.haste_multiplier == 3.0,
+          f"def={e5.defense:g} res={e5.res:g} haste={e5.haste_multiplier:g}")
+    check("★ 无敌期内打不掉血（这是「5 秒无敌」，不是减伤）",
+          s5._damage_enemy(e5, 1000.0, 5.0, DamageType.PHYSICAL) == 0.0)
+    check("属性改写**只做一次**（反复进形态不会指数衰减）",
+          abs(e5.atk - 4000 * 0.4) < 1e-9)
+    check("⚠ 远程化只在本来就有射程时生效（祟 rangeRadius = −1，故仍近战）",
+          e5.apply_way != "RANGED", f"applyWay={e5.apply_way} "
+          f"range={e5.attack_range:g}")
+
+    # 召唤真的落地（第二路 21 秒时也要出）
+    s6, e6 = mech_sim("enemy_1550_dhnzzh", 1, cell)
+    # ⚠ **不要**把 `reborn_delay` 改短：召唤只在重生窗口内按点走，
+    #   把 40 秒窗口压成 1 秒会让 8 秒/20 秒两路**根本来不及**出——
+    #   而"8 秒那路在同一次调用里先出再复活"又会让检查假绿。
+    s6._damage_enemy(e6, e6.max_hp + 1, 0.0, DamageType.PHYSICAL)
+    s6._reborn_tick(0.0)
+    # 召唤真的落地。⚠ 换一个**不是保护目标**的格子：脚下就是终点时
+    # `ground_path` 会返回只含自身的一点路径，"有没有路径"这条检查会假绿。
+    away = next((c for c in ((x, y) for y in range(st.map.height)
+                             for x in range(st.map.width))
+                 if st.map.walkable(*c) and c not in set(st.map.end_points)
+                 and s6.farmland.is_farmland(*c)), None)
+    if away is None:
+        skip("召唤路径", "找不到非终点的可行走田地格")
+    else:
+        e6.position = (float(away[0]), float(away[1]))
+    n0 = len(s6.enemies)
+    s6._reborn_tick(8.0)
+    new = [x for x in s6.enemies if x is not e6 and x not in s6.enemies[:n0]]
+    check("★ 到点真的召唤出 2 个随从，位置在脚下那一格",
+          len(new) == 2 and all(x.cell() == e6.cell() for x in new),
+          f"{len(new)} 个：{sorted({x.enemy_id for x in new})} 于 {e6.cell()}")
+    check("★ 召唤体带得出通往**保护目标**的路径（不是原地不动的死物）",
+          bool(new) and len(new[0].route) > 1,
+          f"route={len(new[0].route) if new else 0} 点、"
+          f"起点 {new[0].route[0] if new else None} → "
+          f"终点 {new[0].route[-1] if new else None}")
+    check("召唤体走的是最短的那条可达路径（逐目标试出来的）",
+          bool(new) and new[0].route[-1] in set(st.map.end_points),
+          f"终点 {new[0].route[-1] if new else None}")
+
+    # 清水：明识形态站在**病害值 0 的田地**上要再减一档
+    clean_cell = next((c for f in s6.farmland.fields for c in sorted(f.cells)
+                       if s6.farmland.actual_at(*c) == 0), None)
+    if clean_cell is None:
+        skip("明识形态的清水分支", "这一关没有病害值 0 的田地")
+    else:
+        s7, e7 = mech_sim("enemy_1550_dhnzzh", 1, clean_cell)
+        s7._enter_pm2(e7, 100.0)
+        base_def = e7.reborn_def_base
+        check("清水前：防御 ×0.3、移速 ×3",
+              abs(e7.defense - base_def * (1.0 + e7.pm2_def)) < 1e-9
+              and e7.haste_multiplier == 3.0,
+              f"def={e7.defense:g} haste={e7.haste_multiplier:g}")
+        s7._pm2_tick(e7, 100.0)
+        check("★ 站在病害值 0 的田地上 → 防御再降到 0.15 倍、**失去移速加成**",
+              (e7.pm2_clean, e7.haste_multiplier) == (True, 1.0)
+              and abs(e7.defense - base_def * 0.15) < 1e-9,
+              f"def={e7.defense:g} haste={e7.haste_multiplier:g}")
+        # 离开清水要能收回来
+        dirty = next((f for f in s7.farmland.fields if f.maximum > 0), None)
+        if dirty is not None:
+            e7.position = (float(sorted(dirty.cells)[0][0]),
+                           float(sorted(dirty.cells)[0][1]))
+            s7.farmland.pollute_cell(*e7.cell(), 5.0)
+            s7._pm2_tick(e7, 101.0)
+            check("★ 离开清水后减益收回（不是单向的）",
+                  e7.pm2_clean is False and abs(e7.defense - base_def * 0.3) < 1e-9
+                  and e7.haste_multiplier == 3.0,
+                  f"def={e7.defense:g} haste={e7.haste_multiplier:g}")
+
+    # 标记退场：被它打过的干员退场 → 若它未被阻挡，田地再被污染
+    s8, e8 = mech_sim("enemy_1550_dhnzzh", 1, cell)
+    s8._enter_pm2(e8, 0.0)
+    op_stub = _Stub(cell)
+    s8.operators.append(op_stub)
+    # ⚠ 要等无敌过去再打：进入形态带 5 秒无敌，无敌期内伤害为 0，
+    #   而标记只在**真的挨到伤害**时才记（`dealt > 0` 之后）。
+    #   先前这一条没等，标记自然是空的——这正说明"无敌确实挡掉了伤害"。
+    s8._damage_enemy(e8, 10.0, 6.0, DamageType.PHYSICAL, source=op_stub)
+    check("★ 明识形态记下了伤害来源（标记）", id(op_stub) in e8.marked_ops,
+          f"marked={len(e8.marked_ops)}")
+    op_stub.alive = False
+    p_before = s8.farmland.actual_at(*cell)
+    s8._pm2_tick(e8, 6.5)
+    check("★ 被标记者退场 → 半径 1.0 内田地 +40（未被阻挡时）",
+          s8.farmland.actual_at(*cell) > p_before,
+          f"{p_before:g}→{s8.farmland.actual_at(*cell):g}")
+    check("标记用掉即摘除（不会每帧重复污染）", not e8.marked_ops)
+
+    # 被击倒给装置的机制**只记账**：这是"数据对了、效果无处落地"的如实记录
+    s9, e9 = mech_sim("enemy_1397_dhtsxt", 0, cell)
+    s9._damage_enemy(e9, e9.max_hp + 1, 1.0, DamageType.PHYSICAL)
+    s9._enemy_mech_tick(0.05, 1.05)
+    check("★ 田鼷飞贼被击倒记下 2 个阻流阀（但模拟器没有部署装置层）",
+          s9.result.device_tokens
+          and s9.result.device_tokens[0][1:] == ("trap_139_dhtl", 2),
+          str(s9.result.device_tokens))
+    check("⚠ 这条机制仍标 TODO（只记账不算实现）",
+          __import__("ak_tactic.activity", fromlist=["ENEMY_BB_REGISTRY"])
+          .ENEMY_BB_REGISTRY["DeathPassive."].status == "todo")
+
+    # ★ 前提守卫：SpeedUp 写 `haste_multiplier`、明识形态也写它，
+    #   两者若落在**同一个敌人**身上就会互相覆盖。当前数据里两拨敌人不相交，
+    #   写成检查，以后谁把两套机制挂到同一个敌人身上会立刻红。
+    both = [eid for eid in ("enemy_1396_dhdts", "enemy_1396_dhdts_2",
+                            "enemy_1397_dhtsxt", "enemy_1397_dhtsxt_2",
+                            "enemy_1550_dhnzzh")
+            if lib.get(eid).speedup_move > 0 and lib.get(eid, 1).pm2_move > 0]
+    check("★ 假设守卫：没有敌人同时带 SpeedUp 与明识形态（否则移速加成会打架）",
+          not both, str(both))
+
+    # ------------------------------------------- 10.7 「祟」整条链上真实几何
+    # 上面几段都在桩场景里。这一段把 **ex08 的真实地图/装置/寻路**拿来，
+    # 按关卡自己的出怪路线把「祟」摆出来，然后打掉它，走完
+    # 倒下 → 召唤 → 归来 → 明识形态 这条链。
+    # 真关卡里要走到这一步得先打掉它 50000 血，构造触发是唯一可行的验法。
+    st8 = stage("act31side_ex08")
+    if st8 is None:
+        skip("「祟」整条链", "缺 act31side_ex08 缓存")
+        return
+    zspawn = next((sp for _t, sp in st8.timeline()
+                   if sp.enemy_id.startswith("enemy_1550")), None)
+    if zspawn is None:
+        skip("「祟」整条链", "这一关的出怪表里没有「祟」")
+        return
+    s10 = BattleSimulator(st8, enemy_at=lib.get)
+    e10 = s10._spawn(zspawn.enemy_id, zspawn.level, zspawn.route_index, 0.0)
+    s10.enemies.append(e10)
+    check("祟按关卡自己的路线入场",
+          e10.position == tuple(e10.route[0]), f"{e10.position}")
+    # ⚠ **不动** `reborn_delay`：关卡的 40 秒就是召唤窗口（8 秒 / 20 秒两路都在里面）
+    s10._damage_enemy(e10, e10.max_hp + 1, 0.0, DamageType.PHYSICAL)
+    s10._reborn_tick(0.0)
+    check("★ 打掉后进入重生窗口（不是当场算死）", e10.pending_reborn)
+    n_before = len(s10.enemies)
+    s10._reborn_tick(8.0)
+    born = [x for x in s10.enemies[n_before:] if x is not e10]
+    check("★ 真实关卡上召唤出随从、数值取自本关的敌人档位",
+          len(born) == 2 and all(x.level == s10._summon_level(x.enemy_id)
+                                 for x in born),
+          f"{len(born)} 个 {sorted({(x.enemy_id, x.level) for x in born})}")
+    check("★ 召唤体从「祟」脚下那一格起步、朝保护目标走",
+          bool(born) and all(x.route and x.route[0] == e10.route[0]
+                             for x in born)
+          and all(x.route[-1] in set(st8.map.end_points) for x in born),
+          f"{born[0].route[0]} → {born[0].route[-1]}" if born else "无")
+    # 第二拍：8 秒那路在 16 秒再出 2 个，20 秒那路出 1 个 —— 一共 3 个。
+    # （按**增量**数，不要用"总长度减一减一"，那样会把「祟」自己减两次。）
+    n_before2 = len(s10.enemies)
+    s10._reborn_tick(20.5)
+    check("★ 两路各自按自己的间隔走（16 秒那次 2 个 + 20 秒那路 1 个）",
+          len(s10.enemies) - n_before2 == 3,
+          f"新增 {len(s10.enemies) - n_before2} 个")
+    s10._reborn_tick(41.5)
+    check("★ 40 秒后归来并切明识形态（真实关卡上同样成立）",
+          e10.pm2_active and e10.attack_times == 2,
+          f"pm2={e10.pm2_active} 连击={e10.attack_times}")
+
+
 def main() -> int:
     print("=" * 68)
     print("关卡环境机制自检（ak_tactic/battle/environment.py）")
@@ -631,6 +1072,7 @@ def main() -> int:
     check_sim_wiring()
     check_devices()
     check_pump()
+    check_enemy_mech()
     print("\n" + "=" * 68)
     tail = f"通过 {_PASSED} 项，失败 {len(_FAILED)} 项"
     if _SKIPPED:

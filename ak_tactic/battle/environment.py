@@ -38,9 +38,10 @@ __all__ = [
     "DIFFICULTIES", "RUNES_KEY", "FARMLAND_EXCLUDED_KEYS",
     "POLLUT_MIN", "POLLUT_MAX", "CACHE_INTERVAL", "CACHE_PER_TICK",
     "ACTUAL_INTERVAL", "ACTUAL_PER_DIVISOR", "ACTUAL_BASE_STEP",
-    "PUMP_RATE", "PUMP_RANGE", "PUMP_RANGE_BONUS",
+    "PUMP_RATE", "PUMP_RANGE", "PUMP_RANGE_BONUS", "POLLUTE_LIFTS_MAX",
     "mask_applies", "find_rune", "bb_number", "bb_text",
     "parse_init_pollut", "is_farmland", "farmland_cells", "farmland_groups",
+    "cells_in_radius",
     "PolluteParams", "Field", "FarmlandSystem", "actual_step",
 ]
 
@@ -86,6 +87,23 @@ PUMP_RANGE = 1
 #: 水源地部署有我方单位时的范围加成。原文「自身生效范围+2」——
 #: 加的是**前方格数**（1 → 3），不是攻击范围那种几何。
 PUMP_RANGE_BONUS = 2
+
+#: 「令…半径 1.0 范围内的田地地块病害值 +N」这类**一次性加病害值**的做法：
+#: 抬【实际】的同时要不要把该片的【最大】也顶上去？
+#:
+#: ⚠ **原文没有明说，这是本项目的一处待裁定读数**，两读法都有自检盯着：
+#:
+#: * **甲（当前实现，`True`）**：两者都抬。理由是「对田地造成病害污染」
+#:   （秽 / 除秽 / 肮 / 厌肮被击倒时的能力）若只抬【实际】，靠拢会在下一秒
+#:   按 `ceil(差值/25+1)` 把它拉回【最大】（差值 20 → 每秒掉 2 点），
+#:   污染变成几秒的闪烁，与「造成**严重**病害污染」的措辞不符；
+#:   且同一活动里泵站的受污支正是「【当前】及【最大】」两者都抬。
+#: * **乙**：只抬【实际】。理由是同一条原文在泵站那一处**明确写了两种量**，
+#:   而这里只写「地块病害值」，按字面只该动**按格存的那个量**（即【实际】）。
+#:
+#: 甲、乙在「敌人刚倒下那一秒」完全相同，之后分道扬镳：甲留下持续污染，
+#: 乙在十几秒内被靠拢抹平。**待实机校正**（见 docs/uncertainties.md）。
+POLLUTE_LIFTS_MAX = True
 
 
 # ================================================================ 一、runes 黑板
@@ -204,6 +222,29 @@ def farmland_groups(stage_map: Any,
                     stack.append(nb)
         groups.append(group)
     return groups
+
+
+def cells_in_radius(x: int, y: int, radius: float) -> list[tuple[int, int]]:
+    """以这一格为心、`radius` 格为半径的**圆**内的整数格（含自身）。
+
+    原文里「半径1.0范围内的田地地块」出现在两处：敌人的死亡污染
+    （「令阻挡自身的单位(被阻挡时)/自身(未被阻挡时)半径1.0范围内的
+    田地地块病害值+N」）与「祟」蜕皮。半径 1.0 恰好够到**上下左右四邻**
+    （距离正好 1.0），而斜角是 √2 ≈ 1.414、够不到——所以结果是十字五格。
+
+    ⚠ 不要与「1.0 **边长**正方形范围内」混为一谈：天桩-甲召唤天桩-乙写的
+    是「在当前位置1.0边长正方形范围内**随机位置**」，那是 3×3 的连续区域，
+    与本函数的整数格集合不是一回事。
+    """
+    if radius <= 0:
+        return [(x, y)]
+    span = int(math.floor(radius))
+    out: list[tuple[int, int]] = []
+    for dy in range(-span, span + 1):
+        for dx in range(-span, span + 1):
+            if math.hypot(dx, dy) <= radius + 1e-9:
+                out.append((x + dx, y + dy))
+    return out
 
 
 def pump_once(system: "FarmlandSystem", devices: Iterable[Any], *,
@@ -404,6 +445,74 @@ class FarmlandSystem:
     def zero_cell(self, x: int, y: int) -> None:
         """把这一格的【实际】清零（阻流阀的行为之一）。"""
         self.actual.pop((x, y), None)
+
+    def drain_cell(self, x: int, y: int, amount: float) -> float:
+        """从这一格的【实际】病害值里扣掉 `amount`，返回**实际扣掉的量**。
+
+        对应敌人「瘴 / 鄙瘴」的充能：重生期间每 0.5s，
+        「若自身所在田地地块病害值>0，则降低此地块10点病害值并获得1层充能」。
+
+        ⚠ 三处口径，写的时候别"顺手统一"：
+        * 判据是**这一格**的病害值 > 0（不是它所属连片的【最大】）；
+          扣的也是**这一格**的【实际】。若不大于 0 则**不扣、也不给层数**——
+          原文把「降低」与「获得1层充能」写在同一个条件里。
+        * 只动【实际】，**不动【最大】**。这跟泵站受污那一支（两者都抬）
+          不对称，但两边原文就是这么写的。
+        * 返回实际扣掉的量而不是请求量：本格不足 `amount` 时按剩余量扣，
+          避免把负数写进 `actual`。
+        """
+        cur = self.actual.get((x, y), 0.0)
+        if cur <= 0.0:
+            return 0.0
+        moved = min(amount, cur)
+        left = cur - moved
+        if left <= 0.0:
+            self.actual.pop((x, y), None)
+        else:
+            self.actual[(x, y)] = left
+        return moved
+
+    # ---------------------------------------------------------- 污染
+
+    def pollute_cell(self, x: int, y: int, amount: float) -> float:
+        """把**这一格**的病害值抬高 `amount` 点，返回实际抬高的量。
+
+        用于所有「令…地块病害值+N」的效果：秽 / 除秽 / 肮 / 厌肮被击倒时的
+        污染（+5 / +15）、「祟」每层蜕皮的 +4、被标记单位退场时的 +50、
+        玷的「污」+5。
+
+        三条口径：
+
+        * **不是田地就什么也不做**（返回 0）——原文一律写「**田地**地块」。
+        * 上限是 100（`POLLUT_MAX`），超出部分被吃掉，返回值是**实际**增量，
+          所以「甲给满值格子加 5」会如实返回 0 而不是 5。
+        * 【最大】要不要一起抬见 `POLLUTE_LIFTS_MAX`，那里写了两读法的理由。
+        """
+        f = self._index.get((x, y))
+        if f is None or amount <= 0:
+            return 0.0
+        cur = self.actual.get((x, y), 0.0)
+        new = min(POLLUT_MAX, cur + amount)
+        applied = new - cur
+        if applied <= 0:
+            return 0.0
+        self.actual[(x, y)] = new
+        if POLLUTE_LIFTS_MAX and new > f.maximum:
+            f.maximum = min(POLLUT_MAX, new)
+        return applied
+
+    def pollute_area(self, x: int, y: int, radius: float,
+                     amount: float) -> float:
+        """把半径 `radius` 格**圆**内所有田地格各抬高 `amount` 点。
+
+        返回这些格子实际抬高的**总量**（不是格数）——自检与日志用它判断
+        「这一下到底有没有落到田地上」，落在高台或图外时自然为 0。
+        非田地格被跳过，不报错（原文一律限定「田地地块」）。
+        """
+        total = 0.0
+        for c in cells_in_radius(x, y, radius):
+            total += self.pollute_cell(*c, amount)
+        return total
 
     def sever(self, x: int, y: int) -> list[Field]:
         """把这一格从田地里摘掉，并重算连通域。

@@ -142,6 +142,11 @@ class BattleResult:
     effect_source_used: dict[str, str] = field(default_factory=dict)
     #: 描述与黑板**真分歧**的记录（`agree`/`only_desc` 不记）
     effect_conflicts: list[str] = field(default_factory=list)
+    #: `DeathPassive.` 给的可部署装置：`(时刻, 装置 key, 个数)`。
+    #: **只记账不生效**——模拟器没有"部署装置"这一层（部署计划只收干员，
+    #: 装置全是关卡预先摆好的）。留这份账是为了让这条机制**可被检查**
+    #: （打死了几个飞贼、该得几个阻流阀，自检能对得上），而不是装作没接。
+    device_tokens: list[tuple[float, str, int]] = field(default_factory=list)
 
     def summary(self) -> str:
         head = "胜利" if self.won else "失败"
@@ -207,6 +212,15 @@ class BattleSimulator:
     ):
         self.stage = stage
         self.enemy_at = enemy_at
+        #: 关卡 `runes` 里的**敌人修饰层**（`enemy_attribute_mul` /
+        #: `enemy_talent_blackb_mul` / `enemy_skill_blackb_mul`），按难度消歧。
+        #: 包在 `enemy_at` 的出口上，所以模拟器里每一处取敌人属性的地方都过它。
+        from .stage_mul import (cost_recovery_scale, global_lifepoint,
+                                parse_rune_muls, wrap_enemy_at)
+        self.rune_muls = parse_rune_muls(
+            (getattr(stage, "raw", None) or {}).get("runes"), environment_difficulty)
+        if self.rune_muls:
+            self.enemy_at = wrap_enemy_at(enemy_at, self.rune_muls)
         self.range_provider = range_provider
         self.skill_book = skill_book
         #: 技能效果的来源策略。三者都建立在**黑板**之上，区别只在描述那一路
@@ -262,8 +276,19 @@ class BattleSimulator:
         self.cost = float(getattr(stage.options, "initial_cost", 0.0) or 0.0)
         self.max_cost = float(getattr(stage.options, "max_cost", 99.0) or 99.0)
         self.cost_time = float(getattr(stage.options, "cost_increase_time", 1.0) or 1.0)
+        # `cbuff_cost_recovery.scale`（四星档常见 2 = 回复速度翻倍）。
+        # 它改的是**每点费用几秒**，所以要除。1-7 的四星档就是这条。
+        self._cost_scale = cost_recovery_scale(stage, environment_difficulty)
+        if self._cost_scale and self._cost_scale != 1.0:
+            self.cost_time = self.cost_time / self._cost_scale
         self._cost_timer = 0.0
         self.life = int(getattr(stage.options, "max_life_point", 1) or 1)
+        # `global_lifepoint` 是**关卡级**的生命点改写（八关 EX 的四星档都把它
+        # 改成 1，而关卡文件自己的 maxLifePoint 是 3、普通与四星两份**都是
+        # 3**）。不接这条，四星档就凭空多两条命，而模拟照常给出结果。
+        _lp = global_lifepoint(stage, environment_difficulty)
+        if _lp is not None:
+            self.life = int(_lp)
 
         # 关卡环境机制：田地 / 病害值。
         # 惰性导入——`environment` 依赖 `gamedata`，放在模块顶层会让
@@ -272,21 +297,17 @@ class BattleSimulator:
         #: 阻流阀等装置是否已建成。它们在开场后 `BUILD_SECONDS` 秒才生效，
         #: 一旦生效就把自身地块从田地里摘掉，**田地几何会在那一刻整片改变**。
         self._blockers_built = False
+        # 装置表**无条件**解析：泵站 / 阻流阀归环境系统用，但「祟」明识形态的
+        # 「清澈泵站生效范围内」判据、以及田鼷与阻流阀的互动也都要这张表。
+        # 原先只在开了环境系统时解析，等于把这几条挂在"这一关有田地"上。
+        from .devices import BLOCKER_KEY, parse_devices
+        self._devices = parse_devices(stage)
+        self._blocker_cells = [d.cell for d in self._devices if d.key == BLOCKER_KEY]
         if environment != "off":
             from .environment import FarmlandSystem, PolluteParams
-            from .devices import BLOCKER_KEY, parse_devices
             _p = PolluteParams.from_stage(stage, environment_difficulty)
             if _p is not None and _p.valid:
                 self.farmland = FarmlandSystem(stage, _p)
-                self._devices = parse_devices(stage)
-                self._blocker_cells = [d.cell for d in self._devices
-                                       if d.key == BLOCKER_KEY]
-            else:
-                self._devices = []
-                self._blocker_cells = []
-        else:
-            self._devices = []
-            self._blocker_cells = []
         #: 环境伤害的每秒结算节拍（与病害值的【实际】更新同拍，都是 1 秒）。
         self._env_timer = 0.0
 
@@ -597,7 +618,8 @@ class BattleSimulator:
     # -------------------------------------------------------- 伤害相性 P3R
 
     def _damage_enemy(self, target: EnemyUnit, final: float, t: float,
-                      damage_type: str = "") -> float:
+                      damage_type: str = "",
+                      source: "OperatorUnit | None" = None) -> float:
         """对敌人结算一次伤害的**唯一入口**：过相性 → 扣血 → 累积击破值。
 
         相性只决定**击破值能不能累积**（0 弱点才累积），**不减免伤害**——
@@ -605,7 +627,24 @@ class BattleSimulator:
         `affinity_blocks_damage=True` 可切回旧的「免疫即归零」行为做对照。
         所有打向敌人的伤害都必须走这里，否则相性规则会被绕过——
         积雪、总攻击、普攻三条路都接进来了。
+
+        【怀黍离】另外三个机制也挂在这个出口上，理由同上——它们都以
+        「受到一次伤害」为触发条件，散在各自的调用点会漏掉某一类伤害：
+
+        * **无敌**（明识形态开场 5 秒、天桩-甲的监测状态）→ 直接归零；
+        * **蜕皮**（`Passive_Hit.`）：每受 N 次伤害叠一层，**次数**而不是
+          伤害量，所以数的是本函数的调用次数；
+        * **加速**（`SpeedUp.`）：受伤且**未被阻挡**时获得移速增益；
+        * **标记**（`PassiveM2.`）：明识形态下记下伤害来源，它退场时污染田地。
+
+        `source` 是伤害来源的干员（积雪、装置这类没有明确来源的传 None）。
         """
+        now = t
+        # 1. 无敌：明识形态的开场 5 秒、天桩-甲的监测状态。
+        #    注意**只挡伤害**，不挡「重设生命」这类直接写血（天桩-甲那套）。
+        if (getattr(target, "always_invincible", False)
+                or now < getattr(target, "invincible_until", -1.0)):
+            return 0.0
         slot = damage_slot(damage_type)
         aff = target.affinity.get(slot) if slot else None
         amount = final * affinity_multiplier(
@@ -620,7 +659,68 @@ class BattleSimulator:
                 self.result.log.append(
                     f"{t:7.1f}s  {target.name} 击破值满 → 倒地 {st.fall_duration:g}s")
             self._note_knockdown(target, t)
+        self._enemy_on_hit(target, dealt, t, source)
         return dealt
+
+    def _enemy_on_hit(self, e: EnemyUnit, dealt: float, t: float,
+                      source: "OperatorUnit | None") -> None:
+        """「挨了一次伤害」之后要发生的事：蜕皮、加速、标记。
+
+        单独一个函数是因为这三样都只认**次数**、不认伤害量，而且必须
+        在扣完血之后判（挨打的那一下本身也会触发蜕皮）。
+        """
+        # ---- 蜕皮（Passive_Hit.）：「祟」混沌形态
+        if e.phit_cnt > 0 and e.phit_stacks < e.phit_max_stack:
+            e.phit_hits += 1
+            while (e.phit_hits >= e.phit_cnt
+                   and e.phit_stacks < e.phit_max_stack):
+                e.phit_hits -= e.phit_cnt
+                e.phit_stacks += 1
+                e.atk += e.phit_atk          # 黑板存的是负数（-40 = 降低 40）
+                e.defense += e.phit_def
+                e.res += e.phit_res
+                e.move_speed += e.phit_move
+                # 每 N 层重量等级 −1
+                if e.phit_weight_cnt > 0 and e.phit_stacks % e.phit_weight_cnt == 0:
+                    e.weight = max(0.0, e.weight - 1.0)
+                # 污染：「阻挡自身的单位(被阻挡时)/自身(未被阻挡时)半径1.0内」
+                self._pollute_around(
+                    e, t, e.phit_block_pollut if e.blocked_by is not None
+                    else e.phit_pollut, 1.0, "蜕皮")
+        # ---- 加速（SpeedUp.）：受伤且未被阻挡
+        if (e.speedup_move > 0.0 and e.blocked_by is None
+                and e.haste_multiplier <= 1.0 and t >= e.speedup_ready_at):
+            e.speedup_timer = e.speedup_duration
+            e.speedup_ready_at = t + e.speedup_cooldown
+            e.haste_multiplier = 1.0 + e.speedup_move
+            if self.verbose:
+                self.result.log.append(
+                    f"{t:7.1f}s  {e.name} 受击 → 移速 "
+                    f"+{e.speedup_move * 100:.0f}%（{e.speedup_duration:g}s）")
+        # ---- 标记（PassiveM2.）：明识形态记下伤害来源
+        if e.pm2_active and source is not None:
+            e.marked_ops.add(id(source))
+
+    def _pollute_around(self, e: EnemyUnit, t: float, amount: float,
+                        radius: float, why: str) -> float:
+        """在「阻挡自身的单位(被阻挡时)/自身(未被阻挡时)」周围抬高田地病害值。
+
+        圆心按原文取：被阻挡时是**挡它的那个干员**脚下那一格，否则是敌人
+        自己脚下那一格。半径按**圆**算（半径 1.0 恰好够到上下左右四邻、
+        够不到斜角，见 `environment.cells_in_radius`）。
+        """
+        if amount <= 0.0 or self.farmland is None:
+            return 0.0
+        if e.blocked_by is not None and e.blocked_by.alive:
+            cx, cy = e.blocked_by.position
+        else:
+            cx, cy = e.cell()
+        got = self.farmland.pollute_area(int(cx), int(cy), radius, amount)
+        if got > 0.0 and self.verbose:
+            self.result.log.append(
+                f"{t:7.1f}s  {e.name} {why} → 田地病害值 +{got:.0f}"
+                f"（{amount:g} × 范围内田地格）")
+        return got
 
     def _note_knockdown(self, target: EnemyUnit, t: float) -> None:
         """BOSS 倒地了一次 —— **每倒地一次就切换一次免疫类型**（用户实机确认）。
@@ -777,10 +877,86 @@ class BattleSimulator:
                 self._mode_next = t + float(self.mode_skill["init"])
 
     def _spawn(self, enemy_id: str, level: int, route_index: int, t: float) -> EnemyUnit:
-        stats = self.enemy_at(enemy_id, level)
-        self._note_mode_skill(stats, t)
         pts = self._route_points.get(route_index) or []
         legs = self._route_legs.get(route_index) or []
+        # 有分段计划时，开头的待命已经是计划里的 wait 段，别再设一遍
+        wait = 0.0 if legs else self._route_wait.get(route_index, 0.0)
+        return self._build_enemy(enemy_id, level, pts, legs, t, wait)
+
+    def _summon_at(self, enemy_key: str, cnt: int, cell: tuple[int, int],
+                   t: float, parent: "EnemyUnit") -> list[EnemyUnit]:
+        """在 `cell` 原地召唤 `cnt` 个 `enemy_key`（怀黍离「祟」重生期间的随从）。
+
+        原文：「在自身位置**1.0 边长正方形范围内随机位置**召唤 N 个…，
+        并自动生成通往**最近可通行保护目标**的路径」。
+
+        两处按本项目的约定收口：
+
+        * **1.0 边长的正方形**从格心量出去正好覆盖脚下那一格（±0.5），
+          所以召唤位置就是脚下格，**不做随机**——模拟器必须可复现，
+          掷骰会让同一份作业每次跑出不同结果。
+        * 终点取地图的**保护目标**里最近的一个，路径走 `ground_path`，
+          与 `eta.route_plans` 用的是同一个寻路。
+        """
+        path = self._path_from(cell)
+        if not path:
+            if self.verbose:
+                self.result.log.append(
+                    f"{t:7.1f}s  {parent.name} 召唤 {enemy_key} 失败："
+                    f"{cell} 走不到任何保护目标")
+            return []
+        # 惰性导入：`battle` 的导入链**不牵 gamedata**（自检与 TUI 只用前者）
+        from ..gamedata.stage import RouteLeg
+        pts = [(float(x), float(y)) for x, y in path]
+        legs = [RouteLeg(kind="walk", points=path,
+                         length=self.stage.map.path_length(path))]
+        out = []
+        for _ in range(max(0, int(cnt))):
+            e = self._build_enemy(enemy_key, self._summon_level(enemy_key),
+                                  pts, legs, t, 0.0)
+            self.enemies.append(e)
+            out.append(e)
+        if self.verbose and out:
+            self.result.log.append(
+                f"{t:7.1f}s  {parent.name} 召唤 {len(out)} 个 {out[0].name}"
+                f" 于 {cell}（{len(path)} 格到保护目标）")
+        return out
+
+    def _summon_level(self, enemy_key: str) -> int:
+        """被召唤的敌人用哪一档数值。
+
+        先看这一关的 `enemyDbRefs` 有没有点名它（有就按那一档），
+        没有就用 0 档——**不猜**。召唤体往往不在关卡的出怪表里，
+        所以这条回退路径是常态而不是异常。
+        """
+        for ref in (getattr(self.stage, "enemy_refs", None) or []):
+            if str(ref.get("id") or "") == enemy_key:
+                try:
+                    return int(ref.get("level") or 0)
+                except (TypeError, ValueError):
+                    return 0
+        return 0
+
+    def _path_from(self, cell: tuple[int, int]) -> list[tuple[int, int]]:
+        """从 `cell` 走到**最近的可达保护目标**的那条路。
+
+        逐目标试 `ground_path`（它不可达时返回空），取第一条走通的——
+        「最近」按路径长度而不是直线距离算：绕远路的直线距离可能更近。
+        """
+        m = self.stage.map
+        best: list[tuple[int, int]] = []
+        for goal in m.end_points:
+            p = m.ground_path(cell, goal)
+            if not p:
+                continue
+            if not best or len(p) < len(best):
+                best = list(p)
+        return best
+
+    def _build_enemy(self, enemy_id: str, level: int, pts: list, legs: list,
+                     t: float, wait: float) -> EnemyUnit:
+        stats = self.enemy_at(enemy_id, level)
+        self._note_mode_skill(stats, t)
         # P3R：相性取形态档（BOSS 的真档位在 Mode_A，它的 TotalAttack 是 1/1/1）
         aff = {}
         bk = None
@@ -819,7 +995,7 @@ class BattleSimulator:
             position=pts[0] if pts else (0.0, 0.0),
             spawn_time=t,
             # 有分段计划时，开头的待命已经是计划里的 wait 段，别再设一遍
-            wait_remaining=0.0 if legs else self._route_wait.get(route_index, 0.0),
+            wait_remaining=wait,
             # ---- 关卡机制
             is_flying=bool(getattr(stats, "is_flying", False)),
             apply_way=str(getattr(stats, "apply_way", "MELEE") or "MELEE"),
@@ -828,7 +1004,52 @@ class BattleSimulator:
             reborn_left=int(getattr(stats, "reborn_count", 0) or 0),
             reborn_delay=float(getattr(stats, "reborn_duration", 0.0) or 0.0),
             reborn_hp_ratio=float(getattr(stats, "reborn_hp_ratio", 1.0) or 1.0),
+            # 怀黍离：重生期充能（瘴 / 鄙瘴）。没有这套机制的敌人全为 0。
+            reborn_interval=float(getattr(stats, "reborn_interval", 0.0) or 0.0),
+            reborn_pollut=float(getattr(stats, "reborn_pollut", 0.0) or 0.0),
+            reborn_def_add=float(getattr(stats, "reborn_def_add", 0.0) or 0.0),
+            reborn_damage_magic=float(
+                getattr(stats, "reborn_damage_magic", 0.0) or 0.0),
+            # 再生期间按间隔召唤（怀黍离「祟」：每 8 秒 2 个去蚀、每 20 秒 1 个厌肮）。
+            # 与上面的充能是**两条互不相干**的重生分支：瘴走到充能那支，
+            # 「祟」走到召唤这支，判据各看各的键。
+            reborn_summons=tuple(getattr(stats, "reborn_summons", ()) or ()),
+            # ---- 六个机制前缀（怀黍离；来历见 gamedata/enemy.py::mech_fields）
+            passive_pollut=float(getattr(stats, "passive_pollut", 0.0) or 0.0),
+            passive_radius=float(getattr(stats, "passive_radius", 0.0) or 0.0),
+            death_token=str(getattr(stats, "death_token", "") or ""),
+            death_cnt=int(getattr(stats, "death_cnt", 0) or 0),
+            aura_hit_ratio=float(getattr(stats, "aura_hit_ratio", 0.0) or 0.0),
+            aura_hit_radius=float(
+                getattr(stats, "aura_hit_radius", 0.5) or 0.5),
+            speedup_move=float(getattr(stats, "speedup_move", 0.0) or 0.0),
+            speedup_duration=float(getattr(stats, "speedup_duration", 0.0) or 0.0),
+            speedup_cooldown=float(getattr(stats, "speedup_cooldown", 0.0) or 0.0),
+            phit_cnt=int(getattr(stats, "phit_cnt", 0) or 0),
+            phit_atk=float(getattr(stats, "phit_atk", 0.0) or 0.0),
+            phit_def=float(getattr(stats, "phit_def", 0.0) or 0.0),
+            phit_res=float(getattr(stats, "phit_res", 0.0) or 0.0),
+            phit_move=float(getattr(stats, "phit_move", 0.0) or 0.0),
+            phit_pollut=float(getattr(stats, "phit_pollut", 0.0) or 0.0),
+            phit_block_pollut=float(
+                getattr(stats, "phit_block_pollut", 0.0) or 0.0),
+            phit_extra=float(getattr(stats, "phit_extra", 0.0) or 0.0),
+            phit_max_stack=int(getattr(stats, "phit_max_stack", 0) or 0),
+            phit_weight_cnt=int(getattr(stats, "phit_weight_cnt", 0) or 0),
+            pm2_atk=float(getattr(stats, "pm2_atk", 0.0) or 0.0),
+            pm2_def=float(getattr(stats, "pm2_def", 0.0) or 0.0),
+            pm2_res=float(getattr(stats, "pm2_res", 0.0) or 0.0),
+            pm2_move=float(getattr(stats, "pm2_move", 0.0) or 0.0),
+            pm2_clean_def=float(getattr(stats, "pm2_clean_def", 0.0) or 0.0),
+            pm2_clean_res=float(getattr(stats, "pm2_clean_res", 0.0) or 0.0),
+            pm2_clean_move=float(getattr(stats, "pm2_clean_move", 0.0) or 0.0),
+            pm2_mark_pollut=float(getattr(stats, "pm2_mark_pollut", 0.0) or 0.0),
+            pm2_invincible=float(getattr(stats, "pm2_invincible", 0.0) or 0.0),
+            pm2_pollut_threshold=float(
+                getattr(stats, "pm2_pollut_threshold", 0.0) or 0.0),
         )
+        # 防御力基准：充能加成按它重算，避免二次重生时把上次的加成再乘一遍
+        e.reborn_def_base = e.defense
         # 屏障：按最大生命折算，在血量之前被消耗
         ratio = float(getattr(stats, "shield_hp_ratio", 0.0) or 0.0)
         if ratio:
@@ -1122,6 +1343,11 @@ class BattleSimulator:
 
             # 7. 敌方出手
             self._enemies_attack(dt, t)
+
+            # 7.5 敌人侧关卡机制（怀黍离）：移速增益的计时与解除、明识形态的
+            #     清水判定与标记退场、以及**被击倒之后**那批一次性效果。
+            #     排在两个出手之后：这一帧谁的出手把谁打倒了，这里就看得到。
+            self._enemy_mech_tick(dt, t)
 
             # 8. 结算
             self._resolve(t)
@@ -1478,7 +1704,10 @@ class BattleSimulator:
                         # 免疫侧被相性压成 0，故它会自动躲开当前被免疫的类型。
                         used_type, dmg = self._adaptive_damage(
                             power, hit_scale, target, ign, ign_res)
-                    dealt = self._damage_enemy(target, dmg.final, t, used_type)
+                    # `source=op` 是给「祟」明识形态的**标记**用的：
+                    # 它要记住"谁打过我"，那些干员退场时田地会被污染。
+                    dealt = self._damage_enemy(target, dmg.final, t, used_type,
+                                               source=op)
                     # 技能附带的【停顿】：不能移动，但照样能开火
                     if eff is not None and eff.control.get("sluggish"):
                         target.sluggish_timer = max(
@@ -1589,13 +1818,33 @@ class BattleSimulator:
             # 出手要占用一段攻击动作时间，这期间它不走路（但**不会**因此
             # 停在原地不走完整条路线——动作一结束就继续推进）。
             e.attack_pause = max(e.attack_pause, self.enemy_windup)
-            dealt = op.take(resolve_damage(
-                e.atk, damage_type=e.attack_type,
-                defense=op.current_defense(), res=op.current_res(),
-                # 闪避走期望值法：把最终伤害乘 `(1 − 闪避率)`，不掷骰。
-                # 掷骰会让同一份作业每次跑出不同结果，搜索与回归都不可复现。
-                dodge_phys=op.dodge_phys, dodge_arts=op.dodge_arts,
-            ).final)
+            dealt = 0.0
+            # 明识形态的普攻是 **2 连击**（原文「自身普通攻击变为2连击」）。
+            # 逐段结算：两段的防御/法抗各减一次。把 atk 乘 2 再打一次会
+            # 少减一次防御，对高防目标能差出成倍的伤害。
+            for _seg in range(max(1, int(getattr(e, "attack_times", 1) or 1))):
+                dealt += op.take(resolve_damage(
+                    e.atk, damage_type=e.attack_type,
+                    defense=op.current_defense(), res=op.current_res(),
+                    # 闪避走期望值法：把最终伤害乘 `(1 − 闪避率)`，不掷骰。
+                    # 掷骰会让同一份作业每次跑出不同结果，搜索与回归都不可复现。
+                    dodge_phys=op.dodge_phys, dodge_arts=op.dodge_arts,
+                ).final)
+                if op.hp <= 0 or op.retreated:
+                    break
+            # 【怀黍离】重生后的普攻附加伤害（瘴 / 鄙瘴）：
+            # 「普通攻击附加攻击力(10×充能层数)%的无途径法术普通伤害」。
+            # 「无途径」= 走后**不受攻击方式/途径影响**，故这里独立结算：
+            # 攻击力 × 比例 × 层数，按法术算（吃目标法抗），并同样吃闪避期望。
+            # ⚠ 它是**附加**在普攻上的，不是替代——上面那次已经结算完了。
+            if e.reborn_charge and e.reborn_damage_magic:
+                bonus = e.atk * e.reborn_damage_magic * e.reborn_charge
+                if bonus > 0.0:
+                    dealt += op.take(resolve_damage(
+                        bonus, damage_type="ARTS",
+                        defense=0.0, res=op.current_res(),
+                        dodge_phys=op.dodge_phys, dodge_arts=op.dodge_arts,
+                    ).final)
             # 受击回复的技力
             if dealt > 0 and op.skill is not None and not op.skill.is_passive \
                     and not op.skill_active:
@@ -1603,28 +1852,264 @@ class BattleSimulator:
                 if gain:
                     op.sp = min(op.skill.sp_cost, op.sp + gain)
 
+    def _enemy_mech_tick(self, dt: float, t: float) -> None:
+        """敌人侧关卡机制（怀黍离）：加速计时、明识形态、被击倒后的效果。
+
+        四件事都在这里，因为它们都**不属于任何一帧的伤害结算**，而是
+        「状态随时间走」或「一次性的收尾」：
+
+        1. `SpeedUp.` 的移速增益：倒计时、**被阻挡立刻解除**、以及解除后
+           把 `haste_multiplier` 收回 1.0。
+        2. `PassiveM2.` 明识形态的**清水判定**（水田中病害值=0，或处于清澈
+           泵站生效范围内 → 防御/法抗再降、并失去移速加成）。
+        3. `PassiveM2.` 的**标记退场**：被标记的干员退场时，若自身未被阻挡，
+           半径 1.0 内田地病害值 +`pm2_mark_pollut`。
+        4. `Passive.` / `DeathPassive.`：被击倒时污染田地、给予我方可部署装置。
+
+        ⚠ 第 4 条只认「**被击倒**」：漏怪（`leaked`）不算、传送离场
+        （`off_map`）不算、等重生的（`pending_reborn`）也不算——原文一律
+        写「被击倒时」。
+        """
+        for e in self.enemies:
+            # ---- 1. 加速：被阻挡立刻解除；否则倒计时
+            if e.haste_multiplier > 1.0:
+                if e.blocked_by is not None:
+                    e.speedup_timer = 0.0
+                    e.haste_multiplier = 1.0
+                    if self.verbose:
+                        self.result.log.append(
+                            f"{t:7.1f}s  {e.name} 被阻挡 → 移速增益解除")
+                else:
+                    e.speedup_timer -= dt
+                    if e.speedup_timer <= 0.0:
+                        e.speedup_timer = 0.0
+                        e.haste_multiplier = 1.0
+            # ---- 2./3. 明识形态
+            if e.pm2_active and e.hp > 0 and not e.off_map:
+                self._pm2_tick(e, t)
+            # ---- 4. 被击倒后的效果
+            if (e.hp <= 0 and e.reborn_at < 0.0 and not e.leaked
+                    and not e.off_map and not e.death_done):
+                e.death_done = True
+                self._on_enemy_death(e, t)
+
+    def _on_enemy_death(self, e: EnemyUnit, t: float) -> None:
+        """被击倒之后的一次性效果：田地污染与「给予可部署装置」。
+
+        * `Passive.`（秽 / 除秽 / 肮 / 厌肮）：令**阻挡自身的单位(被阻挡时)/
+          自身(未被阻挡时)** 半径 1.0 范围内的田地地块病害值 +N。
+        * `DeathPassive.`（田鼷飞贼 / 田鼷大盗）：死亡爆炸，予我方可部署装置
+          （`token_key` 的装置 × `death_cnt`）。
+          ⚠ **模拟器目前没有"部署装置"这一层**——部署计划只收干员，装置全是
+          关卡预先摆好的。所以这里只把账记下来（`res.device_tokens`），
+          不改变任何一次结算。这不是接了一半，是如实记账：
+          `activity.py` 里 `DeathPassive.` 因此仍标 `todo`。
+        """
+        if e.passive_pollut > 0.0:
+            self._pollute_around(e, t, e.passive_pollut,
+                                 e.passive_radius or 1.0, "被击倒")
+        if e.death_token and e.death_cnt:
+            self.result.device_tokens.append((t, e.death_token, e.death_cnt))
+            if self.verbose:
+                self.result.log.append(
+                    f"{t:7.1f}s  {e.name} 被击倒 → 获得 {e.death_cnt} 个 "
+                    f"{e.death_token}（模拟器没有装置部署层，仅记账）")
+
+    def _pm2_tick(self, e: EnemyUnit, t: float) -> None:
+        """明识形态逐帧要判的两件事：**清水**与**标记退场**。
+
+        清水（原文）：「位于水田中，且所在地块病害值=0，或处于**身后一格
+        水田为清澈状态的泵站**生效范围内时，防御力-15%、法术抗性-30、
+        失去移动速度加成」。
+
+        两读合一的写法：把「清澈泵站生效范围」也算出来，落在里面同样算清水。
+        泵站自身那一格必须是田地且病害值=0（原文「身后一格水田为清澈状态」），
+        它生效的前方格数按 `PUMP_RANGE`（水源地上有我方单位时 +2）。
+        """
+        clean = False
+        fs = self.farmland
+        if fs is not None:
+            cell = e.cell()
+            idx = fs._index.get(cell)
+            if idx is not None and fs.actual.get(cell, 0.0) <= 0.0:
+                clean = True
+            elif self._devices:
+                clean = self._in_clear_pump(e, cell)
+        if clean != e.pm2_clean:
+            e.pm2_clean = clean
+            # 属性改写**只算一次**（`pm2_applied`），清水是叠在其上的可开关项：
+            # 进去再收回去，得按同一套公式重算，不能反复乘。
+            e.defense = e.reborn_def_base * (
+                1.0 + e.pm2_def + (e.pm2_clean_def if clean else 0.0))
+            e.haste_multiplier = 1.0 + (0.0 if clean else e.pm2_move)
+            if self.verbose:
+                self.result.log.append(
+                    f"{t:7.1f}s  {e.name} 明识形态："
+                    f"{'进入清澈水域（防御/法抗降低、失去移速加成）' if clean else '离开清澈水域'}"
+                    f"  防御 {e.defense:,.0f}")
+
+        # 标记退场：被标记的干员退场（阵亡或撤退）时，若自身未被阻挡，
+        # 半径 1.0 内田地病害值 +N。
+        # ⚠ 圆心取**祟自己**脚下那一格：原文的「自身」是被标记者的施加者。
+        #   另一种读法是以退场的那个干员为中心（见 docs/uncertainties.md）。
+        if e.marked_ops:
+            gone = [k for k in e.marked_ops
+                    if not any(id(o) == k and o.alive and not o.retreated
+                               for o in self.operators)]
+            for k in gone:
+                e.marked_ops.discard(k)
+                if e.blocked_by is None and e.pm2_mark_pollut > 0.0:
+                    self._pollute_around(e, t, e.pm2_mark_pollut, 1.0, "标记退场")
+
+    def _in_clear_pump(self, e: EnemyUnit, cell: tuple[int, int]) -> bool:
+        """敌人脚下是否落在**清澈泵站**的生效范围内。
+
+        泵站要「清澈」得满足原文那一条：**身后一格为田地、且该格病害值=0**。
+        生效范围取泵站**前方的 `span` 格**（`span = PUMP_RANGE`，
+        水源地上有我方单位时 +2）。这里取**整段前方格**而不是"泵水实际打到
+        的那一格"：原文说的是「处于泵站生效范围内」，指的是那圈范围，
+        不是它这一秒把水打到了哪儿——后者会随田地几何逐秒变。
+        """
+        from .devices import DIRECTIONS, PUMP_KEY, behind_of
+        from .environment import PUMP_RANGE, PUMP_RANGE_BONUS
+        fs = self.farmland
+        for d in self._devices:
+            if d.key != PUMP_KEY:
+                continue
+            src = behind_of(d.cell, d.direction)
+            if src is None or fs._index.get(src) is None:
+                continue
+            if fs.actual.get(src, 0.0) > 0.0:
+                continue                      # 水源地本身被污染 → 不是清澈泵站
+            dv = DIRECTIONS.get((d.direction or "").upper())
+            if dv is None:
+                continue
+            span = PUMP_RANGE + (PUMP_RANGE_BONUS if self._ally_on(src) else 0)
+            for k in range(1, span + 1):
+                if (d.cell[0] + dv[0] * k, d.cell[1] + dv[1] * k) == cell:
+                    return True
+        return False
+
+    def _ally_on(self, cell: tuple[int, int]) -> bool:
+        return any(op.alive and op.position == cell for op in self.operators)
+
+    def _enter_pm2(self, e: EnemyUnit, t: float) -> None:
+        """「祟」重生归来 → **明识形态**。
+
+        原文：「重生后，自身攻击力-60%、防御力-70%、法术抗性-30、移动速度
+        +200%、普通攻击变为2连击且可进行远程攻击；获得 5 秒无敌」。
+
+        ⚠ 属性改写**只做一次**（`pm2_applied`）。这个函数会在归来那一帧
+        被调一次，但若哪天它被逐帧调用，反复乘会让攻击力指数衰减——
+        所以判据放在函数里，不放在调用点上。
+        """
+        e.pm2_active = True
+        if not e.pm2_applied:
+            e.pm2_applied = True
+            e.atk *= 1.0 + e.pm2_atk
+            e.defense *= 1.0 + e.pm2_def      # 清水项在 `_pm2_tick` 里加减
+            e.res += e.pm2_res
+            e.haste_multiplier = 1.0 + e.pm2_move
+            e.attack_times = 2
+            # 「可进行远程攻击」——**射程数据里没有**，故只在本来就有射程
+            # （`rangeRadius > 0`）时才转远程，否则维持近战。
+            # 凭空编一个射程会让「祟」隔着半个屏幕打人，那是编数据。
+            if e.attack_range > 0.0:
+                e.apply_way = "RANGED"
+        if e.pm2_invincible > 0.0:
+            e.invincible_until = t + e.pm2_invincible
+        if self.verbose:
+            self.result.log.append(
+                f"{t:7.1f}s  {e.name} 进入明识形态  攻击 {e.atk:,.0f} / "
+                f"防御 {e.defense:,.0f} / 移速 ×{e.haste_multiplier:.1f}"
+                f" / {e.attack_times} 连击 / 无敌 {e.pm2_invincible:g}s")
+
     def _reborn_tick(self, t: float) -> None:
-        """重生结算。
+        """重生结算 + 【怀黍离】重生期充能。
 
         BOSS「死志的凝结」的 `Reborn.reborn_duration = 10` /
         `Reborn.max_hp_ratio = 1`：倒下 10 秒后**满血归来**——等于多一条命。
         在数据里它和普通敌人没有任何区别，只有把这条算上，
         「打完了没有」才是可信的。
+
+        怀黍离的瘴 / 鄙瘴走另一套键（`Reborning.*`），除了重生还带**充能**：
+        重生期间每 0.5s，若自身所在田地地块病害值 > 0，则降低该地块 10 点
+        病害值并获得 1 层充能；重生后防御力 +(30×层数)%、普通攻击附加
+        攻击力 (10×层数)% 的无途径法术普通伤害。
+
+        ⚠ 充能**只在重生窗口里增长**（原文「重生期间每0.5s」），重生完成即定住。
+        所以防御加成在归来那一刻按 `reborn_def_base` 重算一次即可，
+        不必逐帧改 `defense`。
         """
+        fs = self.farmland
         for e in self.enemies:
             if e.leaked:
                 continue
             if e.pending_reborn:
+                # ---- 召唤：重生期间按间隔在自己脚下召唤（「祟」）
+                for i, (itv, cnt, key) in enumerate(e.reborn_summons):
+                    if i >= len(e.reborn_summon_at):
+                        break
+                    while e.reborn_summon_at[i] >= 0.0 and t >= e.reborn_summon_at[i]:
+                        if itv <= 0.0:
+                            e.reborn_summon_at[i] = -1.0
+                            break
+                        e.reborn_summon_at[i] += itv
+                        self._summon_at(key, cnt, e.cell(), t, e)
+                # 充能：窗口内按 interval 逐个结算。用 while 而不是 if——
+                # fps 高时不会漏，fps=1 的粗扫时又会一次补上欠下的所有拍。
+                while e.reborn_charge_at >= 0.0 and t >= e.reborn_charge_at:
+                    # 间隔非正就是「没有充能节拍」，先退出——否则
+                    # `charge_at` 会原地踏步（或倒退），这个 while 永不收敛。
+                    if e.reborn_interval <= 0.0:
+                        break
+                    e.reborn_charge_at += e.reborn_interval
+                    # 原文把「降低病害值」与「获得1层充能」写在同一个条件里：
+                    # 本格病害值 > 0 才**同时**发生两件事，否则一件都不发生。
+                    # `drain_cell` 在 ≤0 时返回 0，正好当这个条件用。
+                    moved = 0.0
+                    if fs is not None:
+                        # ⚠ 必须用 `e.cell()`（四舍五入到整数格）而不是
+                        # `e.position`——后者是浮点坐标，而 `actual` 的键是
+                        # **整数格**。传浮点进去不会报错，只是永远取不到，
+                        # 于是充能永远是 0 层、整条机制静默失效。
+                        moved = fs.drain_cell(*e.cell(), e.reborn_pollut)
+                    if moved > 0.0:
+                        e.reborn_charge += 1
+                        if self.verbose:
+                            self.result.log.append(
+                                f"{t:7.1f}s  {e.name} 吸收病害 {moved:.0f} 点"
+                                f"  充能 {e.reborn_charge} 层")
+                    if e.reborn_interval <= 0.0:
+                        break
                 if t >= e.reborn_at:
                     e.reborn_at = -1.0
+                    e.reborn_charge_at = -1.0
+                    e.reborn_summon_at = [-1.0] * len(e.reborn_summons)
                     e.hp = e.max_hp * e.reborn_hp_ratio
+                    # 重生后：防御力 +(def_add × 层数)%。从基准重算，
+                    # 免得二次重生时把上一次的加成再乘一遍。
+                    if e.reborn_charge and e.reborn_def_add:
+                        e.defense = e.reborn_def_base * (
+                            1.0 + e.reborn_def_add * e.reborn_charge)
                     e.blocked_by = None
                     if self.verbose:
+                        extra = (f"  充能 {e.reborn_charge} 层"
+                                 f"（防御 {e.defense:,.0f}）"
+                                 if e.reborn_charge else "")
                         self.result.log.append(
-                            f"{t:7.1f}s  {e.name} 重生  生命 {e.hp:,.0f}")
+                            f"{t:7.1f}s  {e.name} 重生  生命 {e.hp:,.0f}{extra}")
+                    # 「祟」：归来的不是同一副样子——切明识形态
+                    if e.pm2_atk or e.pm2_move or e.pm2_invincible:
+                        self._enter_pm2(e, t)
             elif e.hp <= 0 and e.reborn_left > 0:
                 e.reborn_left -= 1
                 e.reborn_at = t + e.reborn_delay
+                # 充能窗口与重生窗口同长：进来就排第一拍
+                e.reborn_charge_at = (t + e.reborn_interval
+                                      if e.reborn_interval > 0.0 else -1.0)
+                # 召唤同样只在重生窗口里：进来就排第一拍
+                e.reborn_summon_at = [t + itv for itv, _c, _k in e.reborn_summons]
                 if self.verbose:
                     self.result.log.append(
                         f"{t:7.1f}s  {e.name} 倒下，{e.reborn_delay:.0f} 秒后重生"

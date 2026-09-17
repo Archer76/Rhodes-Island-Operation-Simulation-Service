@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,6 +41,260 @@ _IMMUNE_FIELDS = (
 #: 等级类型代号，来自游戏内约定。
 LEVEL_TYPES = {0: "普通", 1: "精英", 2: "领袖", 3: "精英", "ELITE": "精英",
                "BOSS": "领袖", "NORMAL": "普通"}
+
+
+#: 重生（倒下后归来）的键拼法。**只收在 gamedata 里逐条核过的**——
+#: 之前写死成 `Reborn.reborn_duration` 一个键，漏掉了整整一类敌人。
+#:
+#: 每项 = (前缀, 间隔键, 血量比例键或 None)。两套拼法在真实数据里并存：
+#:
+#:   * 死志的凝结（SR-EX-8 BOSS）：`Reborn.reborn_duration` = 10 /
+#:     `Reborn.max_hp_ratio` = 1 → 倒下 10 秒后**满血归来**。
+#:     ⚠ 它同时还有 `Reborn.hp_ratio` = 0.01，那是**另一个量**，不是
+#:     归来时的血量比例，别顺手换过去。
+#:   * 怀黍离的瘴 / 鄙瘴 = `Reborning.duration` 5；「祟」= 40。
+#:     两套里都没有比率键 → 默认满血（原文写「恢复100%生命值」）。
+#:
+#: ⚠ 这只是**已核实**的两套，全库还有 `reborn.` / `M0Reborn.` /
+#: `TalentReborn.` 等前缀（在 prts 侧的敌人库里观察到，拼法与 gamedata
+#: 未必相同）。**扩充前必须在 gamedata 上验一次**——两侧拼法不一致。
+_REBORN_SPECS: tuple[tuple[str, str, str | None], ...] = (
+    ("Reborn.", "Reborn.reborn_duration", "Reborn.max_hp_ratio"),
+    ("Reborning.", "Reborning.duration", None),
+)
+
+
+def reborn_fields(bb: dict) -> dict:
+    """从天赋黑板解出 `EnemyStats` 的重生与充能字段。
+
+    返回的是可直接 `**` 展开进构造调用的字典。取不到就是「不重生」，
+    一律给默认值而不是 None——上层不必再判。
+    """
+    empty = {
+        "reborn_count": 0, "reborn_duration": 0.0, "reborn_hp_ratio": 1.0,
+        "reborn_prefix": "", "reborn_interval": 0.0, "reborn_pollut": 0.0,
+        "reborn_def_add": 0.0, "reborn_damage_magic": 0.0,
+        "reborn_summons": (),
+    }
+    for prefix, dur_key, ratio_key in _REBORN_SPECS:
+        if dur_key not in bb:
+            continue
+        # 数据里没有明写重生次数，按「一次」建模——这是唯一有旁证
+        # （TalentReborn 是一次性触发）的读法，且次数越多结论越保守。
+        out = dict(empty)
+        out["reborn_count"] = 1
+        out["reborn_duration"] = float(bb.get(dur_key) or 0.0)
+        out["reborn_hp_ratio"] = (
+            float(bb.get(ratio_key) or 1.0) if ratio_key else 1.0)
+        out["reborn_prefix"] = prefix
+        # 充能四项挂在同一前缀下；少任何一项就当没有充能机制，
+        # 不做「缺一项按 0 算」——那会产出「每次都扣 0 点病害值却照拿层数」。
+        if f"{prefix}interval" in bb and f"{prefix}value" in bb:
+            out["reborn_interval"] = float(bb.get(f"{prefix}interval") or 0.0)
+            # `value` 存的是 **-10**（原文「降低此地块10点病害值」），
+            # 取绝对值当正数用，动作方向由调用方决定。
+            out["reborn_pollut"] = abs(float(bb.get(f"{prefix}value") or 0.0))
+            out["reborn_def_add"] = float(bb.get(f"{prefix}def_add") or 0.0)
+            out["reborn_damage_magic"] = float(
+                bb.get(f"{prefix}damage_magic") or 0.0)
+        # ---- 另一支：重生期间**按间隔召唤**
+        #
+        # 与充能那支互不相干，判据也不同（充能要 `interval` + `value`，
+        # 召唤要 `interval` + `cnt` + `enemy_key`）——「祟」两样都有 interval，
+        # 但没有 `value`，若按「有 interval 就是充能」去读，它会被算成
+        # 「每次扣 0 点病害值」的充能怪，召唤整支消失。
+        out["reborn_summons"] = _reborn_summons(bb, prefix)
+        return out
+    return empty
+
+
+def _reborn_summons(bb: dict, prefix: str) -> tuple:
+    """重生期间要按间隔召唤什么。返回 `((间隔秒, 个数, 敌人 id), …)`。
+
+    主召唤写在 `{prefix}interval` / `{prefix}cnt` / `{prefix}enemy_key`；
+    第二路写在 `{prefix}dhnzzh_reborn_c2.*`（「祟」的另一只随从）。
+    两者都是「在自身位置 1.0 边长正方形范围内随机位置召唤」——
+    1.0 边长恰好覆盖脚下那一格，故这里只取脚下格，不做随机
+    （模拟器要可复现，见 docs 里的确定性约定）。
+
+    没有 `enemy_key` 就没有召唤（瘴 / 鄙瘴正如此：它们只有充能那一支）。
+    """
+    out = []
+    specs = [(prefix, prefix), (f"{prefix}dhnzzh_reborn_c2.", f"{prefix}dhnzzh_reborn_c2.")]
+    for _, pre in specs:
+        key = bb.get(f"{pre}enemy_key")
+        if not isinstance(key, str) or not key.strip():
+            continue
+        itv = bb.get(f"{pre}interval")
+        try:
+            itv = float(itv or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if itv <= 0:
+            continue
+        try:
+            cnt = int(float(bb.get(f"{pre}cnt") or 0))
+        except (TypeError, ValueError):
+            cnt = 0
+        if cnt <= 0:
+            continue
+        out.append((itv, cnt, key.strip()))
+    return tuple(out)
+
+
+#: 「进入阻流阀半径 `AURA_HIT_RADIUS` 范围内时立刻对其造成…」。
+#: **0.5 写在正文里、不在黑板上**（`AuraHit.hp_ratio` 是伤害比例，
+#: 半径只出现在天赋文字里），所以它只能作为常量记在这里。
+AURA_HIT_RADIUS = 0.5
+
+#: 敌人天赋黑板上的**机制前缀** ↔ 它们各自需要哪些键。
+#:
+#: 登记粒度按前缀（与 `activity.py` 的登记表同一粒度）：同一前缀下各键
+#: 必然同生同死。**每一项都在 gamedata 的怀黍离敌人上逐键核过**
+#: （`enemy_1390_dhsbr` 秽 / `1396_dhdts` 田鼷力士 / `1550_dhnzzh` 「祟」…），
+#: 不是照着 prts.wiki 的写法抄的——两侧拼法不一致（见 `_REBORN_SPECS`）。
+#:
+#: 键一律写全（含前缀的点），因为黑板就是一张平表。
+_MECH_PREFIXES: tuple[str, ...] = (
+    "Passive.", "DeathPassive.", "AuraHit.", "SpeedUp.",
+    "Passive_Hit.", "PassiveM2.",
+)
+
+
+def _bb_float(bb: dict, key: str, default: float = 0.0) -> float:
+    v = bb.get(key)
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _bb_int(bb: dict, key: str, default: int = 0) -> int:
+    return int(_bb_float(bb, key, float(default)))
+
+
+def mech_fields(bb: dict) -> dict:
+    """从天赋黑板解出六个机制前缀对应的字段。
+
+    【逐项正文来历】全部取自 prts.wiki 的敌人页「天赋」栏（原文已留档
+    `out/prts-act31side-pages.txt` / `-pages2.txt`）：
+
+    * ``Passive.`` —— 秽 / 除秽 / 肮 / 厌肮：「被击倒时，令阻挡自身的单位
+      (被阻挡时)/自身(未被阻挡时)**半径1.0范围内**的田地地块病害值
+      **+extra_value**」。`range_radius` 就是那个 1.0。
+    * ``DeathPassive.`` —— 田鼷飞贼 / 田鼷大盗：「死亡爆炸（予我方可部署
+      装置）」，`token_key` = `trap_139_dhtl`、`cnt` = 2。
+    * ``AuraHit.`` —— 田鼷力士 / 猛士 / 飞贼 / 大盗：「进入阻流阀半径0.5
+      范围内时**立刻**对其造成目标最大生命值 `hp_ratio` 的真实伤害」。
+    * ``SpeedUp.`` —— 同一批田鼷：「自身受到伤害且**未被阻挡**时，获得
+      `duration` 秒移动速度 +(`move_speed`×100)% 的增益（被阻挡时立刻解除；
+      获得增益后 `cooldown` 秒内无法再次获得）」。
+    * ``Passive_Hit.`` —— 「祟」混沌形态：「每受到 `cnt` 次伤害，若自身蜕皮
+      次数未达到上限 `max_stack_cnt`，则触发【蜕皮】：攻击力+`atk`、防御力
+      +`def`、法术抗性+`magic_resistance`、移动速度+`move_speed`，半径1.0
+      范围内田地病害值+`value`；每触发 `other_cnt` 次蜕皮，重量等级-1」。
+      （负数即"降低"，原文写「攻击力-30」，黑板存的就是 -30。）
+    * ``PassiveM2.`` —— 「祟」明识形态：「攻击力 `atk`、防御力 `def`、
+      法术抗性+`magic_resistance`、移动速度 `move_speed`；位于水田中且所在
+      地块病害值=0（或处于清澈泵站生效范围内）时，防御力+`clean_water.def`、
+      法术抗性+`clean_water.magic_resistance`、**失去移动速度加成**；被标记的
+      目标退场时若自身未被阻挡，半径1.0 内田地病害值+`mark[host].value`；
+      进入该形态时获得 `duration_invic` 秒无敌」。
+
+    ⚠ 两处**读数存疑、按原样带出但不擅自解释**：
+
+    * ``Passive_Hit.extra_value`` = -0.001：与 `move_speed` = 0.01 同量级，
+      疑似移速的某种递减项，但**没有任何正文提到它**，故只登记不用。
+    * ``PassiveM2.value`` = 100：与「如梭」技能描述的触发条件「所在地块
+      病害值≥100」同值，据此当作阈值带出。
+
+    缺失的键一律给 0/空串，不给 None——上层不必再判。
+    """
+    out = {
+        # ---- Passive.：被击倒时对田地的病害污染
+        "passive_pollut": 0.0,
+        "passive_radius": 0.0,
+        # ---- DeathPassive.：被击倒时给予可部署装置
+        "death_token": "",
+        "death_cnt": 0,
+        # ---- AuraHit.：进入阻流阀半径 0.5 内立刻造成的真伤比例
+        "aura_hit_ratio": 0.0,
+        "aura_hit_radius": AURA_HIT_RADIUS,
+        # ---- SpeedUp.：受击且未被阻挡时的移速增益
+        "speedup_move": 0.0,
+        "speedup_duration": 0.0,
+        "speedup_cooldown": 0.0,
+        # ---- Passive_Hit.：「祟」混沌形态的蜕皮
+        "phit_cnt": 0,
+        "phit_atk": 0.0,
+        "phit_def": 0.0,
+        "phit_res": 0.0,
+        "phit_move": 0.0,
+        "phit_pollut": 0.0,
+        "phit_block_pollut": 0.0,
+        "phit_extra": 0.0,
+        "phit_max_stack": 0,
+        "phit_weight_cnt": 0,
+        # ---- PassiveM2.：「祟」明识形态
+        "pm2_atk": 0.0,
+        "pm2_def": 0.0,
+        "pm2_res": 0.0,
+        "pm2_move": 0.0,
+        "pm2_clean_def": 0.0,
+        "pm2_clean_res": 0.0,
+        "pm2_clean_move": 0.0,
+        "pm2_mark_pollut": 0.0,
+        "pm2_invincible": 0.0,
+        "pm2_pollut_threshold": 0.0,
+    }
+    if not any(k.startswith(p) for k in bb for p in _MECH_PREFIXES):
+        return out
+
+    if "Passive." in _present(bb):
+        out["passive_pollut"] = _bb_float(bb, "Passive.extra_value")
+        out["passive_radius"] = _bb_float(bb, "Passive.range_radius")
+    if "DeathPassive." in _present(bb):
+        out["death_token"] = str(bb.get("DeathPassive.token_key") or "")
+        out["death_cnt"] = _bb_int(bb, "DeathPassive.cnt")
+    if "AuraHit." in _present(bb):
+        out["aura_hit_ratio"] = _bb_float(bb, "AuraHit.hp_ratio")
+    if "SpeedUp." in _present(bb):
+        out["speedup_move"] = _bb_float(bb, "SpeedUp.move_speed")
+        out["speedup_duration"] = _bb_float(bb, "SpeedUp.duration")
+        out["speedup_cooldown"] = _bb_float(bb, "SpeedUp.cooldown")
+    if "Passive_Hit." in _present(bb):
+        out["phit_cnt"] = _bb_int(bb, "Passive_Hit.cnt")
+        out["phit_atk"] = _bb_float(bb, "Passive_Hit.atk")
+        out["phit_def"] = _bb_float(bb, "Passive_Hit.def")
+        out["phit_res"] = _bb_float(bb, "Passive_Hit.magic_resistance")
+        out["phit_move"] = _bb_float(bb, "Passive_Hit.move_speed")
+        out["phit_pollut"] = _bb_float(bb, "Passive_Hit.value")
+        # 「阻挡自身的单位(被阻挡时)」那一支另有自己的量
+        out["phit_block_pollut"] = _bb_float(
+            bb, "Passive_Hit.enemy_dhnzzh_passive_m1[to_block].extra_value")
+        out["phit_extra"] = _bb_float(bb, "Passive_Hit.extra_value")
+        out["phit_max_stack"] = _bb_int(bb, "Passive_Hit.max_stack_cnt")
+        out["phit_weight_cnt"] = _bb_int(bb, "Passive_Hit.other_cnt")
+    if "PassiveM2." in _present(bb):
+        out["pm2_atk"] = _bb_float(bb, "PassiveM2.atk")
+        out["pm2_def"] = _bb_float(bb, "PassiveM2.def")
+        out["pm2_res"] = _bb_float(bb, "PassiveM2.magic_resistance")
+        out["pm2_move"] = _bb_float(bb, "PassiveM2.move_speed")
+        out["pm2_clean_def"] = _bb_float(bb, "PassiveM2.dhnzzh_clean_water.def")
+        out["pm2_clean_res"] = _bb_float(
+            bb, "PassiveM2.dhnzzh_clean_water.magic_resistance")
+        out["pm2_clean_move"] = _bb_float(
+            bb, "PassiveM2.dhnzzh_clean_water.move_speed")
+        out["pm2_mark_pollut"] = _bb_float(bb, "PassiveM2.dhnzzh_passive_mark[host].value")
+        out["pm2_invincible"] = _bb_float(bb, "PassiveM2.duration_invic")
+        out["pm2_pollut_threshold"] = _bb_float(bb, "PassiveM2.value")
+    return out
+
+
+def _present(bb: dict) -> frozenset[str]:
+    """黑板里**实际出现**的前缀集合。逐前缀判断，不是「有任意一个就全填」——
+    混着填会让没有某机制的敌人凭空带上它的默认值。"""
+    return frozenset(p for p in _MECH_PREFIXES if any(k.startswith(p) for k in bb))
 
 
 @dataclass
@@ -101,12 +356,167 @@ class EnemyStats:
     #: 击杀奖励费用（`Talent1.cost`）。没办法车是 50，且它
     #: `lifePointReduce = 0`（漏掉不扣命、不可阻挡）。
     kill_cost: int = 0
-    #: 重生次数（`Reborn.*`）。BOSS「死志的凝结」死一次后以满血归来。
+    #: 重生次数。BOSS「死志的凝结」死一次后以满血归来。
     reborn_count: int = 0
-    #: 两次重生之间的间隔（`Reborn.reborn_duration`，10 秒）
+    #: 两次重生之间的间隔秒数（`Reborn.reborn_duration` = 10 /
+    #: `Reborning.duration` = 5）
     reborn_duration: float = 0.0
     #: 重生时的血量比例（`Reborn.max_hp_ratio`，1 = 满血）
     reborn_hp_ratio: float = 1.0
+    #: 命中的重生前缀（`Reborn.` / `Reborning.`），空串表示不重生。
+    #: 充能那四个量都挂在这个前缀下，故必须把它带出来。
+    reborn_prefix: str = ""
+    #: 【怀黍离】重生期间每隔几秒结算一次充能（`Reborning.interval` = 0.5）
+    reborn_interval: float = 0.0
+    #: 每次充能扣掉所在地块多少点病害值（`Reborning.value` = -10，取绝对值）
+    reborn_pollut: float = 0.0
+    #: 每层充能给多少防御力比例（`Reborning.def_add` = 0.3，即每层 +30%）
+    reborn_def_add: float = 0.0
+    #: 每层充能给多少附加法术伤害比例（`Reborning.damage_magic` = 0.1，每层 10%）
+    reborn_damage_magic: float = 0.0
+    #: 重生期间按间隔召唤：`((间隔秒, 个数, 敌人 id), …)`。
+    #: 与上面的充能是两条互不相干的分支（「祟」走这支、瘴走充能那支）。
+    reborn_summons: tuple = ()
+
+    # ------------------------------------------------ 六个机制前缀（见 mech_fields）
+    #: 「Passive.」被击倒时对半径 `passive_radius` 内的田地各加多少病害值
+    passive_pollut: float = 0.0
+    passive_radius: float = 0.0
+    #: 「DeathPassive.」被击倒时给予我方可部署装置：装置 key 与个数
+    death_token: str = ""
+    death_cnt: int = 0
+    #: 「AuraHit.」进入阻流阀 `aura_hit_radius` 格内时对其造成**目标最大生命**
+    #: 的这个比例（真伤）。注意比例是相对**目标（阻流阀）**的生命，不是自己的。
+    aura_hit_ratio: float = 0.0
+    aura_hit_radius: float = AURA_HIT_RADIUS
+    #: 「SpeedUp.」受到伤害且未被阻挡时，移速 +`speedup_move`×100%、
+    #: 持续 `speedup_duration` 秒、冷却 `speedup_cooldown` 秒
+    speedup_move: float = 0.0
+    speedup_duration: float = 0.0
+    speedup_cooldown: float = 0.0
+    #: 「Passive_Hit.」每受 `phit_cnt` 次伤害蜕皮一层（上限 `phit_max_stack`）
+    phit_cnt: int = 0
+    phit_atk: float = 0.0
+    phit_def: float = 0.0
+    phit_res: float = 0.0
+    phit_move: float = 0.0
+    phit_pollut: float = 0.0
+    phit_block_pollut: float = 0.0
+    phit_extra: float = 0.0
+    phit_max_stack: int = 0
+    phit_weight_cnt: int = 0
+    #: 「PassiveM2.」明识形态的属性改写与清水减益
+    pm2_atk: float = 0.0
+    pm2_def: float = 0.0
+    pm2_res: float = 0.0
+    pm2_move: float = 0.0
+    pm2_clean_def: float = 0.0
+    pm2_clean_res: float = 0.0
+    pm2_clean_move: float = 0.0
+    pm2_mark_pollut: float = 0.0
+    pm2_invincible: float = 0.0
+    pm2_pollut_threshold: float = 0.0
+
+    # ---------------------------------------------------------- 派生与副本
+
+    def derive_blackboard_fields(self) -> None:
+        """**只**由 `talent_blackboard` 推出的那些字段：相性、屏障、击杀费用、
+        重生与六个机制前缀。
+
+        单独抽出来是为了 `rescale_talent_blackboard`：关卡 runes 的
+        `enemy_talent_blackb_mul` 会把某个黑板键乘一个系数，乘完必须**重算**
+        由它派生的字段，否则乘数只改了一张没人再读的表（看着接好了、实际没接）。
+
+        属性类字段（`max_hp` / `atk` / `defense` …）不在这里——它们来自
+        `enemyData.attributes`，与黑板无关。
+        """
+        bb = self.talent_blackboard
+        self.p3r = affinity_of(bb)
+        self.weak_max = float(bb.get("TotalAttack.weak_max") or 0.0)
+        self.fall_duration = float(bb.get("TotalAttack.fall_duration") or 0.0)
+        self.modes = {m: affinity_of(bb, m) for m in ("Mode_A", "Mode_B")
+                      if affinity_of(bb, m)}
+        self.shield_hp_ratio = float(bb.get("Shield.shield_hp_ratio") or 0.0)
+        self.kill_cost = int(bb.get("Talent1.cost") or 0)
+        for k, v in reborn_fields(bb).items():
+            setattr(self, k, v)
+        for k, v in mech_fields(bb).items():
+            setattr(self, k, v)
+
+    def rescale_talent_blackboard(self, factors: dict) -> list[str]:
+        """把若干天赋黑板键各乘一个系数，并重算派生字段。
+
+        返回**真的改到了**的键（键不在这个敌人的黑板上就没有改到）——
+        调用方据此记账：`enemy_talent_blackb_mul` 指名道姓地写了对哪些敌人、
+        哪个键乘多少，若一个键都没命中，那是**数据与敌人对不上**，
+        静默忽略等于把守卫关掉。
+        """
+        hits: list[str] = []
+        for key, factor in factors.items():
+            if key not in self.talent_blackboard:
+                continue
+            try:
+                self.talent_blackboard[key] = float(
+                    self.talent_blackboard[key]) * factor
+            except (TypeError, ValueError):
+                continue
+            hits.append(key)
+        if hits:
+            self.derive_blackboard_fields()
+        return hits
+
+    def rescale_skill_blackboard(self, prefab_key: str,
+                                 factors: dict) -> list[str]:
+        """把**某个技能**（按 `prefabKey` 点名）的若干黑板键乘系数。
+
+        返回真的改到的键。`skills_raw` 是元组、里面的 dict 与 blackboard 列表
+        都可能是库里共享的对象，所以这里**重建**那一项而不是就地改
+        （就地改会污染全库缓存，见 `clone`）。
+
+        ⚠ 目前**没有消费者**：模拟器不驱动敌方技能（既没有敌方 SP 回转，
+        也没有技能效果结算），所以这条乘数眼下只让数据变正确、不改变任何
+        一次结算。这不是"顺手接了一半"，是如实记账——
+        `activity.py` 里 `enemy_skill_blackb_mul` 因此仍标 `todo`。
+        """
+        if not prefab_key:
+            return []
+        hits: list[str] = []
+        out = []
+        for sk in self.skills_raw or ():
+            if str(sk.get("prefabKey") or "") != prefab_key:
+                out.append(sk)
+                continue
+            new_bb = []
+            for b in (sk.get("blackboard") or []):
+                k = b.get("key")
+                if k in factors and b.get("valueStr") in (None, ""):
+                    try:
+                        nv = float(b.get("value")) * factors[k]
+                    except (TypeError, ValueError):
+                        new_bb.append(b)
+                        continue
+                    b = {**b, "value": nv}
+                    hits.append(str(k))
+                new_bb.append(b)
+            out.append({**sk, "blackboard": new_bb})
+        if hits:
+            self.skills_raw = tuple(out)
+        return hits
+
+    def clone(self) -> "EnemyStats":
+        """一份**可以随便改**的副本。
+
+        `EnemyLibrary` 的 `EnemyStats` 是按敌人全库缓存的，而关卡 runes 的
+        乘数是**按关生效**的：不改副本就会把「这一关的四星难度敌人更强」
+        永久写进库里，下一关跟着一起变强，且没有任何报错。
+        """
+        new = copy.copy(self)
+        new.immunities = dict(self.immunities)
+        new.raw_attributes = dict(self.raw_attributes)
+        new.p3r = dict(self.p3r)
+        new.modes = {k: dict(v) for k, v in self.modes.items()}
+        new.talent_blackboard = dict(self.talent_blackboard)
+        return new
 
     @property
     def has_p3r(self) -> bool:
@@ -236,7 +646,27 @@ class EnemyLibrary:
                     bk = b.get("key")
                     if not bk:
                         continue
-                    bv = _unwrap(b.get("value"))
+                    # ⚠ 黑板有两列：**数值住 `value`、字符串住 `valueStr`**。
+                    # 只读 `value` 会把所有字符串键整条丢掉，而"召唤什么"
+                    # "给哪个装置"恰恰只写在字符串里：
+                    # `DeathPassive.token_key = "trap_139_dhtl"`、
+                    # `Reborning.enemy_key = "enemy_1390_dhsbr"`。
+                    # 丢掉它们不会报错——`bb.get(k)` 只是返回 None，
+                    # 上层当"这个敌人没有这项机制"处理，于是召唤/给装置
+                    # 整条静默失效。
+                    #
+                    # ⚠ 而且字符串键的 `value` 列**不是 None 而是 0**
+                    # （占位值），所以判据必须是"valueStr 非空则取它"，
+                    # 不能写成"value 没了才看 valueStr"——那样仍会读到 0，
+                    # 看着有值、实则拿到的是一个假的敌人 id。
+                    #
+                    # 这条判据在**全库**上验过：`enemy_database.json` 的天赋与
+                    # 技能黑板里 valueStr 非空的条目 531 条，其中 value 列
+                    # 同时非零的 **0 条**——即"valueStr 非空"与"value 是占位 0"
+                    # 是同一件事，取字符串不会吃掉任何真数值。
+                    sv = b.get("valueStr")
+                    bv = (sv.strip() if isinstance(sv, str) and sv.strip()
+                          else _unwrap(b.get("value")))
                     if bv is not None:
                         bb[bk] = bv
                 merged_bb = _merge_defined(merged_bb, bb)
@@ -270,30 +700,20 @@ class EnemyLibrary:
                     level_type=merged.get("levelType"),
                     immunities={f: bool(merged.get(f)) for f in _IMMUNE_FIELDS},
                     raw_attributes=dict(attrs_raw),
-                    p3r=affinity_of(merged_bb),
-                    weak_max=float(merged_bb.get("TotalAttack.weak_max") or 0.0),
-                    fall_duration=float(merged_bb.get("TotalAttack.fall_duration") or 0.0),
-                    modes={m: affinity_of(merged_bb, m)
-                           for m in ("Mode_A", "Mode_B")
-                           if affinity_of(merged_bb, m)},
                     talent_blackboard=dict(merged_bb),
                     skills_raw=merged_skills,
-                    # ---- 关卡机制（敌人侧）。键名全部来自战数据，别猜。
-                    # 吓人路灯 0.25；别人没有这一项。
-                    shield_hp_ratio=float(merged_bb.get("Shield.shield_hp_ratio") or 0.0),
                     # 挥铳圣像 motion=FLY；它同时是 1/1/1 无弱点
                     is_flying=str(merged.get("motion") or "") == "FLY",
                     apply_way=str(merged.get("applyWay") or "MELEE"),
-                    # 没办法车：击倒 +50 费用，且 lifePointReduce = 0
-                    kill_cost=int(merged_bb.get("Talent1.cost") or 0),
-                    # BOSS「死志的凝结」：Reborn.reborn_duration 10 /
-                    # max_hp_ratio 1（满血归来）。数据里没有明写次数，
-                    # 按「一次」建模——这是唯一有旁证（TalentReborn 是
-                    # 一次性触发）的读法，且次数越多结论越保守。
-                    reborn_count=1 if "Reborn.reborn_duration" in merged_bb else 0,
-                    reborn_duration=float(merged_bb.get("Reborn.reborn_duration") or 0.0),
-                    reborn_hp_ratio=float(merged_bb.get("Reborn.max_hp_ratio") or 1.0),
                 )
+                # 由**天赋黑板**派生的字段统一在这里算（相性 / 屏障 / 击杀费用 /
+                # 重生 / 六个机制前缀）。单列出来是为了关卡 runes 的乘数能重算
+                # 一遍——见 `derive_blackboard_fields`。
+                #
+                # 重生那一条格外重要：原先写死成 `"Reborn.reborn_duration" in
+                # merged_bb` 一个键，于是怀黍离的瘴 / 鄙瘴（`Reborning.duration`）
+                # 与「祟」**从来不重生**——而模拟照常跑完、照常出结果，不报错。
+                levels[lv].derive_blackboard_fields()
             stats[key] = levels
 
         self._stats = stats

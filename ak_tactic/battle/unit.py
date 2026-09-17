@@ -488,6 +488,107 @@ class EnemyUnit(Combatant):
     #: 这个窗口里它不算活人（不能被选中、不能阻挡、不推路），
     #: 但**也不能算击杀**，否则击杀数会虚高、战斗会提前判胜。
     reborn_at: float = -1.0
+    # ---- 【怀黍离】重生期充能（瘴 / 鄙瘴；「祟」同前缀但没有那两项）----
+    #: 重生期间每隔几秒结算一次（`Reborning.interval` = 0.5）。0 = 无此机制。
+    reborn_interval: float = 0.0
+    #: 每次充能扣掉所在地块多少点病害值（`Reborning.value` = 10，已取正）
+    reborn_pollut: float = 0.0
+    #: 每层充能的防御力比例（`Reborning.def_add` = 0.3 → 每层 +30%）
+    reborn_def_add: float = 0.0
+    #: 每层充能的附加法术伤害比例（`Reborning.damage_magic` = 0.1）
+    reborn_damage_magic: float = 0.0
+    #: 已积累的充能层数。**只在重生窗口里增长**，重生后定住——
+    #: 原文是「重生期间每 0.5s…获得1层充能」「重生后，自身防御力+(30×层数)%」。
+    reborn_charge: int = 0
+    #: 下一次充能结算的时刻（绝对时间；< 0 表示不在充能窗口里）
+    reborn_charge_at: float = -1.0
+    #: 本次重生开始时的防御力。充能加成按「基础值 × (1 + 比例×层数)」算，
+    #: 每次都从这个基准重算，避免二次重生时把上一次的加成再乘一遍。
+    reborn_def_base: float = 0.0
+    #: 重生期间按间隔召唤：`((间隔秒, 个数, 敌人 id), …)`（怀黍离「祟」）。
+    #: 与充能是两条互不相干的分支——「祟」有 interval 但没有 value，
+    #: 按"有 interval 就是充能"去读会把它算成「每次扣 0 点」的充能怪。
+    reborn_summons: tuple = ()
+    #: 运行时：每一路召唤的下一次到期时刻（与 `reborn_summons` 一一对应）
+    reborn_summon_at: list = field(default_factory=list)
+
+    # ---- 六个机制前缀（怀黍离实测；字段来历见 gamedata/enemy.py::mech_fields）----
+    #: 「Passive.」被击倒时把半径 `passive_radius` 内的田地各抬高这么多病害值
+    passive_pollut: float = 0.0
+    passive_radius: float = 0.0
+    #: 「DeathPassive.」被击倒时给予**我方**可部署装置（key 与个数）。
+    #: ⚠ 模拟器目前没有"部署装置"这一层（部署计划只收干员），故这两项
+    #: 只被记账、不影响结算——见 activity.py 里该前缀的状态说明。
+    death_token: str = ""
+    death_cnt: int = 0
+    #: 「AuraHit.」进入阻流阀 `aura_hit_radius` 格内时对其造成**阻流阀最大生命**
+    #: 的 `aura_hit_ratio` 倍真实伤害（目标血量比例，不是自己的）
+    aura_hit_ratio: float = 0.0
+    aura_hit_radius: float = 0.5
+    #: 「SpeedUp.」受击且未被阻挡 → 移速 +`speedup_move`×100%，持续
+    #: `speedup_duration` 秒、冷却 `speedup_cooldown` 秒（被阻挡立刻解除）
+    speedup_move: float = 0.0
+    speedup_duration: float = 0.0
+    speedup_cooldown: float = 0.0
+    #: 运行时：增益剩余秒数 / 冷却到期的绝对时刻
+    speedup_timer: float = 0.0
+    speedup_ready_at: float = 0.0
+    #: 运行时：当前的**加速倍率**（1.0 = 无增益）。
+    #: ⚠ 不并进 `speed_multiplier`：那一个由积雪天赋**每帧重写**
+    #: （`_snow_tick` 里先置 1.0 再乘减速），并进去会被当场抹掉，
+    #: 而且是静默的——增益看着挂上了，敌人该多快还是多快。
+    haste_multiplier: float = 1.0
+    #: 「Passive_Hit.」每受 `phit_cnt` 次伤害蜕皮一层，上限 `phit_max_stack`；
+    #: 每层改属性（负数是减）并污染半径 1.0 内的田地；每 `phit_weight_cnt` 层
+    #: 重量 −1
+    phit_cnt: int = 0
+    phit_atk: float = 0.0
+    phit_def: float = 0.0
+    phit_res: float = 0.0
+    phit_move: float = 0.0
+    phit_pollut: float = 0.0
+    phit_block_pollut: float = 0.0
+    phit_extra: float = 0.0
+    phit_max_stack: int = 0
+    phit_weight_cnt: int = 0
+    #: 运行时：累计受击次数 / 已蜕皮层数。
+    #: ⚠ 计的是**次数**而不是伤害量（原文「每受到 N 次伤害」），所以一次
+    #: 多段攻击要按段数计——它由 `_damage_enemy` 的调用次数决定。
+    phit_hits: int = 0
+    phit_stacks: int = 0
+    #: 「PassiveM2.」明识形态的属性改写与清水减益（`clean_*` 三项只有在
+    #: 「水田中且本格病害值=0」或「清澈泵站生效范围内」时才生效）
+    pm2_atk: float = 0.0
+    pm2_def: float = 0.0
+    pm2_res: float = 0.0
+    pm2_move: float = 0.0
+    pm2_clean_def: float = 0.0
+    pm2_clean_res: float = 0.0
+    pm2_clean_move: float = 0.0
+    pm2_mark_pollut: float = 0.0
+    pm2_invincible: float = 0.0
+    pm2_pollut_threshold: float = 0.0
+    #: 运行时：是否已进入明识形态
+    pm2_active: bool = False
+    #: 运行时：属性改写是否**已经算过一次**（属性只改一次，不能逐帧反复乘）
+    pm2_applied: bool = False
+    #: 运行时：当前清水减益是否生效（用于把移速加成收回去）
+    pm2_clean: bool = False
+    #: 运行时：无敌到期的绝对时刻（<0 表示不无敌）。
+    #: 混沌形态下天桩-甲是**常驻**无敌，那种走 `always_invincible`。
+    invincible_until: float = -1.0
+    #: 运行时：常驻无敌（`CheckAwake` 监测状态的天桩-甲、以及「不死」）。
+    #: 它挡伤害但**不挡**「重设生命」这类直接写血的行为。
+    always_invincible: bool = False
+    #: 每一次攻击动作打几段。【怀黍离】「祟」明识形态的普攻是 2 连击。
+    #: ⚠ 逐段结算，不是把攻击力乘 2——两段的防御/法抗各减一次，
+    #: 合并成一次会少减一次，对高防目标差得很远。
+    attack_times: int = 1
+    #: 运行时：明识形态「受到伤害时标记伤害来源」，存 `id(干员)`。
+    #: 用 id 而不是对象本身：`OperatorUnit` 是普通 dataclass、不可哈希。
+    marked_ops: set = field(default_factory=set)
+    #: 运行时：被击倒后的那批一次性效果（死亡污染 / 给装置）是否已结算
+    death_done: bool = False
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -542,7 +643,8 @@ class EnemyUnit(Combatant):
             return
         if self.blocked_by is not None:
             return
-        speed = self.move_speed * speed_scale * self.speed_multiplier
+        speed = (self.move_speed * speed_scale * self.speed_multiplier
+                 * self.haste_multiplier)
         if speed <= 0:
             return
         if not self.legs:
