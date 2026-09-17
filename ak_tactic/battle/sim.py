@@ -190,6 +190,20 @@ class BattleSimulator:
         #: 把实测速度下会漏 1 只的事实整个盖住了。
         sword_qi_speed: float = 1.2,
         effect_source: str = "merge",
+        #: 关卡环境机制（怀黍离的田地/病害值）是否结算。
+        #:
+        #: * `auto`（默认）—— 这一关的 `runes` 里有环境系统就自动开启，
+        #:   没有则整条链路不建对象、零开销。绝大多数关卡走这条。
+        #: * `off` —— 显式关掉，用于回归对照（与 `effect_source` 同一套路）。
+        #:
+        #: 为什么默认开着：环境伤害是**关卡机制**，不是可选内容。怀黍离的
+        #: 田地每秒能打出 320 点法术伤害，比多数敌人的普攻还高；不结算
+        #: 等于把这一关的难度整个抹掉。
+        environment: str = "auto",
+        #: 环境系统按哪一档难度取参数。同一关的 `NORMAL` 与 `FOUR_STAR`
+        #: 数值常不同（`act31side_ex08` 的初始污染点 `1,1:0` vs `4,4:100`），
+        #: 且 **`ALL` 也要认**——`act31side_08` 用的就是 `ALL`。
+        environment_difficulty: str = "NORMAL",
     ):
         self.stage = stage
         self.enemy_at = enemy_at
@@ -250,6 +264,18 @@ class BattleSimulator:
         self.cost_time = float(getattr(stage.options, "cost_increase_time", 1.0) or 1.0)
         self._cost_timer = 0.0
         self.life = int(getattr(stage.options, "max_life_point", 1) or 1)
+
+        # 关卡环境机制：田地 / 病害值。
+        # 惰性导入——`environment` 依赖 `gamedata`，放在模块顶层会让
+        # `battle` 的导入链牵上 gamedata（自检与 TUI 都只想要前者）。
+        self.farmland = None
+        if environment != "off":
+            from .environment import FarmlandSystem, PolluteParams
+            _p = PolluteParams.from_stage(stage, environment_difficulty)
+            if _p is not None and _p.valid:
+                self.farmland = FarmlandSystem(stage, _p)
+        #: 环境伤害的每秒结算节拍（与病害值的【实际】更新同拍，都是 1 秒）。
+        self._env_timer = 0.0
 
         # 预先把出怪时刻摊平
         self._spawns: list[tuple[float, object]] = sorted(
@@ -604,6 +630,46 @@ class BattleSimulator:
         self._knocks[key] = self._knocks.get(key, 0) + 1
         # 每倒地一次就换 —— 不读 `Mode_X.trigger_cnt`（那是 2，但实机是一换一）
         self._switch_boss_mode(t)
+
+    def _environment_tick(self, dt: float, t: float) -> None:
+        """关卡环境机制：田地/病害值的演化与结算（怀黍离）。
+
+        三个节拍各归各的：病害值【缓存】每 0.2s 释放 1 点、【实际】每秒向
+        【最大】靠拢（都由 `FarmlandSystem.tick` 管）；**环境伤害按每秒结算
+        一次**，因为原文写的是「每秒受到 … 环境法术伤害」。
+
+        结算对象是**站在田地上的我方单位**：病害值 >0 吃伤害，=0 时按
+        `hp_recovery_per_sec` 回血（同一个机制的两面，不是两个机制）。
+        高台天然取不到田地——田地判据本身就要求低地。
+        """
+        fs = self.farmland
+        if fs is None:
+            return
+        fs.tick(dt)
+
+        # 伤害按整秒结算。用整数计数而不是 `>= 1.0` 后清零：掉帧时 dt 可能
+        # 跨过不止一秒，只结一次等于把伤害漏掉（模拟器 fps 30 时不会发生，
+        # 但 `fps=1` 的粗扫会，而粗扫正是搜索里用得最多的档）。
+        self._env_timer += dt
+        ticks = int(self._env_timer)
+        if ticks <= 0:
+            return
+        self._env_timer -= ticks
+
+        for op in self.operators:
+            if not op.alive:
+                continue
+            cell = op.position
+            if not fs.is_farmland(*cell):
+                continue
+            dmg = fs.damage_per_second(*cell)
+            if dmg > 0:
+                op.take(dmg * ticks)
+                continue
+            # 病害值为 0 的田地改成回血，且**回复量与病害值无关**（恒 50/秒）。
+            heal = fs.regen_per_second(*cell)
+            if heal > 0:
+                op.heal(heal * ticks)
 
     def _p3r_tick(self, dt: float, t: float) -> None:
         """P3R：刷新倒地状态 → 驱动「全场总攻击」装置 → 打出真伤。"""
@@ -987,6 +1053,9 @@ class BattleSimulator:
             # 3.6 P3R：刷新倒地 → 全场总攻击装置
             self._p3r_tick(dt, t)
 
+            # 3.7 关卡环境机制：田地/病害值（怀黍离）
+            self._environment_tick(dt, t)
+
             # 4. 阻挡
             self._update_blocking()
 
@@ -1063,6 +1132,19 @@ class BattleSimulator:
         op.talents = list(d.talents or [])
         self._attach_skill(op, d)
         self.operators.append(op)
+
+        # 部署瞬间的一次性环境伤害：`first_basic_damage + 实际 × first_damage_ratio`。
+        # 它**额外于**每秒结算，不是它的第一次——原文两句分开写
+        # （「部署时立刻受到 …」与「每秒受到 …」），加起来才是落地那一秒的总量。
+        # 病害值为 0 时 `deploy_damage` 返回 0，落进干净田地的干员不吃这下。
+        if self.farmland is not None:
+            hurt = self.farmland.deploy_damage(*d.position)
+            if hurt > 0:
+                op.take(hurt)
+                if self.verbose:
+                    self.result.log.append(
+                        f"{t:7.1f}s  {op.name} 落于有病害的田地，"
+                        f"额外受到环境伤害 {hurt:g}")
         self.cost = max(0.0, self.cost - op.deploy_cost)
         # 天赋：积雪
         snow = find_snow(op.talents)
