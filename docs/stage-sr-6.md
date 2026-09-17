@@ -4,7 +4,7 @@
 > 模拟器：`ak_tactic.battle`（纯标准库）。复现命令：`python tools/run_sr6.py`。
 
 > **⚠️ 口径变更（2026-09-15）**：本报告初版写于两处机制接入之前，**旧的胜负数字（19 杀 2 漏剩 1 命）已作废**。
-> ① `trap_335_totalattack`「全场总攻击」装置已接入（act54side 全部 25 关都有，见 `docs/srx8-solution.md`）；
+> ① `trap_335_totalattack`「全场总攻击」装置已接入（act54side 全部 25 关都有，见 `docs/srx8-qi-solution.md`）；
 > ② `tile_hole` 改为**不可走**（`data/stage.py` 的 `IMPASSABLE_KEYS`），SR-6 有 12 条路线因此各长 0.59 格。
 > **现行基线**见第一节表格（21 杀 0 漏剩 3 命，总伤害 617,000，196.6 / 201.4 / 196.6s）。
 > 第四节那张「满层冻结开/关」对照表仍是接入装置**之前**的旧数，只可用于理解机制，不要当现行基线引用。
