@@ -172,12 +172,14 @@ python -m ak_tactic [--no-cache] <子命令> [参数]
 | `--module` | — | 模组 id，如 `uniequip_002_amiya` |
 | `--module-level` | — | 模组等级 1/2/3 |
 | `--modules` | 关 | 只列出该干员的模组 |
-| `--rounding` | `floor` | 插值取整：`floor` / `round` / `ceil` / `none` |
+| `--rounding` | `round` | 插值取整：`floor` / `round` / `ceil` / `none`（默认四舍五入，2026-09-17 实机定案） |
 | `--search` | 关 | 按 id 或中文名找干员（不计算） |
 | `--limit` | `20` | 搜索上限 |
 | `--json` | 关 | 输出 JSON |
 
-> 属性 = 等级插值 + 信赖 + 潜能 + 模组。**取整方式是唯一未证实的假设**，故做成参数。
+> 属性 = 等级插值 + 信赖 + 潜能 + 模组。**面板取整 = 四舍五入、信赖显示 100% 封顶**
+> （均于 2026-09-17 由实机面板定案，守卫在 `tools/check_db.py` 的 `[4b]` 节），
+> 取整方式仍留作参数以便遇到反例时校准。
 
 ---
 
@@ -423,7 +425,7 @@ python -m ak_tactic [--no-cache] <子命令> [参数]
 | --- | --- |
 | `stats.OperatorCalculator` | 属性计算器：等级插值 + 信赖 + 潜能 + 模组 |
 | `stats.OperatorStats` | 一次计算的完整结果（四份来源分开留着） |
-| `stats.interpolate_keyframes(frames, level, *, rounding='floor')` | 关键帧之间线性插值 |
+| `stats.interpolate_keyframes(frames, level, *, rounding='round')` | 关键帧之间线性插值（越界的 level 夹到最近帧，故信赖 level ≥ 50 自然封顶） |
 | `stats.parse_rarity(value)` | `"TIER_5"` → 5 |
 | `stats.OperatorError` | 查不到干员、等级越界、数据源缺表 |
 | `skill.SkillBook` | 技能数据读取入口 |
