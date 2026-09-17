@@ -51,11 +51,15 @@ from typing import Callable, Iterable
 from ..eta import leading_wait, route_plans
 from .damage import DamageType, resolve_damage
 from .talents import (RegenAura, SnowField, TeamAura, find_regen, find_snow,
-                      find_sp_on_action, find_team_aura, squad_cost_bonus)
+                      find_sp_on_action, find_summon_allowance, find_team_aura,
+                      squad_cost_bonus)
 from .p3r import BreakState, TotalAttackDevice, affinity_multiplier, damage_slot
+from .summons import SummonDeployment, build_summon_unit
+from ..operator.summons import SummonBook
 from .unit import POSITION_TOL, EnemyUnit, OperatorUnit, point_at
 
-__all__ = ["BattleSimulator", "BattleResult", "Deployment", "SkillUse"]
+__all__ = ["BattleSimulator", "BattleResult", "Deployment", "SkillUse",
+           "SummonDeployment"]
 
 FPS = 30
 
@@ -147,6 +151,12 @@ class BattleResult:
     #: 装置全是关卡预先摆好的）。留这份账是为了让这条机制**可被检查**
     #: （打死了几个飞贼、该得几个阻流阀，自检能对得上），而不是装作没接。
     device_tokens: list[tuple[float, str, int]] = field(default_factory=list)
+    #: 实际放进场的召唤物个数。
+    summons_deployed: int = 0
+    #: **被拒收**的召唤物部署：`(时刻, token_key, 原因)`。
+    #: 与 `device_tokens` 同理——拒收要留痕，不能悄悄少放一个还算胜利。
+    #: 目前三种原因：召唤者不在场 / 召唤者没有召唤额度 / 已达同时部署上限。
+    summon_rejected: list[tuple[float, str, str]] = field(default_factory=list)
 
     def summary(self) -> str:
         head = "胜利" if self.won else "失败"
@@ -177,6 +187,7 @@ class BattleSimulator:
         enemy_at: Callable[[str, int], object],
         range_provider: Callable[[str, int, str, tuple[int, int]], set] | None = None,
         skill_book=None,
+        summon_book=None,
         fps: int = FPS,
         speed_scale: float = 1.0,
         verbose: bool = False,
@@ -270,6 +281,12 @@ class BattleSimulator:
         self.deployments: list[Deployment] = []
         self.skill_uses: list[SkillUse] = []
         self.retreats: list[tuple[float, tuple[int, int]]] = []
+        #: 召唤物的部署计划。与干员分开一张表——它们的归属、上限、费用口径
+        #: 都不同（见 `ak_tactic.battle.summons`）。
+        self.summon_deployments: list["SummonDeployment"] = []
+        #: 取召唤物属性的入口。为 None 时按需新建（首次真的要用才建，
+        #: 这样不用召唤物的关卡完全不碰 `excel/character_table.json`）。
+        self.summon_book = summon_book
 
         self.operators: list[OperatorUnit] = []
         self.enemies: list[EnemyUnit] = []
@@ -386,6 +403,14 @@ class BattleSimulator:
 
     def retreat(self, position, time: float) -> None:
         self.retreats.append((time, tuple(position)))
+
+    def plan_summon(self, deployment: "SummonDeployment") -> None:
+        """排一次召唤物部署。**与 `plan()` 分开**——两者的归属与上限口径不同。
+
+        能不能真放下去由模拟器在那一刻判（召唤者是否在场、是否已达同时上限），
+        判不过就记进 `BattleResult.summon_rejected` 而不是静默丢弃。
+        """
+        self.summon_deployments.append(deployment)
 
     # -------------------------------------------------------- 辅助
 
@@ -1243,6 +1268,7 @@ class BattleSimulator:
         t = 0.0
         res = self.result
         pending = sorted(self.deployments, key=lambda d: d.time)
+        pending_summon = sorted(self.summon_deployments, key=lambda d: d.time)
 
         # 天赋「编入队伍后额外获得初始部署费用」——开局一次性结算。
         # 必须在循环之前：它加的是**初始**费用，不是部署那一刻的返费，
@@ -1260,6 +1286,9 @@ class BattleSimulator:
             # 1. 部署
             while pending and pending[0].time <= t:
                 self._do_deploy(pending.pop(0), t)
+            # 1b. 召唤物部署。排在干员之后：召唤者必须已经入场才谈得上归属。
+            while pending_summon and pending_summon[0].time <= t:
+                self._do_deploy_summon(pending_summon.pop(0), t)
             for use in [s for s in self.skill_uses if abs(s.time - t) < dt / 2]:
                 op = self._alive_op_at(use.position)
                 if op is not None:
@@ -1390,6 +1419,58 @@ class BattleSimulator:
         return res
 
     # -------------------------------------------------------- 各阶段
+
+    def _summons_alive(self, owner: str) -> int:
+        """这名召唤者现在场上有几个自己的召唤物（含正在被阻挡的那些）。"""
+        return sum(1 for o in self.operators
+                   if o.summon_of == owner and o.alive)
+
+    def _do_deploy_summon(self, d: "SummonDeployment", t: float) -> None:
+        """放一个召唤物。放不下就**记录原因并跳过**，绝不静默少放。
+
+        三处判据：
+        ① 召唤者**必须在场**——不在场就没有归属，也拿不到天赋里的额度；
+        ② 召唤者天赋必须给出额度——`find_summon_allowance` 取不到就说明
+           这名干员压根不是召唤者，多半是调用方把 token_key 写错了；
+        ③ 场上已有的召唤物个数不得达到**同时部署上限**。
+
+        ⚠️ 这里**不判费用**：与 `_do_deploy` 同一口径——部署计划被假定是可行的，
+        费用只做扣减。加一道费用闸门会让"计划里排得下、实际差 1 费"这种
+        情况从"结果里看得出来"变成"静默少放一个"，更难查。
+        """
+        owner = None
+        for op in self.operators:
+            if op.char_id == d.owner and op.alive:
+                owner = op
+        if owner is None:
+            self.result.summon_rejected.append(
+                (t, d.token_key, f"召唤者 {d.owner or '（未指定）'} 不在场"))
+            return
+
+        allowance = find_summon_allowance(owner.talents)
+        if allowance is None:
+            self.result.summon_rejected.append(
+                (t, d.token_key, f"{owner.name} 的天赋里没有召唤额度"))
+            return
+
+        have = self._summons_alive(d.owner)
+        if have >= allowance.simultaneous:
+            self.result.summon_rejected.append(
+                (t, d.token_key,
+                 f"已达同时部署上限 {allowance.simultaneous}"
+                 f"（来源：{allowance.source}），场上有 {have} 个"))
+            return
+
+        unit = build_summon_unit(
+            d, book=self.summon_book or SummonBook())
+        self.cost = max(0.0, self.cost - unit.deploy_cost)
+        self.operators.append(unit)
+        self.result.summons_deployed += 1
+        if self.verbose:
+            self.result.log.append(
+                f"{t:7.1f}s  召唤 {owner.name} 放下「{unit.name}」于 {d.position} "
+                f"朝 {d.direction}（{unit.deploy_cost} 费，"
+                f"场上 {have + 1}/{allowance.simultaneous}）")
 
     def _do_deploy(self, d: Deployment, t: float) -> None:
         op = d.operator

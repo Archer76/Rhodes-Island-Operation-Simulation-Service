@@ -912,6 +912,148 @@ def check_summons(sbook) -> None:
           == "token_10057_svash2_eagle")
 
 
+def check_summons_battle(stage, lib, calc, book_t) -> None:
+    """[15] 召唤物：部署层。
+
+    批次二「召唤物」的第二段。第一段（数据层，`SummonBook`）在 `[14]`，
+    这一段管**真放下去**：归属、费用、同时上限、拒收留痕。
+
+    同时上限那条是这一节的**主要价值**：它踩过两个坑——
+    ① 天赋黑板里的 `cnt` 是「可以使用 N 个」（**可动用总量**，随精英变），
+       不是同时上限；同时上限只在描述文字里（电弧/令恒为 3）；
+    ② token 的 `maxDeployCount` **也不能用**——令/深池/梅尔身上是 1，
+       取它会把令错压成只能放 1 个。
+    两个坑都钉在这里，任何一个被改回去都会当场红。
+    """
+    print("\n[15] 召唤物：部署层（归属 / 费用 / 同时上限 / 拒收留痕）")
+
+    from ak_tactic.battle.summons import SummonDeployment            # noqa: E402
+    from ak_tactic.battle.talents import find_summon_allowance       # noqa: E402
+
+    print("     —— 额度解析：两个数不是一回事 ——")
+    for who, cid, want in [("电弧", "char_4195_radian", (5, 3, "同时部署")),
+                           ("令", "char_2023_ling", (5, 3, "同时部署")),
+                           ("望", "char_2027_wang", (6, 7, "拥有"))]:
+        a = find_summon_allowance(book_t.for_operator(cid))
+        got = None if a is None else (a.pool, a.simultaneous, a.source)
+        check(f"{who}：可动用 {want[0]} / 同时 {want[1]}（来源 {want[2]}）",
+              got == want, f"实得 {got}")
+
+    check("深池的文字没写同时上限，如实回落 pool 并标明来源",
+          (lambda a: a is not None and a.source == "回落 pool"
+           and a.simultaneous == a.pool)(
+              find_summon_allowance(book_t.for_operator("char_110_deepcl"))))
+    for cid, who in [("char_002_amiya", "阿米娅"), ("char_4230_mcnist", "机械师"),
+                     ("char_1046_sbell2", "圣聆初雪")]:
+        check(f"{who} 不是召唤者，取不到额度（不猜默认值）",
+              find_summon_allowance(book_t.for_operator(cid)) is None)
+
+    print("     —— 真的放下去：戴乌站上 1-7 的路径格 ——")
+    R_TAL = book_t.for_operator("char_4195_radian")
+    check("电弧的天赋里确有召唤额度（下面几条的前提）",
+          find_summon_allowance(R_TAL) is not None)
+
+    sim = BattleSimulator(stage, enemy_at=lib.get)
+    sim.plan(Deployment(1.0, make_unit(calc, "char_4195_radian", elite=2, level=90),
+                        (5, 2), "Left", talents=R_TAL))
+    sim.plan_summon(SummonDeployment(2.0, "token_10051_radian_tower1", (4, 3),
+                                     "Right", owner="char_4195_radian"))
+    r = sim.run()
+    print(f"         {r.summary()}")
+
+    check("放下去 1 个", r.summons_deployed == 1, f"实得 {r.summons_deployed}")
+    check("没有被拒收", r.summon_rejected == [], f"实得 {r.summon_rejected}")
+    summons = [o for o in sim.operators if o.is_summon]
+    check("场上恰好 1 个召唤物", len(summons) == 1, f"实得 {len(summons)}")
+    if summons:
+        u = summons[0]
+        check("归属正确（summon_of = 召唤者 char_id）",
+              u.summon_of == "char_4195_radian", f"实得 {u.summon_of!r}")
+        check("名字取自 token 表（戴乌）", u.name == "戴乌", f"实得 {u.name!r}")
+        # 三个数都锚 phase 2 的**末帧**（L90）。别拿 phase 0 的数来对——
+        # 戴乌逐阶段递进：hp 2001→2501→2875→3230，def 284→389→533→683，
+        # 拿 E0 满级的 389 当 E2 会凭空多出一条假失败。
+        check("属性取自 token 自己 phase 2 的末帧（L90 = 3230/471/683）",
+              (u.max_hp, u.atk, u.defense) == (3230.0, 471.0, 683.0),
+              f"实得 {u.max_hp:.0f}/{u.atk:.0f}/{u.defense:.0f}")
+        check("阻挡 3（照 token 自己的 blockCnt）", u.block_cnt == 3,
+              f"实得 {u.block_cnt}")
+        check("费用 18（照 token 自己的 cost）", u.deploy_cost == 18,
+              f"实得 {u.deploy_cost}")
+        check("**真在打架**（出过手或被挡过敌人）",
+              u.hits > 0 or bool(u.blocking),
+              f"hits={u.hits} blocking={len(u.blocking)}")
+
+    # 费用必须在**部署那一刻**量：整场跑完后费用随时间回复过，差值没有意义。
+    sim_c = BattleSimulator(stage, enemy_at=lib.get)
+    sim_c._do_deploy(Deployment(1.0, make_unit(calc, "char_4195_radian",
+                                               elite=2, level=90),
+                                (5, 2), "Left", talents=R_TAL), 1.0)
+    # **必须先把费用垫高**：1-7 的初始费用是 0，而部署走的是
+    # `max(0, cost - 费)`，两次部署都夹在 0 上，差值恒为 0，什么也测不出来。
+    sim_c.cost = 100.0
+    before = sim_c.cost
+    sim_c._do_deploy_summon(SummonDeployment(
+        2.0, "token_10051_radian_tower1", (4, 3), "Right",
+        owner="char_4195_radian"), 2.0)
+    check("费用在部署那一刻扣掉 18（与干员部署同一口径）",
+          close(before - sim_c.cost, 18, 1e-6),
+          f"实得 {before - sim_c.cost:g}（{before:g} → {sim_c.cost:g}）")
+
+    print("     —— 同时上限：第 4 个必须被拒收并留痕 ——")
+    sim2 = BattleSimulator(stage, enemy_at=lib.get)
+    sim2.plan(Deployment(1.0, make_unit(calc, "char_4195_radian", elite=2, level=90),
+                         (5, 2), "Left", talents=R_TAL))
+    for i, cell in enumerate([(4, 3), (5, 3), (6, 3), (7, 3)]):
+        sim2.plan_summon(SummonDeployment(2.0 + i, "token_10051_radian_tower1",
+                                          cell, "Right",
+                                          owner="char_4195_radian"))
+    r2 = sim2.run()
+    check("只放下 3 个（电弧的同时上限）", r2.summons_deployed == 3,
+          f"实得 {r2.summons_deployed}")
+    check("第 4 个被拒收且记了原因", len(r2.summon_rejected) == 1
+          and "已达同时部署上限 3" in r2.summon_rejected[0][2],
+          f"实得 {r2.summon_rejected}")
+
+    print("     —— 召唤者不在场 / 不是召唤者 ——")
+    sim3 = BattleSimulator(stage, enemy_at=lib.get)
+    sim3.plan_summon(SummonDeployment(1.0, "token_10051_radian_tower1", (4, 3),
+                                      "Right", owner="char_4195_radian"))
+    r3 = sim3.run()
+    check("召唤者没下场就召唤 → 拒收", r3.summons_deployed == 0
+          and len(r3.summon_rejected) == 1
+          and "不在场" in r3.summon_rejected[0][2],
+          f"实得 {r3.summon_rejected}")
+
+    sim4 = BattleSimulator(stage, enemy_at=lib.get)
+    sim4.plan(Deployment(1.0, make_unit(calc, "char_002_amiya", elite=2, level=80),
+                         (5, 2), "Left",
+                         talents=book_t.for_operator("char_002_amiya")))
+    sim4.plan_summon(SummonDeployment(2.0, "token_10051_radian_tower1", (4, 3),
+                                      "Right", owner="char_002_amiya"))
+    r4 = sim4.run()
+    check("阿米娅**带着自己的天赋**仍被拒（她不是召唤者，说明 token_key 写错了）",
+          r4.summons_deployed == 0 and len(r4.summon_rejected) == 1
+          and "没有召唤额度" in r4.summon_rejected[0][2],
+          f"实得 {r4.summon_rejected}")
+
+    print("     —— 不排召唤物时，行为与从前逐字一致 ——")
+    sim5 = BattleSimulator(stage, enemy_at=lib.get)
+    sim5.plan(Deployment(1.0, make_unit(calc, "char_002_amiya", elite=2, level=80,
+                                        trust=100, potential=6), (5, 2), "Left"))
+    sim5.plan(Deployment(5.0, make_unit(calc, "char_102_texas", elite=2, level=1),
+                         (4, 3), "Right"))
+    sim5.plan(Deployment(9.0, make_unit(calc, "char_140_whitew", elite=2, level=1),
+                         (2, 3), "Right"))
+    r5 = sim5.run()
+    check("1-7 三阵容仍是 137.0s / 41 杀 / 0 漏 / 60750（加了召唤物层也没动它）",
+          r5.kills == 41 and r5.leaks == 0 and close(r5.damage_dealt, 60750, 1)
+          and close(r5.elapsed, 137.0, 0.2),
+          f"实得 {r5.elapsed:.1f}s / {r5.kills} / {r5.leaks} / "
+          f"{r5.damage_dealt:,.0f}")
+    check("召唤物计数为 0", r5.summons_deployed == 0 and r5.summon_rejected == [])
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="战斗与技能的回归检查")
     ap.parse_args()
@@ -941,6 +1083,7 @@ def main() -> int:
     check_desc_effects(book, book_t)
     check_dodge(book)
     check_summons(sbook)
+    check_summons_battle(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

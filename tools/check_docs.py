@@ -18,6 +18,14 @@ GitHub 上指空的链接**不会报错**，只会静静地显示成一段普通
 
 本项目既有的约定是**反引号里写仓库相对路径**（`docs/formula-model.md`），
 那是给源码注释与人看的，不是链接，指空与否不在这套自检的判据里。
+
+## 生成物里手写补的那几节不能被冲掉
+
+`docs/uncertainties.md` 由 `tools/uncertainty_audit.py` 生成，但它的
+**第七节是手写补上去的**。2026-09-18 踩过：生成器只回读「裁定」栏、并不知道
+正文还有别的节，一次重生成就把第七节（4 条裁定行 + 两条只登记项）整节冲掉，
+只在索引里留下一条半截记录。修法是让生成器按 `_PRESERVE_FROM` 原样搬运，
+这里再钉一道：**声明要保留的节必须真的在文件里**。
 """
 
 from __future__ import annotations
@@ -28,6 +36,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LINK = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+
+#: 生成器声明「这几节原样保留」的节首（与 uncertainty_audit.py 同源）。
+#: 这里不 import 那个模块（它跑一次要几十秒），改成直接读它声明的常量。
+_AUDIT = ROOT / "tools" / "uncertainty_audit.py"
+_GENERATED_DOC = ROOT / "docs" / "uncertainties.md"
 
 
 def main() -> int:
@@ -51,6 +64,20 @@ def main() -> int:
                 bad.append(f"{f.relative_to(ROOT)}:{line}  {href}")
 
     print(f"  扫了 {len(targets)} 份文档、{checked} 条相对链接")
+
+    # 生成物里手写补的节：生成器声明要保留的，必须在文件里真的存在。
+    preserved = re.search(r'^_PRESERVE_FROM\s*=\s*"([^"]+)"', _AUDIT.read_text(
+        encoding="utf-8"), re.M)
+    if preserved and _GENERATED_DOC.exists():
+        want = preserved.group(1)
+        have = _GENERATED_DOC.read_text(encoding="utf-8")
+        ok = want in have
+        checked += 1
+        print(f"  [{'ok' if ok else 'FAIL'}] 生成物里手写补的节还在：{want}")
+        if not ok:
+            bad.append(f"{_GENERATED_DOC.relative_to(ROOT)}  丢了 {want}"
+                       "（重生成把它冲掉了？见生成器的 _PRESERVE_FROM）")
+
     for b in bad:
         print(f"  [FAIL] 指空：{b}")
     if bad:

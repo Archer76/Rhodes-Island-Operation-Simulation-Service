@@ -130,6 +130,11 @@ class OperatorUnit(Combatant):
     """
 
     char_id: str = ""
+    #: 召唤物的主人（干员的 char_id）。**空串表示这就是干员本人**。
+    #: 有了它，`self.operators` 里就能混放干员与召唤物而仍分得清归属——
+    #: 阻挡、被索敌、攻击三处主循环都是均匀遍历 `self.operators`，
+    #: 所以召唤物只要挂上这个标记塞进去，这三件事就自动成立。
+    summon_of: str = ""
     position: tuple[int, int] = (0, 0)
     direction: str = "Right"
     block_cnt: int = 0
@@ -235,6 +240,15 @@ class OperatorUnit(Combatant):
     attack_timer: float = 0.0
     #: 已出手次数，便于对账
     hits: int = 0
+
+    @property
+    def is_summon(self) -> bool:
+        """是不是召唤物（相对于干员本人）。
+
+        **判据是 `summon_of` 非空，不是 `char_id` 的前缀**——`token_*` 与
+        `trap_*` 都在 `character_table` 里，靠前缀认会把关卡装置也吞进来。
+        """
+        return bool(self.summon_of)
 
     @property
     def facing(self) -> tuple[int, int]:
