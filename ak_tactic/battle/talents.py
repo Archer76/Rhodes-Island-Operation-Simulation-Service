@@ -54,6 +54,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from ..operator.talent import Talent
@@ -308,6 +309,86 @@ def squad_cost_bonus(talents) -> float:
         if sig == ["cost"]:
             total += t.value("cost")
     return total
+
+
+#: 「可以使用 N 个召唤物（最多同时部署 M 个）」这类天赋的判据。
+#:
+#: 判据两条**同时**成立才算：
+#:   ① 描述里出现「可以使用」且出现「召唤物」或「棋子」（两种叫法，机制同一）；
+#:   ② 黑板里有 `cnt` 且大于 0。
+#:
+#: 为什么不只按黑板键认：`cnt` 是个泛用键名，全表有 100+ 条天赋带它
+#: （计数类、层数类都叫这个），只按键名认会大面积误中。描述里的
+#: 「可以使用」是这句机制独有的措辞。
+#:
+#: 逐条出处（2026-09-18 全表核验）：
+#:   电弧「卡带里的灵感」：可以使用 3 个召唤物（最多同时部署 3 个）  cnt 3
+#:   令  「挑灯问梦」  ：可以使用 3 个召唤物（最多同时部署 3 个）  cnt 3
+#:   望  「铸子」      ：可以使用 4 枚棋子（最多拥有 5 枚）        cnt 4  max_cnt 0
+#:
+#: 望那条的 `max_cnt` 是 0，而文本说「最多拥有 5 枚」——**两个量不是一回事**
+#: （一个是同时部署上限，一个是库存上限），本函数只取 `cnt`。
+_SUMMON_WORDS = ("召唤物", "棋子")
+
+
+def is_summon_limit_talent(t: Talent) -> bool:
+    if not t.has("cnt") or t.value("cnt") <= 0:
+        return False
+    desc = t.description or ""
+    return "可以使用" in desc and any(w in desc for w in _SUMMON_WORDS)
+
+
+#: 「最多同时部署 N 个」——**同时**上限，只在描述文字里。
+_SIMULTANEOUS_RE = re.compile(r"最多同时部署\s*(\d+)\s*[个枚]")
+#: 「最多拥有 N 枚」——望用的是这个措辞（棋子是"摆下去"，不叫部署）。
+_OWNED_RE = re.compile(r"最多拥有\s*(\d+)\s*[枚个]")
+
+
+@dataclass(frozen=True)
+class SummonAllowance:
+    """一名召唤者的召唤物额度。两个数是**两回事**，别混。
+
+    :param pool: **可动用总量**，取自黑板 `cnt`，等于描述里的「可以使用 N 个」。
+        它随**精英阶段**变（电弧/令：E0=3、E1=4、E2=5），是这一场里总共能拿出
+        几个召唤物。
+    :param simultaneous: **同时部署上限**。这个数**不在黑板里**，只在描述文字里，
+        所以只能解析文字（见 `source`）。电弧/令恒为 3——它**不随精英阶段变**，
+        与 `pool` 是完全不同的量。
+    :param source: `simultaneous` 的出处：`"同时部署"` / `"拥有"` / `"回落 pool"`。
+        **回落只发生在文字根本没写的时候**（深池/梅尔/衡沙），那时 `pool` 是
+        唯一的数，只能用它，并在 `source` 里如实标出来。
+    """
+
+    pool: int
+    simultaneous: int
+    source: str
+    talent: Talent
+
+
+def find_summon_allowance(talents) -> SummonAllowance | None:
+    """解析一名干员的召唤物额度；不是召唤者就返回 `None`。
+
+    **不返回猜的默认值**——调用方要据此判断"这人到底是不是召唤者"，
+    猜一个 1 会让非召唤者也悄悄放出东西来。
+
+    为什么同时上限要走文字、不走 `token` 的 `maxDeployCount`：那个字段在
+    令/深池/梅尔身上是 **1**（它们明明能放 3-5 个），在电弧身上是 3、望身上
+    是 4/5/6——**同一个字段在不同 token 上语义不一致**，取它会**把令错压成 1 个**。
+    2026-09-18 全表核验的对照表见 `docs/uncertainties.md` 的待裁定条目。
+    """
+    for t in talents or ():
+        if not is_summon_limit_talent(t):
+            continue
+        pool = int(t.value("cnt"))
+        desc = t.description or ""
+        m = _SIMULTANEOUS_RE.search(desc)
+        if m:
+            return SummonAllowance(pool, int(m.group(1)), "同时部署", t)
+        m = _OWNED_RE.search(desc)
+        if m:
+            return SummonAllowance(pool, int(m.group(1)), "拥有", t)
+        return SummonAllowance(pool, pool, "回落 pool", t)
+    return None
 
 
 @dataclass

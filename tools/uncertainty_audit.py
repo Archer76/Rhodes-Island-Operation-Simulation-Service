@@ -45,18 +45,47 @@ _RULING = "裁定"
 
 # ------------------------------------------------------------ 裁定栏的续用
 
+#: 从这一节起，正文**不生成**，是手写补上去的；重生成时必须原样搬过来。
+#:
+#: 2026-09-18 踩过这个坑：第七节（怀黍离敌人侧机制的存疑读法）是生成之后手写
+#: 上去的，而生成器只会回读「裁定」栏、并不知道正文还有别的节——一次重生成
+#: 就把 4 条裁定行与两条只登记项**整节冲掉了**，只在第六节的索引里留下一条
+#: 半截记录。生成物里手写补节这件事本身没错，错在生成器不认它。
+_PRESERVE_FROM = "## 七、"
+
+
+def split_preserved(path: pathlib.Path) -> str:
+    """取出上一版里「手写补上去」的那几节，原样返回（含末尾换行）。
+
+    找不到就返回空串——第一次生成时本来就没有。
+    """
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8")
+    i = text.find(_PRESERVE_FROM)
+    return "" if i < 0 else text[i:]
+
+
 def load_rulings(path: pathlib.Path) -> dict[tuple[str, str], str]:
     """把上一版已填的 `裁定` 读回来，按 (节名, 首列) 索引。
 
     只认**带 `裁定` 列**的表：旧版或别处的表最后一栏是建议，不能被当答案读进来。
     人若在 markdown 里直接敲了裸 `|`，表格会多切出几栏，把尾部并回最后一栏
     ——不并回去，裁定值会被悄悄截断成半截，比报错更难发现。
+
+    **手写补上去的那几节（见 `_PRESERVE_FROM`）不参与回读**：它们的表也有
+    「裁定」列，读进来会把行号之类的首列当成"键"塞进第六节的索引，
+    而那些行本来就由 `split_preserved` 原样搬过去，不需要也不该被索引一次。
     """
     if not path.exists():
         return {}
     out: dict[tuple[str, str], str] = {}
     section, has_col, ncol = "", False, 0
-    for line in path.read_text(encoding="utf-8").splitlines():
+    raw = path.read_text(encoding="utf-8")
+    i = raw.find(_PRESERVE_FROM)
+    if i >= 0:
+        raw = raw[:i]
+    for line in raw.splitlines():
         if line.startswith("## "):
             section, has_col, ncol = line[3:].strip(), False, 0
             continue
@@ -307,10 +336,23 @@ _Q: list[tuple[str, str, str, str]] = [
      "② 叠满的 +120% 攻 / +60 法抗在**技能结束后是否保留**（描述没说）",
      "**请博士裁定**：① 「斩击期间」的范围；② 技能结束后是否清零。"
      "两者都影响伤害量级，我不猜"),
+    ("召唤物的「同时部署上限」以哪个数为准",
+     "同一个召唤者身上有**三个**不同的数，且互相不等：① 天赋黑板的 `cnt`——"
+     "它是描述里的「可以使用 N 个」（可动用总量，**随精英阶段变**：电弧/令 "
+     "E0=3→E1=4→E2=5，望 4→5→6）；② 描述文字里的第二个数——电弧/令写"
+     "「最多同时部署 3 个」（**恒为 3**，不随精英变），望写「最多拥有 5/6/7 枚」；"
+     "③ token 自己的 `maxDeployCount`——电弧是 3、望是 4/5/6，但在**令/深池/梅尔 "
+     "身上是 1**（它们明明能同时放 3-5 个，所以这个字段并不总是上限）",
+     "**2026-09-18 已按 ② 落地**（`battle/talents.py` 的 `find_summon_allowance`）："
+     "优先取「最多同时部署」→ 退而取「最多拥有」→ 文字没写时才回落到 `cnt`，"
+     "并在返回值里用 `source` 标明出处。**明确不用** `maxDeployCount`——"
+     "取它会把令错压成只能放 1 个。影响：召唤师同时能站几个（电弧/令现在取 3）",
+     "维持现读法（文字优先、`source` 留痕）／并请顺带定一下："
+     "**望该取 6（「可以使用」）还是 7（「最多拥有」）**——现取 7"),
 ]
 
 
-def render(rules: dict) -> str:
+def render(rules: dict, out: pathlib.Path = OUT) -> str:
     freq, forms, sample = collect()
     L: list[str] = []
     add = L.append
@@ -473,6 +515,13 @@ def render(rules: dict) -> str:
     else:
         add("| — | — | — | 暂无 |")
     add("")
+    # ---------------- 七、手写补的节（原样搬过来）----------------
+    # 放在最后：它们是手写的，不属于生成流程，搬过来即可。
+    kept = split_preserved(out)
+    if kept:
+        if not kept.startswith("\n"):
+            add("")
+        add(kept.rstrip("\n"))
     return "\n".join(L) + "\n"
 
 
@@ -516,7 +565,7 @@ def main() -> int:
     ap.add_argument("-o", "--out", type=pathlib.Path, default=OUT)
     args = ap.parse_args()
     rules = load_rulings(args.out)
-    text = render(rules)
+    text = render(rules, args.out)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(text, encoding="utf-8", newline="\n")
     freq, _, _ = collect()
