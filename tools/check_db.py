@@ -219,6 +219,43 @@ def check_references(conn: sqlite3.Connection, src: GameDataSource) -> None:
                   "WHERE o.char_id IS NULL")
     check("阶段挂的干员都存在", not bad, f"悬空 {len(bad)}：{bad[:3]}")
 
+    # 召唤物：`override_token_key` / `token_key` 指过去的 token 必须真在库里。
+    # 上游有一条**已知缺口**：`token_10057_svash2_eagle` 被引用，但
+    # character_table.json 里只有 eagle1/2/3（风雪之眼），没有不带序号的那条。
+    # 钉住它，多出一条就要查。
+    refs: set[str] = set()
+    for sql in ("SELECT DISTINCT override_token_key FROM operator_skill "
+                "WHERE override_token_key IS NOT NULL AND override_token_key <> ''",
+                "SELECT DISTINCT token_key FROM operator_talent "
+                "WHERE token_key IS NOT NULL AND token_key <> ''"):
+        refs |= {r[0] for r in conn.execute(sql)}
+    missing = sorted(k for k in refs
+                     if conn.execute("SELECT 1 FROM operator WHERE char_id=?",
+                                     (k,)).fetchone() is None)
+    check(f"召唤物引用都落在 operator 表里（{len(refs)} 条被引用）"
+          f"：已知只剩 token_10057_svash2_eagle 一条缺口",
+          missing == ["token_10057_svash2_eagle"], f"实得 {missing}")
+
+    # `operator_attr.kind` 两态，语义必须钉死：
+    #   phase → 等级帧，phase 落在 0/1/2，是**真实属性**
+    #   trust → 信赖帧，phase **恒为 -1**（db/build.py 的 _phase_index 故意给的
+    #           哨兵，注释写着「宁可显眼，别静默变成 0」），值是"信赖 x% 时的增量"
+    # 坑：-1 在 `ORDER BY phase` 里排**最前**。漏了 kind 过滤的查询会读到
+    # "信赖 0% 的增量"（hp/atk 恰好为 0），被当成单位属性——这个坑已经咬过两次
+    # （docs/roadmap.md 记的 cost 版：trust 行 cost 是 0；docs/batch2-plan.md 记的
+    # hp 版：把召唤物误判成"属性全 0 的标记"）。所以在这里把语义和"不会只剩
+    # trust"一起钉住。
+    ks = orphans("SELECT DISTINCT phase FROM operator_attr WHERE kind='trust'")
+    check("信赖帧的 phase 恒为 -1（哨兵，不是阶段）", ks == [-1], f"实得 {ks}")
+    ks = orphans("SELECT DISTINCT phase FROM operator_attr WHERE kind='phase'")
+    check("等级帧的 phase 落在 0/1/2", sorted(ks) == [0, 1, 2], f"实得 {sorted(ks)}")
+    only = orphans("SELECT DISTINCT a.char_id FROM operator_attr a "
+                   "WHERE a.kind='trust' AND NOT EXISTS ("
+                   "  SELECT 1 FROM operator_attr b "
+                   "  WHERE b.char_id=a.char_id AND b.kind='phase')")
+    check("有信赖帧的干员都同时有等级帧（不会只剩全零 trust 行让人误读）",
+          not only, f"只有 trust 的 {len(only)} 个：{only[:3]}")
+
 
 # ------------------------------------------------------------------ 3 覆盖
 
