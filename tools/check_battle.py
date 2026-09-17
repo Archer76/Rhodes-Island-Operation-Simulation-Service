@@ -35,7 +35,7 @@ from ak_tactic.gamedata import EnemyLibrary, GameDataSource, load_stage  # noqa:
 from ak_tactic.gamedata.stage import RouteLeg                        # noqa: E402
 from ak_tactic.battle.unit import EnemyUnit                          # noqa: E402
 from ak_tactic.operator import (                                    # noqa: E402
-    OperatorCalculator, SkillBook, TalentBook,
+    OperatorCalculator, SkillBook, SummonBook, TalentBook,
 )
 from ak_tactic import formula as F                                   # noqa: E402
 from ak_tactic.operator.skill import _wants_dodge                    # noqa: E402
@@ -839,6 +839,79 @@ def check_dodge(book) -> None:
           f"实得 {r5.final} / floored={r5.floored}")
 
 
+def check_summons(sbook) -> None:
+    """[14] 召唤物：链路解析 + 属性取数（批次二的"召唤物"这一件的数据层）。
+
+    守两件事，都是**查错地方就整条取不到**的类型：
+
+    ① `overrideTokenKey` 挂在 **`character_table` 里干员的技能槽**上，
+       **不在** `skill_table` 的技能条目上——后者一律 `None`。若日后有人
+       "顺手"改成查技能表，这几名干员的召唤物会集体消失且**不报错**；
+    ② 属性的**阶段在 phase 上、范围也在 phase 上**，顶层的 `rangeId` 不存在。
+
+    另外钉住上游的一条悬空引用（凛御银灰的 `token_10057_svash2_eagle`）。
+    """
+    print("\n[14] 召唤物：谁带出谁，以及它的属性")
+
+    for name, cid, want in [
+        ("电弧", "char_4195_radian",
+         ["token_10051_radian_tower1", "token_10052_radian_tower2",
+          "token_10053_radian_tower3"]),
+        ("令", "char_2023_ling",
+         ["token_10020_ling_soul1", "token_10020_ling_soul2",
+          "token_10020_ling_soul3"]),
+        ("望", "char_2027_wang", ["token_10064_wang_stone1"]),
+        ("机械师", "char_4230_mcnist", ["token_10069_mcnist_mcgraf"]),
+        ("圣聆初雪", "char_1046_sbell2", ["token_10058_sbell2_icetgt"]),
+        ("予愿安洁莉娜", "char_1015_aglna2", ["token_10071_aglna2_agairp"]),
+    ]:
+        got = [s.token_key for s in sbook.for_operator(cid)]
+        check(f"{name}的召唤物链路（走干员技能槽，不走技能表）", got == want,
+              f"实得 {got}")
+
+    # 望的棋子被 3 个技能槽 + 6 个天赋候选项引用，但它是**一件**召唤物
+    wang = sbook.for_operator("char_2027_wang")
+    check("望的棋子去重成 1 件（不是 9 件）", len(wang) == 1, f"实得 {len(wang)}")
+    check("来源合并为 技1/技2/技3/天赋「铸子」",
+          wang[0].origins == ("技1", "技2", "技3", "天赋「铸子」"),
+          f"实得 {wang[0].origins}")
+
+    # 属性定点值（对上 gamedata 原值）
+    a = sbook.attributes("token_10051_radian_tower1", phase=0, level=1)
+    check("戴乌 E0L1 = 2001/314/284，18 费，阻挡 3",
+          (a.max_hp, a.atk, a.defense, a.cost, a.block_cnt)
+          == (2001.0, 314.0, 284.0, 18.0, 3),
+          f"实得 {a.max_hp}/{a.atk}/{a.defense}/{a.cost}/{a.block_cnt}")
+    a2 = sbook.attributes("token_10051_radian_tower1", phase=2)
+    check("戴乌 E2 满级 = 3230/471（默认取该阶段满级）",
+          (a2.max_hp, a2.atk) == (3230.0, 471.0), f"实得 {a2.max_hp}/{a2.atk}")
+    check("范围取**阶段上**的 rangeId（顶层没有 rangeId）",
+          a.range_id == "0-1", f"实得 {a.range_id}")
+    check("phase 越界夹到可用范围，不抛错",
+          sbook.attributes("token_10051_radian_tower1", phase=9).phase == 2)
+
+    check("召唤物自带技能（棋子有三个不同技能）",
+          sbook.skills("token_10064_wang_stone1")
+          == ["sktok_wang_1", "sktok_wang_2", "sktok_wang_3"],
+          f"实得 {sbook.skills('token_10064_wang_stone1')}")
+
+    check("profession 判据：token 是召唤物、trap 是装置",
+          sbook.is_token("token_10051_radian_tower1")
+          and not sbook.is_token("trap_001_crate")
+          and not sbook.is_token("char_4195_radian"))
+
+    # 上游悬空引用：钉住它，多出一条就要查（与 check_db 的那条呼应）
+    dangling = [(cid, s.token_key)
+                for cid in sbook._load()
+                for s in sbook.for_operator(cid) if s.missing]
+    check("全表恰好一条悬空引用（凛御银灰的 svash2_eagle）",
+          dangling == [("char_1045_svash2", "token_10057_svash2_eagle")],
+          f"实得 {dangling}")
+    check("悬空时 name 回落成 key，不静默跳过",
+          sbook.for_operator("char_1045_svash2")[0].name
+          == "token_10057_svash2_eagle")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="战斗与技能的回归检查")
     ap.parse_args()
@@ -851,6 +924,7 @@ def main() -> int:
     calc = OperatorCalculator()
     book = SkillBook()
     book_t = TalentBook()
+    sbook = SummonBook()
 
     check_baseline(stage, lib, calc)
     check_damage_rulings()
@@ -866,6 +940,7 @@ def main() -> int:
     check_attack_speed(calc)
     check_desc_effects(book, book_t)
     check_dodge(book)
+    check_summons(sbook)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:
