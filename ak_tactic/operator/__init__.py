@@ -32,6 +32,12 @@ from .stats import (
     interpolate_keyframes,
     parse_rarity,
 )
+from .summons import (
+    SummonAttributes,
+    SummonBook,
+    SummonError,
+    SummonSpec,
+)
 from .talent import (
     PHASE_CN,
     PHASE_INDEX,
@@ -55,4 +61,6 @@ __all__ = [
     # 天赋
     "TalentBook", "Talent", "TalentError", "resolve_talents",
     "talent_candidates", "PHASE_INDEX", "PHASE_CN",
+    # 召唤物
+    "SummonBook", "SummonSpec", "SummonAttributes", "SummonError",
 ]
