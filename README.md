@@ -682,7 +682,8 @@ ak-tactic/
 │  ├─ squad.py               森空岛名册 → 战斗单位（保真度基准）
 │  ├─ roster.py / skland.py  森空岛登录与名册拉取
 │  ├─ run_sr6.py              SR-6 关卡专属跑法（含落位合法性守卫）
-│  ├─ run_srx8.py / export_srx8.py / search_srx8.py   SR-EX-8 跑法/导出/搜索
+│  ├─ run_srx8.py             SR-EX-8 共用层（编队校验 / 试跑 / 落位表）
+│  ├─ export_srx8.py          SR-EX-8 导出 MAA copilot JSON（现行答案出处）
 │  ├─ unit_audit.py          量纲裁定表生成（裁定栏可回填、再生不丢）
 │  ├─ uncertainty_audit.py   待裁定清单生成 → docs/uncertainties.md（同上机制）
 │  └─ enemy_field_audit.py   敌人字段总账（非 0 退出即有字段没入库）

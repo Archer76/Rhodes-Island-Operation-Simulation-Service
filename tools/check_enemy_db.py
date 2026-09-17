@@ -6,7 +6,7 @@
 
 1. **出处与自洽**——结构版本、来源、行数、`level_count` 与逐档行数、孤儿行；
 2. **覆盖**——有图鉴的比例、每档都有生命值、黑板与天赋文本的档位数；
-3. **跨源对账**——库是从 **PRTS 页面**解析来的，对账用的是**游戏本体**的
+3. **跨源对账**——库是从 **prts.wiki 页面**解析来的，对账用的是**游戏本体**的
    `enemy_database.json`（`EnemyLibrary`）。两个独立来源逐项比
    生命/攻击/防御/法抗/重量与档数；
 4. **解析口径守卫**——注释掉的参数、档位继承、技能冷却语义、形态相性、
@@ -16,7 +16,7 @@
 
 干员库是**另一个文件**，自检在 `tools/check_db.py`。
 
-第 3 类是整个文件里最有价值的一项：PRTS 与 gamedata 同源，所以两边一起错的
+第 3 类是整个文件里最有价值的一项：prts.wiki 与 gamedata 同源，所以两边一起错的
 概率远低于解析器单独错的概率。
 """
 
@@ -41,7 +41,7 @@ _PASSED = 0
 _FAILED: list[str] = []
 
 #: 跨源锚点：SR-EX-8 的 8 个敌人 + 源石虫。项目已用**游戏本体**（gamedata 的
-#: `enemy_database.json`）单独核过它们，而本库是从 **PRTS 页面**解析来的。
+#: `enemy_database.json`）单独核过它们，而本库是从 **prts.wiki 页面**解析来的。
 #: 两个独立来源对得上，才算真对上了——只比"库和解析器一起错"抓得住。
 CROSS_ENEMY_IDS = (
     "enemy_1007_slime",
@@ -79,7 +79,7 @@ def _count(conn: sqlite3.Connection, sql: str, params=()) -> int:
 
 def _norm_name(s: str) -> str:
     """比名字时把引号与空白抹掉——gamedata 叫「死志的凝结」，
-    PRTS 页名是「“死志的凝结”」，不抹就永远对不上。"""
+    prts.wiki 页名是「“死志的凝结”」，不抹就永远对不上。"""
     return _QUOTE_RE.sub("", s or "")
 
 
@@ -138,7 +138,7 @@ def check_coverage(conn: sqlite3.Connection, counts: dict) -> None:
 # ------------------------------------------------------------ 3 跨源对账
 
 def check_cross_source(conn: sqlite3.Connection, src: GameDataSource) -> None:
-    print("\n[3] 跨源对账：PRTS 解析 vs 游戏本体 enemy_database")
+    print("\n[3] 跨源对账：prts.wiki 解析 vs 游戏本体 enemy_database")
     lib = EnemyLibrary(source=src)
     by_name: dict[str, str] = {}
     for row in conn.execute("SELECT page, name FROM enemy"):
@@ -160,11 +160,11 @@ def check_cross_source(conn: sqlite3.Connection, src: GameDataSource) -> None:
         got = (row["hp"], row["atk"], row["defense"], row["res"], row["weight"])
         check(f"跨源 {st.display_name}：生命/攻击/防御/法抗/重量",
               all(close(a, b) for a, b in zip(got, want)),
-              f"PRTS {got} vs 本体 {want}")
+              f"prts.wiki {got} vs 本体 {want}")
         n_body = len(lib.levels(eid))
         check(f"跨源 {st.display_name}：档数",
               row["level_count"] == n_body,
-              f"PRTS {row['level_count']} vs 本体 {n_body}")
+              f"prts.wiki {row['level_count']} vs 本体 {n_body}")
     check("跨源对账命中数 = 锚点数", hit == len(CROSS_ENEMY_IDS),
           f"{hit}/{len(CROSS_ENEMY_IDS)}")
 

@@ -122,7 +122,7 @@ SP    : 自动回复 1/s；攻击回复每次攻击 1 点（含治疗）；受�
 1. `battle/damage.py`：补 `minRate=0.05` 的法术分支开关（默认按 wiki 打开），留一个 flag 便于实机对比。
 2. `battle/sim.py`：现在是"秒"为单位的浮点推进，技能一接就会暴露帧误差 → 建议改为 **30fps 整数帧推进**，攻击间隔走
    `round(base*100/aspd*30) + frameCorr`，SP 用帧记账（AKData 的做法）。
-3. 新增 `ak_tactic/battle/skill.py`：读 `skill_table.json` 的 `blackboard`，按 `spChargeType / spCost / initSp / duration /
+3. 新增 `ak_tactic/operator/skill.py`（本条计划当时写作 `battle/skill.py`，实际落在 `operator/`）：读 `skill_table.json` 的 `blackboard`，按 `spChargeType / spCost / initSp / duration /
    sp_recovery_per_sec / base_attack_time / atk_scale / damage_scale / prepDuration / stunDuration` 驱动；
    攻击次数用第三节的 `ceil((duration - prep)/attackTime)` 族。
 4. 回归用例：拿 1-7 与 SR-6 现成基线（怒潮凛冬 2 倍速录像、SR-6 21 杀 0 漏）重跑，先只开"技能倍率 + 帧对齐"，再逐项加特判。

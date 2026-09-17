@@ -9,12 +9,12 @@
 * **独立文件**：与干员库（`data/akdb.sqlite`）不共用文件、不共用结构版本、
   不互相引用。理由见 `enemy_schema.py` 顶部——来源不同、节奏不同、主键口径不同，
   连数值口径都是**相反**的（干员只存关键帧原文，敌人存算好继承的结果）。
-* **继承在建库时算好**：PRTS 页面里没有"显式/继承"的标志位，只有"写了/没写"；
+* **继承在建库时算好**：prts.wiki 页面里没有"显式/继承"的标志位，只有"写了/没写"；
   模板靠 SMW `#ask` 向上一档取。本库把结果落进列，同时把**本档显式写出的参数**
   留在 `explicit_params`，把**被 HTML 注释掉的**留在 `hidden_params`。
 * **原子落盘**：先写 `.part` 再 `os.replace`，构建中途炸掉不会毁掉手上的库。
 * **可重复构建**：每次 `build` 都从零建表，不做增量。库是纯派生物。
-* **抓不动就如实报错**：这个库**只有** PRTS 一个源，抓不到就是没有——
+* **抓不动就如实报错**：这个库**只有** prts.wiki 一个源，抓不到就是没有——
   不像干员库那样可以"少一半照样用"。所以失败直接抛，不产出空库。
 """
 
@@ -139,7 +139,7 @@ def build_enemy_db(path: Path | str | None = None, *,
     """从 prts.wiki 重建敌人库，返回构建报告。
 
     :param path: 库文件路径，默认 `data/enemydb.sqlite`
-    :param client: PRTS 客户端（默认新建一个，走 `data/cache/prts/` 缓存）
+    :param client: prts.wiki 客户端（默认新建一个，走 `data/cache/prts/` 缓存）
     :param limit: 只抓前 N 页，供试跑用；正式建库不要给
     """
     target = Path(path) if path else DEFAULT_ENEMY_DB_PATH

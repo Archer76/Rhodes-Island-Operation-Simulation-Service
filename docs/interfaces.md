@@ -415,7 +415,7 @@ python -m ak_tactic [--no-cache] <子命令> [参数]
 | `enemy.parse_page(page, wikitext)` | 解析一个敌人页 → `PrtsEnemy` |
 | `enemy.parse_blackboard(comments)` / `strip_comments` / `extract_comments` / `template_params` / `resolve_fixes` / `parse_aliments` | 模板与黑板的解析原语 |
 | `enemy.PrtsEnemy` / `EnemyLevel` | 敌人页模型 |
-| `grid.parse_svg(code, svg)` / `grid.AttackRange` / `grid.merge_ranges(ranges)` | 攻击范围 SVG 解析（PRTS 侧，常年 403，实际走 gamedata） |
+| `grid.parse_svg(code, svg)` / `grid.AttackRange` / `grid.merge_ranges(ranges)` | 攻击范围 SVG 解析（prts.wiki 侧）。该路**仍通**（`Widget:Range/<代号>` 可取到），只是战斗侧改走 gamedata 的 `excel/range_table.json`，见 `gamedata.range` |
 | `ranges.RangeRegistry` / `ranges.fetch_range(code)` | 代号 → 攻击范围的两级缓存 |
 | `wikitext.*` | wikitext 原语：`iter_templates` / `find_templates` / `template_name` / `parse_params` / `split_top_level` / `split_multi` / `render` / `render_flat` / `to_number` |
 
@@ -477,7 +477,7 @@ python -m ak_tactic [--no-cache] <子命令> [参数]
 | `formula.compare_effects(bb, desc)` / `formula.merge_effects(bb, desc, *, policy='merge')` | 黑板 vs 描述对账 / 合并 |
 | `formula.load_corpus(db)` / `formula.scan(db, *, top=…)` / `formula.describe_row(db, key)` | 全库语料 / 覆盖率统计 / 单条报告 |
 | `formula.Num` / `Term` / `Rule` / `Expr` / `FormulaEffects` / `Difference` | 模型类 |
-| `enemy_formula.detemplate(text)` | PRTS wikitext → 纯文本 |
+| `enemy_formula.detemplate(text)` | prts.wiki wikitext → 纯文本 |
 | `enemy_formula.parse_enemy(text, blackboard=…)` | 敌人侧主入口 |
 | `enemy_formula.formulas_enemy(text, blackboard=…, *, name='')` | 敌人侧的 `formulas` |
 | `enemy_formula.enemy_formulas(db, key)` | **一个敌人的全部公式项报告**（调试首选） |
@@ -563,14 +563,13 @@ python -m ak_tactic [--no-cache] <子命令> [参数]
 `check_enemy_db.py` 是 `check(label, ok, detail)`；`check_p3r.py` 是 `check(label, got, want)`。
 **加自检前先看那个文件的签名。** 条数以各脚本末尾打印的汇总行与 `README` 的总表为准。
 
-### 试跑与导出（4 个）
+### 试跑与导出（3 个）
 
 | 脚本 | 参数 | 用途 |
 | --- | --- | --- |
 | `run_sr6.py` | — | SR-6 模拟 + 三档练度对照 |
-| `run_srx8.py` | `--verbose` `--rank` `--check` | SR-EX-8 试跑台（P3R 与总攻击情况） |
-| `search_srx8.py` | `--team` `--top` `--min-cover` | SR-EX-8 落位贪心搜索 |
-| `export_srx8.py` | `--plan` `--verbose` | 导出 **MAA copilot JSON** 供实机对照 |
+| `run_srx8.py` | `--rank` | SR-EX-8 **共用层**：编队校验、试跑函数与落位表（`export_srx8.py` 从这里 import）；**不内置方案** |
+| `export_srx8.py` | `--plan` `--verbose` | 导出 **MAA copilot JSON** 供实机对照（SR-EX-8 现行答案的出处） |
 
 ### 取数与审计（6 个）
 

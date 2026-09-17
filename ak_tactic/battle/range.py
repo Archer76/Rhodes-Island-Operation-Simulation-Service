@@ -1,6 +1,6 @@
 """攻击范围。
 
-PRTS 的 ``Widget:Range/<代号>`` 给的是**朝右**时的相对坐标集合（自身站位格为
+prts.wiki 的 ``Widget:Range/<代号>`` 给的是**朝右**时的相对坐标集合（自身站位格为
 ``(0,0)``，其余是攻击覆盖格）。所以换朝向就是把这组坐标转一下：
 
 ===========  ==================
@@ -44,9 +44,9 @@ def normalize_direction(direction: str) -> str:
 
 
 def normalize_cells(cells, self_cell) -> set[Cell]:
-    """把 PRTS 给的格集合平移到「自身格 = (0,0)」。
+    """把 prts.wiki 给的格集合平移到「自身格 = (0,0)」。
 
-    **这一步不能省**：PRTS 的 ``self_cell``（蓝色实心那一个）不总在原点——
+    **这一步不能省**：prts.wiki 的 ``self_cell``（蓝色实心那一个）不总在原点——
     ``3-6`` 是 ``(0,1)``、``x-1`` 是 ``(2,2)``。直接用原始格集合去旋转，
     范围会整体偏掉好几格，症状是「站对了格子却打不到人」。
     """
@@ -99,7 +99,7 @@ class RangeProvider:
     :param range_id_of: `(char_id, elite) -> rangeId`，通常取自
         `character_table.phases[elite].rangeId`
 
-    近战（``block_cnt > 0``）会**额外补上自身格**：PRTS 的格集合只标攻击覆盖格，
+    近战（``block_cnt > 0``）会**额外补上自身格**：prts.wiki 的格集合只标攻击覆盖格，
     而 ``1-1`` 这类近战范围只有 ``[(1,0)]``、不含自身格——但近战必须能打自己
     挡住的敌人，否则模拟器里会出现「挡住了却打不到」的怪象。
     """

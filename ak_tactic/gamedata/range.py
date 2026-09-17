@@ -1,11 +1,12 @@
 """攻击范围网格——取自游戏本体的 `excel/range_table.json`。
 
-## 为什么不走 PRTS 了
+## 为什么不走 prts.wiki 了
 
-原先范围是抓 PRTS 的 `Widget:Range/<代号>`（一张 SVG），再解析成格集合。那条路
-有三个代价：PRTS 的模板命名空间常年 403（WAF），请求要间隔 1.2 秒，而且 SVG 的
-`self_cell`（蓝色实心格）**不总在原点**，得先平移到自身格再旋转——`3-6` 是
-`(0,1)`、`x-1` 是 `(2,2)`，踩过这个坑。
+原先范围是抓 prts.wiki 的 `Widget:Range/<代号>`（一张 SVG），再解析成格集合。**那条路今天
+仍然通**——2026-09-17 实测 `Widget:Range/1-1` 返回 631 字符；被 WAF 挡住的是 `Template:` /
+`Module:` 命名空间，不是 `Widget:`。所以换掉它的理由不是「抓不到」，而是三个纯代价：要联网、
+请求得间隔 1.2 秒，而且 SVG 的 `self_cell`（蓝色实心格）**不总在原点**，得先平移到自身格
+再旋转——`3-6` 是 `(0,1)`、`x-1` 是 `(2,2)`，踩过这个坑。
 
 `excel/range_table.json` 是游戏自己的表，53 KB、73 个代号，结构就是答案：
 
@@ -58,7 +59,7 @@ class RangeGrid:
 
     code: str
     cells: frozenset[Cell]
-    #: 本表里自身格恒为原点——PRTS 那套要平移，这里不用
+    #: 本表里自身格恒为原点——prts.wiki 那套要平移，这里不用
     self_cell: Cell = (0, 0)
 
     @property

@@ -1,6 +1,6 @@
 """wikitext 的模板解析与内联标记还原。
 
-PRTS 的干员页面本质上是「一堆模板调用」，而且参数本身又是模板：属性表里写
+prts.wiki 的干员页面本质上是「一堆模板调用」，而且参数本身又是模板：属性表里写
 `{{精英2_满级_攻击}}` 的实参是数字，技能描述里却夹着 `{{color|#0098DC|3}}`。
 要把它们变成计算器能吃的数字，需要三件事：
 
@@ -8,7 +8,7 @@ PRTS 的干员页面本质上是「一堆模板调用」，而且参数本身又
 2. 按**顶层**竖线切分参数，别被 `[[a|b]]` 与嵌套 `{{...}}` 里的竖线骗到（`split_top_level`）；
 3. 把内联模板还原成纯文本（`render`）。
 
-第 3 步的规则很朴素却普适：PRTS 的展示类模板（color / + / * / 变动数值lite …）
+第 3 步的规则很朴素却普适：prts.wiki 的展示类模板（color / + / * / 变动数值lite …）
 一律把「最后一个位置参数」当作人眼看到的内容。`{{color|#0098DC|3}}` → `3`，
 `{{*|6%|+6%}}` → `+6%`，`{{变动数值lite|up|蓝|两名}}` → `两名`。一条规则全救。
 """
@@ -62,7 +62,7 @@ def iter_templates(text: str) -> Iterator[tuple[int, int, str]]:
 def template_name(inner: str) -> str:
     """从 `{{...}}` 的内部片段取出模板名。
 
-    必须先剥掉注释——PRTS 会在模板名和第一个竖线之间塞一大段
+    必须先剥掉注释——prts.wiki 会在模板名和第一个竖线之间塞一大段
     `<!--下方为自动更新部分，您的修改可能会被覆盖-->`。
     """
     head = _COMMENT_RE.sub("", inner).split("|", 1)[0]
@@ -172,7 +172,7 @@ def _split_first_top_level_eq(seg: str) -> tuple[str, bool, str]:
 def _render_inner_template(inner: str) -> str:
     """把一个内联模板还原成人眼看到的文本。
 
-    规则：有位置参数就取最后一个（PRTS 展示模板的通用约定）；
+    规则：有位置参数就取最后一个（prts.wiki 展示模板的通用约定）；
     只有命名参数时，优先 `内容`／`文本`，否则取第一个命名值。
     """
     name, named, positional = parse_params(inner)
@@ -255,7 +255,7 @@ def to_number(text: str) -> float | int | None:
 
 
 def split_multi(text: str, seps: str = ",，、;；") -> list[str]:
-    """按多种分隔符切列表（PRTS 用 `;;`、`,`、`、` 混用）。"""
+    """按多种分隔符切列表（prts.wiki 用 `;;`、`,`、`、` 混用）。"""
     if not text:
         return []
     tmp = text

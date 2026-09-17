@@ -19,7 +19,7 @@ from typing import Any
 API_ENDPOINT = "https://prts.wiki/api.php"
 WIKI_BASE = "https://prts.wiki/w/"
 
-#: PRTS 的 WAF 会拦掉没有浏览器 UA 的请求（裸 urllib 一律 403）。
+#: prts.wiki 的 WAF 会拦掉没有浏览器 UA 的请求（裸 urllib 一律 403）。
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -27,7 +27,7 @@ DEFAULT_UA = (
 
 DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "cache" / "prts"
 
-#: 两次请求之间的最小间隔（秒）。并发打 PRTS 会吃 403，这是实测出来的值。
+#: 两次请求之间的最小间隔（秒）。并发打 prts.wiki 会吃 403，这是实测出来的值。
 MIN_INTERVAL = 1.2
 
 #: 默认缓存有效期（秒）：7 天。干员数据变动很慢。
@@ -39,7 +39,7 @@ class PrtsError(RuntimeError):
 
 
 class RateLimiter:
-    """进程内全局串行限速器——PRTS 的 WAF 是按来源 IP 计的。"""
+    """进程内全局串行限速器——prts.wiki 的 WAF 是按来源 IP 计的。"""
 
     def __init__(self, min_interval: float = MIN_INTERVAL) -> None:
         self.min_interval = min_interval
