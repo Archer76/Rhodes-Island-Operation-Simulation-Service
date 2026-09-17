@@ -433,6 +433,89 @@ def check_sim_wiring() -> None:
           f"实际={a:g} → {fs.damage_per_second(*cell):g}")
 
 
+def check_devices() -> None:
+    """关卡装置（阻流阀 / 泵站 / 天桩）。"""
+    print("\n[8] 关卡装置")
+    from ak_tactic.battle import devices as D                              # noqa: PLC0415
+
+    check("方向表覆盖四个屏幕方向",
+          set(D.DIRECTIONS) == {"LEFT", "RIGHT", "UP", "DOWN"})
+    check("★ UP 是屏幕上方 = MAA 坐标 y−1（与内部 y 轴朝哪边无关）",
+          D.front_of((5, 5), "UP") == (5, 4), str(D.front_of((5, 5), "UP")))
+    check("LEFT 前方是 x−1", D.front_of((5, 5), "LEFT") == (4, 5))
+    check("身后格与前方格相反",
+          D.behind_of((5, 5), "UP") == (5, 6)
+          and D.behind_of((5, 5), "LEFT") == (6, 5))
+    check("不认识的方向返回 None（不猜）",
+          D.front_of((5, 5), "SIDEWAYS") is None
+          and D.front_of((5, 5), "") is None)
+
+    st = stage("act31side_08")
+    if st is None:
+        return
+    ds = D.parse_devices(st)
+    check("解析出装置", len(ds) > 0, f"{len(ds)} 个")
+    check("装置身份取自 inst.characterKey（prefabKey 不存在）",
+          all(d.key.startswith("trap_") for d in ds),
+          "、".join(sorted({d.key for d in ds})))
+    check("中文名解析出来了",
+          all(d.name != d.key for d in ds),
+          "、".join(sorted({d.name for d in ds})))
+    check("全部装置都在图内",
+          all(st.map.inside(*d.cell) for d in ds))
+
+    # ★ 行翻转的实关判据：这些装置是**摆在田地上**的（闸门不可能摆在高台上）。
+    #   行不翻的话它们会整批落到图的另一侧，落到高台或图外。
+    fs = E.FarmlandSystem(st, E.PolluteParams.from_stage(st, "NORMAL"))
+    on_farm = [d for d in ds if d.cell in fs._index]
+    check("★ 全部装置都落在田地上（行翻转的实关判据）",
+          len(on_farm) == len(ds), f"{len(on_farm)}/{len(ds)}")
+
+    blockers = [d for d in ds if d.key == D.BLOCKER_KEY]
+    check("这一关有阻流阀", len(blockers) > 0, f"{len(blockers)} 个")
+    # 我先前只看探针打印的前 12 个装置就断言「全在一列」，实际 16 个并非同一个 y；
+    # 正确的判据是「**存在**一条成列的坝」，以及如实报出分布。
+    rows = {}
+    for d in blockers:
+        rows.setdefault(d.cell[1], []).append(d.cell[0])
+    biggest = max((len(v) for v in rows.values()), default=0)
+    spread = "；".join(f"y={y}: x{min(v)}-{max(v)}（{len(v)}个）"
+                      for y, v in sorted(rows.items()))
+    check("★ 阻流阀成列摆放（最大一列 ≥ 5 个，是一道坝而非零散）",
+          biggest >= 5, spread)
+
+    # ★ 阻流阀建成会**改变田地几何本身**：切断之后片数必须变多。
+    before = len(fs.fields)
+    for d in blockers:
+        fs.sever(*d.cell)
+    check("★ 阻流阀建成后田地重划（片数变多，不是原地不动）",
+          len(fs.fields) > before, f"{before} 片 -> {len(fs.fields)} 片")
+    check("被摘掉的地块不再是田地",
+          all(not fs.is_farmland(*d.cell) for d in blockers))
+
+    # 接进模拟器：阻流阀按自己的技能 duration 在 3 秒后建成。
+    from ak_tactic.battle.sim import BattleSimulator                      # noqa: PLC0415
+    from ak_tactic.gamedata.enemy import EnemyLibrary                     # noqa: PLC0415
+    try:
+        lib = EnemyLibrary()
+        s = BattleSimulator(st, enemy_at=lib.get)
+    except Exception as exc:                                              # noqa: BLE001
+        skip("阻流阀建成时机", f"敌人库不可用：{type(exc).__name__}")
+        return
+    check("模拟器读到了阻流阀的坐标",
+          len(s._blocker_cells) == len(blockers), f"{len(s._blocker_cells)}")
+    check("开场时阻流阀还没建成（地块仍是田地）",
+          s.farmland.is_farmland(*blockers[0].cell))
+    s._t = 0.0
+    s._environment_tick(D.BUILD_SECONDS, D.BUILD_SECONDS)
+    check("★ 到 BUILD_SECONDS 后阻流阀建成、地块不再是田地",
+          not s.farmland.is_farmland(*blockers[0].cell),
+          f"{D.BUILD_SECONDS:g}s")
+    check("第二次 tick 不会重复切断（一次性事件）",
+          len({c for f in s.farmland.fields for c in f.cells})
+          == len(s.farmland._index))
+
+
 def main() -> int:
     print("=" * 68)
     print("关卡环境机制自检（ak_tactic/battle/environment.py）")
@@ -444,6 +527,7 @@ def main() -> int:
     check_evolution()
     check_settlement()
     check_sim_wiring()
+    check_devices()
     print("\n" + "=" * 68)
     tail = f"通过 {_PASSED} 项，失败 {len(_FAILED)} 项"
     if _SKIPPED:

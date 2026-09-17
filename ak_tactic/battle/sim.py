@@ -269,11 +269,21 @@ class BattleSimulator:
         # 惰性导入——`environment` 依赖 `gamedata`，放在模块顶层会让
         # `battle` 的导入链牵上 gamedata（自检与 TUI 都只想要前者）。
         self.farmland = None
+        #: 阻流阀等装置是否已建成。它们在开场后 `BUILD_SECONDS` 秒才生效，
+        #: 一旦生效就把自身地块从田地里摘掉，**田地几何会在那一刻整片改变**。
+        self._blockers_built = False
         if environment != "off":
             from .environment import FarmlandSystem, PolluteParams
             _p = PolluteParams.from_stage(stage, environment_difficulty)
             if _p is not None and _p.valid:
                 self.farmland = FarmlandSystem(stage, _p)
+                from .devices import BLOCKER_KEY, parse_devices
+                self._blocker_cells = [d.cell for d in parse_devices(stage)
+                                       if d.key == BLOCKER_KEY]
+            else:
+                self._blocker_cells = []
+        else:
+            self._blocker_cells = []
         #: 环境伤害的每秒结算节拍（与病害值的【实际】更新同拍，都是 1 秒）。
         self._env_timer = 0.0
 
@@ -645,6 +655,21 @@ class BattleSimulator:
         fs = self.farmland
         if fs is None:
             return
+
+        from .devices import BUILD_SECONDS
+        # 阻流阀建成：一次性事件，**改变田地几何本身**（它把自身地块从田地里
+        # 摘掉，连片的田地因此被切断）。放在推进之前，因为这一刻之后要靠拢的
+        # 目标（【最大】）已经换了。
+        # 建成耗时取自装置自己的技能 `duration`（「3秒后建成」）。
+        if not self._blockers_built and t >= BUILD_SECONDS:
+            self._blockers_built = True
+            for cell in self._blocker_cells:
+                fs.sever(*cell)
+            if self.verbose and self._blocker_cells:
+                self.result.log.append(
+                    f"{t:7.1f}s  阻流阀建成 ×{len(self._blocker_cells)}，"
+                    f"田地重划为 {len(fs.fields)} 片")
+
         fs.tick(dt)
 
         # 伤害按整秒结算。用整数计数而不是 `>= 1.0` 后清零：掉帧时 dt 可能
