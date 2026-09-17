@@ -48,6 +48,7 @@ __all__ = [
     "StageMechanics",
     "STAGE_FIELDS",
     "split_args",
+    "ref_name",
     "parse_glossary",
     "fetch_glossary",
     "parse_stage_fields",
@@ -218,7 +219,41 @@ class StageMechanics:
         return "\n".join(self.texts.values())
 
 
-_REF_RE = re.compile(r"\{\{\s*特殊机制\s*\|([^|{}]+)")
+#: `{{特殊机制|…}}` 的**全部**顶层参数（不只是第一个）。取整串是因为
+#: 第一个参数**可能是命名参数**：
+#: `{{特殊机制|名称=病害|病害值|color=yellowgreen}}`（怀黍离活动页原文）——
+#: 这里的机制名是第 0 个**位置**参数「病害值」，而「名称=病害」只是显示用的
+#: 标签。原先只取第一个参数，会把机制名读成 `名称=病害`：既不匹配术语表，
+#: 也把"这条正文引用了哪个机制"整个搞错。
+_REF_RE = re.compile(r"\{\{\s*特殊机制\s*\|([^|{}]+(?:\|[^|{}]+)*)")
+
+
+def ref_name(args: str) -> str:
+    """从 `{{特殊机制|…}}` 的参数串里取出**机制名**。
+
+    规则：跳过命名参数（含 `=`），取第一个位置参数。全为命名参数时返回空串。
+    例：`名称=病害|病害值|color=yellowgreen` → `病害值`；
+        `敌方单位|名称=敌方` → `敌方单位`（`名称` 只是显示标签）；
+        `附着：` → `附着：`（页面上确实这么写，名字带冒号，交由调用方处理）。
+
+    ⚠ **页面上的写法与术语表的名字并不总是一一对应**，将来若要写"引用 → 条目"
+    的解析器，下面三类都得先处理（2026-09-17 全量缓存页扫描的结果）：
+
+    * **合并条目**：页面按单个属性引用 `{{特殊机制|明}}` / `{{特殊机制|晦}}`，
+      表里却只有一条「**明晦属性**」（引用得最多的表外名就是这两个）。
+    * **带标点**：`{{特殊机制|附着：}}`（带全角冒号）↔ 表里的「附着」。
+    * **子名**：`{{特殊机制|弱点（P3R）}}` / `{{特殊机制|免疫（P3R）}}` ↔
+      表里的「伤害相性（P3R）」——前两者是后者的两种取值，本身**不是**条目。
+      我自己取的敌人「死志的凝结」正文里就是这么引用的。
+
+    现在不做归一化：这几类名字目前只用于 CLI 展示，没有消费者按它查表；
+    真做归一化时得连带决定"一个引用能不能对上多条"，不该在这里悄悄定。
+    """
+    for part in args.split("|"):
+        p = part.strip()
+        if p and "=" not in p:
+            return p
+    return ""
 
 
 def parse_stage_fields(text: str) -> dict[str, str]:
@@ -247,7 +282,7 @@ def parse_stage_mechanics(title: str, text: str) -> StageMechanics:
     refs: list[str] = []
     for v in fields.values():
         for m in _REF_RE.finditer(v):
-            n = m.group(1).strip()
+            n = ref_name(m.group(1))
             if n and n not in refs:
                 refs.append(n)
     return StageMechanics(title=title, fields=fields, refs=tuple(refs))
