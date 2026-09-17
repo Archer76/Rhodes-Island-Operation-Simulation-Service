@@ -791,22 +791,65 @@ def check_enemy_mech() -> None:
     s, e = mech_sim("enemy_1390_dhsbr_2", 0, cell)
     before = s.farmland.actual_at(*cell)
     mx_before = s.farmland.maximum_at(*cell)
+    fld = s.farmland.field_at(*cell)
+    # 圆心那一格周围有 2 格同片田地，所以这一片缓存该收到 5×2 —— 原文是按
+    # **地块**算的（「半径1.0范围内的田地地块病害值+5」），而缓存是按**连片**存的，
+    # 于是同片里被点到的每格各记一份。这个乘积本身就是一条判据，下面单独验。
+    hit = [c for c in E.cells_in_radius(*cell, 1.0)
+           if s.farmland.is_farmland(*c)]
+    want = 5.0 * len(hit)
     s._damage_enemy(e, e.max_hp + 1, 1.0, DamageType.PHYSICAL)
     check("构造场景里敌人确实被打死了", not e.alive)
     s._enemy_mech_tick(0.05, 1.05)
-    after = s.farmland.actual_at(*cell)
-    check("★ 未被阻挡时：污染落在**自身**那格的田地上（+5）",
-          abs(after - before - 5.0) < 1e-9, f"{before:g}→{after:g}")
-    check("★ 同一格【最大】也被顶上去（否则下一秒就被靠拢拉回去）",
-          s.farmland.maximum_at(*cell) >= max(mx_before, after),
-          f"最大 {mx_before:g}→{s.farmland.maximum_at(*cell):g}")
+    # ★ 博士给的 prts.wiki「特殊机制#病害值」原文：污染**先进【缓存】**，
+    #   每 0.2s 释放 1 点累加到【最大】，【实际】再每 1s 靠拢【最大】。
+    #   所以"倒下那一瞬间"的正确表现是：**只动缓存，两套值都不动**。
+    check("★ 被击倒时污染先进【缓存】（每格 +5），当场不改【实际】/【最大】",
+          abs(fld.cache - want) < 1e-9
+          and s.farmland.actual_at(*cell) == before
+          and s.farmland.maximum_at(*cell) == mx_before,
+          f"缓存={fld.cache:g}（半径内 {len(hit)} 格 ×5）"
+          f" 实际={s.farmland.actual_at(*cell):g}"
+          f" 最大={s.farmland.maximum_at(*cell):g}")
+    cache_after = fld.cache
+    s._enemy_mech_tick(0.05, 1.10)
     check("死亡效果只结一次（第二帧不再加）",
-          (s._enemy_mech_tick(0.05, 1.10)
-           or s.farmland.actual_at(*cell)) == after)
+          abs(fld.cache - cache_after) < 1e-9, f"{cache_after:g}→{fld.cache:g}")
+    # 0.2s 一拍、每拍 1 点 → 1 秒整好放完 5 点（本该放的量）
+    s.farmland.tick(1.0)
+    released = min(cache_after, 5.0)
+    check("★ 缓存每 0.2s 释放 1 点：1.0 秒放 5 点、【最大】涨 5",
+          abs(fld.cache - (cache_after - released)) < 1e-9
+          and abs(s.farmland.maximum_at(*cell) - (mx_before + released)) < 1e-9,
+          f"缓存 {cache_after:g}→{fld.cache:g}、"
+          f"最大 {mx_before:g}→{s.farmland.maximum_at(*cell):g}")
+    check("★ 【实际】不会凭空跟上：同一秒内的靠拢只走 actual_step(差值)",
+          s.farmland.actual_at(*cell)
+          == before + E.actual_step(s.farmland.maximum_at(*cell) - before),
+          f"{before:g}→{s.farmland.actual_at(*cell):g}")
+    check("⚠ 这条链路正是「+N 要不要抬【最大】」那个假两难的答案：两套值都不直接加",
+          not hasattr(E, "POLLUTE_LIFTS_MAX"))
 
-    # 被阻挡时：圆心挪到**挡它的那个干员**脚下那一格（原文的括号条件）
-    other = cells[-1] if cells[-1] != cell else (cell[0] + 1, cell[1])
+    # 缓存是**按连片**的：【最大】按片共享，缓存也跟着按片走。
+    # 一次 pollute_area 里，每一格各自往**它所属那片**的缓存里记一份。
+    c0 = sorted(fld.cells)[0]
+    in_r = E.cells_in_radius(c0[0], c0[1], 1.0)
+    farm_hit = [c for c in in_r if s.farmland.is_farmland(*c)]
+    same = [c for c in farm_hit if s.farmland.field_at(*c) is fld]
+    cache0 = fld.cache
+    got = s.farmland.pollute_area(c0[0], c0[1], 1.0, 5.0)
+    check("★ 逐格各记一份：记入总量 = 5 × 范围内**田地**格数",
+          abs(got - 5.0 * len(farm_hit)) < 1e-9,
+          f"{len(farm_hit)} 格 → 记入 {got:g}")
+    check("★ 缓存按**连片**走：只有同片那几格的量落到这一片的缓存上",
+          abs(fld.cache - cache0 - 5.0 * len(same)) < 1e-9,
+          f"同片 {len(same)} 格 → 本片缓存 +{fld.cache - cache0:g}"
+          f"（余下 {len(farm_hit) - len(same)} 格落在邻居片上）")
 
+    # 被阻挡时：圆心挪到**挡它的那个干员**脚下那一格（原文的括号条件）。
+    # ⚠ 两处踩过的坑：① 圆心必须取**另一片**田地里的格子，否则两边读的是同一个
+    #   Field 对象，"自身那片没动"永远立不住；② 基线必须从**这一场**（s2）取，
+    #   从上一场（s）取的 `fld_self` 是另一个系统的对象，比出来是 15→0。
     class _Stub:
         """只有「还活着 / 在哪」的干员桩。
 
@@ -820,15 +863,22 @@ def check_enemy_mech() -> None:
             self.retreated = False
 
     s2, e2 = mech_sim("enemy_1390_dhsbr_2", 0, cell)
+    fld_self = s2.farmland.field_at(*cell)
+    other = next((c for f in s2.farmland.fields if f is not fld_self
+                  for c in sorted(f.cells)), None)
+    if other is None:
+        skip("被阻挡时的污染圆心", "这一关只有一片田地，分不出两片")
+        other = cell
     e2.blocked_by = _Stub(other)
-    b_self, b_op = s2.farmland.actual_at(*cell), s2.farmland.actual_at(*other)
+    f_op = s2.farmland.field_at(*other)
+    b_self, b_op = fld_self.cache, (f_op.cache if f_op else 0.0)
     s2._damage_enemy(e2, e2.max_hp + 1, 1.0, DamageType.PHYSICAL)
     s2._enemy_mech_tick(0.05, 1.05)
-    check("★ 被阻挡时：圆心是阻挡者那一格（自身那格不动）",
-          s2.farmland.actual_at(*other) > b_op
-          and abs(s2.farmland.actual_at(*cell) - b_self) < 1e-9,
-          f"干员格 {b_op:g}→{s2.farmland.actual_at(*other):g}、"
-          f"自身格 {b_self:g}→{s2.farmland.actual_at(*cell):g}")
+    check("★ 被阻挡时：圆心是阻挡者那一格的**那一片**（自身那片缓存不动）",
+          f_op is not None and f_op.cache > b_op
+          and abs(s2.farmland.field_at(*cell).cache - b_self) < 1e-9,
+          f"干员片缓存 {b_op:g}→{f_op.cache if f_op else 0:g}、"
+          f"自身片缓存 {b_self:g}→{s2.farmland.field_at(*cell).cache:g}")
 
     # 半径 1.0 的**圆**：十字五格，够不到斜角
     check("★ 半径 1.0 是圆不是方（斜角 √2 够不到）",
@@ -963,7 +1013,14 @@ def check_enemy_mech() -> None:
         if dirty is not None:
             e7.position = (float(sorted(dirty.cells)[0][0]),
                            float(sorted(dirty.cells)[0][1]))
-            s7.farmland.pollute_cell(*e7.cell(), 5.0)
+            # ⚠ 不能只 `pollute_cell` 就完事：污染进的是【缓存】，要让这一格
+            #   真的"脏"起来得推进时间（缓存 0.2s 释放 1 点 → 【最大】→
+            #   1s 靠拢 → 【实际】）。
+            s7.farmland.pollute_cell(*e7.cell(), 20.0)
+            s7.farmland.tick(2.0)
+            check("   （构造场景：这一格确实被弄脏了）",
+                  s7.farmland.actual_at(*e7.cell()) > 0,
+                  f"实际={s7.farmland.actual_at(*e7.cell()):g}")
             s7._pm2_tick(e7, 101.0)
             check("★ 离开清水后减益收回（不是单向的）",
                   e7.pm2_clean is False and abs(e7.defense - base_def * 0.3) < 1e-9
@@ -982,11 +1039,12 @@ def check_enemy_mech() -> None:
     check("★ 明识形态记下了伤害来源（标记）", id(op_stub) in e8.marked_ops,
           f"marked={len(e8.marked_ops)}")
     op_stub.alive = False
-    p_before = s8.farmland.actual_at(*cell)
+    f8 = s8.farmland.field_at(*cell)
+    p_before = f8.cache if f8 else 0.0
     s8._pm2_tick(e8, 6.5)
-    check("★ 被标记者退场 → 半径 1.0 内田地 +40（未被阻挡时）",
-          s8.farmland.actual_at(*cell) > p_before,
-          f"{p_before:g}→{s8.farmland.actual_at(*cell):g}")
+    check("★ 被标记者退场 → 半径 1.0 内田地 +40 记入缓存（未被阻挡时）",
+          f8 is not None and f8.cache > p_before,
+          f"缓存 {p_before:g}→{f8.cache if f8 else 0:g}")
     check("标记用掉即摘除（不会每帧重复污染）", not e8.marked_ops)
 
     # 被击倒给装置的机制**只记账**：这是"数据对了、效果无处落地"的如实记录
