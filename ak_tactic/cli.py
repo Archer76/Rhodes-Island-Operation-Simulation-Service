@@ -1415,6 +1415,89 @@ def cmd_formula(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- 地图机制
+
+def cmd_mechanics(args: argparse.Namespace) -> int:
+    """地图机制：取术语表／关卡机制文本，并编译成公式项。
+
+    三条来源在输出里**分别标明**，不混为一谈：
+
+    * 全局术语表 —— prts.wiki「特殊机制」页（每个活动新引入的机制都登记在这）
+    * 单关实数   —— 关卡页的「特殊地形效果」「关卡描述」「情报」字段
+    * gamedata   —— 关卡 JSON 的 ``runes[].blackboard``（数值住 `value`）
+
+    编译走 `ak_tactic.mechanics.parse_mechanic`，与干员/敌人两层同一套规则扫描。
+    """
+    import json as _json
+
+    from .mechanics import (STAGE_FIELDS, fetch_glossary, parse_mechanic,
+                            scan_glossary, stage_mechanics)
+
+    as_json = bool(getattr(args, "json", False))
+
+    if getattr(args, "stage", ""):
+        sm = stage_mechanics(args.stage)
+        terms = parse_mechanic(sm.plain())
+        if as_json:
+            print(_json.dumps({
+                "title": sm.title, "fields": sm.texts, "refs": list(sm.refs),
+                "terms": [t.to_dict() for t in terms],
+            }, ensure_ascii=False, indent=2))
+            return 0
+        if not sm.fields:
+            print(f"{sm.title}：该页没有机制字段（找的是 "
+                  f"{'、'.join(STAGE_FIELDS)}）")
+            return 1
+        print(f"── {sm.title}（关卡页机制字段）")
+        for k, v in sm.texts.items():
+            print(f"\n[{k}]\n  {v}")
+        if sm.refs:
+            print(f"\n引用到的机制：{'、'.join(sm.refs)}")
+        print(f"\n编译出 {len(terms)} 项：")
+        _emit_terms(terms)
+        return 0
+
+    ms = fetch_glossary()
+    if getattr(args, "scan", False):
+        r = scan_glossary(ms)
+        if as_json:
+            print(_json.dumps({k: v for k, v in r.items() if k != "samples"},
+                              ensure_ascii=False, indent=2))
+            return 0
+        print(f"术语表 {r['total']} 条，编译出公式项的 {r['hit']} 条"
+              f" = {r['rate'] * 100:.1f}%")
+        for k, v in r["sections"].items():
+            print(f"  {k:<16} {v['hit']:>2}/{v['total']:<2}"
+                  f" = {v['hit'] / v['total'] * 100:5.1f}%")
+        top = int(getattr(args, "top", 25) or 25)
+        print(f"\n未命中的高频残句（前 {top}）：")
+        for k, n in r["residual"][:top]:
+            print(f"  ×{n}  {r['samples'][k]}  ::  {k[:64]}")
+        return 0
+
+    want = (getattr(args, "name", "") or "").strip()
+    picked = [m for m in ms if not want or want in m.name]
+    if not picked:
+        print(f"术语表里没有匹配「{want}」的机制。")
+        return 1
+    if as_json:
+        print(_json.dumps([{
+            "name": m.name, "section": m.section, "origin": m.origin,
+            "text": m.text, "note": m.note_text,
+            "terms": [t.to_dict() for t in parse_mechanic(m.text)],
+        } for m in picked], ensure_ascii=False, indent=2))
+        return 0
+    for m in picked:
+        terms = parse_mechanic(m.text)
+        print(f"── {m.name}　[{m.section}]　({len(terms)} 项)")
+        print(f"   {m.text[:400]}")
+        if m.note_text:
+            print(f"   ※ {m.note_text[:200]}")
+        _emit_terms(terms)
+        print()
+    return 0
+
+
 # ---------------------------------------------------------------- cache
 
 def cmd_cache(args: argparse.Namespace) -> int:
@@ -1607,6 +1690,21 @@ def build_parser() -> argparse.ArgumentParser:
                          "--enemy --scan 时是 data/enemydb.sqlite）")
     fm.add_argument("--json", action="store_true")
     fm.set_defaults(func=cmd_formula)
+
+    mc = sub.add_parser(
+        "mechanics",
+        help="地图机制：prts.wiki 特殊机制表 + 关卡页机制字段 → 公式项")
+    mc.add_argument("name", nargs="?", default="",
+                    help="机制名（可只给一部分做子串匹配）；留空则列全表")
+    mc.add_argument("--stage", default="",
+                    help='改看某个关卡页的机制字段，如 "HS-8 种因"')
+    mc.add_argument("--scan", action="store_true",
+                    help="统计术语表覆盖率与未命中的高频残句")
+    mc.add_argument("--top", type=int, default=25,
+                    help="scan 时列几条残句（默认 25）")
+    mc.add_argument("--json", action="store_true")
+    mc.set_defaults(func=cmd_mechanics)
+
 
     vf = sub.add_parser(
         "verify", help="验证一份打法：能不能三星，不能又是为什么")
