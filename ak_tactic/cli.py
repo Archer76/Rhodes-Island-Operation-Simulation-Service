@@ -1417,6 +1417,63 @@ def cmd_formula(args: argparse.Namespace) -> int:
 
 # ---------------------------------------------------------------- 地图机制
 
+def cmd_activity(args: argparse.Namespace) -> int:
+    """活动机制完整性盘点。
+
+    每个活动都会新引入一批装置、敌人黑板键、runes 键。这个命令把该活动**全部**
+    承载机制的实体列出来，逐个标出：已实现 / 待实现 / 不需要 / **未登记**。
+
+    判据在 `ak_tactic.activity` 的三张登记表里；任何既没实现、也没登记的东西
+    都会被判 UNKNOWN。派生的用途是"逐活动走一遍、做完整了再进下一个"——
+    先跑这里看还剩什么，做完再把登记表的状态改掉。
+
+    退出码 1 表示有未登记项或活动盘不到；待实现项**不影响退出码**（它们是待办，
+    不是失败——把没做的标成已做才是失败）。
+    """
+    import json as _json
+
+    from .activity import UNKNOWN, audit_activity
+
+    act = args.activity or "act31side"
+    rep = audit_activity(act, with_enemies=not args.no_enemies)
+
+    if getattr(args, "json", False):
+        print(_json.dumps({
+            "activity": rep.activity, "stages": rep.stages,
+            "devices": rep.devices, "runes": rep.runes, "enemies": rep.enemies,
+            "enemy_blackboards": sorted(rep.enemy_bb),
+            "todo": [e.to_dict() for e in rep.todo],
+            "unknown": [{"kind": k, "key": v} for k, v in rep.unknown],
+        }, ensure_ascii=False, indent=2))
+        return 1 if rep.unknown or not rep.stages else 0
+
+    if not rep.stages:
+        print(f"盘不到活动 {act} 的关卡——检查 data/gamedata 下有没有这个目录")
+        return 1
+
+    print(rep.summary())
+    print()
+    print("── 装置")
+    for k, n in rep.devices.items():
+        st = next((e for e in rep._entries() if e.key == k), None)
+        print(f"  {k:<20} ×{n:<5} {st.status if st else UNKNOWN:<9} "
+              f"{st.name if st else ''}")
+    print("── runes")
+    for k, n in rep.runes.items():
+        st = next((e for e in rep._entries() if e.key == k), None)
+        print(f"  {k:<28} ×{n:<5} {st.status if st else UNKNOWN:<9} "
+              f"{st.name if st else ''}")
+    if rep.enemy_bb:
+        print(f"── 敌人黑板机制（{len(rep.enemy_bb)} 类）")
+        for p in sorted(rep.enemy_bb):
+            st = next((e for e in rep._entries() if e.key == p), None)
+            n = len(rep.enemy_bb[p])
+            print(f"  {p:<24} {n} 只  {st.status if st else UNKNOWN:<9} "
+                  f"{st.name if st else ''}")
+    return 1 if rep.unknown else 0
+
+
+
 def cmd_mechanics(args: argparse.Namespace) -> int:
     """地图机制：取术语表／关卡机制文本，并编译成公式项。
 
@@ -1705,6 +1762,17 @@ def build_parser() -> argparse.ArgumentParser:
     mc.add_argument("--json", action="store_true")
     mc.set_defaults(func=cmd_mechanics)
 
+
+
+    ac = sub.add_parser(
+        "activity",
+        help="活动机制完整性盘点：逐个列出装置/敌人黑板/runes 的实现状态")
+    ac.add_argument("activity", nargs="?", default="act31side",
+                    help="活动目录名（默认 act31side = 怀黍离）")
+    ac.add_argument("--no-enemies", action="store_true",
+                    help="跳过敌人黑板（只盘装置与 runes，快很多）")
+    ac.add_argument("--json", action="store_true")
+    ac.set_defaults(func=cmd_activity)
 
     vf = sub.add_parser(
         "verify", help="验证一份打法：能不能三星，不能又是为什么")
