@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ak_tactic.battle import BattleSimulator, Deployment           # noqa: E402
+from ak_tactic.battle.damage import DamageType, resolve_damage      # noqa: E402
 from ak_tactic.battle.talents import (SnowField, find_snow, find_sp_on_action,
                                       squad_cost_bonus)  # noqa: E402
 from ak_tactic.operator.attack_speed import attack_speed_bonus      # noqa: E402
@@ -36,6 +37,8 @@ from ak_tactic.battle.unit import EnemyUnit                          # noqa: E40
 from ak_tactic.operator import (                                    # noqa: E402
     OperatorCalculator, SkillBook, TalentBook,
 )
+from ak_tactic import formula as F                                   # noqa: E402
+from ak_tactic.operator.skill import _wants_dodge                    # noqa: E402
 
 _FAILED: list[str] = []
 _PASSED = 0
@@ -724,6 +727,118 @@ def check_desc_effects(book, book_t) -> None:
           f"实得 {sbell.effects.buffs.get('res_penetrate_fixed')}")
 
 
+def check_dodge(book) -> None:
+    """[13] 闪避：编译层 / 判据层 / 结算层三层同口径，且**不误认**。
+
+    批次一（⑤）新建的链路。补这一节的原因很实在：这条链路**此前全套自检里
+    一条守卫都没有**——只有 `_proto/dodge_check.py` 那个探针在管，而探针不进
+    套件，等于它坏了没人会知道。文档写着「已完成」，回归上却是裸的。
+
+    三层都要守，任何一层断了都是**静默失效**（当初就是这样漏掉整条链路的）：
+
+    ① `formula.py`：正文里带「的」与不带「的」**各占一半**（赤刃技2 原文就没有
+       「的」），旧规则只认带「的」的写法 → 编译层一个项都吐不出来；
+    ② `skill.py` 的 `_wants_dodge`：判据必须走**描述**，不能按黑板键名认——
+       `chen3_s2[respawn_buff].prob` 与提丰的 `attack@prob` 都叫 `prob`，
+       前者是闪避 60%、后者是晕眩 40%，**同名反义**，按键名认必错；
+    ③ `damage.resolve_damage`：**期望值法**（博士 2026-09-17 裁定④）——
+       伤害 ×(1−闪避率)，不掷骰。掷骰会让同一份作业每次跑出不同结果，
+       搜索与回归都不可复现。物理闪避不挡法术、法术闪避不挡物理、
+       真实伤害两类都不吃。
+    """
+    print("\n[13] 闪避（批次一 ⑤）：三层同口径，且不误认")
+
+    # ---- ① 编译层：带「的」与不带「的」都要出项
+    for text, want in [
+        ("获得50%的物理和法术闪避", "物理/法术闪避"),
+        ("获得50%物理和法术闪避", "物理/法术闪避"),      # ← 赤刃的真实写法
+        ("获得19%的物理闪避", "物理闪避"),
+        ("获得19%物理闪避", "物理闪避"),
+        ("获得30%的法术闪避", "法术闪避"),
+        ("获得30%法术闪避", "法术闪避"),
+    ]:
+        got = [t.attr for t in F.parse(text) if t.kind == "dodge"]
+        check(f"formula「{text}」出项", got == [want], f"实得 {got}")
+
+    # ---- ② 判据层：数值正确，且三种**故意不认**的写法必须仍是 (0, 0)
+    for text, want in [
+        ("获得60%物理和法术闪避", (0.6, 0.6)),
+        ("获得60%的物理和法术闪避", (0.6, 0.6)),
+        ("获得19%（+4%）的物理闪避", (0.19, 0.0)),
+        ("获得30%法术闪避", (0.0, 0.3)),
+        # 以下三种是**主动放弃**的写法（宁可少认，不要认错），
+        # 已记进 docs/uncertainties.md，别顺手"修好"它们。
+        ("获得30%的近战物理闪避", (0.0, 0.0)),
+        ("有15%的概率闪避敌人的近战物理攻击", (0.0, 0.0)),
+        ("治疗友方单位后为其提供持续3秒的10%物理闪避", (0.0, 0.0)),
+    ]:
+        got = _wants_dodge(text)
+        check(f"_wants_dodge「{text}」", got == want, f"实得 {got}")
+
+    # ---- ②b 真实干员：赤刃技2 取到 60%，且它落在 variants 而不是 buffs
+    chen2 = book.for_operator("char_1050_chen3")[1].level(7, 3)
+    check("赤刃明霄陈技2 取到 60% 物理闪避",
+          close(chen2.effects.dodge_phys, 0.6), f"实得 {chen2.effects.dodge_phys}")
+    check("赤刃明霄陈技2 取到 60% 法术闪避",
+          close(chen2.effects.dodge_arts, 0.6), f"实得 {chen2.effects.dodge_arts}")
+    check("技2 的 +300% 攻击力落在 variants（键带 [respawn_buff] 前缀）",
+          close(chen2.effects.variants.get("respawn_buff", {}).get("atk", 0.0), 3.0),
+          f"实得 {chen2.effects.variants.get('respawn_buff', {}).get('atk')}")
+    check("技2 的变体值**不该**混进 buffs",
+          close(chen2.effects.buffs.get("atk", 0.0), 0.0),
+          f"实得 {chen2.effects.buffs.get('atk')}")
+
+    # ---- ②c 第二个真实用户：阿米娅(近卫)技1「影霄·奔夜」
+    # 原文：「…攻击变为二连击，获得{prob:0%}的法术闪避」。
+    # **是法术闪避、没有物理**——两个字段要分开验，不能只看"有没有闪避"。
+    # 这条是补守卫时新发现的：此前只有中坚术师形态被测过，近卫形态没人管。
+    ami1 = book.for_operator("char_1001_amiya2")[0].level(7, 3)
+    check("阿米娅(近卫)技1 只有法术闪避（60%），不带物理",
+          close(ami1.effects.dodge_arts, 0.6) and close(ami1.effects.dodge_phys, 0.0),
+          f"实得 phys={ami1.effects.dodge_phys} arts={ami1.effects.dodge_arts}")
+
+    # ---- ②d 同名反义：提丰的 attack@prob 是晕眩，不能被认成闪避
+    ty2 = book.for_operator("char_2012_typhon")[1].level(7, 3)
+    check("提丰技2（attack@prob = 晕眩 40%）不产生闪避",
+          close(ty2.effects.dodge_phys, 0.0) and close(ty2.effects.dodge_arts, 0.0),
+          f"实得 phys={ty2.effects.dodge_phys} arts={ty2.effects.dodge_arts}")
+
+    # ---- ②e 前十名里，除赤刃技2 与阿米娅(近卫)技1 外都不该有闪避
+    # （防判据放宽后误伤：这三处的 prob/闪避字样必须各归各位）
+    for name, cid in [("圣聆初雪", "char_1046_sbell2"), ("逻各斯", "char_4133_logos"),
+                      ("予愿安洁莉娜", "char_1015_aglna2"),
+                      ("机械师", "char_4230_mcnist"), ("望", "char_2027_wang"),
+                      ("电弧", "char_4195_radian"), ("令", "char_2023_ling"),
+                      ("阿米娅(中坚术师)", "char_002_amiya")]:
+        bad = [(s.name, s.level(7, 3).effects.dodge_phys,
+                s.level(7, 3).effects.dodge_arts)
+               for s in book.for_operator(cid)
+               if s.level(7, 3).effects.dodge_phys
+               or s.level(7, 3).effects.dodge_arts]
+        check(f"{name} 的技能都不带闪避", not bad, f"误判 {bad}")
+
+    # ---- ③ 结算层：期望值法的算术
+    r = resolve_damage(1000, damage_type=DamageType.PHYSICAL, defense=0.0,
+                       dodge_phys=0.6)
+    check("物理 1000 ×(1−0.6) = 400（期望值法，不掷骰）",
+          close(r.final, 400.0), f"实得 {r.final}")
+    check("结算结果里如实记下 dodged", close(r.dodged, 0.6), f"实得 {r.dodged}")
+    r2 = resolve_damage(1000, damage_type=DamageType.PHYSICAL, defense=0.0,
+                        dodge_arts=0.6)
+    check("物理闪避不挡法术、法术闪避不挡物理",
+          close(r2.final, 1000.0), f"实得 {r2.final}")
+    r3 = resolve_damage(1000, damage_type=DamageType.TRUE, defense=999.0,
+                        dodge_phys=0.6, dodge_arts=0.6)
+    check("真实伤害两类闪避都不吃", close(r3.final, 1000.0), f"实得 {r3.final}")
+    r4 = resolve_damage(1000, damage_type=DamageType.PHYSICAL, defense=0.0,
+                        dodge_phys=1.5)
+    check("闪避 >1 夹到 1（不会反向加伤）", close(r4.final, 0.0), f"实得 {r4.final}")
+    r5 = resolve_damage(1000, damage_type=DamageType.PHYSICAL, defense=100.0)
+    check("不传闪避时与改动前逐字一致（三条基线不被波及的前提）",
+          close(r5.final, 900.0) and r5.floored is False,
+          f"实得 {r5.final} / floored={r5.floored}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="战斗与技能的回归检查")
     ap.parse_args()
@@ -750,6 +865,7 @@ def main() -> int:
     check_effect_source(stage, lib, calc, book)
     check_attack_speed(calc)
     check_desc_effects(book, book_t)
+    check_dodge(book)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

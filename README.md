@@ -207,7 +207,7 @@ ak-tactic/
 | 终端界面的方案与裁定 | [`docs/tui-plan.md`](docs/tui-plan.md) |
 | 关卡数据与解法记录 | [`docs/stage-1-7.md`](docs/stage-1-7.md)、[`docs/stage-sr-6.md`](docs/stage-sr-6.md)、[`docs/stage-sr-ex-8.md`](docs/stage-sr-ex-8.md)、[`docs/srx8-qi-solution.md`](docs/srx8-qi-solution.md)、[`docs/real-run-srx8.md`](docs/real-run-srx8.md) |
 | 具体干员／敌人的机制口径 | [`docs/wang-mechanics.md`](docs/wang-mechanics.md)、[`docs/ranged-enemy-rule.md`](docs/ranged-enemy-rule.md)、[`docs/squad-skill-audit.md`](docs/squad-skill-audit.md)、[`docs/enemies-sr-ex-8.md`](docs/enemies-sr-ex-8.md) |
-| 实施进度与任务拆分 | [`docs/roadmap.md`](docs/roadmap.md) |
+| 实施进度与任务拆分 | [`docs/roadmap.md`](docs/roadmap.md)、[`docs/batch2-plan.md`](docs/batch2-plan.md) |
 | 还没定的事、还在猜的事 | [`docs/uncertainties.md`](docs/uncertainties.md)、[`docs/limitations.md`](docs/limitations.md) |
 
 ## 已知局限
