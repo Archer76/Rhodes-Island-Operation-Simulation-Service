@@ -239,6 +239,24 @@ def check_stage_fields() -> None:
     check("引用到的机制名被抽出、且去重",
           sm2.refs == ("病害值", "田地"), str(sm2.refs))
 
+    # ★ 命名参数在前的写法（怀黍离活动页 2026-09-17 原文逐字）：
+    #   {{特殊机制|名称=病害|病害值|color=yellowgreen}}
+    #   机制名是第 0 个**位置**参数「病害值」；「名称=病害」只是显示标签。
+    #   只取第一个参数会读出 `名称=病害`——机制名整个错掉、且与术语表不失配。
+    named = ("{{关卡信息|关卡描述=在{{color|yellowgreen|田地}}中，"
+             "奇怪的织物正在散播{{特殊机制|名称=病害|病害值|color=yellowgreen}}。}}\n")
+    sm3 = M.parse_stage_mechanics("怀黍离", named)
+    check("★ 命名参数在前的引用取的是位置参数（不是 `名称=…`）",
+          sm3.refs == ("病害值",), str(sm3.refs))
+    check("★ ref_name 的四种形态",
+          (M.ref_name("名称=病害|病害值|color=yellowgreen") == "病害值"
+           and M.ref_name("敌方单位|名称=敌方") == "敌方单位"
+           and M.ref_name("病害值") == "病害值"
+           and M.ref_name("名称=病害") == ""),
+          f"{M.ref_name('名称=病害|病害值|color=yellowgreen')!r}、"
+          f"{M.ref_name('敌方单位|名称=敌方')!r}、"
+          f"{M.ref_name('名称=病害')!r}")
+
 
 # ---------------------------------------------------------------- 5 精度守卫
 

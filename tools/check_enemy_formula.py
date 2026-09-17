@@ -26,6 +26,10 @@ from ak_tactic.enemy_formula import (ENEMY_RULES, RULES_ENEMY,       # noqa: E40
 _PASSED = 0
 _FAILED: list[str] = []
 
+#: 抓一个完整的 `{{特殊机制|…}}`（参数里不含花括号——引用都是浅层的，够用）。
+#: 用它做"有没有被洗成空串"的扫描，比在语料里数正文更可靠。
+_MECH_CALL = re.compile(r"\{\{\s*特殊机制\s*\|[^|{}]*(?:\|[^|{}]*)*\}\}")
+
 
 def check(label: str, ok: bool, detail: str = "") -> None:
     global _PASSED
@@ -87,6 +91,22 @@ def check_detemplate() -> None:
     left = [r for r in corpus if "{{" in detemplate(r["text"])
             or "}}" in detemplate(r["text"])]
     check("全量语料洗完零残留花括号", not left, f"残留 {len(left)} 条")
+
+    # ★ `{{特殊机制|…}}` 是**唯一**会把整段引用洗成空串的形态：它的正文取第 0 个
+    #   位置参数，而页面上存在把机制名写成命名参数的写法
+    #   （`{{特殊机制|名称=病害|病害值|color=yellowgreen}}`，怀黍离活动页原文）。
+    #   一旦出现**只有**命名参数的调用，`detemplate` 会静默返回空串——
+    #   整句话的宾语凭空消失且不报错。这条守卫盯着它。
+    calls = [c for r in corpus for c in _MECH_CALL.findall(r["text"])]
+    empties = [c for c in calls if not detemplate(c).strip()]
+    check("★ 语料里没有「展开成空串」的 {{特殊机制|…}} 调用",
+          not empties,
+          f"空了 {len(empties)} 处" + (f"，例：{empties[0]}" if empties else ""))
+    named = [c for c in calls
+             if any("=" in a for a in c.split("|")[1:])]
+    print(f"       语料里 {{特殊机制}} 调用共 {len(calls)} 处，"
+          f"其中带命名参数的 {len(named)} 处"
+          + (f"（例：{named[0]}）" if named else ""))
 
 
 # ---------------------------------------------------------------- 2 语料
