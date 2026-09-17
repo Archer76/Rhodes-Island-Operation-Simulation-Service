@@ -274,15 +274,18 @@ class BattleSimulator:
         self._blockers_built = False
         if environment != "off":
             from .environment import FarmlandSystem, PolluteParams
+            from .devices import BLOCKER_KEY, parse_devices
             _p = PolluteParams.from_stage(stage, environment_difficulty)
             if _p is not None and _p.valid:
                 self.farmland = FarmlandSystem(stage, _p)
-                from .devices import BLOCKER_KEY, parse_devices
-                self._blocker_cells = [d.cell for d in parse_devices(stage)
+                self._devices = parse_devices(stage)
+                self._blocker_cells = [d.cell for d in self._devices
                                        if d.key == BLOCKER_KEY]
             else:
+                self._devices = []
                 self._blocker_cells = []
         else:
+            self._devices = []
             self._blocker_cells = []
         #: 环境伤害的每秒结算节拍（与病害值的【实际】更新同拍，都是 1 秒）。
         self._env_timer = 0.0
@@ -680,6 +683,15 @@ class BattleSimulator:
         if ticks <= 0:
             return
         self._env_timer -= ticks
+
+        # 泵站泵水（每秒一次）。必须排在伤害结算**之前**：泵水改的是病害值，
+        # 而这一秒的伤害要按**泵过之后**的病害值算——反过来的话，玩家用泵站
+        # 压低病害值的那一秒仍会按旧值挨打，且这个偏差在每秒都发生。
+        from .environment import pump_once
+        if self._devices:
+            pump_once(fs, self._devices,
+                      ally_cells=[op.position for op in self.operators
+                                  if op.alive])
 
         for op in self.operators:
             if not op.alive:

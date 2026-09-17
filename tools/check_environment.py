@@ -516,6 +516,108 @@ def check_devices() -> None:
           == len(s.farmland._index))
 
 
+def check_pump() -> None:
+    """泵站「泵水」。
+
+    实关里泵站的水源地**多半是清澈的**（8 关 14 个泵站里，开场【实际】>0 的
+    几乎没有），所以受污那一支、以及「范围+2」必须**用构造场景测**——
+    只跑实关会把两个分支全漏掉，而覆盖率看着还是满的。
+    """
+    print("\n[9] 泵站")
+    st = stage("act31side_04")
+    if st is None:
+        return
+    from ak_tactic.battle.devices import parse_devices, PUMP_KEY            # noqa: PLC0415
+    from ak_tactic.battle.environment import pump_once                      # noqa: PLC0415
+
+    pumps = [d for d in parse_devices(st) if d.key == PUMP_KEY]
+    check("这一关有泵站", len(pumps) > 0, f"{len(pumps)} 个")
+    if not pumps:
+        return
+    p = pumps[0]
+
+    def fresh():
+        return E.FarmlandSystem(st, E.PolluteParams.from_stage(st, "NORMAL"))
+
+    fs = fresh()
+    src, tgt = p.behind, p.front
+    check("条件齐备（身后与前方都是田地）",
+          fs.is_farmland(*src) and fs.is_farmland(*tgt),
+          f"身后{src} 前方{tgt}")
+
+    # ---- 清澈分支：只降【最大】，不动各格【当前】
+    check("源头开场是清澈的", fs.actual_at(*src) == 0)
+    g = fs.field_at(*tgt)
+    before_max, before_act = g.maximum, fs.actual_at(*tgt)
+    r = fs.pump(p.cell, p.direction)
+    check("★ 清澈 → 目标组【最大】−1", r and r["kind"] == "clear"
+          and g.maximum == before_max - 1, f"{before_max:g} → {g.maximum:g}")
+    check("★ 清澈分支**不动**各格【当前】（与受污分支不对称，原文如此）",
+          fs.actual_at(*tgt) == before_act, f"当前 {before_act:g}")
+
+    # ---- 受污分支：既抬【最大】也抬**各格的**【当前】
+    # ⚠ 必须同时抬**水源地那片田的【最大】**。我第一版只把那一格的【当前】
+    #   设成 50、却留着组【最大】=0，于是停止条件 `目标组max >= 水源地max`
+    #   立刻成立（30>=0）而返回 hold —— 那是**构造出来的不可能状态**：
+    #   正常演化里【当前】是朝【最大】靠拢的，不会出现当前 50 而最大 0。
+    fs = fresh()
+    g = fs.field_at(*tgt)
+    gs = fs.field_at(*src)
+    gs.maximum = 50.0
+    fs.actual[src] = 50.0
+    m0 = g.maximum
+    act_cells = {c: fs.actual_at(*c) for c in list(g.cells)[:5]}
+    r = fs.pump(p.cell, p.direction)
+    check("★ 受污 → 目标组【最大】+1", r and r["kind"] == "raise"
+          and g.maximum == m0 + 1, f"{m0:g} → {g.maximum:g}")
+    check("★ 并且**每一格的【当前】也 +1**（不是只抬最大）",
+          all(fs.actual_at(*c) == v + 1 for c, v in act_cells.items()),
+          f"{len(act_cells)} 格")
+
+    # ---- 停止条件：目标组【最大】≥ 水源地【最大】时停（组间比较）
+    fs = fresh()
+    g = fs.field_at(*tgt)
+    gs = fs.field_at(*src)
+    gs.maximum = 30.0
+    fs.actual[src] = 30.0
+    g.maximum = 30.0
+    r = fs.pump(p.cell, p.direction)
+    check("★ 追平后停止增加（比的是**组间【最大】**，不是那一格的【当前】）",
+          r is not None and r["kind"] == "hold" and r["delta"] == 0.0,
+          str({k: v for k, v in (r or {}).items() if k != "group"}))
+
+    # ---- 范围：默认身前一格；水源地有我方单位时 +2
+    check("★ 范围是**前方格数**（1 → 3），不是攻击范围那种几何",
+          E.PUMP_RANGE == 1 and E.PUMP_RANGE_BONUS == 2)
+    fs = fresh()
+    check("默认范围下找得到目标", fs.pump(p.cell, p.direction) is not None)
+    check("水源地有我方单位时用 3 格（本轮实关无此场景，走参数）",
+          fs.pump(p.cell, p.direction, ally_on_source=True) is not None)
+
+    # ★ 身后不是田地 → 一定不泵水。用「拿目标格当泵站、朝原方向」构造：
+    #   它的身后是泵站自己那格，而那格**是**田地，所以不能这么测；
+    #   改用朝地图外的一侧，身后必然越界。
+    out_open = E.FarmlandSystem(st, E.PolluteParams.from_stage(st, "NORMAL"))
+    edge = min(out_open._index, key=lambda c: c[0])       # 最左的田地格
+    check("★ 身后越界（不是田地）→ 完全不泵水",
+          out_open.pump(edge, "RIGHT") is None
+          or out_open.field_at(edge[0] + 1, edge[1]) is not None,
+          f"取 {edge} 朝右")
+    check("方向不认识 → 不泵水（不猜）", out_open.pump(p.cell, "SIDEWAYS") is None)
+
+    # ---- 驱动函数：只认 PUMP_KEY，别的装置混进来要被忽略
+    fs = fresh()
+    mixed = pumps + [d for d in parse_devices(st) if d.key != PUMP_KEY]
+    out = pump_once(fs, mixed, ally_cells=())
+    check("★ pump_once 只驱动泵站，混进别的装置会被忽略",
+          all(isinstance(x, dict) for x in out), f"{len(out)} 条")
+    check("泵水速率是每秒 1 点（原文「以每秒1点的速度」）",
+          E.PUMP_RATE == 1.0)
+
+
+
+
+
 def main() -> int:
     print("=" * 68)
     print("关卡环境机制自检（ak_tactic/battle/environment.py）")
@@ -528,6 +630,7 @@ def main() -> int:
     check_settlement()
     check_sim_wiring()
     check_devices()
+    check_pump()
     print("\n" + "=" * 68)
     tail = f"通过 {_PASSED} 项，失败 {len(_FAILED)} 项"
     if _SKIPPED:

@@ -32,10 +32,13 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Iterator
 
+from .devices import DIRECTIONS, PUMP_KEY, behind_of
+
 __all__ = [
     "DIFFICULTIES", "RUNES_KEY", "FARMLAND_EXCLUDED_KEYS",
     "POLLUT_MIN", "POLLUT_MAX", "CACHE_INTERVAL", "CACHE_PER_TICK",
     "ACTUAL_INTERVAL", "ACTUAL_PER_DIVISOR", "ACTUAL_BASE_STEP",
+    "PUMP_RATE", "PUMP_RANGE", "PUMP_RANGE_BONUS",
     "mask_applies", "find_rune", "bb_number", "bb_text",
     "parse_init_pollut", "is_farmland", "farmland_cells", "farmland_groups",
     "PolluteParams", "Field", "FarmlandSystem", "actual_step",
@@ -75,6 +78,14 @@ ACTUAL_PER_DIVISOR = 25.0
 
 #: 上面那句里的「+1」按哪种读法算。见 `actual_step`。
 ACTUAL_BASE_STEP = 1.0
+
+#: 泵站的泵水速率（点/秒）。原文「以每秒1点的速度」。
+PUMP_RATE = 1.0
+#: 前方生效范围的默认格数。原文「自身前方生效范围（默认身前一格）」。
+PUMP_RANGE = 1
+#: 水源地部署有我方单位时的范围加成。原文「自身生效范围+2」——
+#: 加的是**前方格数**（1 → 3），不是攻击范围那种几何。
+PUMP_RANGE_BONUS = 2
 
 
 # ================================================================ 一、runes 黑板
@@ -193,6 +204,32 @@ def farmland_groups(stage_map: Any,
                     stack.append(nb)
         groups.append(group)
     return groups
+
+
+def pump_once(system: "FarmlandSystem", devices: Iterable[Any], *,
+              ally_cells: Iterable[tuple[int, int]] = (),
+              rate: float = PUMP_RATE) -> list[dict[str, Any]]:
+    """让一批泵站各泵水一次（每秒调用一次）。
+
+    处理两条叠加规则：
+
+    * **同一泵站对同一连片田地只生效一次**——所以按 (泵站, 目标组) 去重，
+      同一个泵站在同一次结算里不会对同一片田连加两下；
+    * **多个泵站作用于同一连片田地时效果可叠加**——所以**不跨泵站去重**。
+
+    只收 `PUMP_KEY` 的装置；传别的进来会被忽略（不是报错，装置表本来就会混着装）。
+    """
+    allies = set(ally_cells)
+    out: list[dict[str, Any]] = []
+    for d in devices:
+        if getattr(d, "key", None) != PUMP_KEY:
+            continue
+        r = system.pump(d.cell, d.direction,
+                        ally_on_source=d.behind in allies, rate=rate)
+        if r is not None:
+            r["device"] = d.cell
+            out.append(r)
+    return out
 
 
 # ================================================================ 三、参数
@@ -398,6 +435,77 @@ class FarmlandSystem:
         self.fields = [f for f in self.fields if f is not old] + fresh
         self._rebuild_index()
         return self.fields
+
+    # ---------------------------------------------------------- 泵站
+
+    def pump(self, cell: tuple[int, int], direction: str, *,
+             ally_on_source: bool = False, rate: float = PUMP_RATE,
+             front_range: int | None = None) -> dict[str, Any] | None:
+        """泵站「泵水」一次（每秒结算一次）。
+
+        原文（prts.wiki「泵站」装置机制，逐字）：
+
+            部署后若自身身后一格为田地，且自身前方生效范围（默认身前一格）
+            存在可用的田地时执行泵水：将身后一格的水泵至生效范围
+            · 若水源地为清澈（病害值=0），则以每秒1点的速度'''降低'''目标格
+              所在连片田地【最大病害值】；
+            · 若水源地为污染状态（病害值>0），则以每秒1点的速度'''增加'''目标格
+              所在连片田地各田地【当前病害值】及【最大病害值】，当 目标格所在
+              连片田地≥水源地 的【最大病害值】时停止增加；
+            · 若水源地部署有我方单位，自身生效范围+2；
+            · 同一泵站对同一连片田地只生效一次增减效果，多个泵站作用于同一
+              连片田地时效果可叠加
+
+        三处容易被"顺手续上"的地方，这里都按原文的边界停住：
+
+        * **降低的只有【最大】**，不动各格的【当前】；而**增加的既有【当前】
+          也有【最大】**。两个分支不对称，这是原文自己写的，不是笔误。
+        * 污染的停止条件是 **目标组【最大】 ≥ 水源地【最大】**（组间比较），
+          不是"等于水源地那一格的病害值"。
+        * `生效范围` 是**前方格数**（默认 1），不是我方单位那种攻击范围几何。
+
+        返回这一步做了什么（便于自检与日志）；条件不满足时返回 None。
+        """
+        src = behind_of(cell, direction)
+        if src is None or not self.is_farmland(*src):
+            return None                      # 身后一格不是田地 → 不泵水
+
+        span = PUMP_RANGE if front_range is None else front_range
+        if ally_on_source:
+            span += PUMP_RANGE_BONUS
+        d = DIRECTIONS[(direction or "").upper()]
+        target = None
+        for k in range(1, span + 1):
+            cand = (cell[0] + d[0] * k, cell[1] + d[1] * k)
+            if self.is_farmland(*cand):
+                target = cand
+                break
+        if target is None:
+            return None                      # 前方生效范围内没有可用的田地
+
+        g = self.field_at(*target)
+        if g is None:
+            return None
+
+        src_wet = self.actual_at(*src)
+        if src_wet <= 0:
+            moved = min(rate, g.maximum)
+            g.maximum -= moved
+            g.clamp()
+            return {"kind": "clear", "source": src, "target": target,
+                    "group": id(g), "delta": -moved}
+
+        # 受污：抬目标组的【最大】与**各格的【当前】**，直到追平水源组的【最大】
+        src_max = self.maximum_at(*src)
+        if g.maximum >= src_max:
+            return {"kind": "hold", "source": src, "target": target,
+                    "group": id(g), "delta": 0.0}
+        g.maximum += rate
+        g.clamp()
+        for c in g.cells:
+            self.actual[c] = min(POLLUT_MAX, self.actual.get(c, 0.0) + rate)
+        return {"kind": "raise", "source": src, "target": target,
+                "group": id(g), "delta": rate}
 
     # ---------------------------------------------------------- 演化
 
