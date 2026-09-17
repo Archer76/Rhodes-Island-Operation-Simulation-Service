@@ -224,6 +224,42 @@ class OperatorUnit(Combatant):
     #: 只能由描述驱动（`skill._wants_dodge`），不能按键名认。
     dodge_phys: float = 0.0
     dodge_arts: float = 0.0
+    #: 当前屏障剩余量。**先于生命值被消耗**——`take()` 里屏障扛完才动血条。
+    #: 由技能授予（`SkillEffects.barrier_pct` × 当前生命上限），**技能结束时清零**；
+    #: 召唤物没有自己的技能槽，所以它的屏障是主人开技能时**发下来**的
+    #: （`SkillEffects.affects_summons`）。
+    #:
+    #: 只做「吸收伤害」这一件事：衰减、叠加上限、只吸某一系、损伤屏障都**没做**
+    #: （哪些写法故意不认，逐条列在 `operator/skill.py` 的 `_BARRIER_NOT_SELF`
+    #: 与 `_BARRIER_RATIO` 上方）。
+    barrier: float = 0.0
+    #: 累计被屏障吸收掉的伤害，便于对账——它**不算**进 `damage_taken`，
+    #: 因为 `damage_taken` 记的是真实掉掉的血。
+    barrier_absorbed: float = 0.0
+
+    def take(self, amount: float) -> float:
+        """挨打。**屏障先扛**，扛完剩下的才动血条。
+
+        覆写在这里而不是 `Combatant` 上：屏障是干员与召唤物的机制，
+        敌人没有（`EnemyUnit` 一行都不用改，三关基线自然不受影响）。
+        返回值仍是"真实扣掉多少血"，与基类同义，所以对账口径不变。
+        """
+        if self.barrier > 0.0:
+            absorbed = min(self.barrier, max(0.0, amount))
+            self.barrier -= absorbed
+            self.barrier_absorbed += absorbed
+            amount -= absorbed
+        return super().take(amount)
+
+    def grant_barrier(self, pct: float) -> None:
+        """按当前**生命上限**的比例授予屏障。`pct` 是比例（1.0 = 100%）。
+
+        用 `max_hp` 而不是 `hp`——描述写的是「最大生命值」，与当前血量无关。
+        取「新的更大才替换」而不是累加：同一技能重复授予（召唤物在技能期间
+        新放下一个）不该把屏障叠上去；叠加上限本就没建模。
+        """
+        if pct > 0.0:
+            self.barrier = max(self.barrier, pct * self.max_hp)
     #: 是不是**撤离/退场**离场的。`Combatant.alive` 只看血量，而强制退场
     #: 时干员是满血的，所以必须覆写：让 `alive` 一次覆盖「被打死」与
     #: 「自己下场」两种不在场，其它所有 `if op.alive` 的地方自动跟着对。

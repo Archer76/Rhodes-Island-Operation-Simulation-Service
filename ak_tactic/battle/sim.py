@@ -1190,6 +1190,20 @@ class BattleSimulator:
                 self._activate(op, t)
             op.skill_request = False
 
+    def _grant_barrier(self, op: OperatorUnit, pct: float, *,
+                       to_summons: bool) -> None:
+        """把屏障发给 `op`；`to_summons` 时连它的召唤物一起发。
+
+        比例是对**各自的生命上限**算的，不是对主人的——召唤物的生命上限与
+        主人无关（戴乌 3230、电弧是另一个数），共用一个数会静默算错。
+        """
+        op.grant_barrier(pct)
+        if not to_summons:
+            return
+        for sm in self.operators:
+            if sm.summon_of == op.char_id and sm.alive:
+                sm.grant_barrier(pct)
+
     def _activate(self, op: OperatorUnit, t: float, *, passive: bool = False) -> None:
         sk = op.skill
         if sk is None:
@@ -1215,6 +1229,12 @@ class BattleSimulator:
         # 与提丰技2 的「40% 概率晕眩」同名反义，按键名认必错。
         op.dodge_phys = sk.effects.dodge_phys
         op.dodge_arts = sk.effects.dodge_arts
+        # 屏障：「获得 N% 最大生命值的屏障，持续至技能结束」（电弧技1）。
+        # 主语写「自身和召唤物」时，**同一份也发给主人的召唤物**——召唤物
+        # 自己没有技能槽，不发下去它永远拿不到（`SkillEffects.affects_summons`）。
+        if sk.effects.barrier_pct > 0.0:
+            self._grant_barrier(op, sk.effects.barrier_pct,
+                                to_summons=sk.effects.affects_summons)
         # 回费技能（德克萨斯、桃金娘这一类）：开启时直接给费用
         gain_cost = sk.effects.buffs.get("cost", 0.0)
         if gain_cost:
@@ -1243,6 +1263,14 @@ class BattleSimulator:
         # 闪避也是"持续至技能结束"的一类，出技能就掉回去。
         op.dodge_phys = 0.0
         op.dodge_arts = 0.0
+        # 屏障同理：「持续至技能结束」——描述写的就是这句。发下去的召唤物
+        # 屏障一并清掉，否则技能结束后它还白扛着（那是"技能结束"没生效）。
+        if sk is not None and sk.effects.barrier_pct > 0.0:
+            op.barrier = 0.0
+            if sk.effects.affects_summons:
+                for sm in self.operators:
+                    if sm.summon_of == op.char_id:
+                        sm.barrier = 0.0
         # 技能结束时的**自身**效果，两条都只在描述里写明，判据在 skill.py。
         if sk is not None:
             if sk.effects.self_stun:
@@ -1465,6 +1493,13 @@ class BattleSimulator:
             d, book=self.summon_book or SummonBook())
         self.cost = max(0.0, self.cost - unit.deploy_cost)
         self.operators.append(unit)
+        # 主人的屏障技能正开着时，新放下的这个**当场拿到一份**——否则技能期间
+        # 补一个召唤物就白补了（描述是「自身和召唤物……持续至技能结束」）。
+        sk = owner.skill
+        if (sk is not None and owner.skill_active
+                and sk.effects.barrier_pct > 0.0
+                and sk.effects.affects_summons):
+            unit.grant_barrier(sk.effects.barrier_pct)
         self.result.summons_deployed += 1
         if self.verbose:
             self.result.log.append(
