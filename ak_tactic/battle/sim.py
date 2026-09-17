@@ -703,11 +703,15 @@ class BattleSimulator:
 
     def _pollute_around(self, e: EnemyUnit, t: float, amount: float,
                         radius: float, why: str) -> float:
-        """在「阻挡自身的单位(被阻挡时)/自身(未被阻挡时)」周围抬高田地病害值。
+        """在「阻挡自身的单位(被阻挡时)/自身(未被阻挡时)」周围给田地加病害。
 
         圆心按原文取：被阻挡时是**挡它的那个干员**脚下那一格，否则是敌人
         自己脚下那一格。半径按**圆**算（半径 1.0 恰好够到上下左右四邻、
         够不到斜角，见 `environment.cells_in_radius`）。
+
+        ⚠ 加的是**【缓存】**，不是当场改【实际】/【最大】——「病害值 +N」的
+        落地路径是 缓存 →（每 0.2s 释放 1 点）→【最大】 →（每 1s 靠拢）→【实际】。
+        所以日志写「记入缓存 N」，不要写成「病害值立刻 +N」。
         """
         if amount <= 0.0 or self.farmland is None:
             return 0.0
@@ -718,8 +722,8 @@ class BattleSimulator:
         got = self.farmland.pollute_area(int(cx), int(cy), radius, amount)
         if got > 0.0 and self.verbose:
             self.result.log.append(
-                f"{t:7.1f}s  {e.name} {why} → 田地病害值 +{got:.0f}"
-                f"（{amount:g} × 范围内田地格）")
+                f"{t:7.1f}s  {e.name} {why} → 田地病害 +{got:.0f} 记入缓存"
+                f"（{amount:g} × 范围内田地格，随后每 0.2s 释放 1 点到【最大】）")
         return got
 
     def _note_knockdown(self, target: EnemyUnit, t: float) -> None:
