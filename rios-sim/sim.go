@@ -80,11 +80,35 @@ type enemy struct {
 	rebornChargeAt float64
 	rebornCharge   int
 	rebornDefBase  float64 //: 防御力基准：充能加成每次都按它重算，不能累乘
+	//: 重生期召唤的下一拍时刻（与 `spec.RebornSummons` 一一对应，-1 = 不排了）
+	rebornSummonAt []float64
+
+	// ---- 蜕皮（原版 `Passive_Hit.*`，「祟」的混沌形态）
+	//
+	//: 挨打次数（每满 `PhitCnt` 就消耗掉一层；原版 `phit_hits`）
+	phitHits int
+	//: 已经叠到的层数（上限 `PhitMaxStack`，到顶后整段不再发生）
+	phitStacks int
+
+	//: 造它的那个模拟器——挨打效果（蜕皮加病害）要问机制层，机制层挂在
+	//: 模拟器上。之所以用反向指针而不是给 `take()` 加参数：`take()` 有多个
+	//: 调用点（普攻、技能、机制伤害），**加参数就会有下一次忘记的地方**，
+	//: 而忘记的症状是"这一族效果静默不生效"。指针在 `newEnemy` 里一次设好。
+	sim *simCtx
 
 	index int //: 出生顺序（同分排序用，等价于原版敌人列表的顺序）
 }
 
 func (e *enemy) alive() bool { return e.hp > 0 }
+
+// cell 是原版 `EnemyUnit.cell()`：**四舍五入**到整数格（不是截断）。
+//
+// ⚠ 同一段机制里两种取格口径并存，抄的时候别互换：原版 `_pollute_around`
+// 选圆心时，**没被挡**那一支走 `e.cell()`（四舍五入），**被挡**那一支走
+// `int(blocked_by.position)`（截断）。两者在敌人走在格子中间时给出不同的格。
+func (e *enemy) cell() (int, int) {
+	return int(math.Round(e.position[0])), int(math.Round(e.position[1]))
+}
 
 // pendingReborn 是原版的 `e.pending_reborn`：倒下等待重生。
 func (e *enemy) pendingReborn() bool { return e.rebornAt >= 0 }
@@ -123,7 +147,7 @@ func (c *simCtx) Summon(template json.RawMessage, cell [2]float64) int {
 		panic(fmt.Sprintf("机制递来的召唤模板解不开：%v", err))
 	}
 	spec.Legs = []LegSpec{{Kind: "static", Points: [][2]float64{cell}}}
-	e := newEnemy(spec, len(*c.enemies), cell)
+	e := newEnemy(spec, len(*c.enemies), cell, c)
 	*c.enemies = append(*c.enemies, e)
 	return e.index
 }
@@ -139,14 +163,15 @@ func (c *simCtx) Summon(template json.RawMessage, cell [2]float64) int {
 // 召唤路径曾经自己拼 `&enemy{}`，恰好漏掉这三个。判决当时没变，但那是运气：
 // 甲被"复活"过一次、刚贴上来的阻挡被清掉过一次，只是那几帧里没人受影响。
 // 这一类缺口不会自己报错，只会偶尔改一个判决——所以把口子合成一个。
-func newEnemy(spec SpawnSpec, index int, position [2]float64) *enemy {
-	return &enemy{
+func newEnemy(spec SpawnSpec, index int, position [2]float64, c *simCtx) *enemy {
+	e := &enemy{
 		spec:       spec,
 		hp:         spec.HP,
 		position:   position,
 		index:      index,
 		invincible: spec.Invincible,
 		deathTime:  -1.0,
+		sim:        c,
 		// 重生：窗口从 -1 起步（不在窗口里）；防御力基准按原版在
 		// `_build_enemy` 里取一次（`sim.py:1663`）——充能的防御加成按它重算，
 		// 二次重生时不会把上次的加成再乘一遍。
@@ -155,6 +180,14 @@ func newEnemy(spec SpawnSpec, index int, position [2]float64) *enemy {
 		rebornChargeAt: -1.0,
 		rebornDefBase:  spec.DEF,
 	}
+	if n := len(spec.RebornSummons); n > 0 {
+		// 原版 `_build_enemy` 就给每只排好这一列（-1 = 不在窗口里，不排拍）
+		e.rebornSummonAt = make([]float64, n)
+		for i := range e.rebornSummonAt {
+			e.rebornSummonAt[i] = -1.0
+		}
+	}
+	return e
 }
 
 func (e *enemy) reachedEnd() bool {
@@ -337,7 +370,7 @@ func runSim(spec *Spec) (*Verdict, error) {
 		// ---- 2. 出怪（1753-1760）
 		for cursor < len(spec.Spawns) && spec.Spawns[cursor].Time <= t {
 			sp := spec.Spawns[cursor]
-			e := newEnemy(sp, cursor, [2]float64{})
+			e := newEnemy(sp, cursor, [2]float64{}, ctx)
 			e.legIndex = 0
 			// 起点 = 第一段的第一个点（`_build_enemy` 给的是 `pts[0]`）
 			if len(sp.Legs) > 0 && len(sp.Legs[0].Points) > 0 {
@@ -1212,7 +1245,72 @@ func (e *enemy) take(amount float64) float64 {
 	}
 	dealt := math.Min(e.hp, math.Max(0, amount))
 	e.hp -= dealt
+	if dealt > 0 && e.sim != nil {
+		// 挨打的附加效果（原版 `_enemy_on_hit`）。放在 `take` 里而不是放在
+		// 各个调用点上：普攻、技能、机制伤害都会走到这里，漏一个就是
+		// "某一族效果静默不生效"。
+		e.sim.onEnemyHit(e)
+	}
 	return dealt
+}
+
+// onEnemyHit 是一只敌人**挨了一次伤害**之后要发生的事（原版 `_enemy_on_hit`
+// 里与蜕皮有关的那一段，`sim.py:1248-1265`）。
+//
+// 目前只有蜕皮（`Passive_Hit.*`）；速度提升（`SpeedUp.*`）与明识形态记名
+// （`PassiveM2.*`）还没接，接的时候**加在这里**，不要另开调用点。
+func (c *simCtx) onEnemyHit(e *enemy) {
+	sp := &e.spec
+	// ⚠ 整个判据只有一层：层满了就连病害都不再加（原版把加病害写在同一个
+	// `if` 里，不是并列的两件事）。
+	if sp.PhitCnt <= 0 || e.phitStacks >= sp.PhitMaxStack {
+		return
+	}
+	e.phitHits++
+	for e.phitHits >= sp.PhitCnt && e.phitStacks < sp.PhitMaxStack {
+		e.phitHits -= sp.PhitCnt
+		e.phitStacks++
+		// 黑板里 atk/def/res/move 存的都是**增量**（攻防那几项是负数）
+		sp.ATK += sp.PhitAtk
+		sp.DEF += sp.PhitDef
+		sp.RES += sp.PhitRes
+		sp.MoveSpeed += sp.PhitMove
+		// 原版还按 `phit_weight_cnt` 每 N 层重量等级 −1。Go 侧没有重量字段
+		// （阻挡只看 block_cnt，位移那套不在本模拟器范围内），故不减——这
+		// 一条是**已知边界**，写在 `docs/uncertainties.md` 的口径里。
+	}
+	// 加病害：被挡用 `PhitBlockPollut`、没被挡用 `PhitPollut`。
+	//
+	// ⚠ 两处分寸都不一样，别照抄击倒那一路：
+	//   · 选**用量**看的是 `blocked_by is not None`（挡它的那位这一帧刚倒也算）；
+	//   · 选**圆心**还要求那位**活着**（`_pollute_around` 1294 行），否则退回自己脚下。
+	amount := sp.PhitPollut
+	if e.blockedBy != nil {
+		amount = sp.PhitBlockPollut
+	}
+	c.polluteFromEnemy(e, amount, 1.0)
+}
+
+// polluteFromEnemy 是原版 `_pollute_around`（`sim.py:1280-1303`）：在
+// 「挡它的干员 / 它自己」脚下那一格半径 `radius` 内给田地加病害。
+//
+// 加的是**【缓存】**，不是当场改【实际】/【最大】——落地路径是
+// 缓存 →（每 0.2s 释放 1 点）→【最大】 →（每 1s 靠拢）→【实际】。
+func (c *simCtx) polluteFromEnemy(e *enemy, amount float64, radius float64) float64 {
+	if amount <= 0 {
+		return 0
+	}
+	cx, cy := e.cell()
+	if b := e.blockedBy; b != nil && b.alive() {
+		// ⚠ 这一支原版用的是 `int(position)`（**截断**），与上面那支的
+		// `e.cell()`（四舍五入）不是同一个口径——照抄，别"统一"。
+		cx, cy = int(b.cell[0]), int(b.cell[1])
+	}
+	got := c.mechanisms.PolluteAround([2]int{cx, cy}, amount, radius)
+	if got > 0 {
+		c.Log("%s 蜕皮 → 田地病害 +%g 记入缓存", e.spec.Name, got)
+	}
+	return got
 }
 
 func (o *operator) take(amount float64) float64 {

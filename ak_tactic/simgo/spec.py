@@ -175,8 +175,6 @@ def _enemy_reasons(sim) -> list[str]:
     """
     bad: list[str] = []
     field_why = {
-        "phit_pollut": "蜕皮被动",
-        "phit_block_pollut": "蜕皮被动（被阻挡时）",
         "reborn_summons": "重生期召唤",
         "pm2_mark_pollut": "明识形态",
         "awake_value": "按田地病害值觉醒",
@@ -186,7 +184,9 @@ def _enemy_reasons(sim) -> list[str]:
     #:  * `skill_atk_*`（敌方技能出手「污」）→ Go 的 `AttackTick`（帧序 7.2）；
     #:  * `passive_pollut`（被击倒污染田地）→ Go 的 `PostAttack`（帧序 7.5）；
     #:  * `reborn_pollut` 与整套 `Reborn.*`（重生、重生期充能、归来后的防御
-    #:    加成与普攻附加法术伤害）→ Go 的帧序 3.4 与 `PollutionDrainer`。
+    #:    加成与普攻附加法术伤害）→ Go 的帧序 3.4 与 `PollutionDrainer`；
+    #:  * 整套 `phit_*`（蜕皮被动：每挨打 N 次叠层改属性 + 加病害）→ Go 的
+    #:    `enemy.take` → `simCtx.onEnemyHit`（与普攻同帧）与 `PollutionAdder`。
     #: 它们曾经都在表里，那是对的：没接线的时候放行，等于让 Go 少算一层却照样
     #: 给判决。**新加一条进这张表时先确认那条路真的没接线**，别把已接的留在
     #: 表里——那会让整关无谓地被挡住。
@@ -368,6 +368,22 @@ def _unit_spec(sim, e, *, time: float = 0.0) -> dict[str, Any]:
         # 那一格）——那不是"敌人是什么"的一部分，是"当时场上是谁"的一部分。
         "passive_pollut": float(getattr(e, "passive_pollut", 0.0) or 0.0),
         "passive_radius": float(getattr(e, "passive_radius", 0.0) or 0.0),
+        # ---- 蜕皮（`Passive_Hit.*`，「祟」的混沌形态）
+        #
+        # 送的是**每挨打一次**要用的那套数：挨几次叠一层、每层改多少属性、
+        # 每次挨打给圆心周围加多少病害（被挡 / 没被挡两个数）。
+        # 圆心由 Go 在挨打那一刻自己判（与击倒污染同一套口径，但**用量的选择
+        # 多看一位**：被挡那一位这一帧刚倒也算"被挡"，见 `sim.py:1263-1265`）。
+        "phit_cnt": int(getattr(e, "phit_cnt", 0) or 0),
+        "phit_max_stack": int(getattr(e, "phit_max_stack", 0) or 0),
+        "phit_atk": float(getattr(e, "phit_atk", 0.0) or 0.0),
+        "phit_def": float(getattr(e, "phit_def", 0.0) or 0.0),
+        "phit_res": float(getattr(e, "phit_res", 0.0) or 0.0),
+        "phit_move": float(getattr(e, "phit_move", 0.0) or 0.0),
+        "phit_weight_cnt": int(getattr(e, "phit_weight_cnt", 0) or 0),
+        "phit_pollut": float(getattr(e, "phit_pollut", 0.0) or 0.0),
+        "phit_block_pollut": float(
+            getattr(e, "phit_block_pollut", 0.0) or 0.0),
         # 敌方**技能出手**（怀黍离「玷 / 勿玷」技能「污」）。这一组数送的是
         # 黑板里的量；"1 名 / 地面 / 十字五格 / 100%"四件事只在正文里，
         # 落在 Go 侧的 `AttackTick` 上（`sim.py:3471-3482` 的来历）。

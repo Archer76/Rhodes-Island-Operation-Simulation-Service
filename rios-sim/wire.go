@@ -213,6 +213,16 @@ type LegSpec struct {
 	Seconds float64      `json:"seconds,omitempty"`
 }
 
+// RebornSummonSpec 是重生期召唤的一"拍"（见 `SpawnSpec.RebornSummons`）。
+//
+// `Template` 是**完整的敌人规格**（不是 id）：Go 侧没有敌人图鉴，只有规格，
+// 所以 Python 把要召唤的那只的整份规格塞进来——和天桩链的 summons 同一个套路。
+type RebornSummonSpec struct {
+	Interval float64    `json:"interval"`
+	Count    int        `json:"count"`
+	Template *SpawnSpec `json:"template,omitempty"`
+}
+
 // SpawnSpec 是一个**已经建好**的敌人实例（数值、路线、机制标记都在这里）。
 //
 // 注意用的是 `sim._spawn()` 建出来的那份对象里的字段，不是重新按 id 查一遍：
@@ -273,6 +283,30 @@ type SpawnSpec struct {
 	RebornPollut      float64 `json:"reborn_pollut,omitempty"`
 	RebornDefAdd      float64 `json:"reborn_def_add,omitempty"`
 	RebornDamageMagic float64 `json:"reborn_damage_magic,omitempty"`
+
+	//: 蜕皮（原版 `Passive_Hit.*`，「祟」的混沌形态）：**每挨打 `PhitCnt` 次**
+	//: 叠 1 层（上限 `PhitMaxStack`），每层改一次属性；同时每次挨打都在
+	//: 「挡它的干员 / 它自己」脚下那一格半径 1.0 内给田地加病害。
+	//:
+	//: ⚠ 加病害的两个数不一样：被阻挡时用 `PhitBlockPollut`，没被挡用
+	//: `PhitPollut`（原版 1263-1265 的整个判据就是这两支）。层满之后整段
+	//: 都不再发生——连病害也不加了（原版把加病害写在同一个 `if` 里）。
+	PhitCnt         int     `json:"phit_cnt,omitempty"`
+	PhitMaxStack    int     `json:"phit_max_stack,omitempty"`
+	PhitAtk         float64 `json:"phit_atk,omitempty"`
+	PhitDef         float64 `json:"phit_def,omitempty"`
+	PhitRes         float64 `json:"phit_res,omitempty"`
+	PhitMove        float64 `json:"phit_move,omitempty"`
+	PhitWeightCnt   int     `json:"phit_weight_cnt,omitempty"`
+	PhitPollut      float64 `json:"phit_pollut,omitempty"`
+	PhitBlockPollut float64 `json:"phit_block_pollut,omitempty"`
+
+	//: 重生期**召唤**（「祟」）：窗口内每 `Interval` 秒在自己脚下召唤 `Count` 个
+	//: `Template`（模板就是一份普通的敌人规格，见 `Summon`）。
+	//:
+	//: ⚠ 它不是"一共召唤 Count 个"：`Count` 是**每一拍**几个，拍数由窗口长度
+	//: 决定（窗口 = `RebornDelay` 秒）。窗口一结束就停（原版 4214 行把它清空）。
+	RebornSummons []RebornSummonSpec `json:"reborn_summons,omitempty"`
 
 	//: 敌方**技能出手**（怀黍离「玷 / 勿玷」技能「污」，原版
 	//: `sim.py:3468` 的 `_skill_attack_tick`）。全 0 = 这一只没有这个技能。

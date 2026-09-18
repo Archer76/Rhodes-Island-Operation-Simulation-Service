@@ -1001,6 +1001,22 @@ func (m *farmlandMech) DrainPollution(cell [2]int, want float64) float64 {
 	return m.field.DrainPollution(Cell{cell[0], cell[1]}, want)
 }
 
+// PolluteAround 是田地这一层对 `PollutionAdder` 的回答（「祟」的蜕皮被动）。
+//
+// 原版 `_pollute_around` 最后调的就是 `farmland.pollute_area(int(cx), int(cy),
+// radius, amount)`——**圆心已经在模拟器那边按两种口径取好了**，这里只负责
+// "半径内哪些格子是田地、每格加多少"。半径按**圆**算（半径 1.0 恰好够到上下
+// 左右四邻、够不到斜角），这一步与击倒污染共用同一份 `PolluteArea`。
+func (m *farmlandMech) PolluteAround(cell [2]int, amount float64, radius float64) float64 {
+	if m.field == nil || amount <= 0 {
+		return 0
+	}
+	if radius <= 0 {
+		radius = 1.0
+	}
+	return m.field.PolluteArea(cell[0], cell[1], radius, amount)
+}
+
 // DeployDamage 是部署瞬间的一次性环境法术伤害（病害值为 0 时不结算）。
 func (fs *Farmland) DeployDamage(x, y int) float64 {
 	a := fs.ActualAt(x, y)
