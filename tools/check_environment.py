@@ -1341,6 +1341,11 @@ def check_pile() -> None:
             self.defense = 500.0
             self.res = 20.0
             self.dodge_phys = self.dodge_arts = 0.0
+            # 常驻「伤害抵挡」（天赋/技能的档）与闪避一起进 `resolve_damage`。
+            # 桩是拿来量"扑咬那一下吃不吃防御"的，所以两项都给 0——
+            # **但字段必须在**：`sim._pile_diver_tick` 与别的扑咬那条路都直接取
+            # `target.talent_dodge_phys`，缺字段是 AttributeError，不是"没抵挡"。
+            self.talent_dodge_phys = self.talent_dodge_arts = 0.0
             self.shield = 0.0
 
         def take(self, amount):
@@ -1810,6 +1815,10 @@ class _ProbeOp:
         self.defense = 0.0
         self.res = 0.0
         self.dodge_phys = self.dodge_arts = 0.0
+        # 与 `_OpStub` 同一件事：常驻「伤害抵挡」的字段必须在。技能攻击那条路
+        # （`sim._skill_attack_tick`）直接取 `op.talent_dodge_phys`，缺了是
+        # AttributeError——那与"本来就没抵挡"长得完全不同，必须炸出来。
+        self.talent_dodge_phys = self.talent_dodge_arts = 0.0
         self.shield = 0.0
         self.block_cnt = block
         self.skill = None
