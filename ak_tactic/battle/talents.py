@@ -73,6 +73,11 @@ __all__ = [
     "PowerAttack",
     "is_power_attack_talent",
     "find_power_attack",
+    "GLIDER_MOBILITY_TALENTS",
+    "GLIDER_MOBILITY_KEYS",
+    "GliderMobility",
+    "is_glider_mobility",
+    "find_glider_mobility",
     "RHODES_NATION",
     "LIMIT_DISPATCH_TALENTS",
     "is_limit_dispatch",
@@ -199,7 +204,107 @@ def is_damage_block_talent(t: Talent) -> bool:
 
 
 @dataclass(frozen=True)
+class GliderMobility:
+    """天赋「翔虫机动」（焰狐龙梓兰 天赋2）——**一个天赋，两个平面**。
+
+    正文（精2）：「再部署时间-15秒且不提高部署费用；部署至上次部署位置周围时，
+    30秒内攻击力+15%并且可以部署在近战位」。
+
+    prts.wiki 该页 `|备注=` 把"上次部署位置周围"落实成了一个实体：
+
+    > ※离场后将在原地留下一个静止[[弹道]]，弹道效果范围 `[范围:x-1]`，持续存在
+    > 直至下次焰狐龙梓兰部署或下次留下该弹道
+    > ※非首次部署时，焰狐龙梓兰可以部署在远程位地块／弹道范围内的近战位地块，
+    > 以此部署的焰狐龙梓兰的部署类型将临时变为全部位；部署于该弹道范围后将获得
+    > 攻击力加成效果
+    > ※不提高部署费用的实现逻辑为部署后获得永久的"离场后不累加再部署惩罚"效果
+
+    于是七个黑板键各有归属（值取精2 档）：
+
+    * `atk` 0.15 / `atk_duration` 30 —— 落在弹道范围内的**限时攻击力加成**
+      （战斗层，`sim._mobility_on_deploy`）。
+    * `projectile`（`$projectile` = `projectile_chr_orchd2_t`）——那个静止弹道的
+      预制体代号，"上次部署位置周围"就是以它为准。
+    * `ignore_build_type_target` 1 / `..._dir` 0 /
+      `..._range`（`$...` = `x-1`）——**落位放宽**：范围代号 `x-1`、以她上次
+      部署点为原点的格子里，**近战位**也可以放（部署类型临时变"全部位"）。
+    * `not_add_respawn_cost_cnt` 1 —— 离场后**不累加再部署惩罚**（精1 档是 0）。
+    """
+
+    #: 限时攻击力加成（`atk`，精2 = 0.15）。
+    atk_bonus: float
+    #: 加成持续秒数（`atk_duration`）。
+    atk_duration: float
+    #: 静止弹道的预制体代号（`$projectile`）。
+    projectile: str
+    #: 落位放宽用的范围代号（`$ignore_build_type_target_range`），以**上次部署点**
+    #: 为原点。她两档都是 `x-1`。
+    deploy_range: str
+    #: 是否开启落位放宽（`ignore_build_type_target`）。
+    ignore_build_type: bool
+    #: 放宽的方向参数（`ignore_build_type_target_dir`）。她两档都是 0。
+    ignore_dir: float
+    #: 离场后是否不累加再部署惩罚（`not_add_respawn_cost_cnt`）。精1 档为假。
+    no_respawn_cost_add: bool
+
+
+#: 具名的「翔虫机动」。
+GLIDER_MOBILITY_TALENTS = frozenset({"翔虫机动"})
+#: 认这条天赋要**同时**看到的键——名字可以被改、被本地化，键不会。
+GLIDER_MOBILITY_KEYS = ("ignore_build_type_target", "not_add_respawn_cost_cnt")
+
+
+def is_glider_mobility(t: Any) -> bool:
+    """是不是「翔虫机动」。名字或键的组合命中即可（判法同本文件其它天赋）。"""
+    if getattr(t, "name", "") in GLIDER_MOBILITY_TALENTS:
+        return True
+    bb = getattr(t, "blackboard", None) or {}
+    return all(k in bb for k in GLIDER_MOBILITY_KEYS)
+
+
+def find_glider_mobility(talents: Any) -> GliderMobility | None:
+    """从天赋列表里取出「翔虫机动」。没有就返回 None（调用方按"没这天赋"处理）。"""
+    for t in talents or ():
+        if not is_glider_mobility(t):
+            continue
+        bb = t.blackboard or {}
+        # 范围代号在 `$key`（`valueStr`）里——裸键的 value 恒为 0：
+        # `{"key": "ignore_build_type_target_range", "value": 0, "valueStr": "x-1"}`。
+        # 两个都读：裸键是`是否给了这一项`的证据，`$` 键才是真值。
+        deploy_range = str(bb.get("$ignore_build_type_target_range")
+                           or bb.get("ignore_build_type_target_range") or "")
+        return GliderMobility(
+            atk_bonus=float(bb.get("atk") or 0.0),
+            atk_duration=float(bb.get("atk_duration") or 0.0),
+            projectile=str(bb.get("$projectile") or bb.get("projectile") or ""),
+            deploy_range=deploy_range,
+            ignore_build_type=bool(bb.get("ignore_build_type_target") or 0.0),
+            ignore_dir=float(bb.get("ignore_build_type_target_dir") or 0.0),
+            no_respawn_cost_add=bool(bb.get("not_add_respawn_cost_cnt") or 0.0),
+        )
+    return None
+
+
+@dataclass(frozen=True)
 class PowerAttack:
+    """天赋「强击瓶专家」（焰狐龙梓兰 天赋1）。
+
+    正文：「部署后首次开启技能时，接下来 50 次攻击的攻击力提升至 115%」。
+
+    prts.wiki 该页 `|备注=` 把它钉成"按**轮**数"而不是按箭矢：
+
+    > ※其攻击力提升效果将作用于**当次连击的所有弹道**……于弹道脱手前生效
+    > ※每轮技能三/四/五连击、每次二技能的降落攻击、每次三技能的龙之箭
+    > 均会消耗 1 次效果
+
+    所以 `count` 数的是**攻击动作**（一轮），`sim` 在出手时整轮乘一次、
+    只扣一层；技2 一次技能含三轮齐射＋一次落地点射 ⇒ 一次扣四层。
+    """
+
+    #: 一共多少轮（`power_attack_count`，她 50）。
+    count: int
+    #: 攻击力倍率（`power_attack_scale`，精2 = 1.15）。
+    scale: float
     """「强击瓶专家」：部署后首次开技起，接下来 N 次**攻击**的攻击力倍率。
 
     注意 `count` 数的是**攻击动作**，不是箭矢：prts.wiki「焰狐龙梓兰」页

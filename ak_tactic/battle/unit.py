@@ -229,6 +229,29 @@ class OperatorUnit(Combatant):
     #: 还剩多少次（运行期状态，部署时为 0，`_activate` 首次开技时装满）。
     power_attack_left: int = 0
 
+    # ------------------------------------------------- 天赋「翔虫机动」
+    # 精2 正文：「再部署时间-15秒**且不提高部署费用**；部署至上次部署位置周围时，
+    # **30秒内攻击力+15%**并且可以部署在近战位」。parse 出来的原值在
+    # `battle/talents.GliderMobility`（含 prts 备注的原文）。
+    #: 落进"上次部署位置周围"时拿到的攻击力加成（`atk`，精2 = 0.15）。
+    mobility_atk_bonus: float = 0.0
+    #: 加成持续秒数（`atk_duration` = 30）。
+    mobility_atk_duration: float = 0.0
+    #: **当前生效**的攻击力加成（部署时置为 `mobility_atk_bonus`，计时到期清 0）。
+    #: 单独一个字段是为了让 `current_atk()` 读得直白——它开不开技能都吃这个加成。
+    mobility_atk_pct: float = 0.0
+    #: 加成剩余秒数（运行期）。
+    mobility_atk_left: float = 0.0
+    #: 落位放宽：近战位也能放（`ignore_build_type_target`）。
+    mobility_melee_deploy: bool = False
+    #: 落位放宽用的范围代号（`$ignore_build_type_target_range` = `x-1`），
+    #: 以**上次部署点**为原点。
+    mobility_deploy_range: str = ""
+    #: 离场留下的静止弹道的预制体代号（`$projectile`）。
+    mobility_leftover: str = ""
+    #: 离场后不累加再部署惩罚（`not_add_respawn_cost_cnt`，精1 档为假）。
+    no_respawn_cost_add: bool = False
+
     # ---------------------------------------------------- 技能自己打的一轮伤害
     # 「无可抵挡」的五连锤击：这是仓库里第一条**不吃攻速、由技能自打的**
     # 伤害通道（系数与出处见 `battle/hammer.py`）。这三个字段是运行期状态，
@@ -461,8 +484,11 @@ class OperatorUnit(Combatant):
         直接 `return self.atk`，症状是光环只对开着技能的人生效、对队友一点用没有。
         """
         e = self.effects
+        # 天赋「翔虫机动」的限时加成**开不开技能都在**（它挂在部署那一刻，
+        # 不是技能 buff），所以两个分支都要加——与全场光环同理。
+        mob = self.mobility_atk_pct
         if e is None:
-            return self.atk * (1.0 + self.aura_atk_pct)
+            return self.atk * (1.0 + self.aura_atk_pct + mob)
         # 击杀叠层的加成与普通攻击力增益**同层相加**（都进 `(1 + 攻击力增益)`
         # 这个括号），不乘在外面——三层的 +40% 是 +120%，不是 1.4³。
         pct = 0.0
@@ -470,7 +496,7 @@ class OperatorUnit(Combatant):
             v = e.variants.get("kill") or {}
             pct = float(v.get("atk", 0.0)) * self.kill_stacks
         # 全场光环（青色怒火）同样是**同层相加**的百分比加成。
-        return self.atk * (1.0 + e.atk_pct + pct + self.aura_atk_pct)
+        return self.atk * (1.0 + e.atk_pct + pct + self.aura_atk_pct + mob)
 
     def current_res(self) -> float:
         """当前法术抗性——含技能增益与**击杀叠层**的固定值加成。

@@ -3806,6 +3806,163 @@ def check_batch3_sample(stage, lib, calc, book_t) -> None:
           f"物理口径 {resolve_damage(want5, damage_type=DamageType.PHYSICAL, defense=5000.0).final:,.1f}")
 
 
+def check_glider_mobility(stage, lib, calc, book_t) -> None:
+    """[43] 焰狐龙梓兰天赋2「翔虫机动」——一个天赋横跨两个平面。
+
+    正文（精2）：「再部署时间-15秒且不提高部署费用；部署至上次部署位置周围时，
+    30秒内攻击力+15%并且可以部署在近战位」。prts.wiki 该页 `|备注=` 把它做实：
+
+    > ※离场后将在原地留下一个静止弹道，弹道效果范围 `[范围:x-1]`，持续存在直至
+    > 下次焰狐龙梓兰部署
+    > ※非首次部署时……可以部署在远程位地块／弹道范围内的近战位地块，以此部署的
+    > 焰狐龙梓兰的部署类型将临时变为全部位；部署于该弹道范围后将获得攻击力加成
+    > ※不提高部署费用的实现逻辑为部署后获得永久的"离场后不累加再部署惩罚"效果
+
+    于是：**战斗层**是那个 30 秒限时攻击力加成（`sim._mobility_on_deploy` ＋
+    `_mobility_tick` ＋ `current_atk()`），**部署层**是落位放宽
+    （`verify.mobility_deploy_spots` ＋ `_check_terrain`）。
+    """
+    print("\n[43] 焰狐龙梓兰天赋2「翔虫机动」：上次部署位置周围（限时加成＋落位放宽）")
+    from ak_tactic.battle import Deployment  # noqa: PLC0415
+    from ak_tactic.verify import PlanError, Verifier  # noqa: PLC0415
+
+    v = Verifier()
+    TA = v.talents.for_operator("char_1048_orchd2", elite=2, level=60,
+                                potential=1)
+    u2 = v.unit({"char_id": "char_1048_orchd2", "elite": 2, "level": 60,
+                 "trust": 100, "potential": 1})
+    check("  解析（精2）：攻击力 +15% / 30 秒 / 近战位可放 / 范围代号 x-1 / "
+          "弹道预制体 / 不再累加再部署惩罚",
+          close(u2.mobility_atk_bonus, 0.15, 1e-9)
+          and close(u2.mobility_atk_duration, 30.0, 1e-9)
+          and u2.mobility_melee_deploy is True
+          and u2.mobility_deploy_range == "x-1"
+          and u2.mobility_leftover == "projectile_chr_orchd2_t"
+          and u2.no_respawn_cost_add is True,
+          f"{u2.mobility_atk_bonus} / {u2.mobility_atk_duration} / "
+          f"{u2.mobility_melee_deploy} / {u2.mobility_deploy_range} / "
+          f"{u2.mobility_leftover} / {u2.no_respawn_cost_add}")
+    u1 = v.unit({"char_id": "char_1048_orchd2", "elite": 1, "level": 60,
+                 "trust": 100, "potential": 1})
+    check("  反向：精1 档的攻击力是 +10%、且**会**累加再部署惩罚（两档不是同一份数据）",
+          close(u1.mobility_atk_bonus, 0.10, 1e-9)
+          and u1.no_respawn_cost_add is False,
+          f"{u1.mobility_atk_bonus} / {u1.no_respawn_cost_add}")
+
+    def deploy(s, pos, t):
+        """走**真实部署通道**（`_do_deploy`），而不是往 `operators` 里塞一个。
+
+        加成是在部署那一刻算的，绕过 `_do_deploy` 就等于什么都没测。
+        费用池先灌满：这一节量的是天赋，不是开局攒费。
+        """
+        op = v.unit({"char_id": "char_1048_orchd2", "elite": 2, "level": 60,
+                     "trust": 100, "potential": 1})
+        s.cost = 999.0
+        s._do_deploy(Deployment(t, op, pos, "Right", talents=TA), t)
+        return op
+
+    def fresh():
+        # **必须接上真实范围表**：`x-1` 的格集合要靠它算。不接的话
+        # `_mobility_cells` 走退化口径（自身格＋朝前三格），测试会变成
+        # "测退化分支"，而不是测这条天赋。`verify` 真实跑法也是这么接的。
+        return mechanism_sim(stage, lib, range_provider=v.range_provider(stage))
+
+    # 上次落点 (2,3)，x-1 范围里的近战位（取自范围表本身，不写死坐标）
+    spots = sorted(v.mobility_deploy_spots(u2, stage, (2, 3)))
+    check("  x-1 在以 (2,3) 为原点时给出的近战位格不为空（范围表查得到这个代号）",
+          len(spots) >= 1, f"实得 {spots}")
+
+    s = fresh()
+    deploy(s, (2, 3), 0.0)
+    first = s.operators[-1]
+    check("  反向：**首次**部署没有弹道可落 ⇒ 不给加成",
+          close(first.mobility_atk_pct, 0.0, 1e-9)
+          and close(first.current_atk(), first.atk, 1e-9),
+          f"加成 {first.mobility_atk_pct}，面板 {first.current_atk():,.1f}")
+
+    near = spots[0]
+    second = deploy(s, near, 5.0)
+    check(f"  非首次部署落在 {near}（上次 (2,3) 的 x-1 范围内）⇒ 攻击力 +15%",
+          close(second.mobility_atk_pct, 0.15, 1e-9),
+          f"实得 {second.mobility_atk_pct}")
+    check("  而且这一项**进当前面板**（current_atk 直接乘进去，开不开技能都吃）",
+          close(second.current_atk(), second.atk * 1.15, 1e-6),
+          f"实得 {second.current_atk():,.2f}，应为 {second.atk * 1.15:,.2f}")
+    check("  倒计时也从部署那一刻起算（剩余 30 秒）",
+          close(second.mobility_atk_left, 30.0, 1e-9),
+          f"实得 {second.mobility_atk_left}")
+
+    # 到期
+    for _ in range(int(30.0 * 30) + 2):
+        s._mobility_tick(1.0 / 30.0)
+    check("  30 秒后加成到期收走，面板回到原值",
+          close(second.mobility_atk_pct, 0.0, 1e-9)
+          and close(second.current_atk(), second.atk, 1e-6),
+          f"加成 {second.mobility_atk_pct}，面板 {second.current_atk():,.1f}")
+
+    # 反向：落点不在范围内
+    s2 = fresh()
+    deploy(s2, (2, 3), 0.0)
+    far = next((c for c in sorted(stage.map.ranged_spots)
+                if c not in v.mobility_deploy_spots(u2, stage, (2, 3))
+                and abs(c[0] - 2) + abs(c[1] - 3) > 4), None)
+    if far is None:
+        check("  反向：找得到一个「远处」的高台位", False, "地图上没有够远的格")
+    else:
+        third = deploy(s2, far, 5.0)
+        check(f"  反向：落在 {far}（离上次 (2,3) 很远）⇒ 不给加成",
+              close(third.mobility_atk_pct, 0.0, 1e-9),
+              f"实得 {third.mobility_atk_pct}")
+
+    # ---- 部署层：落位放宽 ----
+    melee = stage.map.melee_spots
+    widened = spots
+    inside = widened[0]
+    outside = next((c for c in sorted(melee)
+                    if c not in set(widened)), None)
+    d = Deployment(5.0, u2, inside, "Right")
+    try:
+        v._check_terrain(stage, u2, inside, d, previous=(2, 3))
+        ok_inside = True
+        err = ""
+    except PlanError as exc:
+        ok_inside, err = False, str(exc)
+    check(f"  落位放宽：非首次部署落在近战位 {inside}（在 x-1 范围内）被接受",
+          ok_inside, err or "通过")
+    if outside is None:
+        check("  反向：近战位里存在「范围外」的格", False, "该关没有范围外的近战位")
+    else:
+        try:
+            v._check_terrain(stage, u2, outside, d, previous=(2, 3))
+            refused = False
+        except PlanError:
+            refused = True
+        check(f"  反向：同样落近战位 {outside}，但不在范围内 ⇒ 仍然拒绝",
+              refused, "被放过了")
+        try:
+            v._check_terrain(stage, u2, inside, d, previous=None)
+            refused_first = False
+        except PlanError:
+            refused_first = True
+        check("  反向：**首次**部署（没有上次落点）同样不给放宽",
+              refused_first, "被放过了")
+
+    # 全表命中面：同时带这两个键的天赋只有她一条。
+    import sqlite3  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+    with sqlite3.connect(Path(__file__).resolve().parent.parent
+                         / "data" / "akdb.sqlite") as con:
+        rows = con.execute(
+            "SELECT DISTINCT char_id, name, blackboard FROM operator_talent"
+        ).fetchall()
+    face = sorted({cid for cid, _n, bb in rows
+                   if all(k in json.loads(bb or "{}")
+                          for k in ("ignore_build_type_target",
+                                    "not_add_respawn_cost_cnt"))})
+    check("  判据的全表命中面：只有她（这两个键一起出现只此一条天赋）",
+          face == ["char_1048_orchd2"], f"命中 {face}")
+
+
 def check_pierce_arrow(stage, lib, calc, book_t) -> None:
     """[42] 焰狐龙梓兰技3「龙之箭」——模拟器里第一条**活得比出手长**的弹道。
 
@@ -4451,6 +4608,7 @@ def main() -> int:
     check_combo_attack(stage, lib, calc, book_t)
     check_power_attack(stage, lib, calc, book_t)
     check_pierce_arrow(stage, lib, calc, book_t)
+    check_glider_mobility(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

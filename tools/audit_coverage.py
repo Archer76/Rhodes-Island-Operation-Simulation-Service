@@ -36,7 +36,12 @@ TABLE_ROW = re.compile(
 #: 「未归类」只是第一道筛子——`hp_ratio`、`cnt`、`prob`、`interval` 这些键
 #: 分类器认不了，但模拟器在**原地**直接读（因为要靠周围描述消歧），它们不是欠账。
 #: 两道都不成立（既不归类、也没人读）的键，才是**真的没建模**。
-_LITERAL = re.compile(r"""["']([A-Za-z_@][A-Za-z0-9_@]*)["']""")
+_LITERAL = re.compile(r"""["']([A-Za-z_@$][A-Za-z0-9_@$]*)["']""")
+# 字符集里的 `$` 是必须的：解析层把黑板里 `valueStr` 的字符串值存成 **`$键名`**
+# （`operator/talent._blackboard`，技能那边同理），源码里读的就是 `"$projectile"`
+# 这样的字面量。不收 `$` 会让这一类键**永远**落在"无人读"栏里——2026-09-18
+# 焰狐龙梓兰的 `$projectile` / `$ignore_build_type_target_range` 就是这种假欠账
+# （当时两位数字都齐了、代码也确实在读，仍旧报"没人读"）。
 
 
 _VARIANT_RE = re.compile(r"\[([^\]]+)\]")
