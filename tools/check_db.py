@@ -36,7 +36,7 @@ from ak_tactic.db.build import (                                    # noqa: E402
 )
 from ak_tactic.db.tiles import KNOWN_GAPS, load_tiles               # noqa: E402
 from ak_tactic.db.stages import (                                   # noqa: E402
-    FOUR_STAR_SUFFIX, load_stages, resolve_code,
+    CHAPTER_TYPES, FOUR_STAR_SUFFIX, load_stages, resolve_code,
 )
 from ak_tactic.gamedata.source import GITHUB_BASE, GameDataSource   # noqa: E402
 from ak_tactic.operator import OperatorCalculator, SkillBook            # noqa: E402
@@ -726,11 +726,26 @@ def check_stages(conn: sqlite3.Connection) -> None:
 
     # 水位会随游戏版本长，所以断的是**下限**不是等号（与 tile 那节的写法一致：
     # 写死一个会漂的条数，下一个人读到就是错的）。
-    check("条数在合理量级（≥4000，水位随版本涨）", len(table) >= 4000,
+    #
+    # 2026-09-18 起这张表**只留五类 zone**（主线 / 插曲·别传 / 剿灭作战 /
+    # 主线活动章 / 活动，口径 = theresa.wiki/map 的分类），肉鸽、爬塔、周常、
+    # 导览、SIDESTORY、MAINLINE_RETRO 与「zone 表里查不到的」一并清掉，
+    # 所以下限跟着口径一起改（旧口径下这里写的是 ≥4000）。判据有两道：
+    # 条数的下限 + **每一条都落在白名单里**（后者才是新口径真正的守卫）。
+    check("条数在合理量级（≥2500，水位随版本涨）", len(table) >= 2500,
           f"{len(table)} 条")
+    keep_types = set(CHAPTER_TYPES)
+    types = {r[0] for r in conn.execute("SELECT DISTINCT type FROM zone")}
+    check("zone 表里只有白名单那五类（新口径的真守卫）",
+          bool(types) and types <= keep_types, "、".join(sorted(types)))
+    orphan = _count(conn, "SELECT COUNT(*) FROM stage WHERE zone_id IS NULL "
+                          "OR zone_id = '' OR zone_id NOT IN "
+                          "(SELECT zone_id FROM zone)")
+    check("没有归属不明的关卡（zone_id 在 zone 表里都查得到）", orphan == 0,
+          f"{orphan} 条")
     codes = {v["code"] for v in table.values() if v["code"]}
-    check("能去重出 2000 个以上的关卡号（≥2000）", len(codes) >= 2000,
-          f"{len(codes)} 个关卡号")
+    check("能去重出 1200 个以上的关卡号（≥1200，同样随版本涨）",
+          len(codes) >= 1200, f"{len(codes)} 个关卡号")
 
     # 下面这条是这张表**主键必须用 levelId** 的理由，也是最容易踩的坑：
     # 同一个关卡号下还有一份 `#f#` 四星限定版，它的 code 与普通版**完全相同**。

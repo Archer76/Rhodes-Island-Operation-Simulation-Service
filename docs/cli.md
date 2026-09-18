@@ -25,7 +25,7 @@ python -m ak_tactic stats --search 银灰                   # 按中文名找干
 python -m ak_tactic stats 阿米娅 --elite 0 --level 3 --rounding round   # 换取整方式
 
 # ── 关卡与敌人（gamedata，默认走 map.ark-nights.com）
-python -m ak_tactic stage --search SR-EX                # 按关卡号找（索引 4694 条）
+python -m ak_tactic stage --search SR-EX                # 按关卡号找（只在本项目的口径内找，见 tui-plan.md）
 python -m ak_tactic stage 1-7                           # 关卡号与 levelId 都收
 python -m ak_tactic stage SR-EX-8                       # 活动关一样能取
 python -m ak_tactic stage SR-EX-8 --map                 # 只看地图，不加载敌人库（快）

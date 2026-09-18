@@ -46,6 +46,26 @@ TTL 7 天、文档明说「约 17 MB，可随时删」。清一次缓存或断�
 `db build` 全程不联网，但它会把整份库文件换掉（`.part` + `os.replace`），
 所以那里有一道 `carry_over()` 把旧库的两张表原样搬到新库，
 否则每建一次库这两张表就被清空一次。
+
+## 只取这五类（博士 2026-09-18）
+
+`zone_table` 有 477 条、11 类。本项目**只留** `MAINLINE` / `BRANCHLINE` /
+`CAMPAIGN` / `MAINLINE_ACTIVITY` / `ACTIVITY`——口径就是 theresa.wiki/map 的分类
+（两边的类型名与逐类条数完全对得上：ACTIVITY 297、SIDESTORY 84、CLIMB_TOWER 24…）。
+其余六类（肉鸽 6 / 爬塔 24 / 周常 9 / 导览 1 / `SIDESTORY` 84 / `MAINLINE_RETRO` 3）
+**既不进库也不进菜单**：`insert_stages` 按 `CHAPTER_TYPES` 筛行、
+`prune_foreign_rows` 把库里过时的清掉，`db stage-prune` 可单独跑（不联网）。
+
+判据是**两条数据关系**，不是 id 前缀（前缀迟早会变）：
+① `zone.type` 在白名单里；② 关卡的 `zone_id` 在 zone 表里查得到。
+第二条一次覆盖两类东西——被剔除类型下面的关卡，以及 `zone_id` 指向一个 zone 表里
+**根本没有的** zone 的关卡（干员密录 `mem_*` 308、生息演算 `sandbox_*` 159、
+危机合约 128、小玩法 25、活动旧 id 64…）。实清一次：127 个 zone / 1660 关，
+留下 350 个 zone / 3034 关。
+
+**活动名去掉「复刻」后缀**（43 个里 42 个写 `墟·复刻`、1 个写 `不义之财 复刻`），
+见 `clean_activity_name`。改名**不会**让菜单出现重复条目：活动复刻之后原版的 zone
+就不再有关卡了（关卡全指到复刻那些 zone 上），所以那一对里只有一条进得了菜单。
 """
 
 from __future__ import annotations
@@ -60,7 +80,8 @@ __all__ = [
     "load_stages", "load_zones", "list_stages", "list_zones", "list_chapters",
     "zone_of", "zone_title", "resolve_code", "carry_over",
     "FOUR_STAR_SUFFIX", "DIFFICULTY_ORDER", "DIFFICULTY_LABELS", "ENV_LABELS",
-    "ENV_ORDER", "CHAPTER_TYPES",
+    "ENV_ORDER", "CHAPTER_TYPES", "CAMPAIGN_TITLE", "clean_activity_name",
+    "prune_foreign_rows", "clean_zone_names",
 ]
 
 #: 四星限定版的后缀。普通版是 `main_00-01`，四星版是 `main_00-01#f#`，
@@ -103,10 +124,33 @@ ENV_LABELS = {
 #: 环境那一层菜单里的排列顺序
 ENV_ORDER = ("EASY", "NORMAL", "TOUGH", "ALL")
 
-#: 选关界面第一层菜单认哪些 zone 类型。**白名单不是装饰**：`zone_table` 有 477 条，
-#: 里面还有肉鸽子（`ROGUELIKE`）、生息演算、训练、周常等，按既有口径一律不进菜单。
-CHAPTER_TYPES = ("MAINLINE", "MAINLINE_ACTIVITY", "ACTIVITY", "SIDESTORY",
-                 "BRANCHLINE", "MAINLINE_RETRO")
+#: 本项目**只取这几类** zone（口径就是 theresa.wiki/map 的分类）。
+#:
+#: 博士 2026-09-18 裁定：`MAINLINE`（主线）/ `BRANCHLINE`（插曲·别传）/
+#: `CAMPAIGN`（剿灭作战）/ `MAINLINE_ACTIVITY`（主线活动章）/ `ACTIVITY`（活动）。
+#: 其余几类——`ROGUELIKE`（肉鸽）、`CLIMB_TOWER`（爬塔）、`WEEKLY`（周常）、
+#: `GUIDE`（导览）、`SIDESTORY`、`MAINLINE_RETRO`——**既不进库也不进菜单**。
+#:
+#: 这是**写入口径**（`insert_stages` 按它筛行、`prune_foreign_rows` 按它清库），
+#: 不只是菜单的白名单：库里留着 6 百多条肉鸽关卡而界面上一条都看不见，
+#: 只会让人以为「这游戏有这些关」。
+CHAPTER_TYPES = ("MAINLINE", "BRANCHLINE", "CAMPAIGN", "MAINLINE_ACTIVITY",
+                 "ACTIVITY")
+
+#: 菜单第一层的排列顺序。与 `CHAPTER_TYPES` 是**同一批**，只是顺序另有讲究：
+#: 主线各章 → 第 15–17 章（`MAINLINE_ACTIVITY`，那也是主线，必须紧挨着）→
+#: 剿灭作战 → 插曲·别传 → 活动。口径那一份（筛选用）不承担顺序，所以单列一份。
+CHAPTER_ORDER = ("MAINLINE", "MAINLINE_ACTIVITY", "CAMPAIGN", "BRANCHLINE",
+                 "ACTIVITY")
+
+#: 剿灭作战在菜单里的显示名。它的 15 个 zone 在 gamedata 与 theresa.wiki 里
+#: **名字全是空的**（取数只到 `zoneNameSecond: None` 这一层），只能自己给一个。
+CAMPAIGN_TITLE = "剿灭作战"
+
+#: 活动名里的「复刻」后缀。写法不止一种：绝大多数是 `墟·复刻`，实测还有
+#: `不义之财 复刻`（空格），所以间隔符要放宽；`玛莉娅·临光` 那种带间隔符但
+#: 不带「复刻」的名字**不能动**。
+_RERUN_RE = re.compile(r"\s*[·・•]?\s*[（(]?\s*复刻\s*[）)]?\s*$")
 
 
 class StageTableError(RuntimeError):
@@ -197,7 +241,7 @@ def fetch_names(*, refresh: bool = False) -> tuple[dict, dict]:
             "name_title": str(e.get("zoneNameTitleCurrent") or ""),
             "name_third": str(e.get("zoneNameThird") or ""),
             "activity_id": act,
-            "activity_name": act_names.get(act, "") if act else "",
+            "activity_name": clean_activity_name(act_names.get(act, "")) if act else "",
         }
     # 大文件解析完丢掉原始对象（gamedata 的常规做法，不丢会胀上百 MB）
     for rel in ("excel/stage_table.json", "excel/zone_table.json",
@@ -210,6 +254,24 @@ def fetch_names(*, refresh: bool = False) -> tuple[dict, dict]:
 
 
 _CN_DIGITS = "零一二三四五六七八九"
+
+
+def clean_activity_name(name: str) -> str:
+    """活动名去掉「复刻」后缀，只留本名（博士 2026-09-18）。
+
+    实测 134 个活动名里 43 个带「复刻」：42 个写作 `墟·复刻`，1 个写作
+    `不义之财 复刻`。去掉之后**会与原版撞名**（42 组），这是**已知且接受**的——
+    复刻是一份独立的活动（自己的 zone 与关卡），不该因为名字相同就被吞掉。
+    所以这里只改名字，不动归并逻辑。
+
+    `玛莉娅·临光` 这类带间隔符但不带「复刻」的名字原样返回——判据是**后缀**，
+    不是「有没有间隔符」。
+    """
+    raw = str(name or "").strip()
+    if not raw:
+        return ""
+    out = _RERUN_RE.sub("", raw).strip()
+    return out or raw                     # 名字本身就叫「复刻」时别清成空串
 
 
 def _cn_num(n: int) -> str:
@@ -292,10 +354,78 @@ _ZONE_SQL = (f"INSERT OR REPLACE INTO zone ({', '.join(_ZONE_COLS)}) "
              f"VALUES ({', '.join('?' * len(_ZONE_COLS))})")
 
 
+def _keep_ph(n: int) -> str:
+    """`?, ?, ?`——SQLite 不接受列表参数，只能自己拼占位符。"""
+    return ", ".join("?" * n)
+
+
+def _kept_zone_ids(conn: sqlite3.Connection,
+                   zones: dict[str, dict[str, Any]] | None) -> set[str]:
+    """本次该留下的 `zone_id` 集合（`CHAPTER_TYPES` 那五类）。
+
+    优先用**本次取到的** zone 表；没取到（名字那三张表失败、只写索引）时退回
+    库里现有的 zone 表——那时的口径是「按已知分类留下、其余不要」，而不是
+    「什么都不筛」：一次没联网的重取不该把肉鸽关卡又请回来。
+    """
+    src = zones or {}
+    if src:
+        return {zid for zid, z in src.items()
+                if (z.get("type") or "") in CHAPTER_TYPES}
+    try:
+        return {r[0] for r in conn.execute(
+            f"SELECT zone_id FROM zone WHERE type IN ({_keep_ph(len(CHAPTER_TYPES))})",
+            CHAPTER_TYPES)}
+    except sqlite3.OperationalError:
+        return set()
+
+
+def prune_foreign_rows(conn: sqlite3.Connection, *,
+                       keep_types: tuple[str, ...] = CHAPTER_TYPES,
+                       ) -> tuple[int, int]:
+    """清掉不属于 `keep_types` 的 zone，以及**所有不在 zone 表里的关卡**。
+
+    返回 `(清掉的 zone 数, 清掉的关卡数)`。**不自己开事务**——调用方决定它跟谁
+    同一个事务（`insert_stages` 就把它跟写入放在一起）。
+
+    第二条同时覆盖两种东西：① 被剔除类型下面的关卡（肉鸽 696、爬塔 236、
+    周常 35、导览 2）；② `zone_id` 指向一个 zone 表里**根本没有的** zone 的关卡
+    （干员密录 `mem_*` 308、生息演算 `sandbox_*` 159、危机合约 128、小玩法 25、
+    活动旧 id 64…）。这两类都进不了菜单，博士 2026-09-18 裁定一并清掉，
+    库里只留这五类。**判据是「(zone.type, zone 表里有没有这条)」，不是 id 前缀**
+    ——前缀迟早会变，而这两条是数据本身的关系。
+    """
+    zsql = f"DELETE FROM zone WHERE type IS NULL OR type NOT IN ({_keep_ph(len(keep_types))})"
+    cur = conn.execute(zsql, keep_types)
+    zones_gone = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+    cur = conn.execute("DELETE FROM stage WHERE zone_id IS NULL OR zone_id = '' "
+                       "OR zone_id NOT IN (SELECT zone_id FROM zone)")
+    stages_gone = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+    return zones_gone, stages_gone
+
+
+def clean_zone_names(conn: sqlite3.Connection) -> int:
+    """把**已经写进库的**活动名里的「复刻」后缀擦掉，返回改了几条。
+
+    取数时 `fetch_names` 已经洗过一遍（见 `clean_activity_name`），所以这条是给
+    「库里还留着旧名字、又不想为改个名字联网重取」的场合用的——`db stage-prune`
+    顺手就做。SQLite 没有正则，只能在 Python 侧比一遍再写回；350 条 zone 而已。
+    """
+    rows = list(conn.execute("SELECT zone_id, activity_name FROM zone "
+                             "WHERE activity_name IS NOT NULL AND activity_name <> ''"))
+    changed = [(clean_activity_name(name), zid) for zid, name in rows
+               if clean_activity_name(name) != name]
+    if changed:
+        conn.executemany("UPDATE zone SET activity_name = ? WHERE zone_id = ?", changed)
+    return len(changed)
+
+
 def insert_stages(conn: sqlite3.Connection,
                   index: dict[str, dict[str, Any]],
                   names: dict[str, dict[str, Any]] | None = None,
-                  zones: dict[str, dict[str, Any]] | None = None) -> int:
+                  zones: dict[str, dict[str, Any]] | None = None,
+                  *,
+                  prune: bool = True,
+                  report: dict[str, int] | None = None) -> int:
     """把索引（连同名字与章节）写进库，返回写入的关卡条数。
 
     整体一个事务：中途炸掉不会留下半张表（`db build` 的原子落盘是文件级的，
@@ -303,20 +433,44 @@ def insert_stages(conn: sqlite3.Connection,
 
     `names` / `zones` 可以缺省——缺了就是「只要索引，不要名字」，
     行照写、名字列留空（调用方在取不到名字时走的就是这条路）。
+
+    **只写这五类**（博士 2026-09-18 裁定）：zone 按 `type` 筛，关卡按
+    「它的 zone 在这次要留的集合里」筛。`prune=True` 时还会在同一个事务里
+    把库里过时的其余行清掉（`prune_foreign_rows`）——不筛写入的话，第一次
+    取完之后库里那 1660 条肉鸽/爬塔/密录关卡会一直躺着。
+
+    顺序是「先写要留的 zone → 再清 → 最后写关卡」：清关卡那一步的问法是
+    「这个 zone_id 在 zone 表里吗」，所以 table 里必须先有**要留的那些** zone。
+
+    `report` 传一个 dict 进来时，会把筛掉/清掉的条数写进去
+    （`rows_skipped` / `zones_removed` / `stages_removed`），给 CLI 报数用；
+    返回值仍是**写进去的**关卡条数。
     """
-    payload = _rows(index, names)
-    if not payload:
+    rows = _rows(index, names)
+    if not rows:
         raise StageTableError("关卡名获取失败：解析出的条目是 0 条")
+    keep = _kept_zone_ids(conn, zones)
+    payload = [r for r in rows if r[3] in keep]
+    if not payload:
+        raise StageTableError(
+            f"关卡名获取失败：{len(rows)} 条里没有一条落在 {len(keep)} 个"
+            f"该留的 zone 里——zone 表是不是取空了？"
+            "（一条都不写，库保持原样）")
     # zone_id 是 `zones` 字典的**键**，不在值里——按列名取值会把主键写成 NULL，
     # 而 SQLite 允许 PRIMARY KEY 列为 NULL（没写 NOT NULL 时），477 行会静默地
     # 全挤在同一个 None 键上、读回来只剩 1 条。所以这里显式把键排在第一列。
     zone_payload = [(zid,) + tuple(z.get(c) for c in _ZONE_COLS[1:])
-                    for zid, z in (zones or {}).items()]
+                    for zid, z in (zones or {}).items()
+                    if (z.get("type") or "") in CHAPTER_TYPES]
     try:
         with conn:                               # 失败自动回滚
-            conn.executemany(_STAGE_SQL, payload)
             if zone_payload:
                 conn.executemany(_ZONE_SQL, zone_payload)
+            if prune:
+                gone = prune_foreign_rows(conn)
+                if report is not None:
+                    report["zones_removed"], report["stages_removed"] = gone
+            conn.executemany(_STAGE_SQL, payload)
     except sqlite3.IntegrityError as exc:
         raise StageTableError(f"章节表写入被拒（主键为空或重复）：{exc}") from exc
     except sqlite3.OperationalError as exc:
@@ -325,6 +479,9 @@ def insert_stages(conn: sqlite3.Connection,
                 "这个库还没有 stage/zone 表（结构版本是旧的）：先跑一次 "
                 "`db build` 重建结构，再跑 `db stage-fetch`。") from exc
         raise
+    if report is not None:
+        report.setdefault("rows_skipped", 0)
+        report["rows_skipped"] += len(rows) - len(payload)
     return len(payload)
 
 
@@ -387,40 +544,84 @@ def list_chapters(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
     返回 `[{key, title, subtitle, levels, parts: [{zone_id, title, levels}]}]`。
     `levels` **含四星限定版**，与下一层列表的行数一致；`zone_envs()` 同理。
+
+    两处特例：
+
+    * `ACTIVITY` 里原版与复刻是**两条独立活动**，去掉「复刻」后缀后名字会撞
+      （42 组）。这是**接受的**——见 `clean_activity_name`。所以这里只按
+      `activity_id` 归并，不按名字归并。
+    * `CAMPAIGN`（剿灭作战）的 15 个 zone 名字全是空的，也没挂 `activity_id`：
+      平铺出来就是 15 行「camp_zone_7」这种东西。所以**整类归成一条**
+      「剿灭作战」，分部名取该分部里关卡的**关卡名**（龙门外环、龙门市区…），
+      那是这一层唯一有意义的取数。
     """
     zones = load_zones(conn)
+    # 读侧也过一遍口径。写侧（`insert_stages` / `prune_foreign_rows`）已经筛过，
+    # 但库里那一份可能是**旧口径时代留下来的**（或者被 `db build` 的 carry_over
+    # 整表搬过来的），而 `db build` 不联网、不会顺手清库。菜单不该因为库的状态
+    # 就把肉鸽、爬塔那些摆出来。
+    zones = {z: v for z, v in zones.items()
+             if (v.get("type") or "") in CHAPTER_TYPES}
     counts: dict[str, int] = {}
     totals: dict[str, int] = {}
+    stage_names: dict[str, list[str]] = {}
     for level_id, v in load_stages(conn).items():
         zid = v.get("zone_id") or ""
         totals[zid] = totals.get(zid, 0) + 1
         if level_id.endswith(FOUR_STAR_SUFFIX):
             continue
         counts[zid] = counts.get(zid, 0) + 1
+        nm = (v.get("name") or "").strip()
+        if nm:
+            lst = stage_names.setdefault(zid, [])
+            if nm not in lst:              # `#f#` 那份与普通版同名，去重
+                lst.append(nm)
 
     groups: dict[str, list[str]] = {}
     for zid, z in zones.items():
-        if (z.get("type") or "") not in CHAPTER_TYPES:
+        ztype = (z.get("type") or "")
+        if ztype not in CHAPTER_TYPES:
             continue
         if not counts.get(zid):
             continue                       # 一条关卡都没有的 zone 不进菜单
-        key = (z.get("activity_id") or "").strip() or zid
+        if ztype == "CAMPAIGN":
+            key = CAMPAIGN_TITLE           # 整类一条，见 docstring
+        else:
+            key = (z.get("activity_id") or "").strip() or zid
         groups.setdefault(key, []).append(zid)
 
     out: list[dict[str, Any]] = []
     for key, zids in groups.items():
-        zids.sort(key=lambda z: (zones[z].get("zone_index")
-                                 if zones[z].get("zone_index") is not None
-                                 else 99, z))
+        def _zkey(z: str) -> tuple:
+            """分部顺序：`zone_index` → （剿灭作战）zone_id 尾号 → zone_id。
+
+            剿灭那 15 个 zone 的 `zone_index` **全是 0**，只按它排就会退化成
+            字符串序（camp_zone_1、camp_zone_10、…、camp_zone_2），尾号才是
+            它们真实的先后（也是图的上线顺序）。
+            """
+            zi = zones[z].get("zone_index")
+            num = 99
+            if (zones[z].get("type") or "") == "CAMPAIGN":
+                tail = z.rsplit("_", 1)[-1]
+                num = int(tail) if tail.isdigit() else 99
+            return (zi if zi is not None else 99, num, z)
+
+        zids.sort(key=_zkey)
         first = zones[zids[0]]
         act_name = (first.get("activity_name") or "").strip()
         # **条数一律含四星限定版**（= 下一层列表里真实看得见的行数）。
         # 菜单报 24 而列表给 41 行会让人以为筛错了；这一层不做去重，
         # 「同一个关卡的突袭版」在下一层用难度筛选区分。
-        parts = [{"zone_id": z, "title": _part_title(zones[z]),
+        parts = [{"zone_id": z, "title": _part_title(zones[z], stage_names.get(z)),
                   "levels": totals.get(z, 0)} for z in zids]
-        if len(zids) == 1:
-            title = zone_title(first)
+        if key == CAMPAIGN_TITLE:
+            title, subtitle = CAMPAIGN_TITLE, f"{len(zids)} 个部分"
+        elif len(zids) == 1:
+            # 单个 zone 的活动没有分部名可拼：章节名（主线各章）→ 活动名
+            # → 最后才把内部 id（`act1multi`）摆上台面。缺了活动名那一退，
+            # 「奇象巡展」「卫戍协议」这六个单 zone 活动会显示成空白行——
+            # 实测就是空白，不是「名字太长被截了」。
+            title = zone_title(first) or act_name or key
             subtitle = ""
         else:
             # 活动名优先；拿不到活动名时退回分部的章节名，别把内部 id 摆上台面
@@ -429,7 +630,7 @@ def list_chapters(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         out.append({"key": key, "title": title, "subtitle": subtitle,
                     "levels": sum(p["levels"] for p in parts), "parts": parts})
 
-    order = {t: i for i, t in enumerate(("MAINLINE", "MAINLINE_ACTIVITY"))}
+    order = {t: i for i, t in enumerate(CHAPTER_ORDER)}
 
     def sort_key(e: dict[str, Any]) -> tuple:
         z = zones[e["parts"][0]["zone_id"]]
@@ -443,12 +644,20 @@ def list_chapters(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return out
 
 
-def _part_title(zone: dict[str, Any]) -> str:
+def _part_title(zone: dict[str, Any],
+                stage_names: list[str] | None = None) -> str:
     """第二层（分部）的显示名。
 
     side story 取分部名（通学路 / 殡仪堂）。主线各章只有一个 zone、**不会走到这**，
     这里取章节名只是为了万一（配了环境菜单时会用到）。
+
+    `CAMPAIGN` 是个例外：它的 zone 名字全是空的，所以退到**这一分部里的关卡名**
+    （「龙门外环、龙门市区、龙门商业街」）——玩家认的是图名。15 个分部的关卡名
+    两两不重复，所以这么取也天然不会撞名。关卡名也拿不到时（名字表没取到）
+    才退回 `zone_title`，那一步会露出 `camp_zone_7` 这种内部 id，是最后的退路。
     """
+    if (zone.get("type") or "") == "CAMPAIGN" and stage_names:
+        return "、".join(stage_names)
     second = (zone.get("name_second") or "").strip()
     title = (zone.get("name_title") or "").strip()
     if title.isdigit() and second and title != "00":
@@ -457,8 +666,7 @@ def _part_title(zone: dict[str, Any]) -> str:
 
 
 def list_zones(conn: sqlite3.Connection, *,
-               types: tuple[str, ...] = ("MAINLINE", "MAINLINE_ACTIVITY",
-                                         "ACTIVITY"),
+               types: tuple[str, ...] = CHAPTER_TYPES,
                ) -> list[dict[str, Any]]:
     """列 zone（**不归并活动**），带拼好的 `title`。
 
@@ -471,7 +679,7 @@ def list_zones(conn: sqlite3.Connection, *,
         if types and (z.get("type") or "") not in types:
             continue
         out.append({"zone_id": zone_id, "title": zone_title(z), **z})
-    order = {"MAINLINE": 0, "MAINLINE_ACTIVITY": 1, "ACTIVITY": 2}
+    order = {t: i for i, t in enumerate(CHAPTER_ORDER)}
 
     def key(e: dict[str, Any]) -> tuple:
         title = (e.get("name_title") or "").strip()

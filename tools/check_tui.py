@@ -1092,6 +1092,152 @@ def check_stage_layers() -> None:
           f"add_columns{cols}")
 
 
+def check_stage_categories() -> None:
+    """[10b] 库里只留这五类 zone，活动名去掉「复刻」（博士 2026-09-18）。
+
+    两件事都落在**数据层**，不是界面层：肉鸽关卡留在库里而界面不显示，下一个人
+    打开 sqlite 就会以为「这游戏有这些关」。所以这一节既断白名单与清洗函数，
+    也断真库里的实际内容（真库空了就跳过——它要联网取数）。
+    """
+    print("\n[10b] 只取这五类 zone / 活动名去「复刻」")
+    import sqlite3
+
+    from ak_tactic.db import DEFAULT_DB_PATH, connect
+    from ak_tactic.db import stages as S
+    from ak_tactic.db.schema import SCHEMA_SQL
+    from ak_tactic.tui import data as D
+
+    # ---- ① 白名单与菜单顺序
+    check("白名单正好是这五类（口径 = theresa.wiki/map 的分类）",
+          S.CHAPTER_TYPES == ("MAINLINE", "BRANCHLINE", "CAMPAIGN",
+                              "MAINLINE_ACTIVITY", "ACTIVITY"),
+          str(S.CHAPTER_TYPES))
+    check("肉鸽/爬塔/周常/导览/SIDESTORY/MAINLINE_RETRO 一个都不在白名单里",
+          not ({"ROGUELIKE", "CLIMB_TOWER", "WEEKLY", "GUIDE", "SIDESTORY",
+                "MAINLINE_RETRO"} & set(S.CHAPTER_TYPES)),
+          str(S.CHAPTER_TYPES))
+    check("菜单顺序：主线 → 第 15–17 章 → 剿灭作战 → 插曲·别传 → 活动",
+          S.CHAPTER_ORDER == ("MAINLINE", "MAINLINE_ACTIVITY", "CAMPAIGN",
+                              "BRANCHLINE", "ACTIVITY"), str(S.CHAPTER_ORDER))
+    check("剿灭作战有固定的显示名（它的 15 个 zone 名字全是空的）",
+          S.CAMPAIGN_TITLE == "剿灭作战")
+
+    # ---- ② 名字清洗：判据是**后缀**，不是「有没有间隔符」
+    cases = [("墟·复刻", "墟"), ("不义之财 复刻", "不义之财"),
+             ("众生行记·复刻", "众生行记"), ("玛莉娅·临光", "玛莉娅·临光"),
+             ("复刻", "复刻"), ("", ""), (None, "")]
+    bad = [(a, S.clean_activity_name(a), b) for a, b in cases
+           if S.clean_activity_name(a) != b]
+    check("活动名去「复刻」：·复刻与空格两种写法都认，带·但不带复刻的**不动**",
+          not bad, str(bad))
+
+    # ---- ③ 清库逻辑：拿一个内存库断，不碰真库
+    mem = sqlite3.connect(":memory:")
+    mem.executescript(SCHEMA_SQL)
+    mem.execute("INSERT INTO zone (zone_id, type) VALUES ('keep_zone', 'MAINLINE')")
+    mem.execute("INSERT INTO zone (zone_id, type) VALUES ('gone_zone', 'ROGUELIKE')")
+    mem.execute("INSERT INTO zone (zone_id, type) VALUES ('odd_zone', 'SIDESTORY')")
+    for lid, zid in (("keep_1", "keep_zone"), ("rogue_1", "gone_zone"),
+                     ("story_1", "odd_zone"), ("mem_1", "nowhere")):
+        mem.execute("INSERT INTO stage (level_id, code, zone_id) VALUES (?, ?, ?)",
+                    (lid, lid, zid))
+    gone = S.prune_foreign_rows(mem)
+    left_z = {r[0] for r in mem.execute("SELECT zone_id FROM zone")}
+    left_s = {r[0] for r in mem.execute("SELECT level_id FROM stage")}
+    mem.close()
+    check("清库：被剔除类型的 zone 清掉，白名单那类不动",
+          left_z == {"keep_zone"}, str(left_z))
+    check("清库：被剔除类型下的关卡、以及 zone 表里查不到的关卡都清掉",
+          left_s == {"keep_1"}, str(left_s))
+    check("清库返回的条数如实（2 个 zone / 3 个关卡）", gone == (2, 3), str(gone))
+
+    # 读侧也过口径：库是旧口径时菜单不许把肉鸽摆出来（`db build` 的 carry_over
+    # 会把自己旧库里的两张表整表搬过来，而 build 不联网、不清库）
+    mem = sqlite3.connect(":memory:")
+    mem.executescript(SCHEMA_SQL)
+    mem.execute("INSERT INTO zone (zone_id, type, name_first) "
+                "VALUES ('rogue_zone', 'ROGUELIKE', '肉鸽')")
+    mem.execute("INSERT INTO stage (level_id, code, zone_id, name) "
+                "VALUES ('rogue_1', 'R-1', 'rogue_zone', '肉鸽关')")
+    mem.execute("INSERT INTO zone (zone_id, type, name_first) "
+                "VALUES ('main_1', 'MAINLINE', '第一章')")
+    mem.execute("INSERT INTO stage (level_id, code, zone_id, name) "
+                "VALUES ('main_01-01', '1-1', 'main_1', '坍塌')")
+    keys = [e["key"] for e in S.list_chapters(mem)]
+    mem.close()
+    check("读侧也过口径：库里留着肉鸽时，菜单里也不显示它",
+          keys == ["main_1"], str(keys))
+
+    # ---- ④ 真库：类型、孤儿关卡、还带「复刻」的名字
+    if not Path(DEFAULT_DB_PATH).exists():
+        skip("只取这五类（真库）", "本地没有 akdb.sqlite")
+        return
+    conn = connect()
+    try:
+        types = {r[0] for r in conn.execute("SELECT DISTINCT type FROM zone")}
+        keep_ids = {r[0] for r in conn.execute(
+            "SELECT zone_id FROM zone WHERE type IN (%s)"
+            % ", ".join("?" * len(S.CHAPTER_TYPES)), S.CHAPTER_TYPES)}
+        orphans = conn.execute(
+            "SELECT count(*) FROM stage WHERE zone_id IS NULL OR zone_id = '' "
+            "OR zone_id NOT IN (SELECT zone_id FROM zone)").fetchone()[0]
+        rerun = [r[0] for r in conn.execute(
+            "SELECT activity_name FROM zone WHERE activity_name LIKE '%复刻%'")]
+    finally:
+        conn.close()
+    check("真库里只有这五类 zone（少一类可以，多了不行）",
+          bool(types) and types <= set(S.CHAPTER_TYPES), str(sorted(types)))
+    check("真库里没有归属不明的关卡（清库那一步真跑过）",
+          orphans == 0, f"{orphans} 条")
+    check("真库里没有还带「复刻」的活动名", not rerun, str(rerun[:5]))
+
+    # ---- ⑤ 菜单：剿灭作战那一条与它的分部
+    ch = D.chapter_rows()
+    if not ch:
+        skip("剿灭作战进菜单", "章表是空的——先跑 `db stage-fetch`")
+        return
+    check("第一层没有空标题（单 zone 活动没有活动名时曾显示成空白行）",
+          all(e["title"].strip() for e in ch),
+          str([e["key"] for e in ch if not e["title"].strip()]))
+    check("第一层没有带「复刻」的标题",
+          not [e for e in ch if "复刻" in e["title"]],
+          str([e["title"] for e in ch if "复刻" in e["title"]][:3]))
+    bad_zids = [p["zone_id"] for e in ch for p in e["parts"]
+                if p["zone_id"] not in keep_ids]
+    check("第一层里每一个分部都落在白名单类型上（界面与库同一口径）",
+          not bad_zids, str(bad_zids[:5]))
+
+    camp = [e for e in ch if e["key"] == S.CAMPAIGN_TITLE]
+    check("菜单里有「剿灭作战」，且只有一条（整类归成一条）",
+          len(camp) == 1, f"{len(camp)} 条")
+    if camp:
+        parts = camp[0]["parts"]
+        check("剿灭作战 15 个分部（15 个 camp zone 一个不漏）",
+              len(parts) == 15, f"{len(parts)} 个")
+        check("分部名用的是关卡名（不是空白、也不是 camp_zone_N）",
+              all(p["title"] and not p["title"].startswith("camp_") for p in parts),
+              str([p["title"] for p in parts[:2]]))
+        ids = [p["zone_id"] for p in parts]
+        check("分部按 zone_id 尾号排（它们的 zone_index 全是 0，只按它会排成 "
+              "1、10、11…2）",
+              ids == sorted(ids, key=lambda z: int(z.rsplit("_", 1)[-1])), str(ids))
+        # 分部名必须与那一分部的关卡名逐字一致——两处各算一遍就会漂
+        got = {}
+        for p in parts:
+            names = []
+            for r in D.stage_rows(zone_id=p["zone_id"]):
+                nm = (r.get("name") or "").strip()
+                if nm and nm not in names:
+                    names.append(nm)
+            got[p["zone_id"]] = "、".join(names)
+        off = {z: (got[z], p["title"]) for p in parts for z in [p["zone_id"]]
+               if got[z] != p["title"]}
+        check("分部名与那一分部的关卡名逐字一致", not off, str(list(off.items())[:2]))
+        check("剿灭作战的关数与分部关数之和相等",
+              camp[0]["levels"] == sum(p["levels"] for p in parts),
+              f"{camp[0]['levels']} vs {sum(p['levels'] for p in parts)}")
+
+
 def check_completion() -> None:
     """[11] Guides 目录输入框的 Tab 补全（需求第 3 条）。"""
     print("\n[11] 路径 Tab 补全")
@@ -2279,6 +2425,7 @@ def main() -> int:
         check_maa_export()
         check_home()
         check_result_back_to_stage()
+        check_stage_categories()
         check_stage_layers()
         check_completion()
         check_squad_grouping()
