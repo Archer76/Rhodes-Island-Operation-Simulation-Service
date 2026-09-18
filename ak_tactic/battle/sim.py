@@ -2478,7 +2478,37 @@ class BattleSimulator:
                                  defense=e.defense, res=e.res)
             self._damage_enemy(e, dmg.final, t, "PHYSICAL", source=op)
         if op.highland_splash_scale > 0.0:
-            self._highland_splash(op, cells, power, t)
+            triggered = self._highland_splash(op, cells, power, t)
+            self._highland_sp(op, triggered, t)
+
+    def _highland_sp(self, op: OperatorUnit, triggered: int, t: float) -> None:
+        """「每次有高台触发第一天赋的效果时，获得 N 点技力」（怒潮凛冬技2）。
+
+        三个口径，都得说清，否则这条要么不触发、要么回多了：
+
+        1. **它是常驻的**。这句写在技2 正文的「**被动效果**」段里，不在
+           「自动开启」段——所以技能没开时照样回，只要这个技能被装配上。
+           把技能黑板里的键一律当成"只在技能期间生效"会漏掉整整一半。
+        2. **逐高台计、不逐次出手计**：一次出手触发 k 个高台就回 N × k。
+           所以 `_highland_splash` 的返回值是**计数**而不是布尔。
+        3. **技能开启期间不回**——沿用本项目已有的那条口径（见
+           `_operators_attack` 里「攻击回复的技力按出手算」与天赋「情绪吸收」
+           两处同样的判断）。「技能期间 SP 条不涨」本身仍是**未证实假设**，
+           记在 `docs/uncertainties.md`；本条与它**共用同一个假设**，
+           不另立一套，免得同一个游戏规则在仓库里有两种说法。
+        """
+        sk = op.skill
+        if sk is None or triggered <= 0 or op.skill_active:
+            return
+        per = float(sk.blackboard.get("sp_per_highland") or 0.0)
+        if per <= 0.0:
+            return
+        before = op.sp
+        op.sp = min(float(sk.sp_cost), op.sp + per * triggered)
+        if self.verbose and op.sp > before:
+            self.result.log.append(
+                f"{t:7.1f}s  {op.name} 高台触发第一天赋 ×{triggered} → "
+                f"技力 +{op.sp - before:g}（{op.sp:g}/{sk.sp_cost:g}）")
 
     def _highland_splash(self, op: OperatorUnit, cells: set, power: float,
                          t: float) -> int:
