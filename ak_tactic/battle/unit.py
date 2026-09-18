@@ -399,6 +399,28 @@ class OperatorUnit(Combatant):
     #: 这位干员**还能投递几个干员**（新约能天使技3 的 `max_deploy_character`）。
     #: 开技时按技能黑板重置；每一次成功投递减一。0 = 没开这类技能或名额用完。
     delivery_left: int = 0
+    #: 「每 N 秒获得 1 层护盾（最多 M 层），每层护盾破裂时恢复自身 X% 最大生命」
+    #: ——泥岩天赋「沃土予身」；空弦「铁弦」是同一件事的另一半（1 层、破裂给技力）。
+    #:
+    #: **护盾没有"护盾值"，而且本来就不该有**：PRTS「伤判效果」页把「护盾」
+    #: 归在**抵挡**里、并把"护盾次数"列为伤判条件之一——它是**次数制**，
+    #: 一层护盾就是**整层挡下一次伤害**。博士 2026-09-19 的裁定「泥岩的护盾
+    #: **只要受到伤害就会破裂**」正是这件事的另一种说法。这也解释了为什么
+    #: 全库天赋黑板里没有任何 shield 类键（见 `docs/uncertainties.md` §二十九）。
+    #:
+    #: 所以它是一层**记号**：来一次真正的伤害就消耗一层、这一下被挡下，
+    #: 并按 `shield_break_heal` 回血（或按 `shield_break_sp` 给技力）。
+    #:
+    #: 破裂时刻由 `take()` 记账（它是干员掉血的唯一入口），加层按帧走
+    #: （`sim._shield_tick`）。
+    shield_layers: int = 0
+    shield_timer: float = 0.0
+    shield_interval: float = 0.0
+    shield_max_layers: int = 0
+    shield_break_heal: float = 0.0
+    shield_break_sp: float = 0.0
+    #: 累计破裂了几层（判据用；`shield_layers` 会被补回来，看它看不出发生过几次）。
+    shield_breaks_taken: int = 0
     #: 「阻挡半径倍率」的**天赋级**增量（凯尔希 / 凯尔希·思衡托「遗尘守望」的
     #: `block_radius_scale`）。与技能上的同名键之间**取最高**，见
     #: `current_block_radius_scale`。
@@ -573,6 +595,29 @@ class OperatorUnit(Combatant):
             # 同名同形的屏障分支（那边叫 `shield`），照着形似往里写会写错类，
             # 而敌人永远不会 `locked_timer > 0`——错在那里是**静默**的。
             return 0.0
+        # 「每层护盾破裂时恢复自身 20% 最大生命」（泥岩「沃土予身」）/「护盾破裂后
+        # 获得 7 点技力」（空弦「铁弦」）。
+        #
+        # 语义按 PRTS「伤判效果」页：**护盾属"抵挡"，是次数制**（那一页把
+        # "护盾次数"直接列为伤判条件之一），所以一层护盾 = **整层挡下一次伤害**，
+        # 不存在"护盾值"。博士 2026-09-19 也裁定了「泥岩的护盾只要受到伤害就会
+        # 破裂」——合起来就是：来一次伤害就消耗一层、这一次伤害被挡下。
+        #
+        # 位置在屏障分支**之前**：同一页写明干员泥岩的护盾「不是重新获得，而是
+        # 在已有的护盾之上补充层数……不会改变 Buff 的获取顺序——它**几乎永远是
+        # 最先被获得的**」。伤判效果按"事件优先级 > 获取顺序"处理，所以它先于
+        # 后拿到的屏障。被屏障吃掉的伤害不落到她身上、也不是"受到伤害"。
+        #
+        # 顺序：先裂、先回血，再把这一下伤害归零（`dealt` 因此为 0，上层看到的
+        # 是"没受到伤害"，与那一页「成功受到伤害」的口径一致）。
+        if self.shield_layers > 0 and amount > 0.0:
+            self.shield_layers -= 1
+            self.shield_breaks_taken += 1
+            amount = 0.0
+            if self.shield_break_heal > 0.0:
+                self.hp = min(self.max_hp, self.hp + self.shield_break_heal)
+            if self.shield_break_sp > 0.0:
+                self.sp += self.shield_break_sp
         if self.barrier > 0.0:
             absorbed = min(self.barrier, max(0.0, amount))
             self.barrier -= absorbed
