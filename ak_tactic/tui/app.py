@@ -1786,8 +1786,14 @@ class SquadPickScreen(RiosScreen):
     - 练度门槛做成**一个三档下拉**（不限 / ≥精英二60 / 精英二90），
       而不是「精英化」「等级」两个独立下拉——独立的两个会让人去凑
       「精英 0 且 90 级」这种筛不出东西的组合；
-    - `G` 仍然切列表表头的粗细（「主职业」↔「主职业·子职业」），`M` 仍然切
-      「允许程序补充 / 只用我选的」。
+    - `M` 仍然切「允许程序补充 / 只用我选的」。
+
+    **`G` 键已经去掉了**（博士 2026-09-18：「选人界面可以去掉按 G 切换分类的功能了，
+    与新加上的筛选重复」）。以前 `G` 在「表头按主职业」与「表头按主职业·子职业」
+    之间循环；现在**子职业是靠子职业行筛的**，表头再按子职业分一次组只是把同一个
+    信息说两遍——而且筛到某个子职业时，列表里那一堆表头全是同一行字。
+    所以表头**固定按主职业**（`D.group_label(op)` 的默认档），
+    顶上那行说明里的「分组：…」也一并去掉，剩下范围 / 练度 / 筛出 / 已勾。
 
     **换分类或换门槛都不能丢已勾的人**：勾选状态另存一份 `_picked`，
     列表重建后逐条选回来。否则用户勾了五个人、手一抖切了下分类，
@@ -1811,7 +1817,6 @@ class SquadPickScreen(RiosScreen):
         # 回车让出来，见 `SquadList` 的说明。
         Binding("enter", "go", "开始解算", key_display="Enter"),
         Binding("m", "toggle_mode", "切换模式", key_display="M"),
-        Binding("g", "toggle_group", "切换分类", key_display="G"),
         Binding("escape", "back", "返回", key_display="Esc"),
     ])
 
@@ -1835,7 +1840,6 @@ class SquadPickScreen(RiosScreen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self._group = "prof"                  # prof | sub
         self._prof: str | None = None         # None = 全部
         self._sub: str | None = None          # None = 该职业下不再筛
         self._min_index = 0                   #: 门槛档位下标（写进顶上那行说明）
@@ -1918,7 +1922,7 @@ class SquadPickScreen(RiosScreen):
         lst.clear_options()
         last = None
         for op in self._visible():
-            head = D.group_label(op, self._group)
+            head = D.group_label(op)      # 表头固定按主职业（见 `_fill` 的说明）
             if head != last:
                 # 分组表头：一条**不可选**的哑行。用 `disabled` 而不是普通项，
                 # 否则它会被算进 `selected`、混进最终编队里。
@@ -1971,10 +1975,6 @@ class SquadPickScreen(RiosScreen):
 
     def _render_mode(self) -> None:
         st = self.app.state
-        head = ("分组：[bold]主职业[/]" if self._group == "prof"
-                else "分组：[bold]主职业-子职业[/]")
-        # 当前筛到哪一档也写在这里：分类行在窄窗口里会折行，而说明这行永远看得见，
-        # 「我现在看的是哪个职业」至少有一处说得清。
         scope = D.PROFESSION_CN.get(self._prof or "", self._prof or "") or D.PROF_ALL
         if self._prof and self._sub:
             scope = f"{scope}·{self._sub}"
@@ -1992,9 +1992,9 @@ class SquadPickScreen(RiosScreen):
                 f"范围：[bold]{scope}[/]　练度：[bold]{train}[/]　"
                 f"筛出 [bold]{shown}[/] 人　"
                 f"已勾 [bold]{len(self._picked)}[/] 人　"
-                f"[dim]{head}　{mode}[/]")
+                f"[dim]{mode}[/]")
             return
-        txt = (f"{head}　范围：[bold]{scope}[/]　练度：[bold]{train}[/]　"
+        txt = (f"范围：[bold]{scope}[/]　练度：[bold]{train}[/]　"
                f"筛出 [bold]{shown}[/] 人　"
                f"已勾 [bold]{len(self._picked)}[/] 人\n")
         if st.mode == "auto":
@@ -2012,11 +2012,6 @@ class SquadPickScreen(RiosScreen):
     def action_toggle_mode(self) -> None:
         st = self.app.state
         st.mode = "only" if st.mode == "auto" else "auto"
-        self._render_mode()
-
-    def action_toggle_group(self) -> None:
-        self._group = "sub" if self._group == "prof" else "prof"
-        self._fill()
         self._render_mode()
 
     # ---- 矮窗口：两行分类的留白让路，行本身留着 ----

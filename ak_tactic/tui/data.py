@@ -496,17 +496,15 @@ def sub_professions_in(ops, profession: str) -> list[str]:
     return seen
 
 
-def group_label(op, mode: str = "prof") -> str:
-    """一行分组表头。
+def group_label(op) -> str:
+    """一行分组表头 = 主职业名（「近卫」）。
 
-    `mode="prof"` → 「近卫」；`mode="sub"` → 「近卫·术战者」。
-    子职业缺失时退回主职业名，不留一个孤零零的分隔点。
+    **只有这一档了**：原先还有个 `mode="sub"` 会给出「近卫·术战者」，靠 `G` 键切。
+    博士 2026-09-18 把 `G` 去掉了（「与新加上的筛选重复」）——子职业现在由子职业行
+    筛，表头再按子职业分一次组只是把同一件事说两遍。所以这里不再接 `mode`：
+    留着那个参数就会有人以为界面上还能切到它。
     """
-    main = profession_cn(op)
-    if mode != "sub":
-        return main
-    sub = (getattr(op, "sub_profession", "") or "").strip()
-    return f"{main}·{sub}" if sub else main
+    return profession_cn(op)
 
 
 def meets_trained(op, elite_min: int, level_min: int) -> bool:
