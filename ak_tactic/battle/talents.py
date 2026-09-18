@@ -69,6 +69,10 @@ __all__ = [
     "ANGEL_BLESSING_TALENTS",
     "is_angel_blessing",
     "find_angel_blessing",
+    "POWER_ATTACK_TALENTS",
+    "PowerAttack",
+    "is_power_attack_talent",
+    "find_power_attack",
     "RHODES_NATION",
     "LIMIT_DISPATCH_TALENTS",
     "is_limit_dispatch",
@@ -192,6 +196,54 @@ def find_dot_on_hit(talents) -> Talent | None:
 
 def is_damage_block_talent(t: Talent) -> bool:
     return getattr(t, "name", "") in DAMAGE_BLOCK_TALENTS
+
+
+@dataclass(frozen=True)
+class PowerAttack:
+    """「强击瓶专家」：部署后首次开技起，接下来 N 次**攻击**的攻击力倍率。
+
+    注意 `count` 数的是**攻击动作**，不是箭矢：prts.wiki「焰狐龙梓兰」页
+    `|备注=` 原文——
+
+    > ※天赋启动后，'''每轮'''普通攻击三连击、'''每轮'''技能三/四/五连击、
+    > '''每次'''二技能的降落攻击、'''每次'''三技能的龙之箭都会消耗'''一层'''攻击力
+    > 提升效果的层数来触发攻击力提升效果
+    > ※攻击力提升效果为攻击力倍率提升，于**弹道脱手前**对当次连击的所有
+    > 弹道/龙之箭弹道的攻击力倍率生效
+
+    所以一次出手的所有箭矢都吃加成、整轮只扣一层。博士 2026-09-18 的裁定
+    （「按出手」）与此一致。
+    """
+
+    count: int
+    scale: float
+
+
+#: 具名检测器（审计第三道筛子按天赋名判有没有人读它，名字要作为字面量留在源码里）。
+POWER_ATTACK_TALENTS = frozenset({"强击瓶专家"})
+
+
+def is_power_attack_talent(t: Any) -> bool:
+    """这条天赋是不是「强击瓶专家」。
+
+    判据是**键的组合**（`power_attack_count` + `power_attack_scale`），不是名字：
+    名字只留给审计的第三道筛子看。
+    """
+    if str(getattr(t, "name", "")) in POWER_ATTACK_TALENTS:
+        return True
+    bb = getattr(t, "blackboard", None) or {}
+    return "power_attack_count" in bb and "power_attack_scale" in bb
+
+
+def find_power_attack(talents) -> PowerAttack | None:
+    """把「强击瓶专家」的黑板翻成 `PowerAttack`，没有则返回 None。"""
+    for t in talents or ():
+        if not is_power_attack_talent(t):
+            continue
+        bb = getattr(t, "blackboard", None) or {}
+        return PowerAttack(count=int(bb.get("power_attack_count") or 0),
+                           scale=float(bb.get("power_attack_scale") or 1.0))
+    return None
 
 
 def find_damage_block(talents) -> Talent | None:

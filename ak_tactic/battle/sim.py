@@ -1528,8 +1528,29 @@ class BattleSimulator:
         sk = op.skill
         if sk is None:
             return
+        # 「刚连射」：技1 开技时若已有 **2 次充能**所需的技力，则**一次吃掉两层**、
+        # 多打那 5 支 200%（PRTS `|备注=` 原文：「技能达到 4 级后，若在已有 2 次
+        # 充能所需技力的情况下触发技能，焰狐龙梓兰会消耗 2 次充能所需的技力来
+        # 释放技能」；博士 2026-09-18 裁定同此）。
+        # **判据是开技那一刻的 `op.sp`**（扣之前），不是技能等级——等级只决定
+        # 四段机制有没有，而技力够不够是每局的事。被动开技不扣技力，也就不吃。
+        eff_now = sk.effects
+        op.charge_extra_ready = False
+        if not passive and eff_now.charge_arrows > 0:
+            need = float(sk.sp_cost) * (1 + eff_now.charge_layers)
+            if op.sp + 1e-9 >= need:
+                op.charge_extra_ready = True
+                op.charge_extra_arrows = eff_now.charge_arrows
+                op.charge_extra_scale = eff_now.charge_scale
         if not passive:
-            op.sp = max(0.0, op.sp - float(sk.sp_cost))
+            layers = 1 + (eff_now.charge_layers if op.charge_extra_ready else 0)
+            op.sp = max(0.0, op.sp - float(sk.sp_cost) * layers)
+        # 天赋「强击瓶专家」：**部署后首次开启技能时**，接下来 50 次攻击的攻击力
+        # 倍率提升至 115%。判据是"本局的第几次开技"，而 `op.sp_charges` 在下面
+        # 才自增，所以这里读到的 0 就是首次。每次开技都重置一遍也无妨——它只会
+        # 在 == 0 时触发。
+        if op.sp_charges == 0 and op.power_attack_count > 0:
+            op.power_attack_left = op.power_attack_count
         op.skill_active = True
         # 「第二次及以后使用」的取值：黑板用 `[second]` 变体给。怒潮凛冬技2
         # 「绝不罢休」——第 1 次 atk+90% / def+60% / 16 秒；第 2 次起
@@ -2722,6 +2743,19 @@ class BattleSimulator:
 
             scale = skill_scale
             hits = eff.hit_count if eff is not None else 1
+            # 「刚连射」：另一次出手，箭数与倍率都另算（她 4 支 160% ＋ 5 支 200%）。
+            # 与"末击加倍"分开：末击是同一次连击序列的最后一笔，这是**多花一层
+            # 充能换来的另一段**，所以它整段换倍率、且落在最后 5 笔上。
+            extra_hits = 0
+            extra_scale = 0.0
+            if (eff is not None and op.charge_extra_ready
+                    and op.charge_extra_arrows > 0
+                    and abs(skill_scale - 1.0) > 1e-9):
+                extra_hits = op.charge_extra_arrows
+                extra_scale = op.charge_extra_scale
+                hits += extra_hits
+                # 一次性：这一段出手过去就不再算，免得后续普攻也带上。
+                op.charge_extra_ready = False
             # 普攻连击（焰狐龙梓兰的隐藏天赋：普通攻击为三连击、每击 100%，
             # **计算防御/法抗之后**再 ×33.3%）。只在**这一次出手是普攻**时生效：
             # 技能自己写了攻击倍率就是技能攻击（她技1 的 4 支、技2 的 13 笔
@@ -2758,6 +2792,23 @@ class BattleSimulator:
                             and op.slash_pending)
             slash_type = op.attack_type
             power = op.current_atk()
+            # 天赋「强击瓶专家」：接下来 N 次**攻击**（攻击动作 = 一轮，不是箭矢）
+            # 的攻击力倍率提升。备注写明"于**弹道脱手前**对当次连击的所有弹道
+            # 生效"⇒ 乘在这一轮的全部箭矢上，整轮只扣一层。
+            if op.power_attack_left > 0:
+                power *= op.power_attack_scale
+                # 层数按**轮**扣，而一次出手可能代表多轮：技2 是"三轮齐射 ＋
+                # 落地点射"（备注把这四段各算一轮），技1 的刚连射是另一次。
+                # 不这么算的话，技2 一次只扣一层——技能放四次就差 12 层。
+                rounds = 1
+                if eff is not None:
+                    if len(eff.volley_arrows) > 1:
+                        rounds += len(eff.volley_arrows) - 1
+                    if eff.landing_scale:
+                        rounds += 1
+                    if extra_hits:
+                        rounds += 1
+                op.power_attack_left = max(0, op.power_attack_left - rounds)
 
             for target in targets:
                 ign = pierce_fix + target.defense * pierce_pct
@@ -2770,6 +2821,8 @@ class BattleSimulator:
                     hit_scale = (final_scale
                                  if (final_scale is not None and i == hits - 1)
                                  else scale)
+                    if extra_hits and i >= hits - extra_hits:
+                        hit_scale = extra_scale
                     hit_type = dmg_type
                     if slashing:
                         hit_type = ("TRUE" if i == hits - 1 else slash_type)

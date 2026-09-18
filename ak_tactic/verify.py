@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .battle import BattleSimulator, Deployment, RangeProvider
-from .battle.talents import squad_cost_bonus
+from .battle.talents import find_power_attack, squad_cost_bonus
 from .battle.traits import (apply_splash_talent, read_combo_attack,
                             read_trait_splash)
 from .battle.unit import OperatorUnit
@@ -247,6 +247,12 @@ class Verifier:
         # 而库里的 `operator_talent` 只按 `is_hide_talent` 标记、名字是 null，
         # 走库反而要多一次查询。
         combo = read_combo_attack(c)
+        # 天赋「强击瓶专家」（焰狐龙梓兰）：部署后首次开技起，接下来 50 次
+        # **攻击**的攻击力倍率。取数与判据在 `battle/talents.find_power_attack`。
+        pow_atk = find_power_attack(
+            self.talents.for_operator(cid, elite=entry["elite"],
+                                      level=entry["level"],
+                                      potential=entry.get("potential", 1)))
         tal_text = " ".join(
             (cand.get("description") or "")
             for t_ in (c.get("talents") or [])
@@ -284,6 +290,9 @@ class Verifier:
             combo_hits=combo.hits if combo else 1,
             combo_hit_scale=combo.hit_scale if combo else 1.0,
             combo_damage_scale=combo.damage_scale if combo else 1.0,
+            # 天赋「强击瓶专家」：0 = 没有这条。
+            power_attack_count=pow_atk.count if pow_atk else 0,
+            power_attack_scale=pow_atk.scale if pow_atk else 1.0,
         )
         self._unit_cache[key] = kw
         return OperatorUnit(**kw)
