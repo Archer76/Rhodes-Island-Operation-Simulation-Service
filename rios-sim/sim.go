@@ -494,6 +494,13 @@ func runSim(spec *Spec) (*Verdict, error) {
 				// 没挂机制时 `speedFor` 恒为 1.0，与最小版本逐位相同。
 				advance(e, dt, spec.SpeedScale*ctx.speedFor(e.index))
 			}
+			// 逐帧坐标（按名字门控，见 `tracePosName`）。`blocked/sluggish/freeze`
+			// 一起记：坐标不动有三种截然不同的原因，不写清楚就得分不出来。
+			if traceOn && tracePosName != "" && e.spec.Name == tracePosName {
+				trace("POS t=%.4f idx=%d x=%.4f y=%.4f hp=%.1f blocked=%t pause=%.2f sluggish=%.2f freeze=%.2f",
+					*ctx.time, e.index, e.position[0], e.position[1], e.hp,
+					e.blockedBy != nil, e.attackPause, e.sluggishTimer, e.freezeTimer)
+			}
 		}
 		// 停顿按原版在**推进之后**递减（`sim.py:2721-2722` 在 push 那一步里）：
 		// 同一帧内先判"能不能走"再扣时间，挪到前面去会让每段停顿短一帧。
