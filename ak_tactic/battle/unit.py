@@ -411,7 +411,14 @@ class OperatorUnit(Combatant):
         return bool(self.skill is not None and getattr(self.skill, "is_passive", False))
 
     def current_atk(self) -> float:
-        """当前攻击力——开技能期间含攻击力增益、技能倍率与**击杀叠层**。
+        """当前**面板**攻击力——开技能期间含攻击力增益、击杀叠层与全场光环。
+
+        **不含技能倍率**（`effects.atk_scale`）。倍率只在
+        `damage.resolve_damage(scale=…)` 那一处乘（2026-09-18 博士裁定，
+        缘由见 `SkillEffects.attack_power` 的说明：裁定前它与平A 循环各乘一次，
+        同一份倍率乘了两次）。所以本属性的含义是"这一帧的攻击力面板"，
+        与开不开技能都读得通——积雪踏入伤害、持续伤害的每秒量、全场总攻击
+        这些消费者要的都是这个量。
 
         注意 `effects is None`（这一帧没开技能）的分支**也要算全场光环**：
         「青色怒火」是发给所有友方的，不挑对方开不开技能。早期版本在这个分支
@@ -427,10 +434,7 @@ class OperatorUnit(Combatant):
             v = e.variants.get("kill") or {}
             pct = float(v.get("atk", 0.0)) * self.kill_stacks
         # 全场光环（青色怒火）同样是**同层相加**的百分比加成。
-        if pct or self.aura_atk_pct:
-            return (self.atk * (1.0 + e.atk_pct + pct + self.aura_atk_pct)
-                    * e.atk_scale)
-        return e.attack_power(self.atk)
+        return self.atk * (1.0 + e.atk_pct + pct + self.aura_atk_pct)
 
     def current_res(self) -> float:
         """当前法术抗性——含技能增益与**击杀叠层**的固定值加成。

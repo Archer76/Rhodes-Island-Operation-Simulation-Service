@@ -772,13 +772,23 @@ class SkillEffects:
     # -------------------------------------------------------- 战斗接口
 
     def attack_power(self, base_atk: float) -> float:
-        """开技能期间，**一次攻击**的等效攻击力。
+        """开技能期间，**面板口径**的等效攻击力 = `面板 × (1 + 攻击力增益)`。
 
-        总倍率 = (1 + 攻击力增益) × 技能倍率——两条是相乘的，这有实测依据：
-        机械师「工程学十字星」同时给 `atk 2.8` 与 `attack@atk_scale 2.6`，
-        (1+2.8) × 2.6 = 9.88，与社区标定的 9.9 倍吻合。
+        **这里不含技能倍率**（`atk_scale`）——2026-09-18 博士裁定。倍率只在
+        `damage.resolve_damage(scale=…)` 那一处乘，一次出手的总伤害是
+        `attack_power(面板) × atk_scale`。
+
+        裁定前这里把 `atk_scale` 也乘了进来（口径是"一次攻击的等效攻击力"），
+        而平A 循环同时又按 `resolve_damage(scale=eff.atk_scale)` 乘了一次，
+        于是**同一条倍率乘了两次**：零防目标上实得/正文 = 倍率本身
+        （能天使技1 实测 1.4500）。两侧各自都自洽（本函数有机械师
+        「工程学十字星」`(1+2.8) × 2.6 = 9.88` 的社区标定值撑腰，`resolve_damage`
+        的契约也是"`atk` 给最终攻击力、`scale` 给技能倍率"），合起来才错——
+        所以改的是**含义**那一侧，不是把某一处删掉了事：
+        `attack_power` 从"一次攻击"退回"面板"，9.88 那条断言改写成
+        `attack_power(1.0) × atk_scale`（见 `check_battle [3]`）。
         """
-        return base_atk * (1.0 + self.atk_pct) * self.atk_scale
+        return base_atk * (1.0 + self.atk_pct)
 
     def attack_interval(self, base_interval: float,
                         base_attack_speed: float = 100.0) -> float:

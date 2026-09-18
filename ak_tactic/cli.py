@@ -520,7 +520,11 @@ def _print_skill_level(lv, atk: float | None, *, indent: str = "    ") -> None:
     if eff:
         print(f"{indent}      效果：{'  '.join(eff)}")
     if atk is not None:
-        print(f"{indent}      一次攻击 {lv.effects.attack_power(atk):,.0f}"
+        # 「一次攻击」= 面板口径 × 技能倍率。两段都在这里显式乘开：`attack_power`
+        # 只到面板（2026-09-18 裁定），倍率归 `damage.resolve_damage`，
+        # 所以这个展示值要把两边合起来才是玩家看到的那一下。
+        print(f"{indent}      一次攻击 "
+              f"{lv.effects.attack_power(atk) * lv.effects.atk_scale:,.0f}"
               f"（基于攻击力 {atk:g}）"
               f"   连击 {lv.effects.hit_count}×   目标 {lv.effects.max_target}")
     leftover = {k: v for k, v in lv.effects.other.items()}

@@ -2617,10 +2617,12 @@ class BattleSimulator:
         # 本技能在数据里 duration = 0，"开启中"只持续一帧，而五锤要跨 7.2 秒
         # ——拿"这一帧开没开"去决定加不加本技能的加成，必然一半对一半错。
         # 所以裸攻击力 + 全场光环（那部分与开不开技能无关），再加上本技能的
-        # `atk_base` 与逐击累加的 `atk_step`：三者同属"攻击力+X%"，**相加**。
-        # （先前的写法用 `current_atk() × atk_multiplier()`：技能仍开着的那一帧
-        # `current_atk()` 已含 `atk_base` 与 `atk_scale`，于是那第一锤被重复计成
-        # 4.8 倍——守卫里"第一锤与第五锤都按公式对账"正是为抓这类错。）
+        # `atk_base` 与逐击累加的 `atk_step`：三者同属"攻击力+X%"，**相加**，
+        # 最后再由 `st.atk_scale` 乘一次（技能倍率只在 resolve_damage 那一处乘，
+        # 2026-09-18 裁定）。
+        # （先前的写法用 `current_atk() × atk_multiplier()`：那一版 `current_atk()`
+        # 自带 `atk_scale`，于是第一锤被重复计成 4.8 倍——守卫里"五击逐一对账"
+        # 正是为抓这类错。）
         buff = st.atk_pct + st.atk_step * op.hammer_step + op.aura_atk_pct
         power = op.atk * (1.0 + buff)
         cells = splash_tiles(center, st.splash_radius)

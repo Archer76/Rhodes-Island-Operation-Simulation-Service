@@ -270,8 +270,13 @@ def check_parsing(book) -> None:
     print("\n[3] 技能解析定点值")
 
     lv = book.for_operator("char_4230_mcnist")[2].level(7, 3)
-    total = lv.effects.attack_power(1.0)
-    check("机械师「工程学十字星」总倍率 9.88 =（1+2.8）×2.6",
+    power = lv.effects.attack_power(1.0)
+    check("机械师「工程学十字星」面板口径 =（1+2.8）= 3.8"
+          "（`attack_power` **不含**技能倍率，2026-09-18 裁定）",
+          close(power, 3.8, 1e-6), f"实得 {power:.4f}")
+    total = power * lv.effects.atk_scale
+    check("  一次出手的总倍率 **9.88** = 3.8 × 2.6（社区标定值，"
+          "倍率由 `resolve_damage(scale=…)` 乘那一份）",
           close(total, 9.88, 1e-6), f"实得 {total:.4f}")
     check("  平A取 attack@atk_scale 而非裸 atk_scale",
           close(lv.effects.atk_scale, 2.6, 1e-9),
