@@ -66,6 +66,9 @@ __all__ = [
     "DOT_ON_HIT_TALENTS",
     "is_dot_on_hit_talent",
     "find_dot_on_hit",
+    "ANGEL_BLESSING_TALENTS",
+    "is_angel_blessing",
+    "find_angel_blessing",
     "CLASS_AURA_TALENTS",
     "is_class_aura_talent",
     "find_class_aura",
@@ -195,6 +198,28 @@ def find_damage_block(talents) -> Talent | None:
 
 
 CLASS_AURA_TALENTS: dict[str, str] = {"特种作战策略": "TANK"}
+
+
+#: 「天使的祝福」（能天使天赋1）：「攻击力+6%，生命上限+10%。置入战场后这个
+#: 效果会**同样赋予给一名随机友方单位**」——`{atk: 0.06, max_hp: 0.10}`，
+#: 潜能 2 起 0.08/0.13。
+#:
+#: **本轮只做"自身那半"**（确定、无歧义）。「随机友方」那半需要一个口径
+#: ——取最先部署的友方？把期望摊给全队？——**没有裁定就不动手**，
+#: 见 `docs/uncertainties.md`。所以这条天赋在审计里**只算做了一半**，
+#: 别把它当成已收口。
+ANGEL_BLESSING_TALENTS = frozenset({"天使的祝福"})
+
+
+def is_angel_blessing(t: Talent) -> bool:
+    return getattr(t, "name", "") in ANGEL_BLESSING_TALENTS
+
+
+def find_angel_blessing(talents) -> Talent | None:
+    for t in talents or ():
+        if is_angel_blessing(t):
+            return t
+    return None
 
 
 def is_class_aura_talent(t: Talent) -> bool:
@@ -334,6 +359,11 @@ class TeamAura:
     #: **只发给这个主职业代号的人**（`TANK` = 重装）；None = 不按职业分。
     #: 与 `faction`（阵营 `team_id`）是**两回事**：那是"哪个团"，这是"哪个职业"。
     profession: str | None = None
+    #: **只发给光环主人自己**（能天使「天使的祝福」的自身那半）。与 `profession`
+    #: 的区别：那个筛"什么职业"，这个筛"就是我自己"。
+    #: 判等用**同一对象**（`target is self.operator`），**不按 char_id**——
+    #: 同一关里可以有同名干员，按 char_id 会把别人的那份也发出去。
+    self_only: bool = False
 
     def current(self, target=None) -> tuple[float, float]:
         """当前对 `target` 生效的 `(攻击力比例, 防御力比例)`。
@@ -341,6 +371,9 @@ class TeamAura:
         `target` 是**吃光环的那个人**——万众巨潮要对它判阵营、特种作战策略要对它
         判职业，所以这个参数不是可选的装饰：不传就一律按不吃翻倍/不匹配算。
         """
+        if self.self_only and target is not self.operator:
+            # 只给自己：**不按 char_id 比**（同名干员会串），按对象同一性。
+            return 0.0, 0.0
         if self.profession is not None:
             # 按职业发：**不吃倍率**，也不看主人开不开技能（星熊那条是常驻的）。
             # 空职业（手工搭的试验体）不匹配任何职业光环。

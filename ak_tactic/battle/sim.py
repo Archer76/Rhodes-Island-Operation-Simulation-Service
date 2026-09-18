@@ -53,7 +53,8 @@ from ..gamedata.enemy import PROSE_SUMMON_EDGES
 from .damage import DamageType, resolve_damage
 from .talents import (CLASS_AURA_TALENTS, FACTION_AURA_NAME, STUDENT_TEAM,
                       RegenAura, SnowField, TeamAura, find_blessing,
-                      find_class_aura, find_damage_block, find_dot_on_hit,
+                      find_angel_blessing, find_class_aura, find_damage_block,
+                      find_dot_on_hit,
                       find_regen,
                       find_snow, find_sp_on_action, find_summon_allowance,
                       find_team_aura,
@@ -2203,6 +2204,20 @@ class BattleSimulator:
             d = block.value("prob", 0.0)
             op.talent_dodge_phys = d
             op.talent_dodge_arts = d
+        # 天赋「天使的祝福」（能天使）：**自身** +6% 攻击、+10% 生命上限。
+        # 「随机友方」那半**未做**（等裁定，见 docs/uncertainties.md）——
+        # 所以这条天赋只算做了一半。自身那半借光环通道，self_only 只发自己。
+        bless = find_angel_blessing(op.talents)
+        if bless is not None:
+            self.team_auras.append(TeamAura(
+                owner=op.name,
+                atk_pct=bless.value("atk", 0.0),
+                def_pct=0.0,
+                operator=op,
+                self_only=True,
+            ))
+            self._refresh_auras()
+            op.apply_max_hp_bonus(bless.value("max_hp", 0.0))
         # 地形条件：**周围四格有高台**（阿斯卡纶「噬光残影」额外 +6 攻速）。
         # 伏击客不移动，判一次就定死；判据用 `is_highland()`——`tile_wall`
         # 与 `tile_forbidden` 都是高台（后者不可站人，但仍是高台）。
