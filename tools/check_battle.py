@@ -4591,6 +4591,140 @@ def check_lock_awake(stage, lib, calc, book_t) -> None:
           f"{tgt.stun_timer / max(1, hits):.4f}s")
 
 
+def check_cost_skills(stage, lib, calc, book_t) -> None:
+    """[50] 「给费用」这条通道的**四义拆分**（可露希尔 char_4228_closur）。
+
+    她这一个干员把 `cost` 的两种写法凑齐了：技1 是「技能持续时间内**逐渐获得**
+    3 点」，技2 是「**立即获得**10 点**且**持续时间内**逐渐获得**15 点」，技3 是
+    「逐渐获得 18 点」外加两个方括号变体键给出节奏。
+
+    ⚠️ 这个键**一键多义**：全表（等级10）有 **59 条**技能带费用键，至少四种
+    语义（立即获得 / 逐渐获得 / 每次攻击获得 / **消耗**）。所以本轮**不动**那
+    59 条的全局口径，只在解析侧按**正文关键词**把四个量分开（`cost` 一键多义，
+    `SkillEffects` 上单开 `cost_grant` / `cost_suppress_immediate` /
+    `cost_gradual` / `cost_trickle_*` / `cost_per_attack`）。
+
+    ⚠️ 判据只能按关键词，**不能按占位符**：`SkillLevel.description` 是**渲染后**
+    的正文（技2 实测是「立即获得10点部署费用，持续时间内逐渐获得15点部署
+    费用」），`{cost}` 那种写法根本读不到——第一版按占位符写，技2/技1 全判错。
+
+    可观测量：**费用池 `sim.cost` 的增量**（开技瞬间 / 一段时间之后各一份），
+    以及"从哪一次使用开始不再增长"（技1 的 `cost_add_max` 封顶 7）。
+    """
+    print("\n[50] 可露希尔「给费用」四义拆分：立即 / 逐渐 / 每次攻击 / 递增封顶")
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    v = Verifier()
+    slots = {sk.slot: sk for sk in SkillBook().for_operator("char_4228_closur")}
+
+    def _fx(slot: int):
+        return slots[slot].level(7, 3).effects
+
+    e1, e2, e3 = _fx(1), _fx(2), _fx(3)
+    check("  技1「精准投放」：只有『逐渐』（开技**不许**一次性给）、总额 3、"
+          "每次使用 +1、封顶 7",
+          e1.cost_suppress_immediate and e1.cost_trickle_total == 3.0
+          and (e1.cost_per_add, e1.cost_add_max) == (1.0, 7.0),
+          f"suppress={e1.cost_suppress_immediate} total={e1.cost_trickle_total} "
+          f"+{e1.cost_per_add}/次 封顶 {e1.cost_add_max}")
+    check("  技2：『立即』10 **且**『逐渐』15（两个词同句——只看词有没有出现"
+          "必然判错，要按各自的绑定取）",
+          not e2.cost_suppress_immediate
+          and e2.buffs.get("cost") == 10.0
+          and e2.cost_trickle_total == 15.0,
+          f"buffs.cost={e2.buffs.get('cost')} 逐渐={e2.cost_trickle_total}")
+    check("  技3：只有『逐渐』18，`cost` 本身是 0",
+          e3.cost_trickle_total == 18.0 and e3.buffs.get("cost") == 0.0,
+          f"逐渐={e3.cost_trickle_total}")
+    check("  节奏取自**方括号变体**（技2：1 点 / 2 秒；技3：1 点 / 1.66 秒），"
+          "不再按时长均分",
+          (e2.cost_trickle_per, e2.cost_trickle_interval) == (1.0, 2.0)
+          and (e3.cost_trickle_per, e3.cost_trickle_interval) == (1.0, 1.66),
+          f"技2 {e2.cost_trickle_per}@{e2.cost_trickle_interval}、"
+          f"技3 {e3.cost_trickle_per}@{e3.cost_trickle_interval}")
+
+    print("     —— 不许碰坏那 59 条（德克萨斯「立即获得12点费用」原样）——")
+    _tx = {sk.slot: sk for sk in SkillBook().for_operator("char_102_texas")}
+    check("  德克萨斯：口径不变（开技仍一次性给 12，且没被判成『逐渐』）",
+          _tx[1].level(7, 3).effects.cost_grant == 12.0
+          and not _tx[1].level(7, 3).effects.cost_suppress_immediate,
+          f"grant={_tx[1].level(7, 3).effects.cost_grant}")
+
+    def _prep(slot: int):
+        sim = mechanism_sim(stage, lib)
+        u = v.unit({"char_id": "char_4228_closur", "elite": 2, "level": 60,
+                    "trust": 100, "potential": 1})
+        u.position = (2, 3)
+        u.direction = "Right"
+        u.skill = slots[slot].level(7, 3)
+        sim.operators.append(u)
+        return sim, u
+
+    def _drive(sim, u, seconds: float, keep_alive: bool = True):
+        t = 0.0
+        for _ in range(int(seconds / 0.05)):
+            t += 0.05
+            if keep_alive:
+                u.skill_timer = 1e9
+            sim._cost_trickle_tick(0.05, t)
+
+    print("     —— 技2：开技瞬间 +10，30 秒内再摊 +15 ——")
+    sim, u = _prep(2)
+    before = sim.cost
+    sim._activate(u, 0.0)
+    check("  开技瞬间费用 +10（走的是既有那条『回费技能』通道）",
+          abs(sim.cost - before - 10.0) < 1e-9, f"+{sim.cost - before:g}")
+    _drive(sim, u, 30.0)
+    check("  30 秒里再摊 +15，合计 +25（15 次 1 点，落在 2 秒的节拍上）",
+          abs(sim.cost - before - 25.0) < 1e-9, f"合计 +{sim.cost - before:g}")
+
+    print("     —— 技3：只有『逐渐』，30 秒 +18 ——")
+    sim, u = _prep(3)
+    before = sim.cost
+    sim._activate(u, 0.0)
+    check("  开技瞬间**不给**（`cost` 是 0，且正文只写『逐渐』）",
+          abs(sim.cost - before) < 1e-9, f"+{sim.cost - before:g}")
+    _drive(sim, u, 30.0)
+    check("  30 秒里摊 +18（1.66 秒一拍，正好 18 拍）",
+          abs(sim.cost - before - 18.0) < 1e-9, f"+{sim.cost - before:g}")
+
+    print("     —— 技1：每使用一次 +1，封顶 7 ——")
+    sim, u = _prep(1)
+    got = []
+    for _ in range(6):
+        before = sim.cost
+        sim._activate(u, 0.0)
+        _drive(sim, u, 8.0)
+        got.append(round(sim.cost - before, 3))
+    check("  第 1–6 次依次 3/4/5/6/7/7：增长 1 点、`cost_add_max` 封顶在 7",
+          got == [3.0, 4.0, 5.0, 6.0, 7.0, 7.0], f"{got}")
+
+    print("     —— 反向：技能停掉，没发完的作废 ——")
+    sim, u = _prep(2)
+    sim._activate(u, 0.0)
+    _drive(sim, u, 2.0)
+    mid = sim.cost
+    u.skill_active = False                    # 手动停 / 弹药打完
+    _drive(sim, u, 20.0, keep_alive=False)
+    check("  技能一停就不再发（正文写的是『技能持续时间内』）",
+          abs(sim.cost - mid) < 1e-9 and u.cost_trickle_left == 0.0,
+          f"停了之后又发了 {sim.cost - mid:g}")
+
+    print("     —— `cost_attack_add`（每次攻击给费）——")
+    with sqlite3.connect(Path(__file__).resolve().parent.parent
+                         / "data" / "akdb.sqlite") as _c:
+        _c.row_factory = sqlite3.Row
+        _hit = {r["skill_id"]: json.loads(r["blackboard"] or "{}").get(
+            "cost_attack_add")
+            for r in _c.execute("SELECT skill_id, blackboard FROM skill_level "
+                                "WHERE level = 10")
+            if "cost_attack_add" in json.loads(r["blackboard"] or "{}")}
+    check("`cost_attack_add` 全表只有她技3，且 M3 就是 0（这一支在她身上空转，"
+          "但通道里真的有读点，将来非零不会静默失效）",
+          _hit == {"skchr_closur_3": 0.0} and e3.cost_per_attack == 0.0,
+          f"{_hit}")
+
+
 def check_glider_mobility(stage, lib, calc, book_t) -> None:
     """[43] 焰狐龙梓兰天赋2「翔虫机动」——一个天赋横跨两个平面。
 
@@ -5400,6 +5534,7 @@ def main() -> int:
     check_steal_aspd(stage, lib, calc, book_t)
     check_enemy_hitrate(stage, lib, calc, book_t)
     check_lock_awake(stage, lib, calc, book_t)
+    check_cost_skills(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:
