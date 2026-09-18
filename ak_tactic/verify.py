@@ -136,7 +136,13 @@ class Verifier:
 
     def __init__(self, *, source: GameDataSource | None = None,
                  effect_source: str = "merge", verbose: bool = False,
-                 use_range_table: bool = True) -> None:
+                 use_range_table: bool = True, engine: str = "python") -> None:
+        #: 用哪一份模拟器跑战斗。**默认永远是 `"python"`**（`battle/sim.py` 是权威
+        #: 实现）；`"go"` 指的是 `rios-sim` 那一份 Go 模拟器，接入点在
+        #: `ak_tactic/simgo/verifier.py`。换引擎必须显式点名——它快一个量级，但
+        #: 只在对拍全绿的那些关卡上被放行，规格不支持时会**当场退回 Python**
+        #: 并在判决的 `diagnosis` 里写清楚，绝不静默换。
+        self.engine = engine
         self.source = source or GameDataSource()
         self.calc = OperatorCalculator()
         self.skill_book = SkillBook()
@@ -391,11 +397,32 @@ class Verifier:
             # 只是**请求**：技力不够就等够了再开，判定在 _skill_tick 里。
             sim.use_skill(pos, s.time)
 
+        if self.engine != "python":
+            #: 换了引擎（Go 那一份，见 `ak_tactic/simgo/verifier.py`）。
+            #: 这里**只留一个挂载点**：怎么跑完一场战斗、怎么把结果变成判决，
+            #: 全归 `simgo` 那一层——本文件不该知道 Go 的存在。
+            v = self._run_other_engine(sim=sim, plan=plan, stage=stage,
+                                      deployed=deployed, title=title)
+            if cost_notes:
+                v.diagnosis.extend(cost_notes)
+            return v
+
         res = sim.run(max_time=900.0)
         v = self._verdict(plan, stage, sim, res, deployed, title=title)
         if cost_notes:
             v.diagnosis.extend(cost_notes)
         return v
+
+    def _run_other_engine(self, *, sim, plan, stage, deployed, title):
+        """换引擎时的出口。基类**没有**这个能力，所以照实报错。
+
+        留这个默认实现（而不是 `raise NotImplementedError` 就完事）是为了让
+        "有人给 `engine=` 传了个没实现的字符串"这句话说得清楚：
+        它必须是 `"python"`，要么就得由子类（`simgo.GoVerifier`）提供出口。
+        """
+        raise ValueError(
+            f"engine={self.engine!r} 没有实现：只有 'python'（权威实现）以及"
+            f"由 ak_tactic.simgo.GoVerifier 提供的出口")
 
     # -------------------------------------------------- 内部
 
