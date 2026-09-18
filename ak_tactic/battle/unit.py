@@ -454,6 +454,19 @@ class OperatorUnit(Combatant):
     #: 行动），且持有眩晕/冻结/沉默**反制**」——晕眩会被后续控制续上、闭锁
     #: 不会；拿晕眩顶替是把反制当成了易感。
     locked_timer: float = 0.0
+    #: 「部署后每使用过一次技能，获得的部署费用 +X（最多提升至 Y）」
+    #: （可露希尔技1「精准投放」）要按**本场部署以来用过几次**算，所以留一个
+    #: 计数。它在 `sim._activate` 里自增，一次部署内只增不减。
+    skill_use_count: int = 0
+    #: 「技能持续时间内逐渐获得部署费用」的发放状态（可露希尔那一族）。
+    #: `left` 是这一轮还没发完的总额，`per`/`interval` 是离散节奏（来自方括号
+    #: 变体），`rate` 是"没有变体时按时长均分"的每秒量。技能一停剩余作废——
+    #: 正文写的是"持续时间内"，技能没了就没了。
+    cost_trickle_left: float = 0.0
+    cost_trickle_per: float = 0.0
+    cost_trickle_interval: float = 0.0
+    cost_trickle_timer: float = 0.0
+    cost_trickle_rate: float = 0.0
     #: **偷来的**攻击速度（新约能天使技2）：白拿的点数，直接加进 `current_attack_speed`。
     #: 技能一结束（或她离场）就归零——归零在 `sim._revert_steal` 一处。
     aspd_steal_bonus: float = 0.0

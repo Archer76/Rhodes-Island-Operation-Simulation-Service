@@ -1845,6 +1845,71 @@ class BattleSimulator:
                         f"{t:7.1f}s  {op.name} 闭锁结束 → 晕眩 {n} 名地面敌人 "
                         f"{secs:g}s")
 
+    def _begin_cost_trickle(self, op: OperatorUnit) -> None:
+        """开技时**排**这一轮的"逐渐获得部署费用"（可露希尔那一族）。
+
+        总额三处来：
+
+        1. 解析侧给的 `cost_trickle_total`（技2 = `cost_period` 15、技3 = 18、
+           技1 = `cost` 3，见 `skill._cost_semantics` / `_cost_trickle`）；
+        2. 「每使用过一次技能 +X，最多提升至 Y」（技1 的 `cost_per_add` /
+           `cost_add_max`）——按**本场部署以来**的用次数加；
+        3. 有方括号变体（`…[add_cost_period].cost` / `.interval`）就按那个**离散
+           节奏**发（技2：1 点 / 2 秒），没有就按技能时长**均分**（技1）。
+
+        技能中途被关掉（手动停、弹药打完）时剩余作废——正文写的是
+        "技能持续时间内"，见 `_cost_trickle_tick`。
+        """
+        eff = op.effects
+        if eff is None:
+            return
+        total = eff.cost_trickle_total
+        if eff.cost_per_add > 0.0:
+            grown = total + eff.cost_per_add * max(0, op.skill_use_count - 1)
+            total = min(grown, eff.cost_add_max) if eff.cost_add_max > 0.0 \
+                else grown
+        if total <= 0.0:
+            return
+        dur = float(getattr(op.skill, "duration", 0.0) or 0.0)
+        op.cost_trickle_left = total
+        op.cost_trickle_per = eff.cost_trickle_per
+        op.cost_trickle_interval = eff.cost_trickle_interval
+        op.cost_trickle_timer = 0.0
+        op.cost_trickle_rate = (total / dur
+                                if (eff.cost_trickle_per <= 0.0 and dur > 0.0)
+                                else 0.0)
+        if self.verbose and total > 0.0:
+            self.result.log.append(
+                f"{self._t:7.1f}s  {op.name} 技能期间逐渐获得 {total:g} 点费用"
+                f"（第 {op.skill_use_count} 次使用）")
+
+    def _cost_trickle_tick(self, dt: float, t: float) -> None:
+        """「技能持续时间内逐渐获得 X 点部署费用」的兑现。
+
+        两种节奏：**离散**（有方括号变体，技2/技3——1 点 / 2 秒那种）与
+        **均分**（技1——只有总额，按技能时长摊到每一帧）。离散那种不能改成
+        均分：1 点费早到 0.9 秒，可能就是一个干员能不能踩上那一拍落地的差别。
+        """
+        for op in self.operators:
+            if op.cost_trickle_left <= 0.0:
+                continue
+            if not op.alive or not op.skill_active or op.effects is None:
+                op.cost_trickle_left = 0.0      # 技能没了，剩余作废
+                continue
+            per, iv = op.cost_trickle_per, op.cost_trickle_interval
+            if per > 0.0 and iv > 0.0:
+                op.cost_trickle_timer += dt
+                while (op.cost_trickle_timer >= iv
+                       and op.cost_trickle_left > 0.0):
+                    op.cost_trickle_timer -= iv
+                    give = min(per, op.cost_trickle_left)
+                    self.cost = min(self.max_cost, self.cost + give)
+                    op.cost_trickle_left -= give
+            elif op.cost_trickle_rate > 0.0:
+                give = min(op.cost_trickle_rate * dt, op.cost_trickle_left)
+                self.cost = min(self.max_cost, self.cost + give)
+                op.cost_trickle_left -= give
+
     def _hitrate_tick(self, dt: float) -> None:
         """「使范围内地面敌人**命中率 −X%**」的场（阿斯卡纶技3「残影」/ 艾拉技1）。
 
@@ -2091,8 +2156,15 @@ class BattleSimulator:
                                 to_summons=sk.effects.affects_summons)
         # 回费技能（德克萨斯、桃金娘这一类）：开启时直接给费用
         gain_cost = sk.effects.buffs.get("cost", 0.0)
-        if gain_cost:
+        # ⚠️ 「技能持续时间内**逐渐**获得」的那一族（可露希尔技1）**不许**在这里
+        # 一次性给：一次性给一份、`_begin_cost_trickle` 再摊一份，就是**给双份**。
+        # `cost` 一键多义（全表 59 条技能四种写法），闸门按正文关键词在解析侧
+        # 定好（`SkillEffects.cost_suppress_immediate`），这里只照办。
+        if gain_cost and not sk.effects.cost_suppress_immediate:
             self.cost = min(self.max_cost, self.cost + gain_cost)
+        # 用过几次要在发放之前自增：技1 的「每使用过一次 +1」算的是**这一次**。
+        op.skill_use_count += 1
+        self._begin_cost_trickle(op)
         self.result.skill_activations += 1
         self._spawn_qi(op, t)
         self._apply_push(op, t)
@@ -2375,6 +2447,10 @@ class BattleSimulator:
             # 4.96【闭锁】场（泥岩技3 的前 10 秒）：减速要排在 `_snow_tick`
             #      之后（那个每帧把 `speed_multiplier` 重置为 1.0），否则会被抹掉。
             self._lock_tick(dt, t)
+            # 4.97「技能持续时间内逐渐获得部署费用」（可露希尔那一族）。
+            #      排在这里而不是帧首的费用回复那一步：那是**自然回复**，
+            #      这是**技能给费**，两者各有各的节奏，混在一起对不上账。
+            self._cost_trickle_tick(dt, t)
             self._skill_tick(dt, t)
 
             # 5.4 全场光环（青色怒火）：数值随光环主人的技能状态变，所以必须排在
@@ -3257,6 +3333,11 @@ class BattleSimulator:
             # 次出手打的是旧的个数、第 10 次才是多出来的那个——正文写的是
             # 「每攻击 9 次**后**」，顺序就是这个意思。
             op.trigger_hits += 1
+            # 「每次攻击时获得 X 点部署费用」（`cost_attack_add`）。可露希尔技3
+            # 这个键在 M3 是 0.0，所以这一支**在她身上是空转**——但零值也走
+            # 同一条路：不然将来真出现非零值时，这条通道会静默失效。
+            if eff is not None and eff.cost_per_attack > 0.0:
+                self.cost = min(self.max_cost, self.cost + eff.cost_per_attack)
 
             scale = skill_scale
             hits = eff.hit_count if eff is not None else 1

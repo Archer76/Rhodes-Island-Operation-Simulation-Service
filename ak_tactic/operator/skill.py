@@ -337,6 +337,85 @@ def _hitrate_values(bb: dict[str, float]) -> tuple[float, float]:
     return phys, arts
 
 
+def _cost_semantics(description: str, bb: dict[str, float]) -> dict[str, float]:
+    """把"给费用"这条技能拆成四个互不相同的量（可露希尔那一族）。
+
+    ⚠️ `cost` 这个键**一键多义**，全表（等级10）有 **59 条**技能带费用键，
+    语义至少四种：
+
+    | 正文写法 | 含义 | 样本 |
+    | --- | --- | --- |
+    | 「**立即/立刻获得**{cost}点部署费用」 | 开技**一次**给 | 德克萨斯、桃金娘、可露希尔技2 |
+    | 「技能持续时间内**逐渐获得**{cost}点」 | 整个技能期**摊开**给 | 可露希尔技1 |
+    | 「**每次攻击时**获得{cost}点」 | 每次命中给 | 冬时技2 |
+    | 「**消耗**{cost}点部署费用」 | 反过来**扣** | 轰击术师那一族 |
+
+    本函数只做**分类**，不改任何既有数值：返回四个量（未命中就是 0），
+    由调用方决定怎么用。**不动那 59 条的全局口径**——把"消耗"误读成"获得"
+    这类事超出本批十位的范围，另记留档。
+
+    第四个量 `per_attack` 是 `cost_attack_add`（可露希尔技3 写 0.0，即"每次
+    攻击额外获得 0 点"）。
+    """
+    text = _TAG.sub("", description or "")
+    cost = float(bb.get("cost") or 0.0)
+    period = float(bb.get("cost_period") or 0.0)
+    gradual_text = "逐渐获得" in text
+    immediate_text = ("立即获得" in text) or ("立刻获得" in text)
+    # ⚠️ 判据只能用**关键词**，不能用占位符：`SkillLevel.description` 是
+    # **渲染后**的正文（占位符已经代成数字，实测技2 是「立即获得10点部署费用，
+    # 持续时间内逐渐获得15点部署费用」），所以 `{cost}` 那种写法根本读不到。
+    # 关键词这一层足够把四义分开：一时俱在时，`cost` 归"立即"、`cost_period`
+    # 归"逐渐"（技2/技3），只有"逐渐"时 `cost` 归"逐渐"（技1）。
+    return {
+        # 开技一次给：正文有「立即/立刻获得」才算
+        "immediate": cost if (immediate_text and not gradual_text) else 0.0,
+        # 开技**不许**一次性给：只有"逐渐"、没有"立即/立刻"的那些（技1）
+        "suppress_immediate": gradual_text and not immediate_text,
+        # 「逐渐获得」的总额：有 `cost_period` 用它（技2/技3），否则用 `cost`（技1）
+        "gradual_total": period if (gradual_text and period > 0.0)
+        else (cost if gradual_text else 0.0),
+        # 「每次攻击时获得」这一类（`cost_attack_add`，技3 写 0.0）
+        "per_attack": float(bb.get("cost_attack_add") or 0.0),
+    }
+
+
+#: 「逐渐获得部署费用」的发放节奏挂在哪个**变体条件**下。
+#: 这是运行时真正用来选变体的名字（`effects.variants[条件名]`），
+#: 不是那个 `closur_s_2[add_cost_period].interval` 全键——全键在源码里根本
+#: 不会整串出现（审计 `is_read` 第 3 条也是按条件名判的）。
+_ADD_COST_PERIOD = "add_cost_period"
+
+
+def _cost_trickle(bb: dict[str, float],
+                  variants: dict[str, dict[str, float]]) -> tuple[float, float, float]:
+    """「逐渐获得」的**发放节奏**：返回（总额, 每次给多少, 间隔秒）。
+
+    节奏取自**方括号变体** `…[add_cost_period].cost` / `.interval`——它是正文
+    里「逐渐」两个字的具体兑现方式（技2：1 点 / 2.0 秒；技3：1 点 / 1.66 秒，
+    乘上 30 秒正好等于 `cost_period` 的 15 / 18，两处自洽）。没有变体时返回
+    `(总额, 0, 0)`，由调用方按时长均分。
+
+    ⚠️ 两半的**住处不一样**：`.cost` 已被 `_parse_effects` 拆括号收进
+    `variants["add_cost_period"]`，而 `.interval` **没有**收进去，仍以原始键名
+    `closur_s_2[add_cost_period].interval` 留在 `other` 里——所以这里按条件名取
+    前半、按同一个条件名拼后缀找后半。**这是个解析侧的缺口**（`interval` 那一族
+    没进 variants），已记进 `docs/uncertainties.md`；先在读取侧绕过，不去改
+    `_parse_effects` 的归类口径（那会影响全库同族键）。
+    """
+    own = variants.get(_ADD_COST_PERIOD)
+    if not own:
+        return (0.0, 0.0, 0.0)
+    per = float(own.get("cost") or 0.0)
+    suffix = f"[{_ADD_COST_PERIOD}].interval"
+    found = [float(val or 0.0) for key, val in bb.items()
+             if key.endswith(suffix)]
+    interval = found[0] if found else 0.0
+    if per <= 0.0 or interval <= 0.0:
+        return (0.0, 0.0, 0.0)
+    return (float(bb.get("cost_period") or 0.0), per, interval)
+
+
 def _wants_lock_awake(description: str, bb: dict[str, float]) -> bool:
     """是否「开技后先「闭锁」若干秒、醒来再打」的两段式技能（泥岩技3）。
 
@@ -949,6 +1028,30 @@ class SkillEffects:
     #: 但 `SkillEffects` 上一直**没有同名字段**，于是解析结果被静默丢掉——
     #: 落一个字段在这里，那一行才真的兑现（否则它在表里挂着，看着像"已支持"）。
     move_speed: float = 0.0
+    #: 「给费用」的四个量（可露希尔那一族；见 `_cost_semantics` 与
+    #: `_cost_trickle`）。`cost` 这个键**一键多义**，全表 59 条技能四种写法，
+    #: 所以这里按**正文**分门别类，谁也不许顶替谁：
+    #:
+    #: * `cost_grant`：开技**一次**给的那一份（正文「立即/立刻获得」）；
+    #: * `cost_gradual`：整个技能期**摊开**给的那一份（正文「逐渐获得」，
+    #:   技1 那一族总额写在 `cost` 上）；
+    #: * `cost_trickle_total` / `_per` / `_interval`：摊开的**节奏**
+    #:   （技2/技3 的总额写在 `cost_period` 上，节奏来自方括号变体）；
+    #: * `cost_per_attack`：每次命中给（`cost_attack_add`，技3 为 0）。
+    cost_grant: float = 0.0
+    #: 开技时**不许**一次性给 `cost`（正文只有「逐渐获得」的那些，如技1）。
+    #: 这一条是给模拟器的一个"别重复给"的闸门——`cost` 那条既有通道是
+    #: 无条件在开技时给的，两种写法混在一起就会**给双份**。
+    cost_suppress_immediate: bool = False
+    cost_gradual: float = 0.0
+    cost_trickle_total: float = 0.0
+    cost_trickle_per: float = 0.0
+    cost_trickle_interval: float = 0.0
+    cost_per_attack: float = 0.0
+    #: 主「部署后每使用过一次技能，获得的部署费用 +X（最多提升至 Y 点）」
+    #: （可露希尔技1 的 `cost_per_add` / `cost_add_max`）。
+    cost_per_add: float = 0.0
+    cost_add_max: float = 0.0
     #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
     #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
     #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
@@ -1645,6 +1748,23 @@ class SkillBook:
             # `("move_speed", "pct")`，但落到效果上时并不兑现（实测她的技3
             # 解析出来是 0.0，而黑板是 −0.6）。这一条是本节"减速"那半的来源。
             lv.effects.move_speed = float(bb.get("move_speed") or 0.0)
+        # 「给费用」四个量（可露希尔那一族）。`cost` 一键多义，所以按正文分：
+        # 这一处只**分类**，不替既有口径做决定（那 59 条不动）。
+        _cs = _cost_semantics(lv.description, bb)
+        lv.effects.cost_grant = _cs["immediate"]
+        lv.effects.cost_suppress_immediate = _cs["suppress_immediate"]
+        lv.effects.cost_gradual = _cs["gradual_total"]
+        lv.effects.cost_per_attack = _cs["per_attack"]
+        (_total, _per, _iv) = _cost_trickle(bb, lv.effects.variants)
+        if _cs["gradual_total"] > 0.0 and _total <= 0.0:
+            # 技1 那一族：正文绑的是 `{cost}`、没有 `cost_period`，
+            # 总额就是 `gradual_total`（`cost_per_add` 的成长在运行时加）
+            _total = _cs["gradual_total"]
+        lv.effects.cost_trickle_total = _total
+        lv.effects.cost_trickle_per = _per
+        lv.effects.cost_trickle_interval = _iv
+        lv.effects.cost_per_add = float(bb.get("cost_per_add") or 0.0)
+        lv.effects.cost_add_max = float(bb.get("cost_add_max") or 0.0)
         # 技能结束时的**自身**效果：晕眩与强制退场。两者的数值/语义都
         # 只在描述里，且都与"打在敌人身上"的那套（`control`）无关。
         lv.effects.self_stun = _wants_self_stun(lv.description, bb)
