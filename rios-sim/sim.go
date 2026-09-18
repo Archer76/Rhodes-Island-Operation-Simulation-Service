@@ -1856,6 +1856,13 @@ func (o *operator) hurt(dealt float64) {
 	}
 	o.hp = math.Max(0, o.hp-dealt)
 	o.damageTaken += dealt
+	if traceOn && o.sim != nil {
+		// 每一笔都记：对拍要看的是**承伤曲线**，不是总量。原版那边三种来源
+		// 各有明细（敌方普攻 / 敌方技能 / 田地病害）；两边总量相同而阵亡
+		// 时刻差 6 秒时，只有曲线能指出是哪一路快了。
+		trace("OPDMG t=%.4f op=%s dealt=%.3f cum=%.3f hp=%.3f",
+			*o.sim.time, o.spec.Name, dealt, o.damageTaken, o.hp)
+	}
 	if o.hp <= 0 && !o.deathLogged && o.sim != nil {
 		o.deathLogged = true
 		// 措辞照原版日志那一行：`阵亡（承受 N 伤害）`。
