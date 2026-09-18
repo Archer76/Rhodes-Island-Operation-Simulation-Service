@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import sys
@@ -1614,9 +1615,13 @@ def check_squad_grouping() -> None:
 
     # --- 常量与判据（不依赖界面） ---
     binds = [(b.key, b.action) for b in A.SquadPickScreen.BINDINGS]
-    check("G 键切分类、M 键切模式、回车进解算",
-          ("g", "toggle_group") in binds and ("m", "toggle_mode") in binds
+    check("M 键切模式、回车进解算",
+          ("m", "toggle_mode") in binds
           and any(k == "enter" and a == "go" for k, a in binds), str(binds))
+    check("**`G` 键已去掉**（博士 2026-09-18：与新加的子职业行筛选重复）",
+          not any(k == "g" for k, _a in binds)
+          and not hasattr(A.SquadPickScreen, "action_toggle_group"),
+          str([k for k, _a in binds]))
     check("回车仍在屏上（需求第 8 条不能被这次改动弄坏）"
           "——「不被控件吃掉」现在由列表侧的 `skip_enter` 保证，"
           "行为在 [12b] 里实测（列表上按回车真的推进了流程）",
@@ -1642,13 +1647,11 @@ def check_squad_grouping() -> None:
           str(len(D.PROFESSION_CN)))
     op = D.Operator("c", "赤刃明霄陈", profession="WARRIOR",
                     sub_profession="术战者")
-    check("分组表头：主职业视图是「近卫」、主-子视图是「近卫·术战者」",
-          D.group_label(op, "prof") == "近卫"
-          and D.group_label(op, "sub") == "近卫·术战者",
-          f"{D.group_label(op, 'prof')} / {D.group_label(op, 'sub')}")
-    check("子职业缺失时不留一个孤零零的分隔点",
-          D.group_label(D.Operator("c", "n", profession="MEDIC"), "sub") == "医疗",
-          D.group_label(D.Operator("c", "n", profession="MEDIC"), "sub"))
+    check("分组表头**只有主职业这一档**（「近卫」，不再有「近卫·术战者」）",
+          D.group_label(op) == "近卫", D.group_label(op))
+    check("表头函数不再收 `mode` 参数（留着它就会有人以为界面还能切）",
+          "mode" not in inspect.signature(D.group_label).parameters,
+          str(inspect.signature(D.group_label)))
 
     roster = D.load_roster()
     if roster is None or not roster.top():
@@ -1677,15 +1680,16 @@ def check_squad_grouping() -> None:
 
             got["groups_prof"] = len(heads())
             got["people0"] = people()
-            # 勾一个再切分类：勾选必须活下来
+            # 勾一个，然后按一下**已经去掉的 `G`**：不该有任何反应
             sl.action_first()
             await pilot.press("space")
             await pilot.pause()
             got["picked_before"] = sorted(sl.selected)
             await pilot.press("g")
             await pilot.pause()
-            got["groups_sub"] = len(heads())
-            got["picked_after_group"] = sorted(sl.selected)
+            got["groups_after_g"] = len(heads())
+            got["picked_after_g"] = sorted(sl.selected)
+            got["heads_are_prof_only"] = all("·" not in h for h in heads())
             got["head_options_disabled"] = all(
                 o.disabled for o in sl._options
                 if o.prompt.plain.startswith("──"))
@@ -1707,14 +1711,14 @@ def check_squad_grouping() -> None:
           got["at_pick"] == "SquadPickScreen", f"{got['screen']} → {got['at_pick']}")
     check("默认按**主职业**分类（正好八组，不是每人一组）",
           got["groups_prof"] == 8, f"{got['groups_prof']} 组")
-    check("按 G 切成「主职业-子职业」，组数明显变多",
-          got["groups_sub"] > got["groups_prof"] * 3,
-          f"{got['groups_prof']} → {got['groups_sub']} 组")
+    check("表头**固定**按主职业（不再有「主职业·子职业」那一档）",
+          got["heads_are_prof_only"], "表头里不该出现「·」")
+    check("按**已去掉的 `G`**：什么都不发生（组数不变、勾选不变）",
+          got["groups_after_g"] == got["groups_prof"]
+          and got["picked_after_g"] == got["picked_before"],
+          f"{got['groups_prof']} → {got['groups_after_g']} 组")
     check("分组表头是**不可选**的哑行（否则会混进编队）",
           got["head_options_disabled"], str(got["head_options_disabled"]))
-    check("切分类不丢已勾的人",
-          got["picked_before"] and got["picked_after_group"] == got["picked_before"],
-          f"{got['picked_before']} → {got['picked_after_group']}")
     check("换练度门槛也不丢已勾的人",
           got["picked_after_filter"] == got["picked_before"],
           f"{got['picked_before']} → {got['picked_after_filter']}")
