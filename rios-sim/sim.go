@@ -120,7 +120,7 @@ func (e *enemy) alive() bool { return e.hp > 0 }
 // 选圆心时，**没被挡**那一支走 `e.cell()`（四舍五入），**被挡**那一支走
 // `int(blocked_by.position)`（截断）。两者在敌人走在格子中间时给出不同的格。
 func (e *enemy) cell() (int, int) {
-	return int(math.Round(e.position[0])), int(math.Round(e.position[1]))
+	return int(math.RoundToEven(e.position[0])), int(math.RoundToEven(e.position[1]))
 }
 
 // pendingReborn 是原版的 `e.pending_reborn`：倒下等待重生。
@@ -482,8 +482,8 @@ func runSim(spec *Spec) (*Verdict, error) {
 					// ⚠ 必须用四舍五入到整数格的坐标（原版 `e.cell()`）——病害值
 					// 的键是**整数格**，传浮点进去不会报错，只是永远取不到，
 					// 于是充能永远是 0 层、整条机制静默失效。
-					cell := [2]int{int(math.Round(e.position[0])),
-						int(math.Round(e.position[1]))}
+					cell := [2]int{int(math.RoundToEven(e.position[0])),
+						int(math.RoundToEven(e.position[1]))}
 					if moved := mechanisms.DrainPollution(cell, e.spec.RebornPollut); moved > 0 {
 						e.rebornCharge++
 					}
@@ -1225,6 +1225,21 @@ func traitSplash(op *operator, spec *Spec, enemies []*enemy, target *enemy,
 	if len(cells) == 0 {
 		return
 	}
+	if traceOn {
+		hi := 0
+		hm := map[[2]int]bool{}
+		for _, c := range spec.HighlandCells {
+			hm[[2]int{c[0], c[1]}] = true
+		}
+		for _, c := range cells {
+			if hm[c] {
+				hi++
+			}
+		}
+		trace("SPLASH-CENTER t=%.4f op=%s target=%s pos=%.4f,%.4f cells=%d highland=%d",
+			t, op.spec.Name, target.spec.Name, target.position[0],
+			target.position[1], len(cells), hi)
+	}
 	scale := op.spec.SplashScale * op.spec.SplashDamageScale
 	for _, e := range enemies {
 		if e == target || e.hp <= 0 || e.leaked {
@@ -1234,7 +1249,7 @@ func traitSplash(op *operator, spec *Spec, enemies []*enemy, target *enemy,
 		if !hasCell(cells, cx, cy) {
 			continue
 		}
-		splashHit(op, e, power, scale, t, verdict)
+		splashHit(op, e, power, scale, t, verdict, "radius", target)
 	}
 	if op.spec.HighlandSplashScale <= 0 {
 		return
@@ -1256,7 +1271,8 @@ func traitSplash(op *operator, spec *Spec, enemies []*enemy, target *enemy,
 				if cx != victimCell[0] || cy != victimCell[1] {
 					continue
 				}
-				splashHit(op, e, power, op.spec.HighlandSplashScale, t, verdict)
+				splashHit(op, e, power, op.spec.HighlandSplashScale, t,
+					verdict, "highland", target)
 			}
 		}
 	}
@@ -1264,10 +1280,19 @@ func traitSplash(op *operator, spec *Spec, enemies []*enemy, target *enemy,
 
 // splashHit 是一次溅射伤害的落地（与主目标那一路同一个伤害口径：
 // `resolve_damage` → `take` → 记击杀）。
-func splashHit(op *operator, e *enemy, power, scale, t float64, verdict *Verdict) {
+//
+// `kind` 与 `from` **只为 `RIOS_TRACE` 那条可数痕迹存在**：溅射到底少算了多少点，
+// 只能靠"逐次落点 + 倍率 + 实际扣血"和原版对出来；只看伤害总量，连是哪一半
+// （半径圆 / 高台十字）缺的都分不出来。
+func splashHit(op *operator, e *enemy, power, scale, t float64, verdict *Verdict,
+	kind string, from *enemy) {
 	dmg := resolveDamage(power, "PHYSICAL", scale,
 		e.spec.DEF, e.spec.RES, e.dodgeVs("PHYSICAL"))
 	dealt := e.take(dmg, op)
+	if traceOn {
+		trace("SPLASH t=%.4f op=%s kind=%s from=%s victim=%s scale=%.4f dmg=%.3f dealt=%.3f hp=%.3f",
+			t, op.spec.Name, kind, from.spec.Name, e.spec.Name, scale, dmg, dealt, e.hp)
+	}
 	if dealt <= 0 {
 		return
 	}
@@ -1305,7 +1330,7 @@ func pickHeals(op *operator, ops []*operator, n int) []*operator {
 		if o == op || !o.alive() || o.hp >= o.spec.MaxHP {
 			continue
 		}
-		cell := [2]int{int(math.Round(o.cell[0])), int(math.Round(o.cell[1]))}
+		cell := [2]int{int(math.RoundToEven(o.cell[0])), int(math.RoundToEven(o.cell[1]))}
 		if !inCells(op.spec.Range, cell) {
 			continue
 		}
@@ -1346,7 +1371,7 @@ func pickTargets(op *operator, enemies []*enemy, n int) []*enemy {
 		if e.hp <= 0 || e.leaked || e.offMap {
 			continue
 		}
-		cell := [2]int{int(math.Round(e.position[0])), int(math.Round(e.position[1]))}
+		cell := [2]int{int(math.RoundToEven(e.position[0])), int(math.RoundToEven(e.position[1]))}
 		if !inCells(op.spec.Range, cell) {
 			continue
 		}
@@ -1391,7 +1416,7 @@ func inRangeOf(op *operator, enemies []*enemy) []*enemy {
 		if e.hp <= 0 || e.leaked || e.offMap {
 			continue
 		}
-		cell := [2]int{int(math.Round(e.position[0])), int(math.Round(e.position[1]))}
+		cell := [2]int{int(math.RoundToEven(e.position[0])), int(math.RoundToEven(e.position[1]))}
 		if inCells(op.spec.Range, cell) {
 			out = append(out, e)
 		}
