@@ -85,7 +85,7 @@ from .plan import DeployOrder, Plan
 
 __all__ = [
     "MaaExportError", "MODULE_SLOT", "DIFFICULTY_CODE",
-    "module_type", "module_slot", "skill_usage", "difficulty_code",
+    "module_type", "module_name", "module_slot", "skill_usage", "difficulty_code",
     "used_operators", "operators_report", "operators_lines", "operators_brief",
     "to_maa",
     "job_dir", "next_index", "write_job", "plan_from_rows",
@@ -143,6 +143,20 @@ def module_type(module_id: str | None,
     table = _uniequip() if uni is None else uni
     letter = str((table.get(module_id) or {}).get("typeName2") or "").strip().upper()
     return letter or None
+
+
+def module_name(module_id: str | None,
+                uni: Mapping[str, Any] | None = None) -> str | None:
+    """模组 id → `uniEquipName`（**游戏里显示的那个名字**，如「记忆残页」）。
+
+    与 `module_type` 同一张表（`uniequip_table.equipDict`），同样惰性加载。
+    取不到返回 `None`，由调用方决定退成 id 还是留空。
+    """
+    if not module_id:
+        return None
+    table = _uniequip() if uni is None else uni
+    name = str((table.get(module_id) or {}).get("uniEquipName") or "").strip()
+    return name or None
 
 
 def module_slot(module_id: str | None,
@@ -205,7 +219,12 @@ def used_operators(plan: Plan, roster: Any = None) -> list[dict[str, Any]]:
     这是导出时要"写明"的东西。每一项的键：
 
     `name` / `position` / `direction` / `skill` / `mastery` / `elite` /
-    `level` / `potential` / `trust` / `module` / `module_type` / `module_slot` / `time`
+    `level` / `potential` / `trust` / `module` / `module_name` /
+    `module_type` / `module_slot` / `module_level` / `time`
+
+    `module_name`/`module_type`/`module_level` 是给人看的（结果屏与
+    `doc.details` 都走 `_mod_text`）；进作业的只有 `module_slot`——
+    见 `to_maa`：它逐键组装，多出来的键不会漏进 JSON。
     """
     out: list[dict[str, Any]] = []
     for dep in plan.deploys:
@@ -222,20 +241,33 @@ def used_operators(plan: Plan, roster: Any = None) -> list[dict[str, Any]]:
             "potential": _pick(dep, entry, "potential"),
             "trust": _pick(dep, entry, "trust"),
             "module": mod,
+            "module_name": module_name(mod),
             "module_type": module_type(mod),
             "module_slot": module_slot(mod),
+            "module_level": _pick(dep, entry, "module_level"),
             "time": dep.time,
         })
     return out
 
 
 def _mod_text(op: Mapping[str, Any]) -> str:
-    """一模组一格：`无` / `uniequip_002_wang(X→1) Lv3`。"""
-    if not op.get("module"):
+    """一模组一格：`无` / `记忆残页 X 3`——**模组名 类型字母 等级**。
+
+    博士 2026-09-18 定的写法。原先印的是模组 id 加括号
+    （`uniequip_002_chen3(X→1)`）：id 与 MAA 那个编号都不是游戏里看得见的
+    东西，照着抄不下去；**名字与字母才是**（字母就是 MAA 编号的来源，
+    `X`→1、`Y`→2……见模块文档第二节）。
+
+    两种"没有生效模组"都写 `无`：`module` 为空，或者名册记的是
+    `uniequip_001_*` 那枚**证章**（`typeName2` 为空）。证章不是模组——
+    MAA 那侧同样是整键省略（文档第三节），这里跟同一口径。
+    等级记不到（OperBox 名册没有模组等级）写 `-`，不编一个数。
+    """
+    if not op.get("module") or not op.get("module_type"):
         return "无"
-    slot = op.get("module_slot")
-    slot_txt = f"{op['module_type']}→{slot}" if slot else "编号未定"
-    return f"{op['module']}({slot_txt})"
+    name = str(op.get("module_name") or op["module"])
+    lv = op.get("module_level")
+    return f"{name} {op['module_type']} {lv if lv else '-'}"
 
 
 def operators_report(plan: Plan, roster: Any = None) -> list[str]:
