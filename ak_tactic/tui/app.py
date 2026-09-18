@@ -103,6 +103,18 @@ def both_cases(rows: list[Binding]) -> list[Binding]:
     return out
 
 
+#: `auto` 模式（「允许程序补充」）下**人选池的总大小**：勾的人先进池子，不足就从
+#: 名册里按练度补到这么多。
+#:
+#: 为什么要有个上限：候选数 ≈ 池子人数 × `per_op`（每人挑几个落位），而每层的
+#: 模拟次数 ≈ `beam` × 候选数。211 人的名册 = 一千多个候选 × 5 = 每层五六千次
+#: 模拟，四层就是两万次——那不叫"程序可以补位"，那叫按下去就不动了。
+#:
+#: 24 是实测取的：池子 12 人时 1-7 与 HS-EX-5 各约 40 秒出三星，池子 24 人时约
+#: 80–90 秒（见 `_proto/pool_timing.py`）。够宽，也没慢到让人以为程序死在那里。
+AUTO_POOL = 24
+
+
 # ================================================================ 状态
 
 class State:
@@ -120,6 +132,9 @@ class State:
         self.result = None
         self.error: str = ""
         self.export_path: Path | None = None
+        #: 这一轮解算的**人选池**是怎么凑出来的（如「勾的 3 人 + 名册补 24 人」）。
+        #: 显示在解算屏上：池子多大决定这一轮要跑多久，也解释"为什么没结果"。
+        self.pool_note: str = ""
 
 
 # ================================================================ [0] 准备
@@ -1501,10 +1516,11 @@ class SquadPickScreen(Screen):
                f"已勾 [bold]{len(self._picked)}[/] 人\n")
         if st.mode == "auto":
             txt += ("模式：[bold]允许程序补充[/]　"
-                    "[dim]你勾的是「必须上场」的人，程序还可以再挑人补位[/]")
+                    f"[dim]你勾的人先进池子，不够的从名册按练度补到 "
+                    f"{AUTO_POOL} 人一起挑组合[/]")
         else:
             txt += ("模式：[bold]只用我选的[/]　"
-                    "[dim]只在这几个人里找组合，找不到就如实说找不到[/]")
+                    "[dim]只在勾的这些人里找组合，一个都没勾就搜不出东西[/]")
         self.query_one("#mode-line", Static).update(txt)
 
     def action_toggle_mode(self) -> None:
@@ -1535,6 +1551,7 @@ class SolveScreen(Screen):
     """
 
     BINDINGS = both_cases([Binding("q", "cancel", "中止", key_display="Q")])
+
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1570,9 +1587,10 @@ class SolveScreen(Screen):
         elapsed = time.time() - self._t0
         self.query_one("#prog", ProgressBar).update(
             progress=min(95.0, 5.0 + n * 0.6))
+        pool = f"\n[dim]人选池：{st.pool_note}[/]" if st.pool_note else ""
         self.query_one("#solve-head", Static).update(
             f"关卡：{st.stage['code']}（{st.stage['level_id']}）\n"
-            f"已评估 [bold]{n}[/] 个候选　已用 {elapsed:.0f} 秒")
+            f"已评估 [bold]{n}[/] 个候选　已用 {elapsed:.0f} 秒{pool}")
 
     @work(thread=True, exclusive=True)
     def _run(self) -> None:
@@ -1583,15 +1601,64 @@ class SolveScreen(Screen):
             from ..search import Searcher
             roster = PlanRoster.from_json(st.roster.path)
             st.plan_roster = roster
+            pool, st.pool_note = self._pool(roster)
             searcher = Searcher(verbose=False)
             st.searcher = searcher
-            result = searcher.search(st.stage["level_id"], roster, st.squad)
+            result = searcher.search(st.stage["level_id"], roster, pool)
         except Exception as exc:                          # noqa: BLE001
             st.error = f"{type(exc).__name__}: {exc}"
             self.app.call_from_thread(self._done, None)
             return
         st.result = result
         self.app.call_from_thread(self._done, result)
+
+    def _pool(self, roster) -> tuple[list[str], str]:
+        """这一轮解算的**人选池**：勾的人 + （auto 时）名册里按练度补的人。
+
+        ## 为什么非有这一步
+
+        原先两条路都把 `st.squad` 原样交给搜索，于是：
+
+          * 勾了人 → 只在那几个人里找（`mode` 根本没进搜索，界面上那句
+            「程序还可以再挑人补位」是句空话）；
+          * **不勾人 → 空池子**。`candidates_for` 是按名单遍历的，空名单一个候选
+            都不产生，搜索当场返回「几何剪枝后一个候选都不剩」——而那句话把原因
+            指向了坐标口径，完全指错方向。
+
+        `[2a]` 那一屏的**默认项**正是「不用，让程序自己挑」。所以默认这条路
+        永远出不来东西，症状就是博士报的「没有可用结果」——两个关卡都一样。
+
+        池子总大小见 `AUTO_POOL`：补人要补得动，也要跑得完。
+        """
+        st = self.app.state
+        kept = [n for n in (st.squad or []) if roster.get(n)]
+        missing = [n for n in (st.squad or []) if not roster.get(n)]
+        if st.mode == "only":
+            note = f"只用勾的 {len(kept)} 人"
+            if missing:
+                note += f"（名册里没有：{'、'.join(missing[:3])}）"
+            if not kept:
+                note = ("「只用我选的」但一个人都没勾——池子是空的，搜不出东西。"
+                        "回去勾人，或按 M 换成「允许程序补充」。")
+            return kept, note
+        extra: list[str] = []
+        want = max(0, AUTO_POOL - len(kept))       # 池子补到 AUTO_POOL 人为止
+        tui_roster = st.roster
+        if tui_roster is not None and want:
+            seen = set(kept)
+            for op in tui_roster.top():            # `top()` 已按练度降序
+                if len(extra) >= want:
+                    break
+                if op.name not in seen and roster.get(op.name):
+                    seen.add(op.name)
+                    extra.append(op.name)
+        if not kept and not extra:
+            return [], "名册是空的，池子里一个人都没有。"
+        note = (f"勾的 {len(kept)} 人 + 名册按练度补 {len(extra)} 人"
+                f"（共 {len(kept) + len(extra)} 人）")
+        if missing:
+            note += f"　[d]名册里没有：{'、'.join(missing[:3])}[/]"
+        return kept + extra, note
 
     def _done(self, result) -> None:
         # 已经中止了就别再推结果屏：后台线程拦不住（Python 杀不掉线程），
@@ -2015,3 +2082,4 @@ def run(*, skip_login: bool = False, stage: str = "",
     """CLI 入口。`textual` 只在这里被用到，且是**惰性导入**的。"""
     RiosApp(skip_login=skip_login, stage=stage, squad=squad).run()
     return 0
+
