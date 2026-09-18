@@ -42,36 +42,54 @@ class AttackSpeedBonus:
     flat: float = 0.0
     #: 只在**未挡住任何敌人**时生效，交给 `OperatorUnit.aspd_when_free`。
     when_free: float = 0.0
+    #: 只在**自身周围四格有高台**时生效（阿斯卡纶「噬光残影」）。条件由地形
+    #: 承载，不是实时状态——模拟器在部署那一刻按地图判一次。
+    when_high_ground: float = 0.0
     #: 出处，供对账时打印。
     sources: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def total(self) -> float:
-        """两段相加——用于"纸面上最多能有多少"的估值，不用于结算。"""
-        return self.flat + self.when_free
+        """各段相加——用于"纸面上最多能有多少"的估值，不用于结算。"""
+        return self.flat + self.when_free + self.when_high_ground
 
     def describe(self) -> str:
         if not self.sources:
             return "无攻速加成"
-        head = f"+{self.flat:g}" + (f"（未阻挡时再 +{self.when_free:g}）" if self.when_free else "")
+        head = f"+{self.flat:g}"
+        if self.when_free:
+            head += f"（未阻挡时再 +{self.when_free:g}）"
+        if self.when_high_ground:
+            head += f"（周围四格有高台时再 +{self.when_high_ground:g}）"
         return f"{head} ← " + "、".join(self.sources)
 
 
 def talent_attack_speed(char: dict, *, elite: int = 2, level: int = 1,
-                        potential: int = 1) -> tuple[float, tuple[str, ...]]:
-    """天赋给的**常驻**攻速加成。
+                        potential: int = 1) -> tuple[float, float, tuple[str, ...]]:
+    """天赋给的攻速加成，返回 `(常驻, 周围四格有高台时, 出处)`。
 
     天赋的攻速是绝对值（黑板键 `attack_speed`，与技能的 `+50` 同一量纲），
     不是百分比——按百分比理解会得到荒谬的间隔。
+
+    **`attack_speed_add` 是另一个量**：同一块黑板里它表示"满足某个条件时
+    再给多少"。已全表核验，**全库只有阿斯卡纶「噬光残影」一处**用它，
+    且正文写明条件是「**自身周围四格有高台时**」。所以这里可以放心把
+    `attack_speed_add` 等同于"高台条件加成"；**若日后有第二个人用这个键，
+    必须先看他的正文再决定，不能默认也是高台**——那会静默给错条件。
     """
     flat = 0.0
+    high = 0.0
     sources: list[str] = []
     for t in resolve_talents(char, elite=elite, level=level, potential=potential):
         v = t.value("attack_speed")
         if v:
             flat += v
             sources.append(f"天赋「{t.name}」+{v:g}")
-    return flat, tuple(sources)
+        add = t.value("attack_speed_add")
+        if add:
+            high += add
+            sources.append(f"天赋「{t.name}」（周围四格有高台时）+{add:g}")
+    return flat, high, tuple(sources)
 
 
 def module_attack_speed(parts: Any, *, elite: int = 2, level: int = 1,
@@ -126,8 +144,8 @@ def attack_speed_bonus(calc: Any, char_id: str, *, elite: int = 2, level: int = 
     `module_level` 为 0 或 `module` 为空时不看模组。
     """
     char = calc.character(char_id)
-    flat, sources = talent_attack_speed(char, elite=elite, level=level,
-                                        potential=potential)
+    flat, high, sources = talent_attack_speed(char, elite=elite, level=level,
+                                              potential=potential)
     free = 0.0
     if module and module_level:
         m_flat, m_free, m_src = module_attack_speed(
@@ -136,4 +154,5 @@ def attack_speed_bonus(calc: Any, char_id: str, *, elite: int = 2, level: int = 
         flat += m_flat
         free += m_free
         sources += m_src
-    return AttackSpeedBonus(flat=flat, when_free=free, sources=sources)
+    return AttackSpeedBonus(flat=flat, when_free=free,
+                            when_high_ground=high, sources=sources)

@@ -156,6 +156,11 @@ class OperatorUnit(Combatant):
     #: **未阻挡敌人时**额外获得的攻速（模组特性改写，如赤刃明霄陈的 +8）。
     #: 不能并进 `attack_speed`：它是条件加成，一挡住人就没了。
     aspd_when_free: float = 0.0
+    #: 「自身周围四格有高台时」的额外攻速（阿斯卡纶「噬光残影」+6）。
+    #: 条件由 `high_ground_neighbor` 承载，模拟器部署时按地图判一次。
+    aspd_high_ground: float = 0.0
+    #: 部署位置**周围四格有高台**——地形事实，不是实时状态。
+    high_ground_neighbor: bool = False
 
     #: 这个干员的**普通攻击是治疗**而不是伤害——医疗系特性的
     #: 「恢复友方单位生命」。判据取 `character_table` 的特性文本，
@@ -424,6 +429,12 @@ class OperatorUnit(Combatant):
         spd = self.attack_speed
         if self.aspd_when_free and not self.blocking:
             spd += self.aspd_when_free
+        # 「自身周围四格有高台时」的额外攻速（阿斯卡纶「噬光残影」）。
+        # 与上面那条**不同**：它的条件不是实时状态，而是**地形**——伏击客
+        # 不移动，所以 `high_ground_neighbor` 由模拟器在**部署那一刻**按地图
+        # 判一次就定死（见 `sim` 的部署处）。
+        if self.aspd_high_ground and self.high_ground_neighbor:
+            spd += self.aspd_high_ground
         return spd
 
     def current_interval(self) -> float:

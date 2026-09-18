@@ -83,6 +83,7 @@ def make_unit(calc, char_id: str, **kw) -> OperatorUnit:
         deploy_cost=int(t.get("cost", 0) or 0),
         attack_speed=float(t.get("attackSpeed", 100) or 100) + aspd.flat,
         aspd_when_free=aspd.when_free,
+    aspd_high_ground=aspd.when_high_ground,
     )
 
 
@@ -2579,6 +2580,86 @@ def check_dot_on_hit(stage, lib, calc, book_t) -> None:
           f"上限 {want_tick * 3:.3f}")
 
 
+def check_high_ground_aspd(stage, lib, calc, book_t) -> None:
+    """[32] 「噬光残影」的**地形条件**攻速：周围四格有高台时额外 +6。
+
+    正文：「攻击速度+8，**自身周围四格有高台时，攻击速度额外+6**」。
+    黑板 `{attack_speed: 8.0, attack_speed_add: 6.0, cnt: 1.0}`。
+
+    `attack_speed: 8` 一直是被通用链路接走的，欠的是 `attack_speed_add: 6`
+    ——它归得了类，所以两道键级筛子都看不见。
+
+    与既有那条「未阻挡敌人时」的条件**不同**：那条是**实时状态**（每帧判），
+    这条是**地形事实**——伏击客不移动，部署那一刻判一次就定死。
+
+    本节钉四件事：取数（+8 常驻、+6 条件）、**高台旁边真的加**、
+    **没有高台真的不加**（反向，这才是关键）、以及别人不白拿。
+    """
+    print("\n[32] 「噬光残影」的地形条件攻速")
+    cid = "char_4132_ascln"
+    tal = book_t.for_operator(cid, elite=2, level=60, potential=1)
+    hit = [x for x in tal if x.name == "噬光残影"]
+    check("天赋「噬光残影」取得", bool(hit))
+    check("常驻 +8 与条件 +6 是两个键",
+          bool(hit) and abs(hit[0].value("attack_speed") - 8.0) < 1e-9
+          and abs(hit[0].value("attack_speed_add") - 6.0) < 1e-9)
+
+    base = make_unit(calc, cid, elite=2, level=60, potential=1)
+    check("单位身上：常驻并入 `attack_speed`（100+8=108）、条件 6 单独放",
+          abs(base.attack_speed - 108.0) < 1e-9
+          and abs(base.aspd_high_ground - 6.0) < 1e-9,
+          f"attack_speed={base.attack_speed} high={base.aspd_high_ground}")
+    base.high_ground_neighbor = False
+    check("**没有高台时只算 8**（反向守卫）",
+          abs(base.current_attack_speed() - 108.0) < 1e-9,
+          f"实得 {base.current_attack_speed()}")
+    base.high_ground_neighbor = True
+    check("**有高台时算 14**（108 → 114）",
+          abs(base.current_attack_speed() - 114.0) < 1e-9,
+          f"实得 {base.current_attack_speed()}")
+    check("这条加成的出处会进 `sources`（对账用）",
+          "周围四格有高台" in attack_speed_bonus(
+              calc, cid, elite=2, level=60, potential=1).describe())
+
+    # ---- 由模拟器按地图判：找一个旁边有高台的位置和一个没有的 ----
+    m = stage.map if hasattr(stage, "map") else stage
+    with_hg, without_hg = None, None
+    for y in range(m.height):
+        for x in range(m.width):
+            if not m.tile(x, y).deployable_ranged and not m.tile(x, y).deployable_melee:
+                continue
+            near = any(m.tile(x + dx, y + dy).is_highland
+                       for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+            if near and with_hg is None:
+                with_hg = (x, y)
+            if not near and without_hg is None:
+                without_hg = (x, y)
+    check("这张图上既有『旁边有高台』的位置、也有『旁边没有』的位置",
+          with_hg is not None and without_hg is not None,
+          f"有={with_hg} 无={without_hg}")
+
+    def deployed_flag(pos):
+        s = mechanism_sim(stage, lib)
+        o = make_unit(calc, cid, elite=2, level=60, potential=1)
+        s.operators.append(o)
+        s._do_deploy(Deployment(0.0, o, pos, "Right", talents=tal), 0.0)
+        return o.high_ground_neighbor, o.current_attack_speed()
+
+    if with_hg is not None:
+        flag, spd = deployed_flag(with_hg)
+        check(f"摆在 {with_hg}（旁边有高台）：模拟器判为真、总攻速 114",
+              flag is True and abs(spd - 114.0) < 1e-9, f"flag={flag} spd={spd}")
+    if without_hg is not None:
+        flag, spd = deployed_flag(without_hg)
+        check(f"摆在 {without_hg}（旁边没高台）：**判为假**、总攻速 108",
+              flag is False and abs(spd - 108.0) < 1e-9, f"flag={flag} spd={spd}")
+
+    other = make_unit(calc, "char_103_angel", elite=2, level=60, potential=1)
+    check("别人不白拿：能天使条件攻速 0（她 100+12=112 常驻）",
+          abs(other.aspd_high_ground) < 1e-12 and abs(other.attack_speed - 112.0) < 1e-9,
+          f"high={other.aspd_high_ground} flat={other.attack_speed}")
+
+
 def check_push(stage, lib, calc, book_t) -> None:
     """[26] 位移接线：推击把敌人推离路线，且推完能走回来。
 
@@ -2782,6 +2863,7 @@ def main() -> int:
     check_class_aura(stage, lib, calc, book_t)
     check_damage_block(stage, lib, calc, book_t)
     check_dot_on_hit(stage, lib, calc, book_t)
+    check_high_ground_aspd(stage, lib, calc, book_t)
     check_second_use(stage, lib, calc, book_t)
     check_push(stage, lib, calc, book_t)
 
