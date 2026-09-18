@@ -175,8 +175,6 @@ def _enemy_reasons(sim) -> list[str]:
     """
     bad: list[str] = []
     field_why = {
-        "reborn_summons": "重生期召唤",
-        "pm2_mark_pollut": "明识形态",
         "awake_value": "按田地病害值觉醒",
         "hp_drain_per_sec": "持续自伤",
     }
@@ -186,16 +184,15 @@ def _enemy_reasons(sim) -> list[str]:
     #:  * `reborn_pollut` 与整套 `Reborn.*`（重生、重生期充能、归来后的防御
     #:    加成与普攻附加法术伤害）→ Go 的帧序 3.4 与 `PollutionDrainer`；
     #:  * 整套 `phit_*`（蜕皮被动：每挨打 N 次叠层改属性 + 加病害）→ Go 的
-    #:    `enemy.take` → `simCtx.onEnemyHit`（与普攻同帧）与 `PollutionAdder`。
+    #:    `enemy.take` → `simCtx.onEnemyHit`（与普攻同帧）与 `PollutionAdder`；
+    #:  * `reborn_summons`（重生期召唤）→ Go 的帧序 3.4（路线按格查表，
+    #:    查不到当场拒跑）；
+    #:  * 整套 `pm2_*`（明识形态：归来改一次面板 + 清水开关 + 标记退场 +
+    #:    限时无敌）→ Go 的 `enterPm2`/`pm2Tick`（帧序 7.6）与
+    #:    `ClearWaterProbe`（清水判定住在田地/装置那一层）。
     #: 它们曾经都在表里，那是对的：没接线的时候放行，等于让 Go 少算一层却照样
     #: 给判决。**新加一条进这张表时先确认那条路真的没接线**，别把已接的留在
     #: 表里——那会让整关无谓地被挡住。
-    #: `skill_atk_*`（敌方技能出手「污」）与 `passive_pollut`（被击倒污染田地）
-    #: **都已经接线**，所以不在这张表里：
-    #:  * 技能出手 → Go 侧的 `AttackTick`（帧序 7.2，`sim.py:3468`）；
-    #:  * 被击倒污染 → Go 侧的 `PostAttack`（帧序 7.5，`sim.py:3891`）。
-    #: 两条黑板数值都随敌人规格送过去（`_spawn_spec`）。
-    #: 它们曾经都在表里，那是对的：没接线的时候放行，等于让 Go 少算一层却照样给判决。
     names: dict[str, set[str]] = {}
     for e in mech._spawns_of(sim):
         for attr, why in field_why.items():
@@ -407,8 +404,73 @@ def _unit_spec(sim, e, *, time: float = 0.0) -> dict[str, Any]:
         "reborn_def_add": float(getattr(e, "reborn_def_add", 0.0) or 0.0),
         "reborn_damage_magic": float(
             getattr(e, "reborn_damage_magic", 0.0) or 0.0),
+        # --- 重生期**召唤**（「祟」）：窗口内每 interval 秒在脚下召唤 count 个
+        #
+        # 召唤物要走到最近的保护目标，所以需要**一条真路线**；而路线只取决于
+        # "倒下那一刻站在哪一格"，那一格出规格时还不知道。做法是把地图上
+        # **每一格**的路线都算好随规格发过去（`sim._path_from`，与 `eta.route_plans`
+        # 同一个寻路），Go 按召唤那刻的格子查表——查不到它会当场拒跑，
+        # 而不是随便给一条路（那会让漏怪判定悄悄偏）。
+        "reborn_summons": _reborn_summons_spec(sim, e),
+        # ---- 明识形态（`PassiveM2.*`，「祟」重生归来后的第二形态）
+        #
+        # 送的是"进形态要改哪些量"；"什么时候判清水、什么时候算标记退场"
+        # 由 Go 的帧序 7.6 与田地/装置那一层分别负责。
+        "pm2_atk": float(getattr(e, "pm2_atk", 0.0) or 0.0),
+        "pm2_def": float(getattr(e, "pm2_def", 0.0) or 0.0),
+        "pm2_res": float(getattr(e, "pm2_res", 0.0) or 0.0),
+        "pm2_move": float(getattr(e, "pm2_move", 0.0) or 0.0),
+        "pm2_clean_def": float(getattr(e, "pm2_clean_def", 0.0) or 0.0),
+        "pm2_clean_move": float(getattr(e, "pm2_clean_move", 0.0) or 0.0),
+        "pm2_mark_pollut": float(getattr(e, "pm2_mark_pollut", 0.0) or 0.0),
+        "pm2_invincible": float(getattr(e, "pm2_invincible", 0.0) or 0.0),
         "legs": _legs_spec(e.legs),
     }
+
+
+def _reborn_summons_spec(sim, e) -> list[dict[str, Any]]:
+    """重生期召唤的规格：每拍的时间/个数 + **召唤物的完整规格** + 逐格路线表。
+
+    `e.reborn_summons` 是 `(间隔, 每拍个数, 敌人 id)` 的三元组列表（原版
+    `_reborn_tick` 4176 行就是这样解包的），"召唤谁"要**现造一只**才知道它长
+    什么样——Go 侧没有敌人图鉴，只有规格。
+
+    造模板用的是 `copy.copy(sim)`：`_build_enemy` 会顺手写 `sim.mode_skill`
+    这类"随规格走的"实例状态，直接拿本体造就等于**提前改了要跑的那一份**。
+    浅拷贝把这些写入留在副本上，本体在正式跑之前仍然是干净的。
+
+    路线表按**地图每一格**算（`ground_path` 到最近保护目标，与
+    `eta.route_plans` 同一个寻路）：召唤那一刻站在哪一格只有跑到才知道，
+    而"最近"是按**路径长度**算的（绕远路的直线距离可能更近）。查不到这一格
+    时 Go 会当场拒跑——宁可拒跑也不给一条错的路。
+    """
+    rows = list(getattr(e, "reborn_summons", ()) or ())
+    if not rows:
+        return []
+    import copy
+
+    m = sim.stage.map
+    paths: dict[str, list[list[int]]] = {}
+    for x in range(int(getattr(m, "width", 0))):
+        for y in range(int(getattr(m, "height", 0))):
+            if not m.walkable(x, y):
+                continue
+            p = sim._path_from((x, y))
+            if p:
+                paths[f"{x},{y}"] = [[int(a), int(b)] for a, b in p]
+    out: list[dict[str, Any]] = []
+    for itv, cnt, key in rows:
+        level = sim._summon_level(str(key))
+        probe = copy.copy(sim)
+        # 腿留空：真正那条腿由 Go 按召唤那一刻的格子从 `paths` 里取。
+        unit = probe._build_enemy(str(key), level, [(0.0, 0.0)], [], 0.0, 0.0)
+        out.append({
+            "interval": float(itv),
+            "count": int(cnt),
+            "template": _unit_spec(sim, unit),
+            "paths": paths,
+        })
+    return out
 
 
 def build_spec(sim, *, stage_label: str = "", allow_devices: bool = False,
@@ -450,7 +512,14 @@ def build_spec(sim, *, stage_label: str = "", allow_devices: bool = False,
     return {
         "stage": stage_label or str(getattr(sim.stage, "code", "") or ""),
         "fps": int(sim.fps),
-        "max_time": 600.0,
+        # ⚠ 不能写死 600：原版的 `BattleSimulator.run(max_time=600.0)` 只是**默认**，
+        # 而验证这一路调的是 `sim.run(max_time=900.0)`（`verifier.py:93` 与
+        # `verify.py:410`）。写死 600 会让"打到 814 秒才赢"的作业在 Go 侧被
+        # **截断在 600 秒**——判决从"胜利"变成"超时"，而且看不出是截断造成的。
+        #
+        # `sim` 自己不一定记着这个数（它是 `run` 的形参），所以回退到 900——
+        # 那就是上面两处调用点用的值。哪天上游改成按关卡给，这里会自己跟上。
+        "max_time": float(getattr(sim, "max_time", 0.0) or 900.0),
         "life": int(sim.life),
         "cost_init": float(sim.cost),
         "cost_max": float(sim.max_cost),
