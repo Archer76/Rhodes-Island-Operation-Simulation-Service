@@ -173,6 +173,15 @@ def compare(py_result, go_verdict: dict, *,
                 for t, name, cost in (go_verdict.get("leak_events") or [])]
     if py_leaks != go_leaks:
         diff["leak_events"] = (py_leaks[:5], go_leaks[:5])
+    # 技能开启次数：原版有 `skill_activations` 这个计数器，Go 侧就是时间线上
+    # `kind == "skill"` 的笔数。**这是状态机唯一一个直接可比的量**——次数对上
+    # 不代表时刻一定对，但对不上就一定有一边的状态机错了（本数是先验判据）。
+    want_sk = getattr(py_result, "skill_activations", None)
+    if want_sk is not None:
+        got_sk = sum(1 for e in (go_verdict.get("events") or [])
+                     if e.get("kind") == "skill")
+        if int(want_sk) != got_sk:
+            diff["skill_activations"] = (int(want_sk), got_sk)
     return {"ok": not diff, "diff": diff,
             "note": "" if not diff else "逐项不一致，见 diff"}
 

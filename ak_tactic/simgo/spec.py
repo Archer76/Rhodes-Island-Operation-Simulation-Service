@@ -24,9 +24,40 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from . import skills
+
 #: 攻击间隔的下限与攻速下限，与 `battle/unit.py` 同源（那里写死 0.05 / 20）
 MIN_INTERVAL = 0.05
 ASPD_MIN = 20.0
+
+
+def _attach_skill_for_spec(d, *, allow_skills: bool = True) -> str | None:
+    """照 `sim._attach_skill` 的分支，把这次部署的技能挂到干员身上。
+
+    原版是在**部署那一刻**挂技能的，规则三条：
+
+    * `d.skill` 是**槽位号**（1/2/3）→ 查 `skill_book`（跑起来才查得到）；
+    * `d.skill` 是现成的 `SkillLevel` → 直接挂上；
+    * `d.skill` 是 **0 或 None → 把 `op.skill` 清成 None**。
+
+    第三条最坑：先给干员绑好技能、再摆一条默认的 `Deployment`（`skill=0`），
+    跑起来技能是**没有**的——而生成规格发生在跑之前，那里还看得见它，
+    于是"规格里带着技能、那一趟却没开"这种不对称的对拍会以**别的字段**的
+    形态爆出来（实测就是这样：Go 开了技能、原版一次没开，两边 elapsed 差 18 秒）。
+
+    返回非 None 表示这次部署的技能**现在确定不了**（槽位号那条路），
+    调用方据此拒跑。副作用只有 `op.skill` 一个字段，而且写的就是原版将要写的内容。
+    """
+    op = d.operator
+    spec = getattr(d, "skill", 0)
+    if spec is None or (isinstance(spec, int) and spec == 0):
+        op.skill = None
+        return None
+    if isinstance(spec, int):
+        return (f"技能槽号 {spec}（{op.name or op.char_id}）："
+                f"调用方要先把 SkillLevel 绑好再生成规格")
+    op.skill = spec
+    return None
 
 
 def unsupported_reasons(sim, *, allow_devices: bool = False,
@@ -39,12 +70,14 @@ def unsupported_reasons(sim, *, allow_devices: bool = False,
     `allow_devices` / `allow_skills` 是**给对拍台用的、必须带着证据打开**的两个口子：
 
     * `allow_devices` —— 只有对拍台**实测过**"把装置摘掉结果一字不变"时才传 True；
-    * `allow_skills` —— 只有原版那一趟的 `skill_activations == 0`（从头到尾没开过
-      技能，于是"无技能帧的数值"就是全场的数值）时才传 True。
+    * `allow_skills` —— 打开之后，技能**逐条走 `simgo.skills` 的白名单**：
+      落在已移植子集里的放行，其余逐条写明理由（理由的粒度是
+      "谁 + 哪一项"，方便直接看出该补哪一块）。关着的时候一律拒跑——
+      搜索那条路在技能对拍全绿之前不会打开它。
     """
     bad: list[str] = []
     if sim.skill_uses:
-        bad.append(f"手动开技能 ×{len(sim.skill_uses)}")
+        pass          # 手动开技能现在**支持**（白名单判定在下面逐人做）
     if sim.summon_deployments:
         bad.append(f"召唤物部署 ×{len(sim.summon_deployments)}")
     if sim.device_deployments:
@@ -66,20 +99,32 @@ def unsupported_reasons(sim, *, allow_devices: bool = False,
 
     for d in sim.deployments:
         op = d.operator
-        # `Deployment.skill` 的默认值是 **0**（＝不带技能），所以这里判的是真值
-        # 而不是 `is not None`——写成后者会把整批"本来就没技能"的用例全挡在门外。
-        if getattr(op, "skill", None) is not None and not allow_skills:
-            bad.append(f"技能：{op.name or op.char_id}")
-        if getattr(d, "skill", 0) and not allow_skills:
-            bad.append(f"部署夹带技能：{op.name or op.char_id}")
+        # 先按原版的分支把技能挂好（`Deployment.skill` 的默认值是 **0**，
+        # 而它会把干员身上已绑的技能清掉——这一步不做，规格与那一趟就会不一致）
+        stuck = _attach_skill_for_spec(d)
+        if stuck:
+            bad.append(stuck)
+        elif getattr(op, "skill", None) is not None:
+            if allow_skills:
+                bad += [f"{op.name or op.char_id}：{r}"
+                        for r in skills.port_reasons(sim, op)]
+            else:
+                bad.append(f"技能：{op.name or op.char_id}")
         for attr, why in (("summon_of", "召唤物"),
                           ("splash_radius", "特性溅射"),
                           ("highland_splash_scale", "高台溅射"),
                           ("hammer", "锤击"),
-                          ("effects_override", "技能效果覆盖")):
+                          ("effects_override", "技能效果覆盖"),
+                          ("power_attack_count", "天赋「强击瓶专家」"),
+                          ("sp_per_attack_talent", "天赋回技力（出手）"),
+                          ("sp_per_kill_talent", "天赋回技力（击杀）")):
             val = getattr(op, attr, 0)
             if val:
                 bad.append(f"{why}：{op.name or op.char_id}")
+        # `combo_hits` 的"没有这条"是 **1**（不是 0）：原版判的是 `> 1`。
+        # 按真值判会把**每一位没有连击的干员**全挡在门外——实测阿米娅就中招。
+        if int(getattr(op, "combo_hits", 1) or 1) > 1:
+            bad.append(f"普攻连击（结算后缩放）：{op.name or op.char_id}")
         for attr, why in (("dodge_phys", "物理闪避"), ("dodge_arts", "法术闪避"),
                           ("aura_atk_pct", "攻击力光环"), ("aura_def_pct", "防御光环"),
                           ("blessing_save", "免死"), ("weakness_damage", "弱点伤害"),
@@ -89,6 +134,12 @@ def unsupported_reasons(sim, *, allow_devices: bool = False,
                 bad.append(f"{why}：{op.name or op.char_id}")
         if getattr(op, "heals", False):
             bad.append(f"医疗（平A 是治疗）：{op.name or op.char_id}")
+        # 天赋里那两条**会改数值但不落在干员字段上**的：回技力与「翔虫机动」。
+        # 它们只在跑起来之后才写进 `op`，所以只能按天赋本身判。
+        if _talent_reason(op, "find_sp_on_action"):
+            bad.append(f"天赋回技力：{op.name or op.char_id}")
+        if _talent_reason(op, "find_glider_mobility"):
+            bad.append(f"天赋「翔虫机动」：{op.name or op.char_id}")
     # 去重但保序：同一个人有两条问题时只报一条，方便读
     seen: set[str] = set()
     out: list[str] = []
@@ -99,8 +150,30 @@ def unsupported_reasons(sim, *, allow_devices: bool = False,
     return out
 
 
+def _talent_reason(op, finder: str) -> bool:
+    """这名干员身上有没有 `finder` 认得出的那条天赋。
+
+    取不到天赋模块（比如只装了数据、没装战斗层）就当**没有**——这条判据的
+    作用是"别漏报"，而漏报的前提是先得有天赋。
+    """
+    talents = getattr(op, "talents", None)
+    if not talents:
+        return False
+    try:
+        from ..battle import talents as _talents
+    except Exception:                                          # noqa: BLE001
+        return False
+    fn = getattr(_talents, finder, None)
+    if fn is None:
+        return False
+    try:
+        return fn(talents) is not None
+    except Exception:                                          # noqa: BLE001
+        return True          # 判不了就当有：宁可拒跑
+
+
 def _operator_spec(sim, d) -> dict[str, Any]:
-    """一名干员的规格。数值取**无技能帧**的那一套。
+    """一名干员的规格。数值取**无技能帧**的那一套，外加技能开启期间的那一套。
 
     ⚠️ `_range_of()` 读的是 `op.position` / `op.direction`，而这两个字段要等
     `_do_deploy` 才写上。规格是在**跑之前**生成的，所以这里先把它们按这次部署
@@ -110,10 +183,14 @@ def _operator_spec(sim, d) -> dict[str, Any]:
     op = d.operator
     op.position = (int(d.position[0]), int(d.position[1]))
     op.direction = d.direction
+    # 幂等：正常情况下闸门（`unsupported_reasons`）已经挂过了，这里再挂一次
+    # 只是让 `_operator_spec` 单独被调用时也读得到技能。
+    _attach_skill_for_spec(d)
     spd = float(getattr(op, "attack_speed", 100.0) or 100.0)
     interval = max(MIN_INTERVAL, float(op.attack_interval) * 100.0 / max(ASPD_MIN, spd))
     cells = sim._range_of(op)
-    return {
+    skill, active = skills.skill_spec(sim, d)
+    out = {
         "char_id": op.char_id,
         "name": op.name or op.char_id,
         "cell": [int(d.position[0]), int(d.position[1])],
@@ -128,6 +205,10 @@ def _operator_spec(sim, d) -> dict[str, Any]:
         "redeploy_time": float(getattr(op, "redeploy_time", 70.0) or 70.0),
         "range": sorted([int(x), int(y)] for x, y in cells),
     }
+    if skill is not None:
+        out["skill"] = skill
+        out["active"] = active
+    return out
 
 
 def _legs_spec(legs) -> list[dict[str, Any]]:
@@ -197,8 +278,13 @@ def build_spec(sim, *, stage_label: str = "", allow_devices: bool = False,
             "index": len(operators) - 1,
             "char_id": d.operator.char_id,
             "cost": int(d.operator.deploy_cost),
+            # 显式送：Go 侧的零值是 False，而原版的默认是 True（`Deployment.auto_skill`）
+            "auto_skill": bool(getattr(d, "auto_skill", True)),
         })
     spawns = [_spawn_spec(sim, t, sp) for t, sp in sim._spawns]
+    skill_uses = [{"time": float(u.time),
+                   "cell": [int(u.position[0]), int(u.position[1])]}
+                  for u in getattr(sim, "skill_uses", []) or []]
     return {
         "stage": stage_label or str(getattr(sim.stage, "code", "") or ""),
         "fps": int(sim.fps),
@@ -213,6 +299,7 @@ def build_spec(sim, *, stage_label: str = "", allow_devices: bool = False,
         "operators": operators,
         "deploys": deploys,
         "spawns": spawns,
+        "skill_uses": skill_uses,
         "unsupported": unsupported_reasons(
             sim, allow_devices=allow_devices, allow_skills=allow_skills),
         "mechanisms": list(mechanisms),

@@ -81,6 +81,18 @@ type operator struct {
 	deathTime   float64
 	damageTaken float64
 	slot        int //: 列表下标 = 部署顺序（敌人挑"最后部署的"要看它）
+
+	// ---- 技能状态（`skill.go`；没有技能槽时这几个字段一直不动）
+	//:
+	//: 每次部署都**从零起**（原版每次部署都是一个全新的 `OperatorUnit` 对象，
+	//: 这里复用对象，所以得自己清）：见 `runSim` 的部署那一段。
+	sp          float64 //: 当前技力
+	spCharges   int     //: 这一局开过几次（`once_per_battle` 与"第二次及以后"要看它）
+	skillActive bool
+	skillTimer  float64
+	ammoLeft    int
+	skillReq    bool //: 手动开技能的请求，`skillTick` 里消费
+	autoSkill   bool //: 来自**这一次部署**的 `DeploySpec.AutoSkill`
 }
 
 func (o *operator) alive() bool { return o.hp > 0 && !o.retreated }
@@ -117,6 +129,8 @@ func runSim(spec *Spec) (*Verdict, error) {
 
 	deploys := append([]DeploySpec(nil), spec.Deploys...)
 	sort.SliceStable(deploys, func(i, j int) bool { return deploys[i].Time < deploys[j].Time })
+	skillUses := append([]SkillUseSpec(nil), spec.SkillUses...)
+	sort.SliceStable(skillUses, func(i, j int) bool { return skillUses[i].Time < skillUses[j].Time })
 
 	var ops []*operator
 	var enemies []*enemy
@@ -193,11 +207,39 @@ func runSim(spec *Spec) (*Verdict, error) {
 			op.damageTaken = 0
 			op.retreated = false
 			op.leftAt = -1
+			// 技能状态从零起（等价于原版"每次部署一个全新的 OperatorUnit"）：
+			// 技力回到 `init_sp`，开启次数归零，上一局的持续/弹药不带到这一局。
+			op.autoSkill = d.AutoSkill
+			op.spCharges = 0
+			op.skillReq = false
+			op.ammoLeft = 0
+			op.skillTimer = 0
+			op.skillActive = false
+			op.sp = 0
+			if sk := op.spec.Skill; sk != nil && !sk.Passive {
+				op.sp = sk.InitSP
+			}
 			ops = append(ops, op)
 			onField[d.CharID] = op
 			cost = math.Max(0, cost-float64(d.Cost))
 			verdict.Events = append(verdict.Events,
 				Event{T: t, Kind: "deploy", Who: op.spec.Name})
+		}
+
+		// ---- 1b. 手动开技能的请求（原版 2006-2009，紧随部署之后）
+		//
+		// 与原版同一套判据：**按格子找人**，找不到就什么也不发生。这里只记请求，
+		// 真正开不开在下面的技能阶段判（那一刻的技力说了算）。
+		//
+		// 时间对不齐（离任何一帧都超过 dt/2）的请求**丢掉**——原版也是这么做的
+		// （它每帧筛 `abs(s.time - t) < dt/2`），丢掉时要往前走，否则它会一直
+		// 卡在队头把后面的请求全堵住。
+		for len(skillUses) > 0 && skillUses[0].Time <= t+dt/2 {
+			u := skillUses[0]
+			skillUses = skillUses[1:]
+			if math.Abs(u.Time-t) < dt/2 {
+				useSkill(ops, u.Cell)
+			}
 		}
 
 		// ---- 2. 出怪（1753-1760）
@@ -231,6 +273,11 @@ func runSim(spec *Spec) (*Verdict, error) {
 
 		// ---- 4. 阻挡（1846 → 2289）
 		updateBlocking(ops, enemies)
+
+		// ---- 5. 技能（原版 2156，**阻挡之后、我方出手之前**）
+		//
+		// 位置是定的：刚攒满技力的那一帧就得算数，晚一帧会让每次开技都慢一个 dt。
+		skillTick(ops, dt, t, spec, &cost, verdict)
 
 		// ---- 6. 我方出手（1870 → 2687）
 		operatorsAttack(ops, enemies, dt, t, verdict)
@@ -524,11 +571,18 @@ func updateBlocking(ops []*operator, enemies []*enemy) {
 	}
 }
 
-// operatorsAttack 我方出手（`_operators_attack`，sim.py 2687）。
+// operatorsAttack 我方出手（`_operators_attack`，sim.py 2995）。
 //
-// 一个容易写错的细节：**没有目标时不重置攻击计时器**（原版 2718-2720 的
+// 一个容易写错的细节：**没有目标时不重置攻击计时器**（原版 3026-3027 的
 // `continue` 在 `attack_timer = 0` 之前）——重置的话，范围里一直没人的干员
 // 会在敌人一进范围的那一帧立刻出手，比原版快半拍。
+//
+// 技能期间的三个数（倍率 / 连击数 / 末击倍率）都由 `Profile` 送来：
+//
+//   - `atk_scale` 乘在 `resolve_damage(scale=…)` 那一处（2026-09-18 博士裁定：
+//     主循环**不**再自己乘一遍）；
+//   - `hit_count` 是"一次出手打几下"，**每一击都各减一次防御**；
+//   - `final_hit_scale` 只改最后一击的倍率。
 func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 	verdict *Verdict) {
 	for _, op := range ops {
@@ -536,33 +590,58 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 			continue
 		}
 		op.attackTimer += dt
-		if op.attackTimer < op.spec.AttackInterval {
+		if op.attackTimer < op.interval() {
 			continue
 		}
-		targets := pickTargets(op, enemies, 1)
+		targets := pickTargets(op, enemies, op.maxTarget())
+		if traceOn {
+			trace("%8.4f %s 技=%v 间隔=%.4f 计时=%.4f 挡=%v 选=%v 范围里=%v",
+				t, op.spec.Name, op.skillActive, op.interval(), op.attackTimer,
+				names(op.blocking), names(targets), names(inRangeOf(op, enemies)))
+		}
 		if len(targets) == 0 {
 			continue
 		}
 		op.attackTimer = 0
+		scale := op.atkScale()
+		hits := op.hitCount()
+		finalScale, hasFinal := op.finalHitScale()
+		power := op.atk()
+		dmgType := op.damageType()
 		for _, target := range targets {
-			if !target.alive() {
-				break
+			for i := 0; i < hits; i++ {
+				if !target.alive() {
+					break
+				}
+				hitScale := scale
+				if hasFinal && i == hits-1 {
+					hitScale = finalScale
+				}
+				dmg := resolveDamage(power, dmgType, hitScale,
+					target.spec.DEF, target.spec.RES)
+				dealt := target.take(dmg)
+				trace("        打 %s 攻=%.1f 类型=%s 倍率=%.3f 防=%.1f 抗=%.1f 伤害=%.3f 实扣=%.3f 剩=%.3f",
+					target.spec.Name, power, dmgType, hitScale, target.spec.DEF,
+					target.spec.RES, dmg, dealt, target.hp)
+				if dealt <= 0 {
+					continue
+				}
+				// 打向敌人的伤害在这里累计（原版 `_damage_enemy` 里的
+				// `result.damage_dealt += dealt`）；**不是**干员承受的伤害——
+				// 两者名字都叫 damage，混起来会让对拍看起来"完全对不上"。
+				verdict.DamageDealt += dealt
+				if !target.alive() {
+					target.deathTime = t
+					verdict.Events = append(verdict.Events,
+						Event{T: t, Kind: "kill", Who: target.spec.Name})
+				}
 			}
-			dmg := resolveDamage(op.spec.ATK, op.spec.DamageType, 1.0,
-				target.spec.DEF, target.spec.RES)
-			dealt := target.take(dmg)
-			if dealt <= 0 {
-				continue
-			}
-			// 打向敌人的伤害在这里累计（原版 `_damage_enemy` 里的
-			// `result.damage_dealt += dealt`）；**不是**干员承受的伤害——
-			// 两者名字都叫 damage，混起来会让对拍看起来"完全对不上"。
-			verdict.DamageDealt += dealt
-			if !target.alive() {
-				target.deathTime = t
-				verdict.Events = append(verdict.Events,
-					Event{T: t, Kind: "kill", Who: target.spec.Name})
-			}
+		}
+		// 出手回报：攻击回复的技力与弹药消耗（原版 3187-3205，在整次出手之后）
+		spOnAttack(op)
+		if op.skillActive && op.spec.Skill != nil && op.spec.Skill.Ammo > 0 &&
+			op.ammoLeft > 0 {
+			op.ammoLeft--
 		}
 	}
 }
@@ -607,6 +686,30 @@ func pickTargets(op *operator, enemies []*enemy, n int) []*enemy {
 	return out
 }
 
+// names / inRangeOf 只给跟踪用（`RIOS_TRACE=1`）。放在这里而不是单独文件，
+// 是因为它们读的就是上面那套判据——两者必须一起改，分开写迟早会不一致。
+func names(list []*enemy) []string {
+	out := make([]string, 0, len(list))
+	for _, e := range list {
+		out = append(out, fmt.Sprintf("%s(%.0f)", e.spec.Name, e.hp))
+	}
+	return out
+}
+
+func inRangeOf(op *operator, enemies []*enemy) []*enemy {
+	out := make([]*enemy, 0, 8)
+	for _, e := range enemies {
+		if e.hp <= 0 || e.leaked || e.offMap {
+			continue
+		}
+		cell := [2]int{int(math.Round(e.position[0])), int(math.Round(e.position[1]))}
+		if inCells(op.spec.Range, cell) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 func inCells(cells [][2]int, cell [2]int) bool {
 	for _, c := range cells {
 		if c == cell {
@@ -641,10 +744,12 @@ func enemiesAttack(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec,
 		}
 		// 连击逐段结算：两段的防御/法抗各减一次。把 atk 乘 2 再打一次会少减
 		// 一次防御，对高防目标能差出成倍的伤害（原版 2909-2920 的正文）。
+		// 防御/法抗取**这一刻**的数（技能给防御的，敌人打上来时就得吃到）。
+		dealt := 0.0
 		for seg := 0; seg < times; seg++ {
 			dmg := resolveDamage(e.spec.ATK, e.spec.DamageType, 1.0,
-				op.spec.DEF, op.spec.RES)
-			op.take(dmg)
+				op.defense(), op.res())
+			dealt += op.take(dmg)
 			if !op.alive() {
 				op.deathTime = t
 				verdict.Events = append(verdict.Events,
@@ -652,6 +757,8 @@ func enemiesAttack(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec,
 				break
 			}
 		}
+		// 受击回复的技力：这一下**真的掉血了**才回（原版 3301-3306）
+		spOnHit(op, dealt)
 	}
 }
 
