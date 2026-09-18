@@ -140,6 +140,11 @@ class OperatorUnit(Combatant):
     #: 职业干员的防御力提升 6%」，判的是**职业**，与阵营（`team_id`）是两回事。
     #: 空串 = 没填（手工搭的试验体），按"不匹配任何职业光环"处理。
     profession: str = ""
+    #: 干员**所属势力**（`operator.nation_id`，如 `rhodes`）。与 `profession`
+    #: （职业）、`team_id`（**小队**，如 `student`/`rainbow`）是三件事：
+    #: 能天使的 `team_id` 是 None 却属**龙门**，所以判「是不是【罗德岛】」
+    #: 只能看这一列。#: 「极限调度」的 +4% 攻击就发在这个字段上。
+    nation_id: str = ""
     position: tuple[int, int] = (0, 0)
     direction: str = "Right"
     block_cnt: int = 0

@@ -76,6 +76,7 @@ def make_unit(calc, char_id: str, **kw) -> OperatorUnit:
         name=st.name, char_id=char_id, elite=kw.get("elite", 2),
         # 主职业代号——按职业发光环的天赋（星熊「特种作战策略」）要它。
         profession=str(calc.character(char_id).get("profession") or ""),
+                      nation_id=str(calc.character(char_id).get("nationId") or ""),
         max_hp=float(t["maxHp"]), atk=float(t["atk"]), defense=float(t["def"]),
         res=float(t.get("magicResistance", 0) or 0),
         attack_interval=float(t.get("baseAttackTime", 1.0) or 1.0),
@@ -2721,7 +2722,66 @@ def check_angel_blessing(stage, lib, calc, book_t) -> None:
           f"实得 {ally.max_hp}，原 {ally_hp_before}")
 
 
+def check_limit_dispatch(stage, lib, calc, book_t) -> None:
+    """[35] 「极限调度」的攻击力那半（可露希尔天赋2）。
+
+    正文：「携带可露希尔时，**部署费用下限降低 3**，【罗德岛】干员攻击力 +4%」
+    ——`{atk: 0.04, cost: -3.0}`。
+
+    **本节只覆盖攻击力那半。**「部署费用下限」属名册/费用规则侧，不在
+    `battle/`——所以这条天赋**只算做了一半**，审计里仍是待办。
+
+    【罗德岛】取 `nation_id == 'rhodes'`，**不是 `team_id`**：那列是**小队**
+    （`student`/`rainbow`…），而且能天使的 `team_id` 是 None 却属**龙门**。
+    所以本节的反向对照特意用**龙门**的星熊，而不是"`team_id` 为空的人"。
+
+    端到端那两条是关键的：`nation_id` 真的从库里走到了单位身上，
+    判据才可能触发——**只验函数算得对是不够的**。
+    """
+    print("\n[35] 「极限调度」：【罗德岛】+4% 攻击（费用那半未做）")
+    from ak_tactic.battle.talents import (RHODES_NATION,  # noqa: PLC0415
+                                          find_limit_dispatch)
+
+    cid = "char_4228_closur"
+    tal = book_t.for_operator(cid, elite=2, level=60, potential=1)
+    hit = find_limit_dispatch(tal)
+    check("find_limit_dispatch 认得可露希尔「极限调度」",
+          hit is not None and hit.name == "极限调度",
+          hit.name if hit else "None")
+    check("攻击力加成是 +4%",
+          hit is not None and abs(hit.value("atk") - 0.04) < 1e-9,
+          f"实得 {hit.value('atk') if hit else None}")
+    check("同一条天赋里还有 cost:-3（费用那半，不在战斗层，未做）",
+          hit is not None and abs(hit.value("cost") - (-3.0)) < 1e-9,
+          f"cost={hit.value('cost') if hit else None}")
+    check("反向：星熊的天赋里没有这一条",
+          find_limit_dispatch(book_t.for_operator("char_136_hsguma", elite=2,
+                                                  level=60, potential=1)) is None)
+
+    owner = make_unit(calc, cid, elite=2, level=60, potential=1)
+    rhodes = make_unit(calc, "char_002_amiya", elite=2, level=60, potential=1)
+    lungmen = make_unit(calc, "char_136_hsguma", elite=2, level=60, potential=1)
+    check("端到端：`nation_id` 真的走到了单位身上（阿米娅 rhodes）",
+          rhodes.nation_id == RHODES_NATION, f"实得 {rhodes.nation_id!r}")
+    check("端到端：星熊是 lungmen（龙门），**不是**罗德岛",
+          lungmen.nation_id == "lungmen", f"实得 {lungmen.nation_id!r}")
+
+    sim = mechanism_sim(stage, lib)
+    sim.operators.extend([owner, rhodes, lungmen])
+    sim._do_deploy(Deployment(0.0, owner, (2, 3), "Right", talents=tal), 0.0)
+    sim._do_deploy(Deployment(0.0, rhodes, (3, 3), "Right", talents=[]), 0.0)
+    sim._do_deploy(Deployment(0.0, lungmen, (3, 4), "Right", talents=[]), 0.0)
+
+    check("【罗德岛】的阿米娅吃到 +4%",
+          abs(rhodes.aura_atk_pct - 0.04) < 1e-9, f"实得 {rhodes.aura_atk_pct}")
+    check("可露希尔自己也是罗德岛，同样吃到 +4%",
+          abs(owner.aura_atk_pct - 0.04) < 1e-9, f"实得 {owner.aura_atk_pct}")
+    check("**反向：龙门的星熊一点都拿不到**（筛选不是翻倍）",
+          abs(lungmen.aura_atk_pct) < 1e-12, f"实得 {lungmen.aura_atk_pct}")
+
+
 def check_push(stage, lib, calc, book_t) -> None:
+
     """[26] 位移接线：推击把敌人推离路线，且推完能走回来。
 
     位置本来是 `point_at(route, progress)` 推出来的，**没有"脱离路线"这个概念**
@@ -2926,6 +2986,7 @@ def main() -> int:
     check_dot_on_hit(stage, lib, calc, book_t)
     check_high_ground_aspd(stage, lib, calc, book_t)
     check_angel_blessing(stage, lib, calc, book_t)
+    check_limit_dispatch(stage, lib, calc, book_t)
     check_second_use(stage, lib, calc, book_t)
     check_push(stage, lib, calc, book_t)
 

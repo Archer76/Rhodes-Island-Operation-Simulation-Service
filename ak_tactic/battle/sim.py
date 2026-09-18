@@ -53,8 +53,9 @@ from ..gamedata.enemy import PROSE_SUMMON_EDGES
 from .damage import DamageType, resolve_damage
 from .talents import (CLASS_AURA_TALENTS, FACTION_AURA_NAME, STUDENT_TEAM,
                       RegenAura, SnowField, TeamAura, find_blessing,
-                      find_angel_blessing, find_class_aura, find_damage_block,
+                      RHODES_NATION, find_angel_blessing, find_class_aura, find_damage_block,
                       find_dot_on_hit,
+                      find_limit_dispatch,
                       find_regen,
                       find_snow, find_sp_on_action, find_summon_allowance,
                       find_team_aura,
@@ -2218,6 +2219,19 @@ class BattleSimulator:
             ))
             self._refresh_auras()
             op.apply_max_hp_bonus(bless.value("max_hp", 0.0))
+        # 天赋「极限调度」（可露希尔）：【罗德岛】干员攻击力 +4%。
+        # **同句的「部署费用下限 -3」不在战斗层**（属名册/费用规则），未做——
+        # 所以这条天赋只算做了一半。
+        dispatch = find_limit_dispatch(op.talents)
+        if dispatch is not None:
+            self.team_auras.append(TeamAura(
+                owner=op.name,
+                atk_pct=dispatch.value("atk", 0.0),
+                def_pct=0.0,
+                operator=op,
+                faction_only=RHODES_NATION,
+            ))
+            self._refresh_auras()
         # 地形条件：**周围四格有高台**（阿斯卡纶「噬光残影」额外 +6 攻速）。
         # 伏击客不移动，判一次就定死；判据用 `is_highland()`——`tile_wall`
         # 与 `tile_forbidden` 都是高台（后者不可站人，但仍是高台）。
