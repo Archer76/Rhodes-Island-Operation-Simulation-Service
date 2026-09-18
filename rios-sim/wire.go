@@ -109,6 +109,11 @@ type OperatorSpec struct {
 	SplashScale         float64 `json:"splash_scale,omitempty"`
 	SplashDamageScale   float64 `json:"splash_damage_scale,omitempty"`
 	HighlandSplashScale float64 `json:"highland_splash_scale,omitempty"`
+	//: 高台那一半溅到之后挂的【停顿】秒数（原版 `highland_splash_sluggish`，
+	//: 取自天赋黑板的 `attack@sluggish`）。**它不只是个计时器**：原版
+	//: `EnemyUnit.advance` 在停顿期间**整帧不移动**，所以这个值会实打实地
+	//: 拖慢敌人——漏了它，敌人会一路走得比原版快。
+	HighlandSplashSluggish float64 `json:"highland_splash_sluggish,omitempty"`
 
 	//: 技能（没有技能槽就是 nil）。数值由 Python 算完送来，Go 只跑状态机：
 	//: 攒技力、什么时候能开、开多久、结束。

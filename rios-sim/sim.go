@@ -103,6 +103,16 @@ type enemy struct {
 	//: 移速乘区（原版 `haste_multiplier`）。明识形态会把"清水"状态折进它；
 	//: 推进时乘上去（`advance` 与 `EnemyMoveSpeed` 两处必须同源）。
 	haste float64
+	//: 上一次打进 `RIOS_TRACE` 的移速（只为"变化即记一笔"用，不参与计算）。
+	traceSpeed float64
+	//: 【停顿】剩余秒数（原版 `sluggish_timer`）。
+	//:
+	//: ⚠ 它**不是**"只是记个数"：原版 `EnemyUnit.advance` 在 `sluggish_timer > 0`
+	//: 时**整帧不移动**（与晕眩/束缚/待机并列的那一串 early return）。所以每中
+	//: 一次挂停顿的攻击，敌人就少走 `秒数 × 移速` 格。怒潮凛冬的天赋让每一次
+	//: 高台溅射都给 0.5 秒停顿——漏掉这一路，敌人每次多吃一发就多走 0.2 格，
+	//: 累积到判决层面就是"漏怪"。
+	sluggishTimer float64
 
 	//: 造它的那个模拟器——挨打效果（蜕皮加病害）要问机制层，机制层挂在
 	//: 模拟器上。之所以用反向指针而不是给 `take()` 加参数：`take()` 有多个
@@ -195,6 +205,7 @@ func newEnemy(spec SpawnSpec, index int, position [2]float64, c *simCtx) *enemy 
 		rebornDefBase:   spec.DEF,
 		invincibleUntil: -1.0,
 		haste:           1.0,
+		traceSpeed:      -1.0,
 	}
 	if n := len(spec.RebornSummons); n > 0 {
 		// 原版 `_build_enemy` 就给每只排好这一列（-1 = 不在窗口里，不排拍）
@@ -446,10 +457,17 @@ func runSim(spec *Spec) (*Verdict, error) {
 				e.attackPause = math.Max(0.0, e.attackPause-dt)
 			}
 			if e.alive() && !e.leaked && !e.offMap && e.blockedBy == nil &&
-				e.attackPause <= 0 {
+				e.attackPause <= 0 && e.sluggishTimer <= 0 {
 				// 关卡特有机制可以改这一只的推进速度乘区（如田地/阻流阀）；
 				// 没挂机制时 `speedFor` 恒为 1.0，与最小版本逐位相同。
 				advance(e, dt, spec.SpeedScale*ctx.speedFor(e.index))
+			}
+		}
+		// 停顿按原版在**推进之后**递减（`sim.py:2721-2722` 在 push 那一步里）：
+		// 同一帧内先判"能不能走"再扣时间，挪到前面去会让每段停顿短一帧。
+		for _, e := range enemies {
+			if e.sluggishTimer > 0 {
+				e.sluggishTimer = math.Max(0.0, e.sluggishTimer-dt)
 			}
 		}
 
@@ -946,6 +964,15 @@ func advance(e *enemy, dt, speedScale float64) {
 	if speed <= 0 {
 		return
 	}
+	// 移速**变化即记一笔**（不逐帧打，那样 72 只 × 2900 帧没法看）。
+	// 原版的移速是六项连乘：`move_speed × speed_scale × speed_multiplier ×
+	// haste_multiplier × (1 - slow_pct) × lock_slow`；这里只有三项，
+	// 哪一项分家只能靠"同一只敌人两边速度何时开始不同"去指认。
+	if traceOn && speed != e.traceSpeed {
+		e.traceSpeed = speed
+		trace("SPEED t=%.4f enemy=%s speed=%.6f move=%.4f haste=%.6f scale=%.6f",
+			*e.sim.time, e.spec.Name, speed, e.spec.MoveSpeed, e.haste, speedScale)
+	}
 	left := dt
 	guard := 0
 	for left > 1e-12 && e.legIndex < len(e.spec.Legs) {
@@ -1313,6 +1340,12 @@ func splashHit(op *operator, e *enemy, power, scale, t float64, verdict *Verdict
 	dmg := resolveDamage(power, "PHYSICAL", scale,
 		e.spec.DEF, e.spec.RES, e.dodgeVs("PHYSICAL"))
 	dealt := e.take(dmg, op)
+	if kind == "highland" && op.spec.HighlandSplashSluggish > 0 {
+		// 原版 `sim.py:3855-3857`：高台那一半溅到谁，就给谁挂【停顿】
+		// （天赋 `attack@sluggish` = 0.5 秒）。取 max 而不是覆盖，与
+		// `sluggish_timer` 全仓一致的写法。
+		e.sluggishTimer = math.Max(e.sluggishTimer, op.spec.HighlandSplashSluggish)
+	}
 	if traceOn {
 		trace("SPLASH t=%.4f op=%s kind=%s from=%s victim=%s scale=%.4f dmg=%.3f dealt=%.3f hp=%.3f",
 			t, op.spec.Name, kind, from.spec.Name, e.spec.Name, scale, dmg, dealt, e.hp)

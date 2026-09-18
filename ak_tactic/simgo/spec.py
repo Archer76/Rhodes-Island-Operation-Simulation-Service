@@ -338,6 +338,15 @@ def _operator_spec(sim, d) -> dict[str, Any]:
         _high = float(getattr(op, "highland_splash_scale", 0.0) or 0.0)
         if _high > 0.0:
             out["highland_splash_scale"] = _high
+            # 高台那一半溅到之后挂的【停顿】（`attack@sluggish`，怒潮凛冬 0.5 秒）。
+            #
+            # ⚠ 这一条**必须送**：原版 `EnemyUnit.advance` 在停顿期间整帧不移动，
+            # 所以它是个会改判决的量，不是"只用来显示的状态"。曾经把它当成
+            # "原版也不消费的假账"而从规格里删掉，代价是敌人每次中一发高台溅射
+            # 就比原版多走 0.5 × 移速 = 0.2 格，几十秒后判决从"守住"翻成"漏怪"。
+            _slu = float(getattr(op, "highland_splash_sluggish", 0.0) or 0.0)
+            if _slu > 0.0:
+                out["highland_splash_sluggish"] = _slu
     if skill is not None:
         out["skill"] = skill
         out["active"] = active
