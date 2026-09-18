@@ -1694,16 +1694,22 @@ class ResultScreen(Screen):
 
     ## 这一屏**不挂 Esc**（博士 2026-09-17 裁定）
 
-    原话：「结果屏只留退出程序和回主界面」。所以出口就两个：
-    `Q` 退出程序、`H` 回主界面；原先 `Esc` 也指向「结束」，与 `Q` 完全重复，
-    已去掉。**别再给它补 Esc**——这一屏已经是向导的终点，没有"上一步"可退，
-    而 Esc 在这里唯一能做的就是退出程序，那正好是 `Q` 的事。
+    原话：「结果屏只留退出程序和回主界面」。所以 `Esc` 不会被补上——它在这里
+    能做的事与别的出口重复，而这一屏不是向导屏、没有"上一步"可退。
 
-    `E` 导出保留：它不是出口，是这一屏存在的理由（产出 MAA 作业）。
+    出口三个（2026-09-18 加第三个）：
+
+    * `Q` 退出程序；
+    * `H` 回 [0] 准备屏（整轮重来，连关卡也忘掉）；
+    * `R` **回选关页**——博士要的「算完一关，换个关卡接着算」：退到关卡列表为止，
+      章/活动、分部、环境的选择都还留着，**编队也留着**（换一关通常还是同一队）。
+
+    `E` 导出不是出口，是这一屏存在的理由（产出 MAA 作业）。
     """
 
     BINDINGS = both_cases([
         Binding("e", "export", "导出", key_display="E"),
+        Binding("r", "stage_list", "重选关卡", key_display="R"),
         Binding("h", "home", "主界面", key_display="H"),
         Binding("q", "quit", "退出程序", key_display="Q"),
     ])
@@ -1822,6 +1828,15 @@ class ResultScreen(Screen):
         没有道理。
         """
         self.app.goto_home()
+
+    def action_stage_list(self) -> None:
+        """回**选关页**（关卡列表），换个关卡接着算。
+
+        与 `H` 的区别只在退到哪一层：`H` 把整轮清空、连"在哪一章哪一分部"都忘掉；
+        `R` 退到关卡列表为止，章/活动、分部、环境的选择都留着——换一关只要再点
+        一次关卡，不必从头点三层。
+        """
+        self.app.goto_stage_list()
 
 
 # ================================================================ App
@@ -2009,15 +2024,58 @@ class RiosApp(App):
             self.pop_screen()
         # 路径一并作废：下一轮是全新的向导，不该还能退回上一轮的屏
         self._path.clear()
+        self._clear_round(keep_squad=False)
+        self.push_screen(WelcomeScreen())
+
+    def goto_stage_list(self) -> None:
+        """回**选关页**（关卡列表），换个关卡接着算——博士 2026-09-18 要的。
+
+        与 `goto_home` 只差退到哪一层：
+
+        * `goto_home`：全部弹掉、路径清空，连"在哪一章哪一分部"都忘掉；
+        * 这里：退到**关卡列表那一格**为止，章/活动、分部、环境的选择都留着。
+
+        关卡列表那一格**按回调认**（`self._stage_picked`），不按工厂名：进关卡层
+        有两条路，一条直接推 `StagePickScreen`，一条推的是包了一层的 `lambda`
+        （环境层之后就是它），按名字认会漏掉后者。
+
+        `state.squad` **留着**：换个关卡通常还是同一队，重勾一遍是白费。
+        """
+        idx = next((i for i, (_make, cb) in enumerate(self._path)
+                    if cb == self._stage_picked), None)
+        if idx is None:
+            # 关卡层不在路径上（`--stage` 预设、或从别的入口半路进来的）：
+            # 那就重新走一遍选关那三层。总比什么都不做强。
+            while len(self.screen_stack) > 1:
+                self.pop_screen()
+            self._path.clear()
+            self._clear_round(keep_squad=True)
+            self.goto_stage_pick()
+            return
+        make, callback = self._path[idx]
+        # 关卡列表之后那几格（[2a] 编队问答 / [2b] 选人）作废：编队已经交出去了
+        del self._path[idx + 1:]
+        while len(self.screen_stack) > 1:      # 解算屏、结果屏一并弹掉
+            self.pop_screen()
+        self._clear_round(keep_squad=True)
+        self.push_screen(make(), callback)
+
+    def _clear_round(self, *, keep_squad: bool) -> None:
+        """清掉这一轮解算留下的东西。
+
+        `state.roster` **不清**（与算哪一关无关）；`state.mode` 也不清——那是
+        用户的偏好（"只用我选的" / "允许程序补充"），不该被一次返回重置。
+        """
         st = self.state
         st.stage = None
-        st.squad = []
+        if not keep_squad:
+            st.squad = []
         st.searcher = None
         st.plan_roster = None
         st.result = None
         st.error = ""
         st.export_path = None
-        self.push_screen(WelcomeScreen())
+        st.pool_note = ""
 
     def _stage_picked(self, row: dict | None) -> None:
         if row is None:
