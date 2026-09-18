@@ -200,6 +200,12 @@ class OperatorUnit(Combatant):
     #: 是不是**技能强制退场**走的（阿米娅技3 奇美拉），而不是被打死。
     #: 结算时必须与阵亡分开——`operator_deaths` 只数被打死的那些。
     retreated: bool = False
+    #: **离场时刻**（撤退或阵亡的那一秒），`-1` = 还在场。再部署冷却从这里起算。
+    #:
+    #: 不在退场那一处直接算冷却，是因为离场有**三条路**：显式撤退、被打死、
+    #: 技能强制退场（阿米娅技3）。三处各写一遍必然漏一处，所以只记时刻，
+    #: 由模拟器在每次部署时统一判「够不够冷却」。
+    left_at: float = -1.0
     #: 「末击起为真实」类技能（阿米娅技2 影霄·绝影）的**斩击阶段还没打完**。
     #: 为 True 时这一次出手的前 N-1 击仍用干员本来的伤害类型，只有末击转真实；
     #: 打完置 False，此后技能期内的普攻才整体走 `skill_attack_type`。
@@ -237,8 +243,27 @@ class OperatorUnit(Combatant):
     #: 因为 `damage_taken` 记的是真实掉掉的血。
     barrier_absorbed: float = 0.0
 
+    #: 天赋「圣山的祝福」（圣聆初雪）三件套。数值由模拟器在**部署时**从天赋
+    #: 黑板填进来；没填就是 0，等于没有这条天赋，**不会误触发**。
+    #:
+    #: * `blessing_save`：触发后要冻结的**攻击范围内全体敌人**秒数（黑板 `c2e_freeze`）
+    #: * `blessing_self_freeze`：触发时**自身**冻结秒数（黑板 `freeze`）
+    #: * `blessing_cold`：**每次受到伤害**时给攻击者施加的寒冷秒数（黑板 `cold`）
+    blessing_save: float = 0.0
+    blessing_self_freeze: float = 0.0
+    blessing_cold: float = 0.0
+    #: 「仅一次」的记号。描述原文就是"仅一次"，所以**只置位、不复位**。
+    blessing_used: bool = False
+    #: 待结算的"攻击范围内全体冻结"秒数：`take()` 置上，模拟器结算后清零。
+    #: 放在字段里是因为 `take()` 只够得着自己，碰不到场上别的单位。
+    blessing_freeze: float = 0.0
+    #: 剩余【冻结】秒数。干员侧的冻结 = **缴械**（不能攻击）。
+    #: 与敌方那种"站在满层积雪上"的冻结分开——那是每帧按位置重算的，走开了
+    #: 就没了；这是有剩余时长的。
+    freeze_timer: float = 0.0
+
     def take(self, amount: float) -> float:
-        """挨打。**屏障先扛**，扛完剩下的才动血条。
+        """挨打。**屏障先扛**，扛完剩下的才动血条；致死时天赋再兜一次底。
 
         覆写在这里而不是 `Combatant` 上：屏障是干员与召唤物的机制，
         敌人没有（`EnemyUnit` 一行都不用改，三关基线自然不受影响）。
@@ -249,7 +274,22 @@ class OperatorUnit(Combatant):
             self.barrier -= absorbed
             self.barrier_absorbed += absorbed
             amount -= absorbed
-        return super().take(amount)
+        dealt = super().take(amount)
+        # 「圣山的祝福」：**仅一次**，受到致命伤害时立刻回复所有生命值、
+        # 自身冻结、攻击范围内全体敌人冻结。
+        #
+        # 判据写在 `take()` 里而不是各调用方——它是干员掉血的**唯一入口**
+        # （屏障也覆写在同一处）。分散到调用方必然漏一处，而漏掉的那一处
+        # 会让这个"免死一次"在某个伤害来源下悄悄失效。
+        #
+        # 判在**扣完血之后**而不是之前：原文写的是"受到致命伤害时"，那是
+        # 伤判的结果，不是预判。预判会被"这一下其实打不死我"的情况误触发。
+        if self.hp <= 0.0 and not self.blessing_used and self.blessing_save > 0.0:
+            self.blessing_used = True
+            self.hp = self.max_hp
+            self.freeze_timer = max(self.freeze_timer, self.blessing_self_freeze)
+            self.blessing_freeze = self.blessing_save
+        return dealt
 
     def grant_barrier(self, pct: float) -> None:
         """按当前**生命上限**的比例授予屏障。`pct` 是比例（1.0 = 100%）。
@@ -471,6 +511,25 @@ class EnemyUnit(Combatant):
     #: 每帧由积雪重算，不是持续状态。
     frozen: bool = False
 
+    #: 剩余【冻结】秒数——**限时**冻结（天赋「圣山的祝福」的范围冻结）。
+    #:
+    #: 为什么必须与上面那个 `frozen` 分开：`frozen` 是每帧从"所站地块是否满层
+    #: 积雪"**重算**出来的（`_snow_tick` 开头先置 False），人一离开雪格就解冻。
+    #: 天赋给的是**一段剩余时长**，人走开了还在冻。两者共用一个字段的话，
+    #: 那个每帧的重算会把这个计时器抹掉（"冻了 8 秒"变成"走到哪冻到哪"）。
+    #: 最终 `frozen = (freeze_timer > 0) or 位置派生`，两者是**或**的关系。
+    freeze_timer: float = 0.0
+
+    #: 剩余【寒冷】秒数。
+    #:
+    #: ⚠ **只记时长，不记效果**——见 `docs/uncertainties.md` 第九节：
+    #: 寒冷的数值效果是"攻击速度降低"，但**降低多少我拿不到**。PRTS 的
+    #: 「异常效果」页只写"攻击速度降低；在特定条件下转变为冻结"，不给数；
+    #: 会说这是 Buff 实现；客户端的 `excel/buff_table.json` 在两个公开镜像上
+    #: 都是 404（未公开）。所以这里如实只记状态、不当 0 用，也不编一个数。
+    #: 待博士找到数据源后，只需在这里补一条攻速折减。
+    cold_timer: float = 0.0
+
     #: 剩余【停顿】秒数（技能黑板里的 `sluggish`）。停顿 = **不能移动**，
     #: 但仍然可以攻击——这与眩晕/冻结不同，别混。
     #: 标本：凯尔希·思衡托「保护性拒止」`sluggish 5.0`。
@@ -482,6 +541,17 @@ class EnemyUnit(Combatant):
     #: 剩余【缴械】秒数。缴械 = **不能攻击但能移动**。
     #: 标本：`disarmed_duration 7`。
     disarm_timer: float = 0.0
+
+    #: 剩余【晕眩】秒数。**晕眩 = 不能移动 + 缴械**，比 `disarm_timer` 多管
+    #: 一半——只拿缴械顶替会变成"站着不动还能打"，只拿它管移动会变成
+    #: "走不动但照样打"。两头都要接（移动闸门与攻击闸门各一处）。
+    #:
+    #: 标本：提丰技2「冰原秩序」的 `attack@prob 0.4` / `attack@stun 1.0`
+    #: ——40% 概率晕眩 1 秒。它走**期望占比**而不是掷骰：每次命中给这个计时
+    #: **加上** `prob × stun`（0.4 秒），计时器照常递减。用 `max` 会在攻击
+    #: 间隔小于单次时长时把占比**低估**；用加法时短间隔会让计时持续为正、
+    #: 敌人一直晕——那正是该有的封顶。
+    stun_timer: float = 0.0
 
     # ---------------------------------------------------------- 伤害相性 P3R
     #: 伤害相性：`{"physical": 0, "magical": 1, "element": 2}`。
@@ -630,6 +700,47 @@ class EnemyUnit(Combatant):
     #: 运行时：常驻无敌（`CheckAwake` 监测状态的天桩-甲、以及「不死」）。
     #: 它挡伤害但**不挡**「重设生命」这类直接写血的行为。
     always_invincible: bool = False
+
+    # ---- 【怀黍离】天桩链：装置 → 甲 → 乙 → 天标 ----
+    #: 「CheckAwake.」监测 / 激活状态机（只有天桩-甲两型有）
+    awake_hp_ratio: float = 0.0
+    awake_summon_ratio: float = 0.0
+    awake_value: float = 0.0
+    awake_value_eff: float = 0.0
+    awake_enemy_key: str = ""
+    awake_summon_cnt: int = 0
+    #: 运行时：是否仍在**监测状态**（只有它会重设生命百分比、且无敌不死）
+    monitor: bool = False
+    #: 运行时：激活后的自伤节拍累计（秒）
+    awake_timer: float = 0.0
+    #: 运行时：激活后**累计损失的生命比例**（每跨过一个 `awake_summon_ratio`
+    #: 就召唤一批，所以它必须单调增，不能从血量反推——血量会因为召唤以外的
+    #: 原因变化时那种反推就错了）
+    awake_lost: float = 0.0
+    #: 运行时：已召唤的批次数
+    awake_batches: int = 0
+    #: 运行时：已排定的召唤到期绝对时刻（每批一个，1~1.5s 随机延迟在模拟器里
+    #: 取中值 1.25s —— 见 `BattleSimulator.PILE_SUMMON_DELAY`）
+    awake_pending: list = field(default_factory=list)
+    #: 「Passive.」附着效果每秒造成的预计算伤害（天标 200 / 天标二 300）
+    attach_damage: float = 0.0
+    #: 运行时：这本天标附着到的干员。**登场那一刻快照**，之后不增不减——
+    #: 原文「附着对象为**自身登场时**附着范围内的我方单位」，是快照不是持续判定。
+    attached: list = field(default_factory=list)
+    #: 运行时：附着伤害的每秒节拍
+    attach_timer: float = 0.0
+    #: 运行时：本单位的"宿主装置"——装置随它退场而退场（天桩：于所在地块的
+    #: 天桩-甲退场时死亡）
+    owner_device: object | None = None
+    #: 运行时：强制自毁的绝对时刻（天桩-乙攻击结束后击杀自身；<0 = 不自毁）
+    self_destruct_at: float = -1.0
+    #: 运行时：是否已经出手过（天桩-乙只扑一次，打中就自毁）
+    attacked_once: bool = False
+    #: 嘲讽等级（`tauntLevel`）。负数 = 非首要目标，索敌时排在所有 0 之后。
+    taunt_level: float = 0.0
+    #: 不可阻挡（天桩-甲的天赋「不可阻挡」）。**与 `down`（倒地那种临时
+    #: 不可阻挡）无关**，它是常驻的：普通干员永远挡不住它。
+    unblockable: bool = False
     #: 每一次攻击动作打几段。【怀黍离】「祟」明识形态的普攻是 2 连击。
     #: ⚠ 逐段结算，不是把攻击力乘 2——两段的防御/法抗各减一次，
     #: 合并成一次会少减一次，对高防目标差得很远。
@@ -640,10 +751,83 @@ class EnemyUnit(Combatant):
     #: 运行时：被击倒后的那批一次性效果（死亡污染 / 给装置）是否已结算
     death_done: bool = False
 
+    # ---- 技能攻击（怀黍离「玷 / 勿玷」的技能「污」，见 gamedata/enemy.py
+    #      `skill_attack_fields`）。这一组非零 = 它的伤害**来自技能而不是普攻**：
+    #      全图挑 1 名地面干员，对目标及其十字四邻造成 `atk × skill_atk_scale_phys`
+    #      的物理伤害；自身站在病害值 > 0 的田地上时，额外附加
+    #      `atk × skill_atk_scale_magic` 的法术伤害，并令目标地块病害值 +N。
+    #: 命中的技能 prefabKey（空 = 不走这一路）
+    skill_atk_key: str = ""
+    skill_atk_scale_phys: float = 0.0
+    #: 附加法术倍率 —— `enemy_skill_blackb_mul` 这条 rune 的落点
+    skill_atk_scale_magic: float = 0.0
+    #: 令目标地块病害值 +N（记入【缓存】）
+    skill_atk_pollut: float = 0.0
+    skill_atk_targets: int = 0
+    #: 溅射十字半径（1 = 目标格 + 上下左右四邻）
+    skill_atk_cross: int = 0
+    skill_atk_ground_only: bool = False
+    #: 天赋「不进行远程普通攻击」：普攻那一路整个关掉
+    skill_atk_no_normal: bool = False
+    #: 出手间隔（0 = 用 `attack_interval`）与首次出手时刻
+    skill_atk_interval: float = 0.0
+    skill_atk_init: float = 0.0
+    #: 运行时：手/技能攻击的计时器
+    skill_atk_timer: float = 0.0
+    #: 运行时：是不是第一次出手（首手等 `skill_atk_init`，之后每次等间隔）
+    skill_atk_first: bool = True
+
+    #: 【被推拉之后离开路线的位置】。`None` = 正在路线上（正常状态）。
+    #:
+    #: 敌人的位置本来是从路线进度推出来的（`position = point_at(route, progress)`），
+    #: 那套表示里**没有"脱离路线"这个概念**——这正是位移一直没接线的真正原因。
+    #: 补法不是改掉 `progress`，而是加一个**并列**的坐标：被推动时把它设上，
+    #: 之后每帧朝"当前进度对应的那一点"走回去，走到了就清掉、恢复按 `progress`
+    #: 推进。
+    #:
+    #: **`progress` 在被推期间原地不动**，所以"被推了一下"既不会缩短总路程
+    #: （不会被推着直接漏怪），也不会弄乱漏怪判定（`leaked` 只看 `progress`）。
+    displaced: tuple[float, float] | None = None
+
     def __post_init__(self) -> None:
         super().__post_init__()
         if self.route:
             self.position = self.route[0]
+
+    def apply_push(self, dx: float, dy: float) -> None:
+        """把敌人从**当前所在处**推开 `(dx, dy)` 格（推拉机制的唯一入口）。
+
+        推动是瞬时的：坐标立刻变，`progress` 不动，之后由 `advance` 每帧把它
+        走回路线。
+
+        **必须同时解除阻挡。** `advance` 开头第一件事就是"被阻挡就不动"，而
+        `_update_blocking` 只在**阻挡者阵亡**时清 `blocked_by`——它是 latch 的。
+        不在这里解除的话，被推开的敌人会永远顶着 `blocked_by` 停在路线外，
+        **推动被静默吃掉**，而且没有任何报错。这条是接线时最难发现的一处。
+        """
+        base = self.displaced if self.displaced is not None else self.position
+        self.displaced = (base[0] + dx, base[1] + dy)
+        self.position = self.displaced
+        blocker = self.blocked_by
+        if blocker is not None:
+            self.blocked_by = None
+            if self in blocker.blocking:
+                blocker.blocking.remove(self)
+
+    def _advance_back_to_route(self, dt: float, speed: float) -> None:
+        """被推拉之后走回路线。到达即归位，之后恢复按 `progress` 推进。"""
+        assert self.displaced is not None
+        target = point_at(self.route, self.progress)
+        d = math.dist(self.displaced, target)
+        step = speed * dt
+        if d <= step or d <= 1e-9:
+            self.displaced = None
+            self.position = target
+            return
+        k = step / d
+        self.displaced = (self.displaced[0] + (target[0] - self.displaced[0]) * k,
+                          self.displaced[1] + (target[1] - self.displaced[1]) * k)
+        self.position = self.displaced
 
     @property
     def pending_reborn(self) -> bool:
@@ -675,6 +859,11 @@ class EnemyUnit(Combatant):
             return
         if self.frozen:
             return
+        if self.stun_timer > 0:
+            # 【晕眩】= **不能移动 + 缴械**。移动这一半在这里，缴械那一半在
+            # `_enemies_attack` 与敌方技能攻击的闸门上——两头都要接。
+            # 与 `down`（倒地）不同：倒地还额外**不可阻挡**，晕眩不解除阻挡。
+            return
         if self.down:
             # 【倒地】= 眩晕，不能移动
             return
@@ -696,6 +885,10 @@ class EnemyUnit(Combatant):
         speed = (self.move_speed * speed_scale * self.speed_multiplier
                  * self.haste_multiplier)
         if speed <= 0:
+            return
+        if self.displaced is not None:
+            # 被推/拉之后先走回路线。这一段**不改 `progress`**，见 `displaced`。
+            self._advance_back_to_route(dt, speed)
             return
         if not self.legs:
             self.progress += speed * dt

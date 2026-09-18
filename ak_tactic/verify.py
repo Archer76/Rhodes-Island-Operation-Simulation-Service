@@ -27,18 +27,25 @@ from .plan import Plan, PlanError, Roster
 __all__ = ["Verdict", "verify", "stars_of", "Verifier"]
 
 
-def stars_of(won: bool, leaks: int) -> int:
-    """三星判定。
+def stars_of(won: bool, leaks: int, challenge: bool = False) -> int:
+    """星级判定。**规则由博士 2026-09-18 实机口述确认，不再是一条假设。**
 
-    **这是一条假设，不是从数据里读出来的**：游戏内的星级只看"有没有敌人
-    到达目标点"——不漏怪 3 星、漏 1 只 2 星、漏 2 只及以上 1 星；
-    生命归零则整局失败（0 星）。本项目没有实机验证过这条规则，
-    所以 `Verdict` 同时把 `won` / `life` / `max_life` / `leaks` 原样带出来，
-    真要按别的口径判，用那几个字段即可，不必改这里。
+    * 打赢且**一只没漏** → 三星；突袭（`challenge`）再 +1 → 四星
+    * 打赢但**漏了怪** → **二星**。漏几只都一样——只要目标生命没扣完就是二星
+    * 目标生命扣完 → 整局失败，**零星**
+
+    **没有"一星"这一档。** 旧实现写的是「漏 2 只及以上 1 星」并自注为"一条
+    假设"，那是错的：游戏里星级只看"有没有敌人到达目标点"，漏一只与漏五只
+    同档。这条错误一度让 1-7 重排后的结论被误判成一星。
+
+    `Verdict` 仍把 `won` / `life` / `max_life` / `leaks` 原样带出来，真要按
+    别的口径判，用那几个字段即可。
     """
     if not won:
         return 0
-    return max(1, 3 - max(0, int(leaks)))
+    if int(leaks) > 0:
+        return 2
+    return 4 if challenge else 3
 
 
 @dataclass
@@ -408,7 +415,10 @@ class Verifier:
                 device["卡在"] = raw["last_blocker"]
 
         v = Verdict(
-            stars=stars_of(res.won, res.leaks), won=res.won, life=res.life,
+            stars=stars_of(res.won, res.leaks,
+                           challenge=bool(getattr(stage.options,
+                                                  "is_hard_training", False))),
+            won=res.won, life=res.life,
             max_life=max_life, kills=res.kills, leaks=res.leaks,
             elapsed=res.elapsed, damage=res.damage_dealt,
             title=title or plan.title, operators=ops,
@@ -422,9 +432,33 @@ class Verifier:
         if v.won and v.leaks == 0:
             out.append("三星：没有敌人到达目标点。")
         if not v.won:
-            out.append(f"失败：生命归零（初始 {max_life} 点，"
-                       f"共漏 {v.leaks} 只、扣了 "
-                       f"{sum(c for _t, _n, c in v.leak_events)} 点）。")
+            # **跑满上限 ≠ 生命归零**。原先这里只有一句话，于是"生命还剩 3 点、
+            # 一只都没漏"的局也会被说成「生命归零（初始 3 点，共漏 0 只、扣了
+            # 0 点）」——自相矛盾。两种收场要分开说，而且要说清场上剩的是什么。
+            if getattr(res, "timed_out", False):
+                left = getattr(res, "leftover_units", []) or []
+                names: dict[str, int] = {}
+                for n, _id, is_prop in left:
+                    key = f"{n}（装置召唤）" if is_prop else n
+                    names[key] = names.get(key, 0) + 1
+                who = ("、".join(f"{n}×{c}" for n, c in names.items())
+                       if names else "（没有留下任何东西）")
+                placed = int(getattr(res, "spawns_placed", 0) or 0)
+                total = int(getattr(res, "spawns_total", 0) or 0)
+                if placed < total:
+                    out.append(
+                        f"跑满时间上限（{v.elapsed:.0f}s）：这一波**还没放完**"
+                        f"（出怪表 {placed}/{total} 条），场上还剩 {who}。")
+                else:
+                    out.append(
+                        f"跑满时间上限（{v.elapsed:.0f}s）：出怪表已经放完，"
+                        f"但场上还留着 {who}——「既打不死又不会离场」的单位"
+                        f"不挡结算（见 `BattleSimulator._cannot_clear`），"
+                        f"所以是别的东西让它收不了场。")
+            else:
+                out.append(f"失败：生命归零（初始 {max_life} 点，"
+                           f"共漏 {v.leaks} 只、扣了 "
+                           f"{sum(c for _t, _n, c in v.leak_events)} 点）。")
         elif v.leaks:
             out.append(f"通关但只有 {v.stars} 星：漏了 {v.leaks} 只。")
         if v.leak_events:

@@ -49,13 +49,16 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
 from ..eta import leading_wait, route_plans
+from ..gamedata.enemy import PROSE_SUMMON_EDGES
 from .damage import DamageType, resolve_damage
-from .talents import (RegenAura, SnowField, TeamAura, find_regen, find_snow,
+from .talents import (RegenAura, SnowField, TeamAura, find_blessing,
+                      find_regen, find_snow,
                       find_sp_on_action, find_summon_allowance, find_team_aura,
                       squad_cost_bonus)
 from .p3r import BreakState, TotalAttackDevice, affinity_multiplier, damage_slot
 from .summons import SummonDeployment, build_summon_unit
 from ..operator.summons import SummonBook
+from . import displace
 from .unit import POSITION_TOL, EnemyUnit, OperatorUnit, point_at
 
 __all__ = ["BattleSimulator", "BattleResult", "Deployment", "SkillUse",
@@ -68,6 +71,48 @@ _INFINITE = float("inf")
 
 #: 「全场总攻击」装置的 characterKey。关卡 `predefines.tokenInsts` 里出现它就启用。
 TOTAL_ATTACK_KEY = "trap_335_totalattack"
+
+# ------------------------------------------------------------ 天桩链（怀黍离）
+#
+# 装置「天桩」→ 天桩-甲 → 天桩-乙 → 身上的天标，四跳里**只有一跳**是结构化字段：
+#
+# * 装置 → 甲：正文里的一句话（装置页技能「生成」：「登场时，在自身所在位置
+#   以预设路径召唤一名天桩-甲」+ 机制「于所在地块的天桩-甲（或失控天桩-甲）
+#   退场时死亡」）。装置自己的技能黑板**只有一个键**：
+#   `sktok_dhdcr` 的 `branch_id = branch_dhdcr_1`，而 `branch_dhdcr_1`
+#   在客户端数据里**只出现在 skill_table 里**——没有 branch → prefab 的映射表。
+# * 甲 → 乙：**结构化**。`CheckAwake.enemy_dhdcr_trigger_summon.enemy_key`
+#   点名 `enemy_1399_dhtb`（失控甲点名 `enemy_1399_dhtb_2`）。
+# * 乙 → 天标：正文里的一句话（乙的天赋「攻击命中时，在目标所在地块中心
+#   召唤1个[[身上的天标]]」），乙的 `talentBlackboard` 是**空的**。
+#
+# 所以下面两张表是"正文里那两跳"的落地。**值的唯一出处是
+# `gamedata/enemy.py:PROSE_SUMMON_EDGES`**（盘点也读同一张表，两边不会走散），
+# 这里只是按用途切一刀：装置那一条给 `PILE_CHILD`、敌人那两条给 `PILE_MARK`。
+#
+# ⚠ 2026-09-16 修正：**「装置 → 甲」这一跳根本不是正文跳**，是结构化字段——
+# 装置 predefine 的 `overrideSkillBlackboard[branch_id]` → 关卡 `branches` →
+# `extraRoutes`（见 `BattleSimulator._pile_spec`）。`PILE_CHILD` 因此降级为
+# **退路**：只有在关卡里查不到那条支线时才用（本活动一个关卡都没走到）。
+# 同理"没有任何一关用失控型"这句话是**错的**：`act31side_ex03` / `ex07` /
+# `ex08` 三关的支线里写的正是 `enemy_1398_dhdcr_2`（失控天桩-甲），
+# 03/04/07/tr01/tr02 五关写的是关卡本地的 `enemy_1398_dhdcr_b`。
+#: 装置 key → 它召唤的甲的 key（**退路**，正常走 `_pile_spec` 的结构化查询）
+PILE_CHILD = {
+    k: v[0] for k, v in PROSE_SUMMON_EDGES.items() if k.startswith("trap_")
+}
+#: 乙的 key → 它命中时召唤的天标的 key（这一跳**仍然只能查表**：乙的黑板是空的）
+PILE_MARK = {
+    k: v[0] for k, v in PROSE_SUMMON_EDGES.items() if k.startswith("enemy_")
+}
+#: 甲激活后每损失一批生命，召唤的**延迟秒数**。原文是「1~1.5s 的随机延迟」，
+#: 模拟器必须可复现（同一份作业每次跑出同一结果），故取中值 1.25s，不掷骰。
+PILE_SUMMON_DELAY = 1.25
+#: 监测 / 激活状态判定的**病害值满量程**：原文「每 1% 生命值对应 1 点病害值」，
+#: 而病害值的量程是 0–100（见 `environment.MAX_POLLUT`），故除以 100。
+PILE_POLLUT_FULL = 100.0
+#: 天桩-乙登场时的自缚秒数（原文「登场时持有1秒自缚」）
+PILE_SELF_BIND = 1.0
 
 #: `POSITION_TOL` 的平方，供热路径用平方比较代替 `math.dist` 的开方。
 #: 两处必须同源，改 `unit.POSITION_TOL` 即自动生效。
@@ -147,16 +192,61 @@ class BattleResult:
     #: 描述与黑板**真分歧**的记录（`agree`/`only_desc` 不记）
     effect_conflicts: list[str] = field(default_factory=list)
     #: `DeathPassive.` 给的可部署装置：`(时刻, 装置 key, 个数)`。
-    #: **只记账不生效**——模拟器没有"部署装置"这一层（部署计划只收干员，
-    #: 装置全是关卡预先摆好的）。留这份账是为了让这条机制**可被检查**
-    #: （打死了几个飞贼、该得几个阻流阀，自检能对得上），而不是装作没接。
+    #: 这份账是**额度**的来源：关卡开局的 `tokenCards[].initialCnt` 再加上这里
+    #: 掉的，就是 `BattleSimulator.device_token_balance`（见 `_do_deploy_device`）。
     device_tokens: list[tuple[float, str, int]] = field(default_factory=list)
+    #: 真放下去的**装置**：`(时刻, 装置 key, 格子)`。与干员/召唤物分开记。
+    devices_deployed: list[tuple[float, str, tuple[int, int]]] = field(
+        default_factory=list)
+    #: **被拒收**的装置部署：`(时刻, 装置 key, 原因)`。理由三类：
+    #: 额度不够（关卡给的 + 掉落的都花完了）/ 费用不够 / 那一格已有装置。
+    device_deploy_rejected: list[tuple[float, str, str]] = field(
+        default_factory=list)
     #: 实际放进场的召唤物个数。
     summons_deployed: int = 0
-    #: **被拒收**的召唤物部署：`(时刻, token_key, 原因)`。
-    #: 与 `device_tokens` 同理——拒收要留痕，不能悄悄少放一个还算胜利。
+    #: **被拒收**的召唤物部署：`(时刻, token_key, 原因)`。与 `device_tokens` 同理
+    #: ——拒收要留痕，不能悄悄少放一个还算胜利。
     #: 目前三种原因：召唤者不在场 / 召唤者没有召唤额度 / 已达同时部署上限。
     summon_rejected: list[tuple[float, str, str]] = field(default_factory=list)
+    #: **随召唤者退场而消失**的召唤物：`(时刻, 召唤物名, 原因)`。
+    #:
+    #: 实机规则：召唤者一走，它的召唤物一并消失。这不是"少放一个"而是
+    #: "场上少一个单位"，所以必须留痕——不留痕的话，主人阵亡后召唤物还站在
+    #: 原地继续阻挡、继续出手，伤害账凭空多出一截且毫无征兆。
+    summon_cascaded: list[tuple[float, str, str]] = field(default_factory=list)
+    #: **圣山的祝福**的每次触发：`(时刻, 干员名, 冻结秒数, 冻住几名敌人)`。
+    #:
+    #: 「免死一次」是整场战斗**只可能发生一次**的事，它一旦发生就说明这名干员
+    #: 本来会阵亡——结论会因此完全不同。这种事必须留痕，不能只在日志里滚过去。
+    blessing_saves: list[tuple[float, str, float, int]] = field(
+        default_factory=list)
+    #: **因规则不成立而被拒收**的部署：`(时刻, 谁, 原因)`。目前两类原因：
+    #: 「同一干员已在场」（不能同时放两个同名干员）与「再部署冷却未到」。
+    deploy_rejected: list[tuple[float, str, str]] = field(default_factory=list)
+    #: **因付不起费用而被拒收**的部署：`(时刻, 谁, 需要多少费, 当时有多少费)`。
+    #: 只在 `cost_mode="strict"` 下会非空——这条账的意义就是让"宽松口径"与
+    #: "严格口径"的差**看得见**，而不是靠人去猜哪几手做了手脚。
+    cost_denied: list[tuple[float, str, int, float]] = field(default_factory=list)
+    #: **被摧毁的装置**：`(时刻, 装置 key, 格子, 谁拆的)`。装置有血、会被拆
+    #: （田鼷进阻流阀范围立刻造成目标最大生命值 50%/70% 的真伤，两下拆掉一个），
+    #: 拆掉之后地形**还回**田地——这一整条都要能被检查，不能只看最后还剩几片田。
+    devices_lost: list[tuple[float, str, tuple[int, int], str]] = field(
+        default_factory=list)
+    #: 这一局是**跑满时间上限**结束的（既没打赢也没打输）。
+    #:
+    #: 为什么要单列：`won=False` 原本同时表示"生命归零"和"跑满上限"两件事，
+    #: 于是归因会写出「失败：生命归零（初始 3 点，共漏 0 只、扣了 0 点）」
+    #: 这种自相矛盾的话——生命明明还剩 3 点。两者要分开说。
+    timed_out: bool = False
+    #: 跑满上限时**还站在场上、且不算漏怪**的单位：
+    #: `[(名字, enemy_id, 是不是"清不掉"的)]`。第三个字段要留着：清不掉的单位
+    #: （天桩-甲监测形态那类）**本来就不挡结算**，它出现在这张单子里是正常的；
+    #: 真正让这一局收不了场的是**别的**那些。
+    leftover_units: list[tuple[str, str, bool]] = field(default_factory=list)
+    #: 出怪表的进度：`(已放, 总数)`。跑满上限时要靠它区分"这一波还没放完"与
+    #: "放完了但场上还有东西"——两者要改的地方完全不同。
+    spawns_placed: int = 0
+    spawns_total: int = 0
 
     def summary(self) -> str:
         head = "胜利" if self.won else "失败"
@@ -196,6 +286,32 @@ class BattleSimulator:
         ranged_enemies: bool = True,
         enemy_windup: float = 0.5,
         heal_mode: str = "range",
+        #: 费用口径，见 `self.cost_mode` 的说明。`legacy` / `strict`。
+        #:
+        #: **2026-09-18 定案：默认已是 `strict`。** 过程留档——切成 `strict` 后
+        #: 三条基线先**全部塌掉**（1-7 从 137.0s/41 杀/0 漏 掉到 86.8s/8 杀/11 漏、
+        #: 只部署下去 1 个干员；check_battle 231 项 24 失败、check_verify 58 项
+        #: 10 失败），因为 1-7 那个三阵容的旧时刻**从来就付不起**（详见
+        #: `tools/check_battle.py` 的 `[1]` 节）。把三阵容按真实费用重排
+        #: （9 / 22 / 41s）后仍能胜利，结论降为 39 杀 / 2 漏 / 58650；
+        #: 博士提供的真作业（怒潮凛冬单干员）在两种口径下**签名完全相同**。
+        #: 其余两条基线（SR-6 196.6 / 201.4 / 196.6s、SR-EX-8 219.8s/38 杀/1 漏）
+        #: 在 `strict` 下**一字未变**——它们本来就在真实费用里成立。
+        cost_mode: str = "strict",
+        #: **再部署规则**口径。与 `cost_mode` 同类，两条规则一起翻。
+        #:
+        #:   `legacy` —— 从前的行为：**一条检查都没有**。同一个 `char_id` 能被
+        #:                两条 `Deployment` 同时摆上场（占两格、算两个单位），
+        #:                撤退或阵亡后也能立刻再放——`OperatorUnit.redeploy_time`
+        #:                那个 70 秒字段此前**没有任何人读**（死字段）。
+        #:   `strict` —— 真实的游戏规则，两条：
+        #:                ① 同一干员**不能同时在场上出现两个**；
+        #:                ② 离场（撤退 / 阵亡 / 技能强制退场）后要等
+        #:                   `redeploy_time` 秒才能重新部署。
+        #:
+        #: 与 `cost_mode` 分开留两个开关，是为了让"哪一条规则把结论改了"
+        #: 能被单独测出来；**默认值同为 `strict`**（2026-09-18 定案）。
+        redeploy_mode: str = "strict",
         boss_mode_switch: str = "none",
         affinity_blocks_damage: bool = True,
         #: 剑气速度（格 / 游戏秒）。原文只写了「向前 / 遇障碍右转 / 技能结束消失」，
@@ -277,7 +393,20 @@ class BattleSimulator:
         #:   `target` —— 只治疗被打中那个敌人**紧邻 8 格**内的友方（严格读法）
         #: 结论必须两种读法都成立才敢下，否则就是在用宽松假设换胜率。
         self.heal_mode = heal_mode
-
+        #: 费用口径。**这是本轮新加的一条，两位数的结论都压在它上面。**
+        #:
+        #:   `legacy` —— 从前的行为：显式部署时刻是"**请求**"，模拟器照办，
+        #:                包括付不起费的时候（费用夹到 0，等于白送）。当时的
+        #:                理由是「验证器会如实写出这一手在游戏里做不出来」，
+        #:                三条回归基线就靠这个宽松口径。
+        #:   `strict` —— **真实的游戏规则**：付不起就这一手做不出来，拒收并
+        #:                记进 `BattleResult.cost_denied`。
+        #:
+        #: 留成开关而不是直接替换，是为了让两种口径的差**可测量**：基线该不该
+        #: 动、动了多少、哪一手动的，都能用同一份作业跑两遍对比出来，
+        #: 而不是改完只看一个新数字。
+        self.cost_mode = cost_mode
+        self.redeploy_mode = redeploy_mode
         self.deployments: list[Deployment] = []
         self.skill_uses: list[SkillUse] = []
         self.retreats: list[tuple[float, tuple[int, int]]] = []
@@ -311,22 +440,46 @@ class BattleSimulator:
         # 惰性导入——`environment` 依赖 `gamedata`，放在模块顶层会让
         # `battle` 的导入链牵上 gamedata（自检与 TUI 都只想要前者）。
         self.farmland = None
-        #: 阻流阀等装置是否已建成。它们在开场后 `BUILD_SECONDS` 秒才生效，
-        #: 一旦生效就把自身地块从田地里摘掉，**田地几何会在那一刻整片改变**。
+        #: 阻流阀等装置**是否已把自身地块从田地里摘掉**。
+        #: 预置装置开场即在位，所以这个标志在构造时就为真（见下面的 `_devices`
+        #: 一段）。真正会等 3 秒的是玩家手动部署的阻流阀——那是另一条路。
         self._blockers_built = False
         # 装置表**无条件**解析：泵站 / 阻流阀归环境系统用，但「祟」明识形态的
         # 「清澈泵站生效范围内」判据、以及田鼷与阻流阀的互动也都要这张表。
         # 原先只在开了环境系统时解析，等于把这几条挂在"这一关有田地"上。
-        from .devices import BLOCKER_KEY, parse_devices
-        self._devices = parse_devices(stage)
+        #
+        # ⚠ 这里是**运行态**（`DeviceUnit`：有血量、有建成、会被拆），不再是
+        # 静态描述表。它和 `Device` 的字段名一致，所以泵水那类只读代码不用改。
+        from .devices import (BLOCKER_KEY, DeviceUnit, initial_device_tokens,
+                              make_devices)
+        self._devices = make_devices(stage)
+        #: 玩家手里的**装置额度**：关卡开局给的（`tokenCards[].initialCnt`）
+        #: 加上 `DeathPassive.` 击杀掉落的。`_do_deploy_device` 从那里面扣。
+        self.device_token_balance = initial_device_tokens(stage)
+        #: 作业里的装置部署计划（按时刻排序后消费）。
+        self.device_deployments: list = []
+        # 模块级也拿一份：`_device_tick` 要判"这是不是改写地块的装置"。
+        self._blocker_key = BLOCKER_KEY
         self._blocker_cells = [d.cell for d in self._devices if d.key == BLOCKER_KEY]
         if environment != "off":
             from .environment import FarmlandSystem, PolluteParams
             _p = PolluteParams.from_stage(stage, environment_difficulty)
             if _p is not None and _p.valid:
                 self.farmland = FarmlandSystem(stage, _p)
+                # 预置阻流阀走装置技能 2（无持续时间）→ **开场即在位**，
+                # 它们的格子从第 0 秒起就不算田地。早先统一按 3 秒建成处理，
+                # 等于让每一张有田地的图前 3 秒多算了若干格田地。
+                for _c in self._blocker_cells:
+                    self.farmland.sever(*_c)
+                self._blockers_built = True
         #: 环境伤害的每秒结算节拍（与病害值的【实际】更新同拍，都是 1 秒）。
         self._env_timer = 0.0
+        #: AuraHit 的"上一帧接触了哪些装置"：`id(敌人) -> {id(装置)}`。
+        #: 原文是"**进入**范围时立刻"，是边沿触发，得记住上一帧的位置关系。
+        self._aura_touch: dict[int, set[int]] = {}
+        #: 天桩链：`id(装置) -> [它召唤出来的甲]`。装置随甲退场而死亡，
+        #: 用这张表就不必每帧在"装置 × 敌人"上做笛卡尔积。
+        self._pile_children: dict[int, list] = {}
 
         # 预先把出怪时刻摊平
         self._spawns: list[tuple[float, object]] = sorted(
@@ -412,6 +565,16 @@ class BattleSimulator:
         """
         self.summon_deployments.append(deployment)
 
+    def plan_device(self, deployment) -> None:
+        """排一次**装置**部署（`DeviceDeployment`）。
+
+        与干员/召唤物都分开：装置不占干员名额、不归属任何干员，但它**要花费用**
+        也**要消耗额度**（关卡给的 `tokenCards[].initialCnt` + `DeathPassive.`
+        击杀掉落）。放不放得下去由那一刻判，判不过记进
+        `BattleResult.device_deploy_rejected`，不静默丢弃。
+        """
+        self.device_deployments.append(deployment)
+
     # -------------------------------------------------------- 辅助
 
     def _range_of(self, op: OperatorUnit, elite: int | None = None) -> set[tuple[int, int]]:
@@ -453,6 +616,45 @@ class BattleSimulator:
         return m.tile(*cell).key == "tile_end"
 
     # ------------------------------------------------------------ 剑气（赤刃明霄陈 技3）
+
+    def _apply_push(self, op: OperatorUnit, t: float) -> None:
+        """推击：「将其中等力度地**朝部署方向**推动」（圣聆初雪技1「铃音吹雪」）。
+
+        只认 `force` 这个键，而且它是**力度等级**（"中等力度" = 中力 = 1），
+        **不是距离**。距离要按「受力等级 = 力度等级 − 重量等级」查表，规则全在
+        `displace.py`，这里不重复实现。
+
+        推动是**开启瞬间的一次性动作**（描述写"立即……并推动"），不是每次命中的
+        附带效果——所以挂在 `_activate` 上，与 `_spawn_qi` 并列。
+
+        **方向取 `op.facing`（部署方向）**，描述写的就是"朝部署方向推动"。
+
+        重量取 `EnemyUnit.weight`（来自 gamedata 的 `massLevel`；敌人库里**没有**
+        这一列）。重量为 0 的重装级敌人会被推得最远（约 2 格），重量 3 以上推不动
+        ——`push_distance` 自己处理这个下限。
+        """
+        sk = op.skill
+        if sk is None:
+            return
+        force = float(sk.blackboard.get("force") or 0.0)
+        if force <= 0.0:
+            return
+        level = displace.skill_force_level(force)
+        fx, fy = op.facing
+        cells = self._range_of(op)
+        pushed = 0
+        for e in self.enemies:
+            if e.hp <= 0 or e.leaked or e.off_map:
+                continue
+            if e.cell() not in cells:
+                continue
+            dist = displace.push_distance(level, e.weight)
+            e.apply_push(fx * dist, fy * dist)
+            pushed += 1
+        if pushed and self.verbose:
+            self.result.log.append(
+                f"{t:7.1f}s  {op.name} 推击 {pushed} 名敌人"
+                f"（力度等级 {level}，朝{op.direction}）")
 
     def _spawn_qi(self, op: OperatorUnit, t: float) -> None:
         """技能开启时在前方放出一道剑气（赤刃明霄陈 技3）。
@@ -554,6 +756,37 @@ class BattleSimulator:
                 best = (val, dt, d.final)
         return best[1], best[2]
 
+    def _blessing_tick(self, t: float) -> None:
+        """兑现天赋「圣山的祝福」欠下的那次"攻击范围内全体敌人冻结"。
+
+        `OperatorUnit.take()` 只够得着自己，碰不到场上别的单位，所以它免死时
+        只把"要冻 N 秒"记在 `blessing_freeze` 上，由这里在**下一帧**兑现。
+        差一帧（1/30 秒）在这里无所谓；而把空间查询塞进 `take()`，会让那个
+        本来是纯数值的函数反向依赖整张地图，得不偿失。
+        """
+        for op in self.operators:
+            if op.blessing_freeze <= 0.0 or not op.alive:
+                continue
+            secs = op.blessing_freeze
+            op.blessing_freeze = 0.0
+            cells = set(self._range_of(op))
+            hit = 0
+            for e in self.enemies:
+                if not e.alive or e.leaked or e.off_map:
+                    continue
+                cell = (int(round(e.position[0])), int(round(e.position[1])))
+                if cell in cells:
+                    # **取更大值**而不是覆盖：她已经冻着的敌人不该因为这次
+                    # 触发反而被缩短。与 `sluggish_timer` 等的写法保持一致。
+                    e.freeze_timer = max(e.freeze_timer, secs)
+                    e.frozen = True
+                    hit += 1
+            self.result.blessing_saves.append((t, op.name, secs, hit))
+            if self.verbose:
+                self.result.log.append(
+                    f"{t:7.1f}s  {op.name} 圣山的祝福触发：生命值回满、自身冻结，"
+                    f"攻击范围内 {hit} 名敌人冻结 {secs:g}s")
+
     def _snow_tick(self, dt: float, t: float) -> None:
         """积雪：积层 → 判踏入 → 施减速 → 技能期间追加每秒伤害。
 
@@ -597,7 +830,7 @@ class BattleSimulator:
                 continue
             key = id(e)
             cell = (int(round(e.position[0])), int(round(e.position[1])))
-            e.frozen = False
+            e.frozen = e.freeze_timer > 0.0
             if not m.walkable(*cell):
                 e.speed_multiplier = 1.0
                 continue
@@ -694,6 +927,31 @@ class BattleSimulator:
         单独一个函数是因为这三样都只认**次数**、不认伤害量，而且必须
         在扣完血之后判（挨打的那一下本身也会触发蜕皮）。
         """
+        # ---- 概率晕眩（提丰技2「冰原秩序」：`attack@prob 0.4` / `attack@stun 1.0`）
+        #
+        # 走**期望占比**而不是掷骰：每次命中给敌人的晕眩计时**加上**
+        # `prob × 秒数`（0.4 秒），计时器照常递减。攻击间隔大于单次时长时
+        # 占比正好是 `prob × 秒数 / 间隔`；间隔更短时计时持续为正、敌人一直晕
+        # ——那正是该有的封顶。
+        #
+        # **是「加」不是 `max`**：用 `max` 在间隔小于单次时长时会把占比
+        # **低估**成单次时长。
+        #
+        # 键只能按**键名**取、不能按语义猜：`prob` 在同批干员里同名反义
+        # （赤刃技2 的 `prob` 是闪避率，这里是控场概率）。
+        if source is not None and source.alive and source.skill_active:
+            sk = source.skill
+            if sk is not None:
+                # **直接取属性，绝不用 `getattr(..., None) or {}`**：黑板挂在
+                # **`SkillLevel`** 上，不在 `SkillEffects` 上。上一版就是取错了
+                # 对象，`getattr` 给回一个空字典、这里永远不上晕——而"没上晕"
+                # 与"这个技能本来就无晕"在输出上长得一模一样，只有守卫能发现。
+                # 取错时让它直接抛。
+                bb = sk.blackboard
+                p = float(bb.get("attack@prob") or 0.0)
+                secs = float(bb.get("attack@stun") or 0.0)
+                if p > 0.0 and secs > 0.0:
+                    e.stun_timer += p * secs
         # ---- 蜕皮（Passive_Hit.）：「祟」混沌形态
         if e.phit_cnt > 0 and e.phit_stacks < e.phit_max_stack:
             e.phit_hits += 1
@@ -787,20 +1045,6 @@ class BattleSimulator:
         fs = self.farmland
         if fs is None:
             return
-
-        from .devices import BUILD_SECONDS
-        # 阻流阀建成：一次性事件，**改变田地几何本身**（它把自身地块从田地里
-        # 摘掉，连片的田地因此被切断）。放在推进之前，因为这一刻之后要靠拢的
-        # 目标（【最大】）已经换了。
-        # 建成耗时取自装置自己的技能 `duration`（「3秒后建成」）。
-        if not self._blockers_built and t >= BUILD_SECONDS:
-            self._blockers_built = True
-            for cell in self._blocker_cells:
-                fs.sever(*cell)
-            if self.verbose and self._blocker_cells:
-                self.result.log.append(
-                    f"{t:7.1f}s  阻流阀建成 ×{len(self._blocker_cells)}，"
-                    f"田地重划为 {len(fs.fields)} 片")
 
         fs.tick(dt)
 
@@ -982,9 +1226,28 @@ class BattleSimulator:
                 best = list(p)
         return best
 
+    def _enemy_stats(self, enemy_id: str, level: int):
+        """取敌人数值，**支持关卡自带的敌人定义**（``enemyDbRefs`` 里 ``useDb: false``）。
+
+        那些 id（怀黍离的 ``enemy_1398_dhdcr_b`` / ``enemy_1399_dhtb_b``）不在
+        属性库里，整份数据写在关卡文件里，只有 ``prefabKey`` 指向的那个在库里。
+        库那一步取不到时，才走本地覆盖；本地也没有就照原样把异常抛出去——
+        静默返回一个空数值会让召唤链"看起来跑了、其实什么都没算"。
+        """
+        try:
+            return self.enemy_at(enemy_id, level)
+        except Exception:
+            local = self.stage.local_enemies().get(enemy_id)
+            if not local:
+                raise
+            owner = getattr(self.enemy_at, "__self__", None)
+            if owner is None or not hasattr(owner, "with_overwrite"):
+                raise
+            return owner.with_overwrite(enemy_id, local, level)
+
     def _build_enemy(self, enemy_id: str, level: int, pts: list, legs: list,
                      t: float, wait: float) -> EnemyUnit:
-        stats = self.enemy_at(enemy_id, level)
+        stats = self._enemy_stats(enemy_id, level)
         self._note_mode_skill(stats, t)
         # P3R：相性取形态档（BOSS 的真档位在 Mode_A，它的 TotalAttack 是 1/1/1）
         aff = {}
@@ -1076,6 +1339,32 @@ class BattleSimulator:
             pm2_invincible=float(getattr(stats, "pm2_invincible", 0.0) or 0.0),
             pm2_pollut_threshold=float(
                 getattr(stats, "pm2_pollut_threshold", 0.0) or 0.0),
+            # ---- 天桩链（怀黍离）：CheckAwake 状态机 + 附着伤害 + 嘲讽等级
+            awake_hp_ratio=float(getattr(stats, "awake_hp_ratio", 0.0) or 0.0),
+            awake_summon_ratio=float(
+                getattr(stats, "awake_summon_ratio", 0.0) or 0.0),
+            awake_value=float(getattr(stats, "awake_value", 0.0) or 0.0),
+            awake_value_eff=float(getattr(stats, "awake_value_eff", 0.0) or 0.0),
+            awake_enemy_key=str(getattr(stats, "awake_enemy_key", "") or ""),
+            awake_summon_cnt=int(getattr(stats, "awake_summon_cnt", 0) or 0),
+            attach_damage=float(getattr(stats, "passive_attach_damage", 0.0) or 0.0),
+            taunt_level=float(getattr(stats, "taunt_level", 0.0) or 0.0),
+            # ---- 技能攻击（怀黍离「玷 / 勿玷」的技能「污」）
+            skill_atk_key=str(getattr(stats, "skill_atk_key", "") or ""),
+            skill_atk_scale_phys=float(
+                getattr(stats, "skill_atk_scale_phys", 0.0) or 0.0),
+            skill_atk_scale_magic=float(
+                getattr(stats, "skill_atk_scale_magic", 0.0) or 0.0),
+            skill_atk_pollut=float(getattr(stats, "skill_atk_pollut", 0.0) or 0.0),
+            skill_atk_targets=int(getattr(stats, "skill_atk_targets", 0) or 0),
+            skill_atk_cross=int(getattr(stats, "skill_atk_cross", 0) or 0),
+            skill_atk_ground_only=bool(
+                getattr(stats, "skill_atk_ground_only", False)),
+            skill_atk_no_normal=bool(
+                getattr(stats, "skill_atk_no_normal", False)),
+            skill_atk_interval=float(
+                getattr(stats, "skill_atk_interval", 0.0) or 0.0),
+            skill_atk_init=float(getattr(stats, "skill_atk_init", 0.0) or 0.0),
         )
         # 防御力基准：充能加成按它重算，避免二次重生时把上次的加成再乘一遍
         e.reborn_def_base = e.defense
@@ -1149,6 +1438,10 @@ class BattleSimulator:
             # 同样按帧走；晕眩本身与技能状态无关。
             if op.stun_timer > 0:
                 op.stun_timer = max(0.0, op.stun_timer - dt)
+            # 【冻结】同理，也是按帧走的剩余时长。干员侧的冻结 = 缴械，
+            # **不动阻挡**，所以它有自己的字段、不能并进 stun_timer。
+            if op.freeze_timer > 0:
+                op.freeze_timer = max(0.0, op.freeze_timer - dt)
             if op.skill is None:
                 continue
             sk = op.skill
@@ -1176,9 +1469,20 @@ class BattleSimulator:
                 op.skill_request = False
                 continue
 
-            # 未开启：按回复方式攒技力
+            # 未开启：按回复方式攒技力。
+            #
+            # **上限是 `sp_cost × max_charge`，不是 `sp_cost`。** 可充能 N 次的
+            # 技能允许把 N 次的使用额度**攒起来**（技力每满一次 sp_cost 就存下
+            # 一次），所以没开技能的时候同样该攒过 sp_cost。
+            #
+            # 这里原来写死 `sp_cost`，等于"充能"只在技能**开启期间**才攒得动
+            # （上面那一支写的就是 `sp_cost * max_charge`）。而圣聆初雪技1 是
+            # **瞬发**（`duration = -1`），开启期间只有一两帧——于是"可充能 2 次"
+            # 这条对**最需要它的那类技能**从来没生效过。
+            # 全库带 `max_charge_time > 1` 的技能有 143 个，不是个小面。
             if sk.sp_type == "INCREASE_WITH_TIME":
-                op.sp = min(sk.sp_cost, op.sp + sk.increment * dt)
+                op.sp = min(sk.sp_cost * max(1, sk.max_charge),
+                            op.sp + sk.increment * dt)
 
             ready = op.sp >= sk.sp_cost
             want = op.skill_request or sk.auto_trigger or op.auto_skill
@@ -1241,6 +1545,7 @@ class BattleSimulator:
             self.cost = min(self.max_cost, self.cost + gain_cost)
         self.result.skill_activations += 1
         self._spawn_qi(op, t)
+        self._apply_push(op, t)
         if self.verbose:
             d = "无限" if dur is None else f"{dur:g}s"
             ammo = f" 弹药 {op.ammo_left}" if op.ammo_left else ""
@@ -1291,12 +1596,33 @@ class BattleSimulator:
 
     # -------------------------------------------------------- 主循环
 
+    @staticmethod
+    def _cannot_clear(e: EnemyUnit) -> bool:
+        """这个单位**有没有可能被清掉**——要么被打死，要么走到目标点。
+
+        「既打不死、又不会离场」的单位清不掉：只要把它算进完成判据，
+        这一局就永远结束不了（跑满时间上限、0 星）。目前只有怀黍离的天桩-甲
+        满足，两条依据都写在数据里：
+
+        * **打不死**：监测形态持有「无敌、不死」，落成 `always_invincible`
+          （`unit.py` 里那个字段的正文来历就是这个）；激活状态会摘掉它，
+          但那时甲会**每秒自损 1% 最大生命**，自己会死——所以照旧算数。
+        * **不会离场**：它天赋第一句是「自缚」，模拟器给它的是一条**单点路线**
+          （`route_length == 0`；`reached_end` 要求长度 > 0，单点路线永不判漏）。
+
+        两个条件**同时**成立才算"清不掉"。只满足一个的不算：能走的无敌单位
+        会自己走掉（照样能结束这一局），会死的自缚单位会被打死。
+        """
+        return (bool(getattr(e, "always_invincible", False))
+                and float(getattr(e, "route_length", 0.0)) == 0.0)
+
     def run(self, max_time: float = 600.0) -> BattleResult:
         dt = 1.0 / self.fps
         t = 0.0
         res = self.result
         pending = sorted(self.deployments, key=lambda d: d.time)
         pending_summon = sorted(self.summon_deployments, key=lambda d: d.time)
+        pending_device = sorted(self.device_deployments, key=lambda d: d.time)
 
         # 天赋「编入队伍后额外获得初始部署费用」——开局一次性结算。
         # 必须在循环之前：它加的是**初始**费用，不是部署那一刻的返费，
@@ -1311,12 +1637,26 @@ class BattleSimulator:
 
         while t < max_time:
             self._t = t
+            # 0. **费用回复**。必须排在部署**之前**：这一帧落地的干员，能不能
+            #    付得起，取决于「到 t 为止攒了多少费」。放在帧尾的话，部署看到
+            #    的是 t-dt 那一帧的池子——恰好差一个节拍，于是"刚好攒够"的
+            #    落地（1-7 初始 10 费、1 秒回 1 点，拉普兰德 19 费正好第 9 秒
+            #    攒够）会被冤枉地判成付不起，模拟器少放一个人。
+            #    跳点次数不受本处挪动影响，所以总额不变，只是按时到账。
+            self._cost_timer += dt
+            if self._cost_timer >= self.cost_time:
+                self._cost_timer -= self.cost_time
+                self.cost = min(self.max_cost, self.cost + 1.0)
             # 1. 部署
             while pending and pending[0].time <= t:
                 self._do_deploy(pending.pop(0), t)
             # 1b. 召唤物部署。排在干员之后：召唤者必须已经入场才谈得上归属。
             while pending_summon and pending_summon[0].time <= t:
                 self._do_deploy_summon(pending_summon.pop(0), t)
+            # 1c. **装置**部署。排在最后：它要花费用，而费用在同一帧里
+            #     已经先被干员与召唤物分过一次（顺序固定 = 复现性有保证）。
+            while pending_device and pending_device[0].time <= t:
+                self._do_deploy_device(pending_device.pop(0), t)
             for use in [s for s in self.skill_uses if abs(s.time - t) < dt / 2]:
                 op = self._alive_op_at(use.position)
                 if op is not None:
@@ -1325,9 +1665,46 @@ class BattleSimulator:
                 op = self._alive_op_at(cell)
                 if op is not None:
                     op.hp = 0
+                    # **必须置 `retreated`**：`operator_deaths` 的判据是
+                    # 「`not alive and not retreated`」，只清血条的话，玩家
+                    # 主动撤退会被算成阵亡（`unit.py` 的字段注释写的就是
+                    # 「结算时必须与阵亡分开」，此前这一路漏了）。
+                    op.retreated = True
                     for e in list(op.blocking):
                         e.blocked_by = None
                     op.blocking.clear()
+
+            # 1d. **召唤者退场 → 召唤物一并消失**（实机如此）。
+            #     排在下面"离场时刻"**之前**，是为了让召唤物的离场时刻由那一处
+            #     **统一记账**——分散到三处各写一遍必然漏一处（这条教训在再部署
+            #     冷却上已经吃过一次）。
+            #     `summon_of` 存的是召唤者的 `char_id`（不是名字）。
+            gone = {o.char_id for o in self.operators
+                    if not o.summon_of and (o.retreated or o.hp <= 0)}
+            if gone:
+                for sm in self.operators:
+                    if sm.summon_of and sm.alive and sm.summon_of in gone:
+                        # **置 `retreated` 而不是只清血条**：`operator_deaths`
+                        # 的判据是「not alive and not retreated」，只清血条的话
+                        # 每消失一个召唤物都会凭空记成一次**干员阵亡**。
+                        sm.hp = 0.0
+                        sm.retreated = True
+                        self.result.summon_cascaded.append(
+                            (t, sm.name, f"召唤者 {sm.summon_of} 已退场"))
+                        if self.verbose:
+                            self.result.log.append(
+                                f"{t:7.1f}s  {sm.name} 随召唤者退场而消失")
+            # 离场时刻：撤退 / 阵亡 / 技能强制退场（阿米娅技3）三个口子
+            # **统一在这里记一次**。分散到三处各写一遍必然漏一处，
+            # 而漏掉的那一处会让再部署冷却悄悄失效（不报错，只是不生效）。
+            for op in self.operators:
+                if op.left_at < 0.0 and (op.retreated or op.hp <= 0):
+                    op.left_at = t
+                    if self.verbose:
+                        self.result.log.append(
+                            f"{t:7.1f}s  {op.name} 离场"
+                            f"（{'撤退/强制退场' if op.retreated else '阵亡'}），"
+                            f"再部署冷却 {op.redeploy_time:g}s")
 
             # 2. 出怪
             while (self._spawn_cursor < len(self._spawns)
@@ -1351,6 +1728,15 @@ class BattleSimulator:
                     e.idle_timer = max(0.0, e.idle_timer - dt)
                 if e.disarm_timer > 0:
                     e.disarm_timer = max(0.0, e.disarm_timer - dt)
+                if e.stun_timer > 0:
+                    e.stun_timer = max(0.0, e.stun_timer - dt)
+                # 【冻结】与【寒冷】也是时限状态，一起在这里减。
+                # **必须在这里减而不是在 `advance()` 里**：冻结/停顿的敌人
+                # 在 `advance()` 开头就直接返回了，写进去永远减不动。
+                if e.freeze_timer > 0:
+                    e.freeze_timer = max(0.0, e.freeze_timer - dt)
+                if e.cold_timer > 0:
+                    e.cold_timer = max(0.0, e.cold_timer - dt)
                 if e.attack_pause > 0:
                     e.attack_pause = max(0.0, e.attack_pause - dt)
                 if e.alive and not e.leaked and not e.pending_reborn:
@@ -1367,6 +1753,8 @@ class BattleSimulator:
 
             # 3.5 天赋：积雪（要在推进之后判"踏入了哪一格"，下一帧的减速才生效）
             self._snow_tick(dt, t)
+            # 天赋欠下的那次范围冻结（圣山的祝福）在这里兑现
+            self._blessing_tick(t)
             self._qi_tick(dt, t)
 
             # 3.6 P3R：刷新倒地 → 全场总攻击装置
@@ -1374,6 +1762,20 @@ class BattleSimulator:
 
             # 3.7 关卡环境机制：田地/病害值（怀黍离）
             self._environment_tick(dt, t)
+
+            # 3.8 装置：建成进度、田鼷进阻流阀范围的真伤、被拆后地形还原。
+            #     排在环境之后：这一帧先按**还没变**的田地几何收完伤害，
+            #     装置被拆导致的重划从下一帧起才影响结算（否则同一帧里
+            #     "田地已经并回去、但伤害按并回去之后算"会让拆装置这件事
+            #     反过来立刻减轻当秒的环境伤害）。
+            #     与田地系统**解耦**：没有田地的图（或显式关掉环境）里，
+            #     装置该挨的打、该还的地形照样要算。
+            self._device_tick(dt, t)
+
+            # 3.9 天桩链：装置 → 甲 → 乙 → 天标。紧跟装置之后，因为第一跳
+            #     就是"装置召唤甲"，而甲的生命百分比读的是**本帧刚更新过**的
+            #     病害值（排在 `_environment_tick` 之后）。
+            self._pile_tick(dt, t)
 
             # 4. 阻挡
             self._update_blocking()
@@ -1405,6 +1807,11 @@ class BattleSimulator:
             # 7. 敌方出手
             self._enemies_attack(dt, t)
 
+            # 7.2 **敌方技能出手**（怀黍离「玷 / 勿玷」的技能「污」）。
+            #     与普攻分开：这一类敌人的天赋是「不进行远程普通攻击」，
+            #     伤害全部来自技能（见 `_skill_attack_tick` 的正文来历）。
+            self._skill_attack_tick(dt, t)
+
             # 7.5 敌人侧关卡机制（怀黍离）：移速增益的计时与解除、明识形态的
             #     清水判定与标记退场、以及**被击倒之后**那批一次性效果。
             #     排在两个出手之后：这一帧谁的出手把谁打倒了，这里就看得到。
@@ -1415,19 +1822,41 @@ class BattleSimulator:
             if self.life <= 0:
                 res.won = False
                 break
+            # **"既打不死又不会离场"的单位不算在完成判据里。**
+            #
+            # 怀黍离的天桩-甲就是这种东西：监测形态持有「无敌、不死」
+            # （`always_invincible`），而它天赋第一句是「自缚」——本模拟器给它的
+            # 是一条**单点路线**（`route_length == 0`，`reached_end` 要求长度 > 0），
+            # 所以它既不会被杀死、也永远走不到目标点。原先这里写的是"场上还有
+            # 活着的敌人在就不算打完"，于是**凡是有天桩的关卡永远结束不了**：
+            # 实测 act31side_03 全清 38 杀 0 漏、生命 3/3，只是天桩-甲还站在
+            # 原地，一路跑到时间上限、判定成"失败 0 星"。后果直接落在解算上：
+            # 所有候选都是 0 星 → 搜索永远搜不到三星方案 → TUI 的 [3] 解算
+            # "无论选什么都是 0 条结果"（博士 2026-09-18 报的那个）。
+            #
+            # ⚠ 判据**不含** `owner_device`：甲进入激活状态后会同时摘掉无敌不死
+            # （改成每秒自损 1% 最大生命，见 `_pile_parent_tick`），那时它是会死的、
+            # 而且还在分散召唤天桩-乙——那一局**不许**收场，乙会漏、会扣命。
+            # 用 `_cannot_clear` 而不是"是不是装置召唤的"，正是为了把这两种状态
+            # 分开：清不掉的才忽略。
             if self._spawn_cursor >= len(self._spawns) and not any(
-                    (e.alive and not e.leaked) or e.pending_reborn
+                    (e.alive and not e.leaked and not self._cannot_clear(e))
+                    or e.pending_reborn
                     for e in self.enemies):
                 res.won = True
                 break
 
-            # 费用回复
-            self._cost_timer += dt
-            if self._cost_timer >= self.cost_time:
-                self._cost_timer -= self.cost_time
-                self.cost = min(self.max_cost, self.cost + 1.0)
-
             t += dt
+
+        left = [e for e in self.enemies if e.alive and not e.leaked]
+        if not res.won and self.life > 0:
+            # 走到这里只有两种可能：跑满时间上限，或者循环条件提前退出。
+            # 两种情况都不是"打输了"，如实记下来，别让归因去猜。
+            res.timed_out = True
+            res.leftover_units = [(e.name, e.enemy_id, self._cannot_clear(e))
+                                  for e in left]
+        res.spawns_placed = self._spawn_cursor
+        res.spawns_total = len(self._spawns)
 
         res.elapsed = t
         res.life = self.life
@@ -1462,9 +1891,8 @@ class BattleSimulator:
            这名干员压根不是召唤者，多半是调用方把 token_key 写错了；
         ③ 场上已有的召唤物个数不得达到**同时部署上限**。
 
-        ⚠️ 这里**不判费用**：与 `_do_deploy` 同一口径——部署计划被假定是可行的，
-        费用只做扣减。加一道费用闸门会让"计划里排得下、实际差 1 费"这种
-        情况从"结果里看得出来"变成"静默少放一个"，更难查。
+        第四条随 `cost_mode` 而变：`strict` 下还要**付得起**，付不起就记进
+        `summon_rejected` 并跳过（与部署干员同一道闸门）。
         """
         owner = None
         for op in self.operators:
@@ -1491,6 +1919,11 @@ class BattleSimulator:
 
         unit = build_summon_unit(
             d, book=self.summon_book or SummonBook())
+        if not self._affordable(unit.deploy_cost, t, f"召唤物「{unit.name}」"):
+            self.result.summon_rejected.append(
+                (t, d.token_key,
+                 f"费用不足：需 {unit.deploy_cost}，当时只有 {self.cost:.0f}"))
+            return
         self.cost = max(0.0, self.cost - unit.deploy_cost)
         self.operators.append(unit)
         # 主人的屏障技能正开着时，新放下的这个**当场拿到一份**——否则技能期间
@@ -1507,8 +1940,121 @@ class BattleSimulator:
                 f"朝 {d.direction}（{unit.deploy_cost} 费，"
                 f"场上 {have + 1}/{allowance.simultaneous}）")
 
+    def _do_deploy_device(self, d, t: float) -> None:
+        """放一个**装置**（玩家手动部署的阻流阀等）。放不下就记原因并跳过。
+
+        判据四条，全是数据或账面上的：
+
+        ① **额度**：关卡开局的 `predefines.tokenCards[].initialCnt` 加上
+           `DeathPassive.` 击杀掉落的那一份，就是这一局手里的牌数。
+           这正是「田鼷飞贼被击倒时予我方可部署装置」那条机制的落点——
+           在此之前它只进账不花，等于没接（`DeathPassive.` 曾因此标 todo）。
+        ② **费用**：装置也要花费用（阻流阀 5 费，取自角色表
+           `attributesKeyFrames[0].data.cost`），走同一个 `_affordable` 闸门。
+        ③ 那一格**不能已经有装置**（装置不叠放）。
+        ④ 放下去后按 `BUILD_SECONDS`（3 秒）建成，建成前无敌
+           （`DeviceUnit.build_left` / `building_invincible`）。
+
+        ⚠ **地块改写发生在建成那一刻**，不是落下去那一刻：原文「3 秒建成，
+        自身地块不再是田地、连片由此重划」。所以这里**不动** `farmland`，
+        交给 `_device_tick` 在建成时 `sever()`。落下去就断田会让那 3 秒的
+        田地划分提前变形。
+        """
+        from .devices import (BLOCKER_BUILD_FRACTION, BUILD_SECONDS, DeviceUnit,
+                              device_cost, device_hp, make_deployed_device)
+
+        key = d.device_key
+        have = int(self.device_token_balance.get(key, 0))
+        if have <= 0:
+            self.result.device_deploy_rejected.append(
+                (t, key, "没有可用的额度（关卡没给这张牌，也还没从击杀里掉到）"))
+            if self.verbose:
+                self.result.log.append(
+                    f"{t:7.1f}s  装置「{key}」放不下去：额度为 0 → **拒收**")
+            return
+        cell = (int(d.position[0]), int(d.position[1]))
+        if any(x.alive and x.cell == cell for x in self._devices):
+            self.result.device_deploy_rejected.append(
+                (t, key, f"那一格 {cell} 已经有装置了"))
+            return
+        price = device_cost(key)
+        if not self._affordable(price, t, f"装置「{key}」"):
+            self.result.device_deploy_rejected.append(
+                (t, key, f"费用不足：需 {price}，当时只有 {self.cost:.0f}"))
+            return
+        self.cost = max(0.0, self.cost - price)
+        self.device_token_balance[key] = have - 1
+        unit = DeviceUnit(make_deployed_device(key, cell, d.direction),
+                          max_hp=device_hp(key))
+        unit.build_left = BUILD_SECONDS
+        unit.building_invincible = True
+        unit.hp = unit.max_hp * BLOCKER_BUILD_FRACTION
+        self._devices.append(unit)
+        self.result.devices_deployed.append((t, key, cell))
+        if self.verbose:
+            self.result.log.append(
+                f"{t:7.1f}s  部署装置「{unit.name}」于 {cell} 朝 {d.direction}"
+                f"（{price} 费，额度剩 {have - 1}，{BUILD_SECONDS:g}s 建成）")
+
+    def _affordable(self, price: int, t: float, who: str) -> bool:
+        """这一手付得起吗？`cost_mode="legacy"` 下一律为真。
+
+        付不起就**拒收并留痕**，不是把费用夹到 0 硬放下去——后者等于白送，
+        而且送得毫无痕迹，复盘时看不出哪一手其实做不出来。
+        """
+        if self.cost_mode != "strict" or price <= self.cost:
+            return True
+        self.result.cost_denied.append((t, who, int(price), self.cost))
+        if self.verbose:
+            self.result.log.append(
+                f"{t:7.1f}s  {who} 落地需 {price} 费，当时只有 {self.cost:.0f} 费"
+                f" → **拒收**（费用不足）")
+        return False
+
+    def _can_deploy_again(self, op: OperatorUnit, t: float) -> bool:
+        """同一干员还能不能再放一个？`redeploy_mode="legacy"` 下一律为真。
+
+        两条真实的规则，都在这里判：
+
+        ① **同一干员不能同时在场上出现两个**。宽松口径下同一个 `char_id` 被两条
+           `Deployment` 摆上两格时，模拟器会当成两个独立单位各打各的——那不是
+           "部署了两次"，那是凭空多出一个干员来。
+        ② **离场后要等再部署冷却**，长度取 `op.redeploy_time`（默认 70 秒；
+           快活类干员在数据里是 20 秒）。三个离场口子（撤退 / 阵亡 / 技能强制
+           退场）统一看 `left_at`，不各判各的。
+
+        冷却只跟**同一个 `char_id`** 有关：阿米娅的两种形态是两个 `char_id`，
+        互不牵连——这一条不能按名字判。
+        """
+        if self.redeploy_mode != "strict":
+            return True
+        same = [o for o in self.operators if o.char_id == op.char_id]
+        for o in same:
+            if o.alive:
+                self._reject_deploy(t, op, f"{o.name} 已在场，同一干员不能同时"
+                                          f"部署两个（现有位置 {o.position}）")
+                return False
+        last = max((o.left_at for o in same if o.left_at >= 0.0), default=None)
+        if last is not None and t < last + op.redeploy_time:
+            self._reject_deploy(
+                t, op, f"{op.name} 再部署冷却中：{last:.1f}s 离场，还要等 "
+                       f"{last + op.redeploy_time - t:.1f}s"
+                       f"（共 {op.redeploy_time:g}s）")
+            return False
+        return True
+
+    def _reject_deploy(self, t: float, op: OperatorUnit, why: str) -> None:
+        """规则拒收：留痕，绝不静默少放一个。"""
+        self.result.deploy_rejected.append((t, op.name or op.char_id, why))
+        if self.verbose:
+            self.result.log.append(f"{t:7.1f}s  {op.name} 落地被拒：{why}")
+
     def _do_deploy(self, d: Deployment, t: float) -> None:
         op = d.operator
+        if not self._can_deploy_again(op, t):
+            return
+        if not self._affordable(op.deploy_cost, t, op.name or op.char_id):
+            return
         op.position = d.position
         op.direction = d.direction
         op.auto_skill = d.auto_skill
@@ -1540,6 +2086,19 @@ class BattleSimulator:
                 magic_scale=snow.value("talent_magic_scale", 0.0),
                 operator=op,
             ))
+        # 天赋：圣山的祝福（圣聆初雪天赋1）
+        #
+        # 三个数**在部署时一次读进来**，而不是每次受伤再去翻天赋表：
+        # 前者是一次解析，后者是每帧每敌人都要遍历天赋，而且一旦天赋对象
+        # 在场上被改（换形态之类）会出现"半场换了规则"的怪事。
+        #
+        # 没这条天赋时三个数都是 0，`take()` 里的免死判据写的是
+        # `blessing_save > 0`，所以**不会误触发**。
+        bless = find_blessing(op.talents)
+        if bless is not None:
+            op.blessing_save = bless.value("c2e_freeze", 0.0)
+            op.blessing_self_freeze = bless.value("freeze", 0.0)
+            op.blessing_cold = bless.value("cold", 0.0)
         # 天赋：增益治疗光环（「友方进入攻击范围时每秒回复生命值」）
         regen = find_regen(op.talents)
         if regen is not None:
@@ -1617,8 +2176,9 @@ class BattleSimulator:
                                if e.hp > 0 and e.blocked_by is op]
         for e in self.enemies:
             # 离场传送中的敌人不在地图上，不占阻挡位
-            # 【倒地】不可阻挡；飞行单位任何地面干员都挡不住
-            if (e.hp <= 0 or e.leaked or e.off_map or e.down
+            # 【倒地】不可阻挡；飞行单位任何地面干员都挡不住；
+            # 天桩-甲的天赋「不可阻挡」是**常驻**的，同样不占阻挡位。
+            if (e.hp <= 0 or e.leaked or e.off_map or e.down or e.unblockable
                     or e.blocked_by is not None or e.is_flying):
                 continue
             ex, ey = e.position
@@ -1641,13 +2201,17 @@ class BattleSimulator:
                 e.blocked_by = None
 
     def _pick_targets(self, op: OperatorUnit, cells: set, n: int = 1) -> list[EnemyUnit]:
-        """目标选择：先打自己挡住的，再打离防守点最近的。
+        """目标选择：先打自己挡住的，再打离防守点最近的（**嘲讽等级高的优先**）。
 
         返回最多 `n` 个——`n > 1` 对应技能里的「同时攻击 N 个目标」。
 
         与 `_update_blocking` 同理，`e.alive` 这类 property 在此就地展开
         （一场 1-7 调 6359 次、每次扫 41 个敌人）。`EnemyUnit` 的 `alive`
         就是 `hp > 0`，没有覆写。
+
+        排序键前面加了 `taunt_level`：绝大多数敌人是 0（不影响任何现有行为），
+        负数才是「**非首要目标**」——身上的天标是 −1，干员能打到它时也排在
+        所有正常敌人之后。这一条同时是"它不会把火力从甲/乙身上吸走"的保证。
         """
         out: list[EnemyUnit] = []
         for e in op.blocking:
@@ -1661,7 +2225,7 @@ class BattleSimulator:
                 continue
             if (int(round(e.position[0])), int(round(e.position[1]))) in cells:
                 rest.append(e)
-        rest.sort(key=lambda e: -e.progress)
+        rest.sort(key=lambda e: (-e.taunt_level, -e.progress))
         for e in rest:
             out.append(e)
             if len(out) >= n:
@@ -1748,6 +2312,11 @@ class BattleSimulator:
                 continue
             # 技能结束后自身晕眩期间不出手（阿米娅技2 那类的代价）
             if op.stun_timer > 0:
+                continue
+            # 自身【冻结】期间同样出不了手（冻结 = 缴械）。
+            # **不能拿 stun_timer 顶替**：晕眩还会中断阻挡，冻结不会——
+            # 用晕眩顶替会让她在冻结那 4 秒里连阻挡一并丢掉，那是另一回事。
+            if op.freeze_timer > 0:
                 continue
             cells = self._range_of(op)
             op.attack_timer += dt
@@ -1921,11 +2490,15 @@ class BattleSimulator:
         for e in self.enemies:
             if e.hp <= 0 or e.leaked or e.off_map or e.reborn_at >= 0.0:
                 continue
-            if e.frozen or e.down:
-                # 冻结 / 倒地的敌人不能攻击；计时器也不该偷偷攒着
+            if e.frozen or e.down or e.stun_timer > 0:
+                # 冻结 / 倒地 / 晕眩的敌人不能攻击；计时器也不该偷偷攒着
                 continue
             if e.idle_timer > 0 or e.disarm_timer > 0:
                 # 【待机】/【缴械】期间不能出手（待机还额外不能移动，见 advance）
+                continue
+            if e.skill_atk_no_normal:
+                # 天赋「不进行远程普通攻击」：这一类敌人的伤害**全部**走技能，
+                # 普攻那一路整个关掉（免得将来谁给它补一个射程就双份出手）。
                 continue
             op = self._enemy_target(e)
             if op is None or op.hp <= 0 or op.retreated:
@@ -1961,7 +2534,7 @@ class BattleSimulator:
                 bonus = e.atk * e.reborn_damage_magic * e.reborn_charge
                 if bonus > 0.0:
                     dealt += op.take(resolve_damage(
-                        bonus, damage_type="ARTS",
+                        bonus, damage_type=DamageType.MAGIC,
                         defense=0.0, res=op.current_res(),
                         dodge_phys=op.dodge_phys, dodge_arts=op.dodge_arts,
                     ).final)
@@ -1971,6 +2544,512 @@ class BattleSimulator:
                 gain = op.skill.sp_per_hit()
                 if gain:
                     op.sp = min(op.skill.sp_cost, op.sp + gain)
+
+    def _skill_attack_tick(self, dt: float, t: float) -> None:
+        """敌方**技能出手**：怀黍离「玷 / 勿玷」的技能「污」。
+
+        【正文来历】prts 图鉴「玷 / 勿玷」天赋与技能 0 原文：
+
+        > 天赋：**不进行远程普通攻击**
+        > 技能0「污」（初始 7）：攻击场上**1 名部署于地面**的我方单位，
+        > 对**目标及其周围 4 格**的单位造成**攻击力 100% 的物理伤害**；
+        > 自身位于病害值 > 0 的田地地块时，当次攻击**额外附加攻击力 80% 的
+        > 法术普通伤害**，且**令目标地块病害值 +5**；※此技能不可沉默
+
+        【哪一半是结构化、哪一半是正文】见 `gamedata/enemy.py::skill_attack_fields`：
+        `atk_scale_magic`（0.8，ex04 四星档被 rune `enemy_skill_blackb_mul`
+        乘成 **1.04**）与 `value`（+5）是黑板里的数；1 名 / 地面 / 十字 /
+        100% / 不做普攻五件事只在正文里，写死在 `PROSE_SKILL_ATTACK`。
+
+        【三处按项目口径收口的】
+
+        1. **「全图」= 不看距离**：`rangeRadius` 是 −1（正是"不进行远程普攻"
+           的后果），所以挑目标时**不限射程**，按既有的敌方索敌规则取
+           **最后部署的那一名地面干员**（见 `_enemy_target` 的说明）。
+        2. **「部署于地面」取 `block_cnt > 0`**：本项目的干员模型里，近战位
+           阻挡数 ≥1、高台位为 0（`can_block` 用的就是它）。这是代理读法，
+           已登记在 `docs/verdicts-pending.md` E16。
+        3. **「周围 4 格」= 曼哈顿距离 1 的十字五格**（目标格 + 上下左右），
+           与「半径 1.0 的圆」是两回事：斜角**不在**里面。原文写的是「周围
+           4 格」，故按格算，不复用 `pollute_area` 的圆。
+
+        ⚠ 附加的法术伤害是「**当次**攻击额外附加」：物理那一段照旧结算，
+        法术这一段在物理之后**再减一次法抗**（`resolve_damage` 两次），
+        不是把两部分加起来当一次伤害打。
+        """
+        for e in self.enemies:
+            if not e.skill_atk_scale_phys and not e.skill_atk_scale_magic:
+                continue
+            if e.hp <= 0 or e.leaked or e.off_map or e.reborn_at >= 0.0:
+                continue
+            if (e.frozen or e.down or e.stun_timer > 0
+                    or e.idle_timer > 0 or e.disarm_timer > 0):
+                continue
+            e.skill_atk_timer += dt
+            need = (e.skill_atk_init if e.skill_atk_first
+                    else (e.skill_atk_interval or e.attack_interval))
+            if e.skill_atk_timer < need:
+                continue
+            e.skill_atk_timer = 0.0
+            e.skill_atk_first = False
+            target = self._skill_atk_target(e)
+            if target is None:
+                continue
+            e.attack_pause = max(e.attack_pause, self.enemy_windup)
+            cx, cy = int(target.position[0]), int(target.position[1])
+            # 十字五格：目标格 + 上下左右（斜角不在内）
+            cells = [(cx, cy), (cx + 1, cy), (cx - 1, cy),
+                     (cx, cy + 1), (cx, cy - 1)]
+            if e.skill_atk_cross <= 0:
+                cells = [(cx, cy)]
+            polluted = (self.farmland is not None
+                        and self.farmland.actual_at(*e.cell()) > 0.0)
+            mag = (e.atk * e.skill_atk_scale_magic) if polluted else 0.0
+            for c in cells:
+                op = self._alive_op_at(c)
+                if op is None or op.hp <= 0 or op.retreated:
+                    continue
+                # ① 基础物理：攻击力 × 100%（正文），逐目标减防
+                op.take(resolve_damage(
+                    e.atk * e.skill_atk_scale_phys, damage_type="PHYSICAL",
+                    defense=op.current_defense(), res=op.current_res(),
+                    dodge_phys=op.dodge_phys, dodge_arts=op.dodge_arts,
+                ).final)
+                # ② 附加法术（仅当它自己站在受污染的田地上），单独减一次法抗
+                if mag > 0.0:
+                    op.take(resolve_damage(
+                        mag, damage_type=DamageType.MAGIC,
+                        defense=0.0, res=op.current_res(),
+                        dodge_phys=op.dodge_phys, dodge_arts=op.dodge_arts,
+                    ).final)
+                if op.skill is not None and not op.skill.is_passive \
+                        and not op.skill_active:
+                    gain = op.skill.sp_per_hit()
+                    if gain:
+                        op.sp = min(op.skill.sp_cost, op.sp + gain)
+            # ③ 令**目标地块**病害值 +N（记入【缓存】，不是直接改【实际】）
+            got = 0.0
+            if polluted and e.skill_atk_pollut > 0.0 and self.farmland is not None:
+                got = self.farmland.pollute_cell(cx, cy, e.skill_atk_pollut)
+            if self.verbose:
+                extra = (f"，附加法术 {mag:.0f}（自身田地病害值 "
+                         f"{self.farmland.actual_at(*e.cell()):g} > 0）" if mag > 0
+                         else "，自身不在受污染的田地上 → 无附加法术")
+                self.result.log.append(
+                    f"{t:7.1f}s  {e.name} 技能「{e.skill_atk_key}」→ "
+                    f"{target.name} 及其十字四邻（{len(cells)} 格）"
+                    f"物理 {e.atk * e.skill_atk_scale_phys:.0f}{extra}"
+                    + (f"，目标地块病害值 +{got:g} 记入缓存" if got else ""))
+
+    def _skill_atk_target(self, e: EnemyUnit) -> OperatorUnit | None:
+        """技能攻击挑谁：**全图**（不看射程）、只要地面单位（`block_cnt > 0`）。
+
+        挑法与敌方普攻一致：**最后部署的那一个**（`self.operators` 的顺序就是
+        部署顺序）。原文只说「1 名部署于地面的我方单位」，没有说按什么挑——
+        这里沿用项目内既有的敌方索敌口径，不另立一套。
+        """
+        picked: OperatorUnit | None = None
+        for op in self.operators:
+            if not op.alive or op.retreated or op.hp <= 0:
+                continue
+            if e.skill_atk_ground_only and op.block_cnt <= 0:
+                continue
+            picked = op
+        return picked
+
+    def _sever_farmland(self, cell: tuple[int, int], t: float) -> None:
+        """把一格从田地里摘掉（阻流阀建成的那一刻）。
+
+        预置阻流阀开场即在位，走的是构造里那一遍；
+        这里是**玩家手动部署**的那条路：落下去时不动田地，建成时才动。
+        """
+        if self.farmland is None or not self.farmland.severable:
+            return
+        self.farmland.sever(*cell)
+        if cell not in self._blocker_cells:
+            self._blocker_cells.append(cell)
+        if self.verbose:
+            self.result.log.append(
+                f"{t:7.1f}s  阻流阀建成 → {cell} 不再算田地，"
+                f"田地重划为 {len(self.farmland.fields)} 片")
+
+    def _device_tick(self, dt: float, t: float) -> None:
+        """装置侧的三件事：建成进度、AuraHit 真伤、被拆后把地形还回去。
+
+        顺序是**有意的**：
+
+        1. 先推进建成进度——建成期间无敌（原文：手动部署的阻流阀「3秒内逐渐
+           提升至最大值，**期间持有无敌**」），这一帧的 AuraHit 不该打进去；
+        2. 再结算 `AuraHit.`——原文是「**进入**阻流阀半径 0.5 范围内时**立刻**对其
+           造成目标最大生命值 50%/70% 的真实伤害」，是**进入触发**（边沿），
+           不是"站在里面每秒掉血"。所以按 (敌人, 装置) 记下上一帧的接触状态，
+           只在"这一帧碰到、上一帧没碰到"时打一下。田鼷沿路线走，进出一次打一下，
+           两次经过就能拆掉一个 100 血的阻流阀（50+50），这正是设计意图。
+           **只对阻流阀生效**：原文点名的是阻流阀，泵站/天桩不因此挨打
+           （天桩另有自己的死法——所在地块的甲退场，见 `_pile_tick`）。
+        3. 最后处理被摧毁的装置——**把地形还回田地**。原文那句「自技能结束到
+           自身退场，重写自身所在地块的地形标记为阻流阀」是有期限的：装置一没，
+           那一格又变回水田，被它切断的田地重新连成一片。
+
+        ⚠ 打的是**目标（装置）最大生命值**的比例，不是田鼷自己的。写反了会得到
+        "19000×0.5" 这种一下拆掉一片装置的怪结果。
+        """
+        cells_before: list[tuple[int, int]] = []
+        for d in self._devices:
+            if not d.alive:
+                continue
+            was_building = d.build_left > 0.0
+            d.tick_build(dt)
+            # 建成**那一刻**才改写地块：原文「3 秒建成，自身地块不再是田地、
+            # 连片由此重划」。落下去就断田会让那 3 秒的田地划分提前变形，
+            # 而"提前 3 秒少一片田"会实打实地改变病害值的扩散。
+            if was_building and d.built and d.key == self._blocker_key:
+                self._sever_farmland(d.cell, t)
+
+        # ---- AuraHit（田鼷力士 / 猛士 / 飞贼 / 大盗）
+        touched: dict[int, set[int]] = {}
+        for e in self.enemies:
+            if e.hp <= 0 or e.leaked or e.off_map or e.reborn_at >= 0.0:
+                continue
+            if e.aura_hit_ratio <= 0.0:
+                continue
+            key = id(e)
+            prev = self._aura_touch.get(key, set())
+            now: set[int] = set()
+            for d in self._devices:
+                if not d.alive or not d.built:
+                    continue
+                # 原文点名的是**阻流阀**（「进入[[阻流阀]]半径0.5范围内时立刻
+                # 对其造成…」），所以泵站/天桩不吃这一条。天桩另有自己的死法
+                # ——所在地块的甲退场时它才死（见 `_pile_tick`）。
+                if d.key != self._blocker_key:
+                    continue
+                if math.dist(e.position, d.cell) <= (e.aura_hit_radius or 0.5):
+                    now.add(id(d))
+                    if id(d) in prev:
+                        continue                    # 上一帧就在范围里 → 不是"进入"
+                    dmg = e.aura_hit_ratio * d.max_hp
+                    dealt = d.take_damage(dmg)
+                    if self.verbose and dealt > 0:
+                        self.result.log.append(
+                            f"{t:7.1f}s  {e.name} 进入 {d.name} 范围 → "
+                            f"真伤 {dealt:.0f}（{d.name} {d.hp:.0f}/{d.max_hp:.0f}）")
+                    if not d.alive:
+                        self.result.devices_lost.append(
+                            (t, d.key, d.cell, e.name))
+                        # 只有**改写地块**的装置（阻流阀）退场才把地形还回去；
+                        # 天桩（重写地块=否）只是站在田地上，拆掉它不改几何。
+                        if d.key == self._blocker_key:
+                            cells_before.append(d.cell)
+            touched[key] = now
+        # 只留这一帧还在场的敌人，免得 id 复用串到别的敌人身上
+        self._aura_touch = touched
+
+        # ---- 被拆掉的装置：把地形还回去
+        for cell in cells_before:
+            if self.farmland is not None and self.farmland.severable:
+                self.farmland.restore(*cell)
+                if self.verbose:
+                    self.result.log.append(
+                        f"{t:7.1f}s  装置被摧毁 → {cell} 还回田地，"
+                        f"田地重划为 {len(self.farmland.fields)} 片")
+
+    def _pile_spec(self, device) -> tuple[str, object]:
+        """装置 → **它召唤的那名天桩-甲**，以及关卡给它指派的那条路径。
+
+        这一段**全是结构化字段**，不用猜正文（原先的 `PILE_CHILD` 表已降级为退路）：
+
+        装置 predefine 的 ``overrideSkillBlackboard[branch_id]``（关卡没写覆盖时
+        退回技能默认黑板 ``branch_dhdcr_1``，见 `Stage.branch_for`）
+        → 关卡 ``branches[branch_id].phases[].actions[]``
+        → ``key`` 是甲（``enemy_1398_dhdcr`` / 失控 ``_2`` / 关卡本地 ``_b``），
+        ``routeIndex`` 指向关卡 ``extraRoutes``（**与出怪表用的 ``routes``
+        是两个命名空间**）。
+
+        ⚠ 2026-09-16 更正：这条路径**不是甲的行进计划**。甲的天赋第一句就是
+        「自缚」（不能移动），它站在原地监测脚下那格的病害值。全活动 32 个天桩
+        逐关核过：**每个装置格都等于它那条路径的起点格**，也就是"关卡给这个
+        单位指派的路线"（编辑器给每个落场单位都发一条，终点是保护目标）。
+        路径因此只作留档与交叉校验用（`tools/check_environment.py` §11 会核
+        "起点 == 装置格"），甲不执行它。
+
+        整条都查不到时退回 `PILE_CHILD`（并返回 None），模拟照跑。
+        """
+        bid = str(getattr(device, "branch_id", "") or "")
+        # 装置 key 末段 → 支线前缀（`trap_146_dhdcr` → `branch_dhdcr`）。
+        # 这一道把**没有支线语义**的装置挡在外面：阻流阀/泵站推不出
+        # `branch_dhtl` / `branch_dhsb`，于是它们不会误领天桩那条支线
+        # （踩过：不挡的话 act31side_08 的 26 个装置会各召唤一名甲）。
+        # 惰性导入：`battle` 的导入链**不牵 gamedata**（自检与 TUI 只用前者）
+        from ..gamedata.stage import branch_prefix
+        branch = self.stage.branch_for(bid, prefix=branch_prefix(device.key))
+        for act in self.stage.branch_actions(branch):
+            if not act.enemy_key:
+                continue
+            return act.enemy_key, self.stage.extra_route(act.route_index)
+        if device.key not in PILE_CHILD:
+            return "", None
+        return PILE_CHILD[device.key], None
+
+    def _pile_mark_key(self, diver: "EnemyUnit") -> str:
+        """天桩-乙 → 它砸下的**身上的天标**。
+
+        乙的天赋黑板是**空的**（`talentBlackboard: []`），"砸下什么"只写在
+        正文里，所以走文件头 `PILE_MARK` 那张表；关卡本地的 ``…_dhtb_b``
+        先退到它的 ``prefabKey``（``enemy_1399_dhtb``）再查表。
+        这是天桩链里**唯一**还需要查表的一跳，已登记在
+        `docs/verdicts-pending.md`。
+        """
+        key = PILE_MARK.get(diver.enemy_id)
+        if key:
+            return key
+        return PILE_MARK.get(self.stage.local_enemy_prefab(diver.enemy_id), "")
+
+    def _pile_tick(self, dt: float, t: float) -> None:
+        """天桩链：装置召唤甲 → 甲监测/激活 → 乙扑咬 → 天标附着。
+
+        【正文来历】（prts.wiki 装置页 + 敌人页，原文留档在
+        `out/prts-act31side-pages*.txt` 与 `out/prts-special-mechanics.txt`；
+        四跳里哪一跳是结构化字段见 `_pile_spec` / `_pile_mark_key` 的说明）
+
+        * **装置「天桩」**：技能「生成」（被动）「登场时，在自身所在位置以预设
+          路径召唤一名天桩-甲」；机制「于所在地块的**天桩-甲**（或失控天桩-甲）
+          **退场时死亡**」。装置 → 甲这一跳**走结构化字段**（`_pile_spec`）。
+        * **天桩-甲**：**监测状态**（初始）——无敌、不死、元素免疫，把自身生命
+          百分比**重设**为所在地块病害值（1% 生命 ↔ 1 点，不会因此死亡），
+          病害值首次 ≥`CheckAwake.value`（100）后进入**激活状态**；激活后不再
+          监测、每秒受自身最大生命 `hp_ratio`（1%）的真实伤害，每损失
+          `summon.hp_ratio`（10%）就在 1~1.5s 后召唤 `cnt`（3）个天桩-乙。
+        * **天桩-乙**：飞行，登场自缚 1 秒，扑到范围内第一个我方单位身上啃啮；
+          攻击**命中时**在目标所在地块中心召唤 1 个身上的天标；**攻击结束时**
+          强制击杀自身。
+        * **身上的天标**：附着范围半径 0.3，附着对象为**自身登场时**范围内的
+          我方单位；附着效果为每秒 `Passive.damage_value`（200）**预计算无途径
+          物理伤害**；任一附着对象的效果结束 → 强制击杀自身。
+
+        【四处按项目约定收口，都已登记在 `docs/verdicts-pending.md`】
+
+        1. **「1.0 边长正方形范围内随机位置」的召唤位置取脚下那一格**——
+           边长 1.0 的正方形以格心为中心正好只覆盖自身这一格，且模拟器不掷骰
+           （与 `_summon_at` 同一处口径）。
+        2. **「1~1.5s 随机延迟」取 1.25s**（`PILE_SUMMON_DELAY`）。
+        3. **天桩-乙的目标取"直线距离最近的存活干员"**（不设距离上限）。
+           它的 `rangeRadius` 是 −1（库里没有射程），「范围内第一个」在数据上
+           无法更精确地复现；另加一个凭空的距离上限只会更假。
+        4. **乙的「啃啮直至目标倒下」与天赋「攻击结束时强制击杀自身」冲突**，
+           按**天赋**实现：咬一口 → 召唤天标 → 自毁（描述那句当风味文本）。
+
+        ⚠ 「自缚」在数据里不是一个字段（它写在天赋正文里），这里靠"召唤时给一条
+        **单点路线**"实现：`reached_end` 要求 `route_length > 0`，单点路线长度为
+        0，所以甲与乙都既不动、也不会被判成漏怪（见 `unit.reached_end`）。
+        甲那条**关卡指派路径**（`extraRoutes`）因此不执行，只留档 + 交叉校验。
+        """
+        fs = self.farmland
+        # ① 装置召唤甲（一次性，模拟器开跑后的第一帧）
+        for d in self._devices:
+            if not d.alive or d.summoned:
+                continue
+            key, route = self._pile_spec(d)
+            if not key:
+                continue
+            # 甲**站在原地**：它的天赋第一句就是「自缚」（= 不能移动），
+            # 报的路径是关卡给"这个单位"的指派路线（起点逐关核过，就是装置格
+            # 本身，见 `check_environment.py` 的 §11），不是它的行进计划。
+            # 所以这里给的是**单点路线**：不动、也不会被判成漏怪
+            # （`reached_end` 要求 `route_length > 0`）。路径只进日志留档。
+            pts = [(float(d.cell[0]), float(d.cell[1]))]
+            child = self._build_enemy(key, self._summon_level(key), pts, [], t, 0.0)
+            # 监测状态：无敌 + 不死。**不可阻挡与自缚是它的常驻天赋**，
+            # 与监测状态无关——全库只有天桩-甲两型带 `CheckAwake.`，故用它当判据。
+            child.monitor = child.awake_value > 0.0
+            child.always_invincible = child.monitor
+            child.unblockable = True
+            child.owner_device = d
+            d.summoned = True
+            self._pile_children.setdefault(id(d), []).append(child)
+            self.enemies.append(child)
+            if self.verbose:
+                tail = (f"，关卡指派路径 {route.start}→{route.end}"
+                        f"（{route.length()} 格，自缚不执行）"
+                        if route is not None else "（关卡里没有它的指派路径）")
+                self.result.log.append(
+                    f"{t:7.1f}s  {d.name} 召唤 {child.name} 于 {d.cell}{tail}"
+                    f"；监测状态：生命百分比 = 所在地块病害值")
+
+        # ② 三型各自的状态机
+        for e in list(self.enemies):
+            if e.hp <= 0 or e.leaked or e.off_map or e.reborn_at >= 0.0:
+                continue
+            if e.awake_value > 0.0:                 # 天桩-甲
+                self._pile_parent_tick(e, dt, t, fs)
+            elif self._pile_mark_key(e):            # 天桩-乙（含关卡本地 _b）
+                self._pile_diver_tick(e, t)
+            elif e.attach_damage > 0.0:             # 身上的天标
+                self._pile_mark_tick(e, dt, t)
+
+        # ③ 甲退场 → 它那根天桩装置自动死亡
+        for d in self._devices:
+            if not d.alive:
+                continue
+            kids = self._pile_children.get(id(d)) or []
+            if not kids:
+                continue                        # 还没召唤出来（不该发生）
+            if any(k.hp > 0 and not k.leaked and not k.off_map for k in kids):
+                continue
+            d.alive = False
+            d.hp = 0.0
+            self.result.devices_lost.append((t, d.key, d.cell, kids[0].name))
+            if self.verbose:
+                self.result.log.append(
+                    f"{t:7.1f}s  {d.name} 随 {kids[0].name} 退场而死亡")
+
+    def _pile_parent_tick(self, e: EnemyUnit, dt: float, t: float, fs) -> None:
+        """`CheckAwake.` 的兑现处：天桩-甲监测状态重设生命；激活状态自伤并分批召唤。"""
+        if e.monitor:
+            pollution = fs.actual_at(*e.cell()) if fs is not None else 0.0
+            # 「重设自身生命百分比与所在地块病害值相同（每1%生命值对应1点，
+            #  **不会导致死亡**）」→ 下限压到 1 点血。
+            e.hp = max(1.0, e.max_hp * min(1.0, pollution / PILE_POLLUT_FULL))
+            if e.awake_value > 0.0 and pollution >= e.awake_value:
+                e.monitor = False
+                e.always_invincible = False
+                e.awake_timer = 0.0
+                if self.verbose:
+                    self.result.log.append(
+                        f"{t:7.1f}s  {e.name} 激活（所在地块病害值 "
+                        f"{pollution:g} ≥ {e.awake_value:g}）→ 开始每秒自伤")
+            return
+        if e.awake_hp_ratio <= 0.0 or e.awake_summon_ratio <= 0.0:
+            return
+        e.awake_timer += dt
+        while e.awake_timer >= 1.0:
+            e.awake_timer -= 1.0
+            # 「每秒受到自身最大生命值1%的真实伤害」：真实伤害不经减伤，
+            # 也不该走 `_damage_enemy`（那会把自伤记成"我方造成的伤害"）。
+            e.hp = max(0.0, e.hp - e.max_hp * e.awake_hp_ratio)
+            e.awake_lost += e.awake_hp_ratio
+            while ((e.awake_batches + 1) * e.awake_summon_ratio
+                   <= e.awake_lost + 1e-9):
+                e.awake_batches += 1
+                e.awake_pending.append(t + PILE_SUMMON_DELAY)
+                if self.verbose:
+                    self.result.log.append(
+                        f"{t:7.1f}s  {e.name} 损失达 "
+                        f"{e.awake_batches * e.awake_summon_ratio * 100:g}% "
+                        f"→ {PILE_SUMMON_DELAY:g}s 后召唤 "
+                        f"{e.awake_summon_cnt} 个{e.awake_enemy_key}")
+        for due in [x for x in e.awake_pending if x <= t]:
+            e.awake_pending.remove(due)
+            self._pile_summon(e, e.awake_summon_cnt, t)
+
+    def _pile_summon(self, parent: EnemyUnit, cnt: int, t: float) -> None:
+        """甲在**脚下那一格**召唤 `cnt` 个乙（原文的随机落在 1.0 正方形内）。
+
+        乙的**静态刚体**（原文天赋第一句）决定了它也**不走路线**，所以这里给
+        单点路线；它动起来只有一种情形——扑向干员（`_pile_diver_tick`）。
+        """
+        key = parent.awake_enemy_key
+        if not key:
+            return
+        pts = [(float(parent.cell()[0]), float(parent.cell()[1]))]
+        for _ in range(int(cnt)):
+            e = self._build_enemy(key, self._summon_level(key), pts, [], t, 0.0)
+            e.idle_timer = PILE_SELF_BIND           # 「登场时持有1秒自缚」
+            self.enemies.append(e)
+            if self.verbose:
+                self.result.log.append(
+                    f"{t:7.1f}s  {parent.name} 召唤 {e.name} 于 {parent.cell()}")
+
+    def _pile_diver_tick(self, e: EnemyUnit, t: float) -> None:
+        """天桩-乙：自缚 1 秒后扑向最近的干员，咬一口、挂天标、自毁。
+
+        「**范围内**第一个我方单位」的范围在数据里是空的：`rangeRadius = −1`、
+        攻击方式写「近战 远程」。本项目取「**最近的存活干员**（不设距离上限）」，
+        理由是正文写的是「扑到…身上」（要够得着才能扑），而数据里没有任何半径
+        可以拿来当上限——加一个上限就是凭空造数。两种读法（含"只扑 1 格内、
+        其余原地悬停"）都已登记在 `docs/verdicts-pending.md`。
+        """
+        if e.self_destruct_at >= 0.0 and t >= e.self_destruct_at:
+            # 「攻击结束时…强制击杀自身」。走直接写血：这不是我方击杀，
+            # 也不该触发任何"被击倒"类效果（乙自己没有那些效果）。
+            e.hp = 0.0
+            return
+        if e.idle_timer > 0.0 or e.attacked_once:
+            return
+        target = None
+        best = float("inf")
+        for op in self.operators:
+            if not op.alive or op.retreated:
+                continue
+            d = math.dist(e.position, op.position)
+            if d < best:
+                best = d
+                target = op
+        if target is None:
+            return
+        # 已经贴到目标格：钉住（换成单点路线，免得"走到路线终点"被判成漏怪）
+        if best <= 0.5:
+            e.route = [(float(target.position[0]), float(target.position[1]))]
+            e.legs = []
+            e.progress = 0.0
+            e.position = (float(target.position[0]), float(target.position[1]))
+            dealt = target.take(resolve_damage(
+                e.atk, damage_type=e.attack_type,
+                defense=target.current_defense(), res=target.current_res(),
+                dodge_phys=target.dodge_phys, dodge_arts=target.dodge_arts,
+            ).final)
+            e.attacked_once = True
+            e.self_destruct_at = t + self.enemy_windup
+            self._pile_attach_mark(e, target, t)
+            if self.verbose:
+                self.result.log.append(
+                    f"{t:7.1f}s  {e.name} 啃啮 {target.name} 造成 {dealt:,.0f}"
+                    f"（砸下 1 个天标，随后自毁）")
+            return
+        # 还没到 → 朝目标扑（目标换人/刚登场时都要指一遍）
+        e.route = [(float(e.position[0]), float(e.position[1])),
+                   (float(target.position[0]), float(target.position[1]))]
+        e.legs = []
+        e.progress = 0.0
+
+    def _pile_attach_mark(self, diver: EnemyUnit, target: OperatorUnit,
+                          t: float) -> None:
+        """在目标所在地块中心召唤 1 个天标，并**当场快照**附着对象。"""
+        key = self._pile_mark_key(diver)
+        if not key:
+            return
+        cell = (float(target.position[0]), float(target.position[1]))
+        mark = self._build_enemy(key, self._summon_level(key), [cell], [], t, 0.0)
+        # 「无法攻击/被阻挡」是它的天赋原文：不可阻挡、也不参与索敌优先级。
+        mark.unblockable = True
+        # 「附着对象为**自身登场时**附着范围内的我方单位」——半径 0.3 从格心量
+        # 出去够不到别格（干员都在格心、相邻 1.0 格），所以快照就是这一格的人。
+        mark.attached = [op for op in self.operators
+                         if op.alive and not op.retreated
+                         and math.dist(op.position, cell) <= 0.3]
+        self.enemies.append(mark)
+        if self.verbose:
+            self.result.log.append(
+                f"{t:7.1f}s  {diver.name} 在 {target.position} 挂上 {mark.name}"
+                f"（附着 {len(mark.attached)} 人，每秒 "
+                f"{mark.attach_damage:g} 无途径物理伤害）")
+
+    def _pile_mark_tick(self, e: EnemyUnit, dt: float, t: float) -> None:
+        """身上的天标：每秒按 `Passive.damage_value` 对附着对象结算一次；对象全没了就自毁。"""
+        alive = [op for op in e.attached if op.alive and not op.retreated]
+        if not alive:
+            e.hp = 0.0
+            if self.verbose:
+                self.result.log.append(
+                    f"{t:7.1f}s  {e.name} 附着对象全部退场 → 强制击杀自身")
+            return
+        e.attach_timer += dt
+        while e.attach_timer >= 1.0:
+            e.attach_timer -= 1.0
+            for op in alive:
+                # 「预计算无途径物理伤害」= 定额、不吃防御也不吃法抗，
+                # 故直接 `take` 而不是 `resolve_damage`。
+                op.take(e.attach_damage)
 
     def _enemy_mech_tick(self, dt: float, t: float) -> None:
         """敌人侧关卡机制（怀黍离）：加速计时、明识形态、被击倒后的效果。
@@ -2019,21 +3098,25 @@ class BattleSimulator:
         * `Passive.`（秽 / 除秽 / 肮 / 厌肮）：令**阻挡自身的单位(被阻挡时)/
           自身(未被阻挡时)** 半径 1.0 范围内的田地地块病害值 +N。
         * `DeathPassive.`（田鼷飞贼 / 田鼷大盗）：死亡爆炸，予我方可部署装置
-          （`token_key` 的装置 × `death_cnt`）。
-          ⚠ **模拟器目前没有"部署装置"这一层**——部署计划只收干员，装置全是
-          关卡预先摆好的。所以这里只把账记下来（`res.device_tokens`），
-          不改变任何一次结算。这不是接了一半，是如实记账：
-          `activity.py` 里 `DeathPassive.` 因此仍标 `todo`。
+          （`token_key` 的装置 × `death_cnt`）。这份额度**记进账也进额度**
+          （`res.device_tokens` + `sim.device_token_balance`），能不能真放下去
+          由 `_do_deploy_device` 在计划到点那一刻判（放不下记进
+          `res.device_deploy_rejected`）。放哪一格数据里没有，所以**只认计划**：
+          计划里没写就只攒着，不替博士做战术决定（`docs/verdicts-pending.md` E7）。
         """
         if e.passive_pollut > 0.0:
             self._pollute_around(e, t, e.passive_pollut,
                                  e.passive_radius or 1.0, "被击倒")
         if e.death_token and e.death_cnt:
             self.result.device_tokens.append((t, e.death_token, e.death_cnt))
+            self.device_token_balance[e.death_token] = (
+                int(self.device_token_balance.get(e.death_token, 0))
+                + int(e.death_cnt))
             if self.verbose:
                 self.result.log.append(
                     f"{t:7.1f}s  {e.name} 被击倒 → 获得 {e.death_cnt} 个 "
-                    f"{e.death_token}（模拟器没有装置部署层，仅记账）")
+                    f"{e.death_token}（手上共 "
+                    f"{self.device_token_balance[e.death_token]} 个）")
 
     def _pm2_tick(self, e: EnemyUnit, t: float) -> None:
         """明识形态逐帧要判的两件事：**清水**与**标记退场**。

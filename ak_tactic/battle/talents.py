@@ -64,6 +64,9 @@ __all__ = [
     "SNOW_KEYS",
     "is_snow_talent",
     "find_snow",
+    "BLESSING_KEYS",
+    "is_blessing_talent",
+    "find_blessing",
     "squad_cost_bonus",
     "REGEN_KEYS",
     "find_regen",
@@ -98,6 +101,7 @@ REGEN_KEYS = ("hp_recovery_per_sec", "buff_duration")
 #: 已被显式建模的天赋一览（给 CLI 与文档用）
 MODELED = {
     "snow": "积雪：积层 / 踏入伤害 / 每层减速 / 满层冻结 / 技能2 持续伤害",
+    "blessing": "圣山的祝福：致命伤免死一次（回满血 + 自身冻结 + 范围冻结）",
     "squad_cost": "编入队伍后额外获得初始部署费用",
     "regen_aura": "友方进入攻击范围时获得每秒回复生命值的增益治疗",
     "sp_on_action": "情绪吸收：攻击敌人额外回技力、消灭敌人额外得技力",
@@ -290,6 +294,37 @@ def is_snow_talent(t: Talent) -> bool:
 def find_snow(talents) -> Talent | None:
     for t in talents or ():
         if is_snow_talent(t):
+            return t
+    return None
+
+
+#: 认出「圣山的祝福」天赋的黑板指纹（圣聆初雪天赋1）。
+#:
+#: 依据：天赋描述与黑板逐字对应——
+#:
+#: > 受到伤害时使敌人**寒冷** 1.5 秒，若受到**致命伤害**，仅一次立刻回复
+#: > 所有生命值并使自身**冻结** 4 秒，使攻击范围内所有敌方单位**冻结** 8 秒
+#:
+#: ```
+#: 精2 潜能 0–4： c2e_freeze 8.0   cold 1.5   freeze 4.0   hp_ratio 1.0
+#: 精2 潜能 5–6： c2e_freeze 8.0   cold 2.0   freeze 4.0   hp_ratio 1.0
+#: ```
+#:
+#: **为什么取这两个键，而不是 `cold` 或 `hp_ratio`**：全表核验过命中面——
+#: `c2e_freeze` 与 `freeze` 各只命中这 2 条（同一天赋的两档潜能），
+#: 而 `cold` 命中 10 条、`hp_ratio` 命中 156 条（`operator_talent` 共 2647 条）。
+#: 后两个键单用会把一堆无关天赋认成这条。守卫把它钉成指纹。
+BLESSING_KEYS = ("c2e_freeze", "freeze")
+
+
+def is_blessing_talent(t: Talent) -> bool:
+    return t.has(*BLESSING_KEYS)
+
+
+def find_blessing(talents) -> Talent | None:
+    """找出「圣山的祝福」。没建模的技能/天赋一概不猜，这里也只认指纹。"""
+    for t in talents or ():
+        if is_blessing_talent(t):
             return t
     return None
 

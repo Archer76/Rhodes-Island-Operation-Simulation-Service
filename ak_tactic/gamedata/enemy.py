@@ -42,6 +42,16 @@ _IMMUNE_FIELDS = (
 LEVEL_TYPES = {0: "普通", 1: "精英", 2: "领袖", 3: "精英", "ELITE": "精英",
                "BOSS": "领袖", "NORMAL": "普通"}
 
+#: 关卡原始字段名 → `EnemyStats` 字段名。给 `with_overwrite` 用：
+#: 关卡自带的敌人定义（`overwrittenData`）是**原始口径**，字段名与库里不同。
+_ATTR_TO_FIELD = {
+    "maxHp": "max_hp", "atk": "atk", "def": "defense",
+    "magicResistance": "magic_resistance", "moveSpeed": "move_speed",
+    "attackSpeed": "attack_speed", "baseAttackTime": "base_attack_time",
+    "massLevel": "weight", "lifePointReduce": "life_point_reduce",
+    "rangeRadius": "range_radius", "hpRecoveryPerSec": "hp_recovery_per_sec",
+}
+
 
 #: 重生（倒下后归来）的键拼法。**只收在 gamedata 里逐条核过的**——
 #: 之前写死成 `Reborn.reborn_duration` 一个键，漏掉了整整一类敌人。
@@ -157,7 +167,7 @@ AURA_HIT_RADIUS = 0.5
 #: 键一律写全（含前缀的点），因为黑板就是一张平表。
 _MECH_PREFIXES: tuple[str, ...] = (
     "Passive.", "DeathPassive.", "AuraHit.", "SpeedUp.",
-    "Passive_Hit.", "PassiveM2.",
+    "Passive_Hit.", "PassiveM2.", "CheckAwake.",
 )
 
 
@@ -169,8 +179,98 @@ def _bb_float(bb: dict, key: str, default: float = 0.0) -> float:
         return default
 
 
+#: 「技能攻击」类敌人的**正文规格**，按技能 `prefabKey` 点名。
+#:
+#: 为什么要有这张表：技能黑板只给得出两个数（`atk_scale_magic` / `value`），
+#: 而"打几个、打谁、怎么分摊"全在正文里。项目纪律是**不编数**：正文写了就
+#: 按正文写死，并让自检去核那段正文（`check_enemy_formula.py` §技能攻击）。
+#:
+#: 原文（prts 图鉴「玷 / 勿玷」天赋 + 技能 0「污」）：
+#:   「不进行远程普通攻击」
+#:   「攻击场上 1 名部署于地面的我方单位，对目标及其周围 4 格的单位造成
+#:     攻击力 100% 的物理伤害；自身位于病害值>0 的田地地块时，当次攻击额外
+#:     附加攻击力 80% 的法术普通伤害，且令目标地块病害值+5」
+PROSE_SKILL_ATTACK: dict[str, dict[str, Any]] = {
+    "Drink": {
+        "scale_phys": 1.0,      # 「攻击力100%的物理伤害」
+        "targets": 1,           # 「攻击场上1名…我方单位」
+        "cross": 1,             # 「目标及其周围4格」= 十字（曼哈顿距离 1）
+        "ground_only": True,    # 「部署于地面的我方单位」
+        "no_normal_ranged": True,   # 天赋「不进行远程普通攻击」
+    },
+}
+
+
 def _bb_int(bb: dict, key: str, default: int = 0) -> int:
     return int(_bb_float(bb, key, float(default)))
+
+
+def skill_attack_fields(skills_raw) -> dict:
+    """由**技能**（`skills_raw`）解出「技能攻击」那一组字段。
+
+    【结构化那半】技能 `Drink`（图鉴技能 0「污」）的 blackboard 只有两个键，
+    两个都用上：
+
+    * ``atk_scale_magic`` = 0.8 —— 「当次攻击额外附加攻击力 80% 的法术普通伤害」
+      的**倍率**。ex04 四星档的 rune `enemy_skill_blackb_mul` 把它 ×1.3 → 1.04。
+    * ``value`` = 5 —— 「令目标地块病害值 +5」的那个 5。
+    * 另外 `initCooldown`（7）与 `baseAttackTime`（7）就是首次出手时刻与间隔。
+
+    【正文那半】prts 图鉴「玷 / 勿玷」的天赋与技能 0 原文：
+
+    > 天赋：**不进行远程普通攻击**
+    > 技能0「污」（初始 7）：攻击场上**1 名部署于地面**的我方单位，
+    > 对**目标及其周围 4 格**的单位造成**攻击力 100% 的物理伤害**；
+    > 自身位于病害值 > 0 的田地地块时，当次攻击**额外附加攻击力 80% 的法术
+    > 普通伤害**，且**令目标地块病害值 +5**；※此技能不可沉默
+
+    这五件事（1 名 / 地面限定 / 十字 / 100% 基础倍率 / 不做普攻）**数据里没有**，
+    按项目惯例在 `PROSE_SKILL_ATTACK` 里按正文写死，由自检逐条核。
+
+    ⚠ 与「装置内容一定要取」同一条纪律：这里不解释、不外推。技能名叫 `Drink`
+    但正文技能名是「污」，两者都留着（`skill_atk_key` 存 prefabKey）。
+    """
+    out: dict[str, Any] = {}
+    for sk in (skills_raw or ()):
+        key = str(sk.get("prefabKey") or "")
+        spec = PROSE_SKILL_ATTACK.get(key)
+        if spec is None:
+            continue
+        bb = {str(b.get("key")): b.get("value")
+              for b in (sk.get("blackboard") or [])}
+
+        def num(k: str, default: float = 0.0) -> float:
+            """取一个数。带 `valueStr` 的键是**字符串参数**，不当数字用。"""
+            for b in (sk.get("blackboard") or []):
+                if str(b.get("key")) != k:
+                    continue
+                if b.get("valueStr") not in (None, ""):
+                    return default
+                try:
+                    return float(b.get("value"))
+                except (TypeError, ValueError):
+                    return default
+            return default
+
+        out["skill_atk_key"] = key
+        out["skill_atk_scale_phys"] = float(spec["scale_phys"])
+        out["skill_atk_scale_magic"] = num("atk_scale_magic")
+        out["skill_atk_pollut"] = num("value")
+        out["skill_atk_targets"] = int(spec["targets"])
+        out["skill_atk_cross"] = int(spec["cross"])
+        out["skill_atk_ground_only"] = bool(spec["ground_only"])
+        out["skill_atk_no_normal"] = bool(spec["no_normal_ranged"])
+        try:
+            out["skill_atk_interval"] = float(sk.get("baseAttackTime") or 0.0)
+        except (TypeError, ValueError):
+            out["skill_atk_interval"] = 0.0
+        try:
+            out["skill_atk_init"] = float(sk.get("initCooldown") or 0.0)
+        except (TypeError, ValueError):
+            out["skill_atk_init"] = 0.0
+        del bb
+        return out
+    return out
 
 
 def mech_fields(bb: dict) -> dict:
@@ -182,6 +282,9 @@ def mech_fields(bb: dict) -> dict:
     * ``Passive.`` —— 秽 / 除秽 / 肮 / 厌肮：「被击倒时，令阻挡自身的单位
       (被阻挡时)/自身(未被阻挡时)**半径1.0范围内**的田地地块病害值
       **+extra_value**」。`range_radius` 就是那个 1.0。
+      同一个前缀下还有**另一个不相干的量**：``damage_value`` ——
+      「身上的天标」的附着效果「每秒受到 `damage_value` 预计算无途径物理
+      伤害」。这两个量此前只取了前者，见 `passive_attach_damage`。
     * ``DeathPassive.`` —— 田鼷飞贼 / 田鼷大盗：「死亡爆炸（予我方可部署
       装置）」，`token_key` = `trap_139_dhtl`、`cnt` = 2。
     * ``AuraHit.`` —— 田鼷力士 / 猛士 / 飞贼 / 大盗：「进入阻流阀半径0.5
@@ -200,6 +303,14 @@ def mech_fields(bb: dict) -> dict:
       法术抗性+`clean_water.magic_resistance`、**失去移动速度加成**；被标记的
       目标退场时若自身未被阻挡，半径1.0 内田地病害值+`mark[host].value`；
       进入该形态时获得 `duration_invic` 秒无敌」。
+    * ``CheckAwake.`` —— 天桩-甲 / 失控天桩-甲（**由天桩装置召唤**，不在任何
+      一关的出怪表里）：「**监测状态**（初始持有）：无敌、不死、元素免疫，
+      **重设自身生命百分比与所在地块病害值相同**（每 1% 生命对应 1 点病害值，
+      **不会因此死亡**），病害值 ≥`value_eff` 时红光警告、**首次 ≥`value`
+      时切换到激活状态**；**激活状态**：不再监测，每秒受到自身最大生命值
+      `hp_ratio`×100% 的真实伤害，**每损失 `enemy_dhdcr_trigger_summon.hp_ratio`
+      ×100% 生命**，在 1~1.5 秒随机延迟后于当前位置 **1.0 边长正方形**范围内
+      以自身设定路径召唤 `cnt` 个 `enemy_key`」。
 
     ⚠ 两处**读数存疑、按原样带出但不擅自解释**：
 
@@ -214,6 +325,8 @@ def mech_fields(bb: dict) -> dict:
         # ---- Passive.：被击倒时对田地的病害污染
         "passive_pollut": 0.0,
         "passive_radius": 0.0,
+        # ---- Passive. 的另一个量：附着效果每秒的预计算伤害（身上的天标）
+        "passive_attach_damage": 0.0,
         # ---- DeathPassive.：被击倒时给予可部署装置
         "death_token": "",
         "death_cnt": 0,
@@ -246,6 +359,13 @@ def mech_fields(bb: dict) -> dict:
         "pm2_mark_pollut": 0.0,
         "pm2_invincible": 0.0,
         "pm2_pollut_threshold": 0.0,
+        # ---- CheckAwake.：天桩-甲的监测 / 激活状态机
+        "awake_hp_ratio": 0.0,
+        "awake_summon_ratio": 0.0,
+        "awake_value": 0.0,
+        "awake_value_eff": 0.0,
+        "awake_enemy_key": "",
+        "awake_summon_cnt": 0,
     }
     if not any(k.startswith(p) for k in bb for p in _MECH_PREFIXES):
         return out
@@ -253,6 +373,7 @@ def mech_fields(bb: dict) -> dict:
     if "Passive." in _present(bb):
         out["passive_pollut"] = _bb_float(bb, "Passive.extra_value")
         out["passive_radius"] = _bb_float(bb, "Passive.range_radius")
+        out["passive_attach_damage"] = _bb_float(bb, "Passive.damage_value")
     if "DeathPassive." in _present(bb):
         out["death_token"] = str(bb.get("DeathPassive.token_key") or "")
         out["death_cnt"] = _bb_int(bb, "DeathPassive.cnt")
@@ -288,6 +409,16 @@ def mech_fields(bb: dict) -> dict:
         out["pm2_mark_pollut"] = _bb_float(bb, "PassiveM2.dhnzzh_passive_mark[host].value")
         out["pm2_invincible"] = _bb_float(bb, "PassiveM2.duration_invic")
         out["pm2_pollut_threshold"] = _bb_float(bb, "PassiveM2.value")
+    if "CheckAwake." in _present(bb):
+        out["awake_hp_ratio"] = _bb_float(bb, "CheckAwake.hp_ratio")
+        out["awake_summon_ratio"] = _bb_float(
+            bb, "CheckAwake.enemy_dhdcr_trigger_summon.hp_ratio")
+        out["awake_value"] = _bb_float(bb, "CheckAwake.value")
+        out["awake_value_eff"] = _bb_float(bb, "CheckAwake.value_eff")
+        out["awake_enemy_key"] = str(
+            bb.get("CheckAwake.enemy_dhdcr_trigger_summon.enemy_key") or "")
+        out["awake_summon_cnt"] = _bb_int(
+            bb, "CheckAwake.enemy_dhdcr_trigger_summon.cnt")
     return out
 
 
@@ -295,6 +426,61 @@ def _present(bb: dict) -> frozenset[str]:
     """黑板里**实际出现**的前缀集合。逐前缀判断，不是「有任意一个就全填」——
     混着填会让没有某机制的敌人凭空带上它的默认值。"""
     return frozenset(p for p in _MECH_PREFIXES if any(k.startswith(p) for k in bb))
+
+
+#: **只有正文、没有结构化字段**的召唤边：来源 key → 被它召唤出来的 key。
+#:
+#: 为什么要有这张表：盘点（`activity.audit_activity`）要顺着召唤关系把
+#: **不在关卡出怪表里**的单位也收进来，否则它们的黑板键永远不会被审计到——
+#: 怀黍离的天桩-甲 / 天桩-乙 / 身上的天标就是三个这样的漏网单位
+#: （`CheckAwake.` 这个前缀因此长期在盘点里"不存在"，而盘点的结论是
+#: 「未登记 0 项」）。模拟器也读这张表，两边同源。
+#:
+#: 判据：**凡是黑板里有结构化 `*enemy_key` 的边一律不写在这里**（甲→乙 走
+#: `CheckAwake.enemy_dhdcr_trigger_summon.enemy_key`、祟的两路走
+#: `Reborning.*.enemy_key`），本表只收"正文说了、数据里没有"的那几条。
+PROSE_SUMMON_EDGES: dict[str, tuple[str, ...]] = {
+    # 装置「天桩」技能「生成」（被动）：「登场时，在自身所在位置以预设路径
+    # 召唤一名天桩-甲」。装置自己的技能黑板只有一个键
+    # `sktok_dhdcr : branch_id = branch_dhdcr_1`，而 `branch_dhdcr_1`
+    # 在客户端数据里只出现在 skill_table 里，没有 branch → prefab 的映射表。
+    "trap_146_dhdcr": ("enemy_1398_dhdcr",),
+    # 天桩-乙天赋：「攻击命中时，在目标所在地块中心召唤1个[[身上的天标]]」。
+    # 乙自己的 `talentBlackboard` 是**空的**，这一跳只有正文。
+    "enemy_1399_dhtb": ("enemy_1400_dhtbgj",),
+    "enemy_1399_dhtb_2": ("enemy_1400_dhtbgj_2",),
+}
+
+
+def summon_edges(key: str, blackboard: dict | None = None) -> list[str]:
+    """这个单位会召唤谁：结构化字段优先，另加正文里写死的那几条边。
+
+    `blackboard` 传 `talentBlackboard`（或已解析的黑板字典）。结构化判据是
+    **键名以 `enemy_key` 结尾**——`Reborning.enemy_key`、
+    `Reborning.dhnzzh_reborn_c2.enemy_key`、
+    `CheckAwake.enemy_dhdcr_trigger_summon.enemy_key` 都命中；
+    而 `DeathPassive.token_key`（给的是**装置**不是敌人）不命中，故不会混进来。
+    """
+    out: list[str] = []
+    for k, v in (blackboard or {}).items():
+        if k.endswith("enemy_key") and isinstance(v, str) and v:
+            out.append(v)
+    out.extend(PROSE_SUMMON_EDGES.get(key, ()))
+    seen, uniq = set(), []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq
+
+
+def token_keys(blackboard: dict | None = None) -> list[str]:
+    """被击倒时**授予的装置**（`DeathPassive.token_key`）。盘点要顺带收进来。"""
+    out = []
+    for k, v in (blackboard or {}).items():
+        if k.endswith("token_key") and isinstance(v, str) and v:
+            out.append(v)
+    return out
 
 
 @dataclass
@@ -382,6 +568,10 @@ class EnemyStats:
     #: 「Passive.」被击倒时对半径 `passive_radius` 内的田地各加多少病害值
     passive_pollut: float = 0.0
     passive_radius: float = 0.0
+    #: 「Passive.」附着效果每秒造成的**预计算无途径物理伤害**（身上的天标 =
+    #: 200，天标二 = 300）。与上面的 `passive_pollut` 同前缀、完全不相干——
+    #: 这正是"前缀级覆盖"曾经漏掉的东西：`mech_fields` 只读了 `extra_value`。
+    passive_attach_damage: float = 0.0
     #: 「DeathPassive.」被击倒时给予我方可部署装置：装置 key 与个数
     death_token: str = ""
     death_cnt: int = 0
@@ -416,6 +606,50 @@ class EnemyStats:
     pm2_mark_pollut: float = 0.0
     pm2_invincible: float = 0.0
     pm2_pollut_threshold: float = 0.0
+    #: 「CheckAwake.」天桩-甲的监测/激活状态机（见 `mech_fields` 的正文）
+    #: 每秒自伤比例（`hp_ratio` = 0.01，即每秒 1% 最大生命）
+    awake_hp_ratio: float = 0.0
+    #: 每损失这个比例的生命就召唤一批（`enemy_dhdcr_trigger_summon.hp_ratio`）
+    awake_summon_ratio: float = 0.0
+    #: 激活阈值（`value` = 100）：所在地块病害值**首次**达到它就切激活
+    awake_value: float = 0.0
+    #: 红闪警告阈值（`value_eff` = 70）：纯表现，模拟器只登记不使用
+    awake_value_eff: float = 0.0
+    #: 召唤谁（`enemy_key` = `enemy_1399_dhtb`，即天桩-乙）
+    awake_enemy_key: str = ""
+    #: 每批召唤几个（`cnt` = 3）
+    awake_summon_cnt: int = 0
+
+    #: 嘲讽等级（`tauntLevel`）。天桩-甲的 **非首要目标** 在天标身上就是
+    #: `tauntLevel = -1`（prts 参数表「基础嘲讽等级 -1」），索敌时排最后。
+    #: 绝大多数敌人是 0，所以这条只在负数单位上改变行为。
+    taunt_level: float = 0.0
+
+    # ---------------------------------------------- 技能攻击（见 skill_attack_fields）
+    #: 命中的技能 `prefabKey`（怀黍离是 `Drink`，即图鉴技能 0「污」）。
+    #: 非空 = 这个敌人的伤害来自**技能**而不是普攻。
+    skill_atk_key: str = ""
+    #: 基础物理倍率（正文「造成攻击力100%的物理伤害」→ 1.0）
+    skill_atk_scale_phys: float = 0.0
+    #: 附加法术倍率（黑板 `atk_scale_magic` = 0.8；ex04 四星档被 rune
+    #: `enemy_skill_blackb_mul` 乘 1.3 变 1.04）。**这是那条 rune 的落点。**
+    skill_atk_scale_magic: float = 0.0
+    #: 攻击时令目标地块病害值 +N（黑板 `value` = 5），记入【缓存】。
+    skill_atk_pollut: float = 0.0
+    #: 打几个目标（正文「攻击场上1名部署于地面的我方单位」→ 1）
+    skill_atk_targets: int = 0
+    #: 溅射的十字半径（正文「对目标及其**周围4格**的单位造成…」→ 1 = 十字五格）
+    skill_atk_cross: int = 0
+    #: 只打**部署于地面**的单位（正文「部署于地面的我方单位」）
+    skill_atk_ground_only: bool = False
+    #: 不做远程普攻（正文天赋「不进行远程普通攻击」）——它的 `rangeRadius`
+    #: 是 −1 正是因为这个：射程对它没有意义，**全图**才是它的射程。
+    skill_atk_no_normal: bool = False
+    #: 出手间隔（秒）与首次出手时刻。技能自己**没有**间隔字段，数据里的
+    #: 间隔就是敌人自己的 `baseAttackTime`（玷 = 7）——所以 `skill_atk_interval`
+    #: 通常是 0，模拟器那时退回 `attack_interval`；`initCooldown` = 7 是首手。
+    skill_atk_interval: float = 0.0
+    skill_atk_init: float = 0.0
 
     # ---------------------------------------------------------- 派生与副本
 
@@ -441,6 +675,17 @@ class EnemyStats:
         for k, v in reborn_fields(bb).items():
             setattr(self, k, v)
         for k, v in mech_fields(bb).items():
+            setattr(self, k, v)
+        self.derive_skill_fields()
+
+    def derive_skill_fields(self) -> None:
+        """由**技能**（`skills_raw`）推出的字段：见 `skill_attack_fields`。
+
+        单列出来的理由与 `derive_blackboard_fields` 一样：`enemy_skill_blackb_mul`
+        会按技能点名把黑板键乘系数，乘完**必须重算**，否则乘数只落在一张
+        没人再读的表上——这一条正是 ④ 那个 TODO 的死因。
+        """
+        for k, v in skill_attack_fields(self.skills_raw).items():
             setattr(self, k, v)
 
     def rescale_talent_blackboard(self, factors: dict) -> list[str]:
@@ -473,10 +718,10 @@ class EnemyStats:
         都可能是库里共享的对象，所以这里**重建**那一项而不是就地改
         （就地改会污染全库缓存，见 `clone`）。
 
-        ⚠ 目前**没有消费者**：模拟器不驱动敌方技能（既没有敌方 SP 回转，
-        也没有技能效果结算），所以这条乘数眼下只让数据变正确、不改变任何
-        一次结算。这不是"顺手接了一半"，是如实记账——
-        `activity.py` 里 `enemy_skill_blackb_mul` 因此仍标 `todo`。
+        ⚠ 2026-09-16 起**有消费者了**：这条乘数打的是「玷 / 勿玷」技能
+        `Drink`（图鉴技能 0「污」）的 `atk_scale_magic`，而这条技能已经接进
+        模拟器（`skill_attack_fields` → `BattleSimulator._skill_attack_tick`）。
+        乘完**必须重算派生字段**，否则乘数只落在 `skills_raw` 那张没人再读的表上。
         """
         if not prefab_key:
             return []
@@ -501,6 +746,9 @@ class EnemyStats:
             out.append({**sk, "blackboard": new_bb})
         if hits:
             self.skills_raw = tuple(out)
+            # 乘完必须重算：技能攻击的倍率是从 `skills_raw` 派生出来的，
+            # 不重算的话乘数只改了一张没人再读的表（这正是 ④ 的死因）。
+            self.derive_skill_fields()
         return hits
 
     def clone(self) -> "EnemyStats":
@@ -705,6 +953,8 @@ class EnemyLibrary:
                     # 挥铳圣像 motion=FLY；它同时是 1/1/1 无弱点
                     is_flying=str(merged.get("motion") or "") == "FLY",
                     apply_way=str(merged.get("applyWay") or "MELEE"),
+                    # 嘲讽等级：负数即「非首要目标」，索敌时排最后（天标 = −1）
+                    taunt_level=float(merged.get("tauntLevel") or 0.0),
                 )
                 # 由**天赋黑板**派生的字段统一在这里算（相性 / 屏障 / 击杀费用 /
                 # 重生 / 六个机制前缀）。单列出来是为了关卡 runes 的乘数能重算
@@ -753,6 +1003,92 @@ class EnemyLibrary:
             st.alias = st.name
             st.name = hb_name
         return st
+
+    def with_overwrite(self, enemy_id: str, overwritten: dict,
+                       level: int | None = None) -> EnemyStats:
+        """关卡**自带**的敌人定义（``enemyDbRefs[].overwrittenData``）盖到 prefab 档位上。
+
+        用在 ``useDb: false`` 的敌人上：它们的 id **不在属性库里**，整份数据写在
+        关卡文件里，只有 ``prefabKey`` 指向的那个在库里。怀黍离小地图上的
+        ``enemy_1398_dhdcr_b``（天桩-甲）/ ``enemy_1399_dhtb_b``（天桩-乙）
+        就是这个形态——不改这条，天桩链在 03/04/07/tr01/tr02 五关里会整条走不通。
+
+        合并口径与库内**逐档合并**一致：
+
+        * ``attributes`` / 顶层字段：只认 ``m_defined: true`` 的那些
+          （``m_defined: false`` 表示"这一档没写、沿用 prefab"）。
+        * ``talentBlackboard``：**整表替换**语义按 ``_merge_defined`` 走
+          （该键在本地定义里出现就覆盖）。这里用同一套 `valueStr 优先` 判据。
+        * 结果拿 prefab 的副本改，绝不写回库——库是所有关卡共用的。
+        """
+        base = copy.deepcopy(self.get(enemy_id if self.exists(enemy_id)
+                                      else str(_unwrap(overwritten.get("prefabKey"))
+                                               or enemy_id), level))
+        attrs = overwritten.get("attributes") or {}
+        for f in _ATTR_FIELDS + _IMMUNE_FIELDS:
+            cell = attrs.get(f)
+            if isinstance(cell, dict) and cell.get("m_defined"):
+                base.raw_attributes[f] = cell
+        top = {}
+        for f in _TOP_FIELDS:
+            cell = overwritten.get(f)
+            if isinstance(cell, dict) and cell.get("m_defined"):
+                top[f] = _unwrap(cell)
+        bb = dict(base.talent_blackboard)
+        for b in (overwritten.get("talentBlackboard") or []):
+            bk = b.get("key")
+            if not bk:
+                continue
+            sv = b.get("valueStr")
+            bv = (sv.strip() if isinstance(sv, str) and sv.strip()
+                  else _unwrap(b.get("value")))
+            if bv is not None:
+                bb[bk] = bv
+        # 属性：本地定义里 `m_defined: true` 的覆盖 prefab，其余沿用。
+        # `lifePointReduce` / `rangeRadius` 在原始数据里挂**顶层**、
+        # 不在 `attributes` 下，两处都要找。
+        def pick(name: str):
+            for cell in (attrs.get(name), overwritten.get(name)):
+                if isinstance(cell, dict) and cell.get("m_defined"):
+                    return _unwrap(cell)
+            return getattr(base, _ATTR_TO_FIELD[name], None)
+
+        base.enemy_id = enemy_id
+        base.level = level if level is not None else base.level
+        base.name = str(_unwrap(overwritten.get("name")) or base.name)
+        base.max_hp = pick("maxHp")
+        base.atk = pick("atk")
+        base.defense = pick("def")
+        base.magic_resistance = pick("magicResistance")
+        base.move_speed = pick("moveSpeed")
+        base.attack_speed = pick("attackSpeed")
+        base.base_attack_time = pick("baseAttackTime")
+        base.weight = pick("massLevel")
+        base.life_point_reduce = pick("lifePointReduce")
+        base.range_radius = pick("rangeRadius")
+        base.hp_recovery_per_sec = pick("hpRecoveryPerSec")
+        if "motion" in top:
+            base.is_flying = str(top["motion"] or "") == "FLY"
+        if "applyWay" in top:
+            base.apply_way = str(top["applyWay"] or base.apply_way)
+        if "levelType" in top:
+            base.level_type = top["levelType"]
+        cell = attrs.get("tauntLevel")
+        if isinstance(cell, dict) and cell.get("m_defined"):
+            base.taunt_level = float(_unwrap(cell) or 0.0)
+        base.immunities = {
+            f: (bool(_unwrap(attrs[f]))
+                if isinstance(attrs.get(f), dict) and attrs[f].get("m_defined")
+                else base.immunities.get(f, False))
+            for f in _IMMUNE_FIELDS}
+        base.talent_blackboard = bb
+        if overwritten.get("skills") is not None:
+            base.skills_raw = tuple(overwritten["skills"])
+        # 派生字段必须重算：`CheckAwake.` 的 enemy_key 换了（03/04 是
+        # `enemy_1399_dhtb_b`，07 又换回 `enemy_1399_dhtb`），不重算就会
+        # 按 prefab 的老黑板召错单位。
+        base.derive_blackboard_fields()
+        return base
 
     def name(self, enemy_id: str) -> str:
         """中文名。图鉴表优先，没有图鉴就退到属性库里的名字。

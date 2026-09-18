@@ -376,6 +376,13 @@ class FarmlandSystem:
         self._t_actual = 0.0
         self.fields: list[Field] = [
             Field(cells=g) for g in farmland_groups(self.map)]
+        #: **地形原本就是田地的格子**（不随阻流阀的建成/被拆而变）。
+        #: `sever` 把它从 `fields` 里摘掉、`restore` 再还回来，两边都要用到
+        #: 这个"原始名单"——只看 `fields` 的话，被摘掉的格子就再也找不回来了。
+        self._all_cells: frozenset[tuple[int, int]] = frozenset(
+            c for f in self.fields for c in f.cells)
+        #: 当前被装置占掉（地形被重写、不算田地）的格子。
+        self._severed: set[tuple[int, int]] = set()
         self._index: dict[tuple[int, int], Field] = {}
         self._rebuild_index()
         self._seed()
@@ -528,11 +535,18 @@ class FarmlandSystem:
         这正是 `actual` 必须按格存的原因，否则「各组当前最高」无从谈起。
 
         返回重建后的分组。
+
+        ⚠ 切分时**缓存一律归零**（`Field(cache=0.0)`）。这不是"丢掉缓存"：
+        原文说建成的瞬间「令所在地形的实际病害值/**缓存病害值**变为0」，而
+        建成要么发生在开场（预置阻流阀）、要么发生在手动部署后的 3 秒内，
+        那时**还没有任何污染**，缓存必然是 0。真要在有污染时切分（例如将来
+        支持"拆掉一个已建成的阻流阀再原样建回去"），这条得改成按格记缓存。
         """
         if not self.severable or (x, y) not in self._index:
             return self.fields
         old = self._index[(x, y)]
         self.actual.pop((x, y), None)
+        self._severed.add((x, y))
 
         rest = old.cells - {(x, y)}
         groups = farmland_groups(self.map, rest)
@@ -547,6 +561,53 @@ class FarmlandSystem:
             fresh.append(Field(cells=g, maximum=peak, cache=0.0))
         # 该组之外的田地原样保留
         self.fields = [f for f in self.fields if f is not old] + fresh
+        self._rebuild_index()
+        return self.fields
+
+    def restore(self, x: int, y: int) -> list[Field]:
+        """把这一格**还回**田地（阻流阀被摧毁 / 被撤回时），并重算连通域。
+
+        与 `sever` 对称。原文（prts.wiki「阻流阀」装置机制）：
+
+            令所在地形的实际病害值/缓存病害值变为0且不视为「田地」地块
+            （实际效果为：**自技能结束到自身退场**，重写自身所在地块的
+            **地形标记**为**阻流阀**）；被分隔的连片田地各自以当前的最高
+            实际病害值作为当前最大病害值。
+
+        「**自技能结束到自身退场**」是这句话的关键：重写是**有期限**的，装置
+        一退场（被田鼷拆掉、或被玩家撤回），地形标记就回到原来的水田——所以
+        必须有这条还原路径。三条边界写清楚：
+
+        * **不是田地的格子不做任何事**：`_all_cells` 记的是地形原本的田地格，
+          高台/地面格即便被装置占了也不算田地，还回来还是不算。
+        * **还回来的格子【实际】从 0 起**：它从建成起就不是田地，任何污染都
+          没记在它头上（建成时原文也要求「实际/缓存病害值变为0」）。
+        * **合并时缓存相加**：还原只会让田地**变多、连通**（永远不会再切分），
+          所以每片旧田地整个落进某一新片里，把各旧片的【缓存】相加就是新片的
+          待释放量——污染已经在缓存里、迟早要释放，不该因为合并而消失。
+        * **【最大】取"旧的最高"与"当前最高的实际"里更大的那个**：原文那条
+          「各自以当前的最高实际病害值作为当前最大」是**切分**时的规矩；合并时
+          若照抄它，会把已经释放进【最大】、但【实际】还没爬上去的值抹掉
+          （缓存→最大→实际 是三步，中间那步的值不能因为合并而归零）。
+        """
+        if (not self.severable or (x, y) in self._index
+                or (x, y) not in self._all_cells):
+            return self.fields
+
+        self._severed.discard((x, y))
+        self.actual.pop((x, y), None)          # 还回来时不带污染
+        cells = set(self._all_cells) - self._severed
+        groups = farmland_groups(self.map, cells)
+
+        # 旧片 → 新片 的归属：一次还原只做合并，故每片旧田地整个进某一片新田地。
+        fresh: list[Field] = []
+        for g in groups:
+            peak = max((self.actual.get(c, 0.0) for c in g), default=0.0)
+            merge = [f for f in self.fields if f.cells & g]
+            cache = sum(f.cache for f in merge)
+            top = max((f.maximum for f in merge), default=0.0)
+            fresh.append(Field(cells=g, maximum=max(peak, top), cache=cache))
+        self.fields = fresh
         self._rebuild_index()
         return self.fields
 

@@ -493,6 +493,19 @@ CONTROL_KEYS: tuple[str, ...] = (
 #: 语义与 `attack@atk_scale` 一致，去掉后缀再查表。
 _SUFFIX_RE = re.compile(r"_(?:s\d+|\d+)$")
 
+#: **中缀**的技能槽标记：`attack@s3_atk_scale` → `attack@atk_scale`。
+#:
+#: 同一件事有两种写法：`attack@atk_scale_s2`（槽号在**尾巴**，上面那条正则管）
+#: 与 `attack@s3_atk_scale`（槽号**夹在 @ 后面**，原先四级降级全都够不着）。
+#: 提丰技3「永恒狩猎」整块黑板就是后一种写法，于是 `atk_scale` / `stun` /
+#: `trigger_time`（弹药数）**四个键一起落进 `other`**，技能一开就因为弹药为 0
+#: 而立刻结束。判据取自描述本身——「共造成 5 次相当于攻击力 {attack@s3_atk_scale}
+#: 的物理伤害并使目标晕眩 {attack@s3_stun} 秒 / 装有 {attack@s3_trigger_time} 发
+#: 弹药」，三个键的语义与不带槽号的同名键一致。
+#:
+#: 影响面很小且已核验：全库 `前缀@sN_属性` 形态只有 6 个技能、11 个键。
+_INFIX_RE = re.compile(r"@s\d+_")
+
 #: 带变体限定的键：`headb2_s_2[second].atk` → 变体 `second`、属性 `atk`。
 #:
 #: 这是**同一个属性的另一个场合取值**，不是新属性。方括号里可以出现
@@ -516,7 +529,8 @@ def _split_variant(key: str) -> tuple[str | None, str]:
 def _classify(key: str) -> tuple[str, str, str] | None:
     """把一个黑板键归到 (类别, 规范名, 量纲)，归不了返回 None。
 
-    匹配是三级降级：原样 → 去掉 `xxx@` 前缀 → 再去掉 `_s2`/`_2` 尾巴。
+    匹配是降级序列：原样 → 去掉 `xxx@` 前缀 → 去掉 `_s2`/`_2` 尾巴 →
+    **去掉夹在 @ 后面的技能槽标记**（`attack@s3_atk_scale` → `attack@atk_scale`）。
     """
     def lookup(k: str):
         if k in BUFF_KEYS:
@@ -527,8 +541,12 @@ def _classify(key: str) -> tuple[str, str, str] | None:
             return ("control", k, "sec")
         return None
 
-    for cand in (key, key.rsplit("@", 1)[-1], _SUFFIX_RE.sub("", key),
-                 _SUFFIX_RE.sub("", key.rsplit("@", 1)[-1])):
+    stripped = _SUFFIX_RE.sub("", key)
+    infixed = _INFIX_RE.sub("@", key)
+    for cand in (key, key.rsplit("@", 1)[-1],
+                 stripped, stripped.rsplit("@", 1)[-1],
+                 infixed, infixed.rsplit("@", 1)[-1],
+                 _SUFFIX_RE.sub("", infixed)):
         hit = lookup(cand)
         if hit:
             return hit

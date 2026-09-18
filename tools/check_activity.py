@@ -56,6 +56,36 @@ def main() -> int:
     # ★ 核心判据：**不许有未登记的东西**
     check("★ 没有任何未登记的机制（装置/黑板/rune 三类）",
           not rep.unknown, f"未登记 {len(rep.unknown)} 项：{rep.unknown[:6]}")
+    # ★ 召唤闭包：不在出怪表里的单位也要盘到，否则它们的黑板键永不进审计，
+    #   「未登记 0 项」就是虚的（天桩-甲/乙/身上的天标就是三例）。
+    check("★ 盘点顺着召唤闭包走（装置→甲、甲→乙、乙→天标都收进来了）",
+          "enemy_1398_dhdcr" in rep.summoned
+          and "enemy_1400_dhtbgj" in rep.summoned,
+          str(sorted(rep.summoned)))
+    # ★ 2026-09-16：装置 → 甲 那一跳**不是正文**，是关卡支线（结构化）。
+    #   而且三型甲都真的被用到——只认默认型会漏掉失控型与关卡本地型。
+    check("★ 三型天桩-甲都被盘到（默认 / 失控 `_2` / 关卡本地 `_b`）",
+          {"enemy_1398_dhdcr", "enemy_1398_dhdcr_2",
+           "enemy_1398_dhdcr_b"} <= set(rep.summoned),
+          str(sorted(rep.summoned)))
+    check("★ 关卡自带的敌人定义（`useDb: false`）不再落进「未登记」",
+          not [x for x in rep.unknown if str(x[1]).endswith("_dhdcr_b")
+               or str(x[1]).endswith("_dhtb_b")],
+          str(rep.unknown))
+    check("★ 失控型的乙（`…dhtb_2`）也在闭包里（失控甲召的是它）",
+          "enemy_1399_dhtb_2" in rep.summoned
+          and rep.summoned["enemy_1399_dhtb_2"] == "enemy_1398_dhdcr_2",
+          str({k: v for k, v in rep.summoned.items() if "dhtb" in k}))
+    check("★ 召唤体的黑板机制进了登记表（CheckAwake. 不再缺席）",
+          "CheckAwake." in rep.enemy_bb
+          and "enemy_1398_dhdcr" in rep.enemy_bb["CheckAwake."]
+          and "enemy_1398_dhdcr_b" in rep.enemy_bb["CheckAwake."],
+          f"CheckAwake. 覆盖 {sorted(rep.enemy_bb.get('CheckAwake.', {}))}")
+    # 同一个前缀下的**两个机制**必须各自有位（Passive. 与 Passive.damage_value）
+    check("★ 同前缀的两个机制各自成条（死亡污染 / 附着每秒伤害）",
+          "Passive." in rep.enemy_bb
+          and "Passive.damage_value" in rep.enemy_bb,
+          str(sorted(rep.enemy_bb)))
 
     # 已实现项必须真的在登记表里标 DONE —— 反向也要核
     check("装置三个都登记了",
@@ -69,10 +99,22 @@ def main() -> int:
         print(f"        来历：{e.source}")
     check("待实现清单非空时会被打印出来（不是静默）",
           True, f"{len(rep.todo)} 项")
-    # ⚠ 这一条不是"必须为 0"——那会逼着人把没做的标成已做。
-    #   它只钉住"清单是真的从数据盘出来的，不是写死的"。
-    check("待实现清单来自实际数据（怀黍离确实还有没做的）",
-          len(rep.todo) >= 1, f"{len(rep.todo)} 项")
+    # ⚠ 这一条原先钉的是 `len(rep.todo) >= 1`（"怀黍离确实还有没做的"）。
+    #   2026-09-16 四条 TODO 全部收口后它是 0——那是**结果**，不是问题；
+    #   再钉"必须非空"就变成逼人留一个假 TODO。改成钉**派生关系**：
+    #   报告里的待实现清单必须恰好等于登记表里 status==TODO 的那些条目，
+    #   既不许多、也不许漏（漏项 = 数据里出现了未登记的机制而清单不报）。
+    # 用别名导入，避免把 main() 里同名的模块级名字变成局部变量（会 UnboundLocalError）
+    from ak_tactic.activity import DEVICE_REGISTRY as _DEV_REG
+    from ak_tactic.activity import ENEMY_BB_REGISTRY as _EBB_REG
+    from ak_tactic.activity import RUNES_REGISTRY as _RUN_REG
+    from ak_tactic.activity import TODO as _TODO
+    _tables = (_DEV_REG, _EBB_REG, _RUN_REG)
+    _listed = {e.key for e in rep.todo}
+    _should = {k for t in _tables for k, v in t.items() if v.status == _TODO}
+    check("★ 待实现清单是从登记表派生的（既不许多、也不许漏）",
+          _listed == _should,
+          f"报告 {sorted(_listed)} / 登记表 {sorted(_should)}")
 
     print("\n[4] 状态声明与代码要对上")
     # 已标 DONE 的装置必须真的被模拟器/环境层读到
@@ -85,8 +127,25 @@ def main() -> int:
           and PUMP_RANGE == 1 and PUMP_RATE == 1.0)
     # 未标 DONE 的装置不许被当成已实现
     todo_dev = [k for k, e in DEVICE_REGISTRY.items() if e.status == TODO]
-    check("天桩仍标为待实现（没被顺手标成完成）",
-          any("dhdcr" in k for k in todo_dev), str(todo_dev))
+    # 天桩：正文与数据都取到了、整条链已接进模拟器，故标 DONE；
+    # 判据是"它的召唤表真的落在代码里、且模拟器真的读它"，见 [6]。
+    from ak_tactic.battle.devices import PILE_KEY as _PILE
+    from ak_tactic.battle.sim import PILE_CHILD as _CHILD
+    check("天桩标 DONE 且常量存在", DEVICE_REGISTRY[_PILE].status == DONE
+          and _PILE == "trap_146_dhdcr" and _PILE in _CHILD)
+    # ★ 装置→甲 的**正常路径**是结构化支线；退路表在，但正路不许被删掉。
+    import inspect as _inspect
+    from ak_tactic.battle.sim import BattleSimulator as _BS
+    _spec = _inspect.getsource(_BS._pile_spec)
+    check("★ 装置 → 甲 走的是关卡支线（结构化），退路表只是兜底",
+          "branch_for" in _spec and "branch_actions" in _spec
+          and "extra_route" in _spec,
+          f"_pile_spec 源码 {len(_spec)} 字符")
+    check("  装置 key 末段能推出支线前缀、且**没有支线语义的装置推不出**",
+          __import__("ak_tactic.gamedata.stage", fromlist=["x"])
+          .branch_prefix("trap_146_dhdcr") == "branch_dhdcr")
+    check("剩下没做的装置是 0 个（怀黍离三种装置都已实现）",
+          not todo_dev, str(todo_dev))
 
     print("\n[5] ★ 每个 DONE 都必须指到兑现它的那段代码（锚点）")
     # 这一节补的是一个**真发生过的漏洞**：`enemy_attribute_mul` 与
@@ -111,7 +170,10 @@ def main() -> int:
             continue
         mod_name, _, attr = e.anchor.partition(":")
         try:
-            sym = getattr(importlib.import_module(mod_name), attr)
+            # 锚点允许带点：`模块:类.方法`（方法就写在类里，指到方法比指到类准）
+            sym = importlib.import_module(mod_name)
+            for part in attr.split("."):
+                sym = getattr(sym, part)
         except Exception as exc:                                  # noqa: BLE001
             bad_anchor.append(f"{k} → {e.anchor}（{exc}）")
             continue
@@ -120,6 +182,7 @@ def main() -> int:
         elif isinstance(sym, (tuple, list, set, frozenset, dict)):
             hit = k in sym
         else:
+            # 函数/方法/类：直接比不过，看源码里有没有这个键（下面统一回退）
             hit = False
         if not hit:
             # 回退到"这个键出现在该符号的源码里吗"。
@@ -135,13 +198,44 @@ def main() -> int:
           str(bad_anchor[:3]))
     check("★ 每个 DONE 的 key 都真的出现在锚点那段代码里", not missing,
           str(missing[:3]))
-    # 反面：TODO 里写明"数据已改、但无消费者"的那条，不许被标成 DONE
-    check("敌方技能黑板乘数仍待实现（改写了数据但没有消费者）",
-          RUNES_REGISTRY["enemy_skill_blackb_mul"].status == TODO)
-    check("被击倒给装置的机制仍待实现（模拟器没有部署装置这一层）",
-          ENEMY_BB_REGISTRY["DeathPassive."].status == TODO)
-    check("进入阻流阀真伤仍待实现（装置没有血量/被摧毁这一层）",
-          ENEMY_BB_REGISTRY["AuraHit."].status == TODO)
+    # 反面→正面：这一条曾写着"数据已改、但无消费者"，2026-09-16 接通后翻 DONE。
+    # 留着这条正面断言，是为了防止有人把状态改回去而代码还在。
+    check("★ 敌方技能黑板乘数已接通（玷 / 勿玷 的技能「污」有消费者了）",
+          RUNES_REGISTRY["enemy_skill_blackb_mul"].status == DONE)
+    # 正面：这两条已经接了，不许再标回 TODO（否则"已实现"是假的）
+    check("★ 进入阻流阀真伤已实现（装置有血量、会被摧毁、田地会还原）",
+          ENEMY_BB_REGISTRY["AuraHit."].status == DONE)
+    check("★ 天桩链已实现（CheckAwake. 由监测/激活/召唤那段代码兑现）",
+          ENEMY_BB_REGISTRY["CheckAwake."].status == DONE)
+    check("★ 附着每秒伤害已实现（Passive.damage_value 单列成条）",
+          ENEMY_BB_REGISTRY["Passive.damage_value"].status == DONE)
+    check("★ 被击倒给装置已实现（额度有来源、有 `plan_device` 花得出去）",
+          ENEMY_BB_REGISTRY["DeathPassive."].status == DONE)
+    # 上面那条 DONE 的判据必须真的落在代码里，不能只是改了状态字符串
+    import inspect as _ins
+    from ak_tactic.battle.sim import BattleSimulator as _BS2
+    _dep = _ins.getsource(_BS2._do_deploy_device)
+    _run = _ins.getsource(_BS2.run)
+    check("  部署层真的存在：额度进账 / 花额度 / 主循环里真的调用它",
+          "device_token_balance" in _dep and "_affordable" in _dep
+          and "_do_deploy_device" in _run
+          and "device_token_balance" in _ins.getsource(_BS2._on_enemy_death),
+          f"_do_deploy_device {len(_dep)} 字符")
+
+    # 技能攻击那一条的 DONE 同样要落进代码：出手方法存在、主循环真的调用它、
+    # 而且**乘完要重算派生字段**（不重算就是"改了数据没消费者"的老病）
+    from ak_tactic.gamedata.enemy import EnemyStats as _ES
+    _tick = _ins.getsource(_BS2._skill_attack_tick)
+    _pick = _ins.getsource(_BS2._skill_atk_target)
+    check("  技能攻击真的存在：全图挑地面干员 / 十字五格 / 附加法术 / 污染地块",
+          "skill_atk_ground_only" in _pick and "skill_atk_cross" in _tick
+          and "skill_atk_scale_magic" in _tick and "pollute_cell" in _tick
+          and "_skill_attack_tick" in _run,
+          f"_skill_attack_tick {len(_tick)} 字符")
+    _rs = _ins.getsource(_ES.rescale_skill_blackboard)
+    check("  乘完**重算派生字段**（否则乘数只落在一张没人读的表上）",
+          "derive_skill_fields" in _rs,
+          "rescale_skill_blackboard → derive_skill_fields")
 
     print("\n" + "=" * 68)
     tail = f"通过 {_PASSED} 项，失败 {len(_FAILED)} 项"

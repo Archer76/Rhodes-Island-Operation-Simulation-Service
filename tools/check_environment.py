@@ -127,6 +127,70 @@ def check_coords() -> None:
           y != 7, f"原始 row 7 → y={y}，图高 {st.map.height}；"
                   f"不翻会落在下半部分")
 
+    # ---------------------------------------------------- 2.2 可部署格的第四个取值
+    #
+    # `buildableType` 有四个取值，`ALL` = 地面与高台**都能放**。原先代码只认
+    # MELEE / RANGED，`ALL` 于是落进"两种都不能"：`act31side_ex05`（33 格）与
+    # `act31side_sub-1-2`（42 格）**整图一个可部署格都没有** → 搜索的几何剪枝
+    # 一个候选都不剩 → 无论选什么都是 0 条结果（见 `docs/environment.md` 第十四节）。
+    from ak_tactic.gamedata.stage import Tile                          # noqa: PLC0415
+    all_tile = Tile(key="tile_road", height="LOWLAND", buildable="ALL",
+                    passable="ALL")
+    check("★ `buildableType: ALL` 判成地面与高台**都能放**",
+          all_tile.deployable_melee and all_tile.deployable_ranged
+          and all_tile.deployable, all_tile.buildable)
+    check("  MELEE 只算地面、RANGED 只算高台（没被顺手放宽）",
+          Tile(key="tile_road", height="LOWLAND", buildable="MELEE",
+               passable="ALL").deployable_melee
+          and not Tile(key="tile_road", height="LOWLAND", buildable="MELEE",
+                       passable="ALL").deployable_ranged
+          and Tile(key="tile_wall", height="HIGHLAND", buildable="RANGED",
+                   passable="FLY_ONLY").deployable_ranged
+          and not Tile(key="tile_wall", height="HIGHLAND", buildable="RANGED",
+                       passable="FLY_ONLY").deployable_melee)
+    check("  NONE 两种都不算",
+          not Tile(key="tile_floor", height="LOWLAND", buildable="NONE",
+                   passable="ALL").deployable)
+    for sid, want in (("act31side_ex05", 33),):
+        st_all = stage(sid)
+        if st_all is None:
+            skip(f"{sid} 可部署格", "关卡缓存缺失")
+            continue
+        got = len(st_all.map.melee_spots)
+        check(f"★ {sid} 整图 `ALL`：可部署格不再是 0", got == want,
+              f"{got} 格（原先是 0）")
+
+    # 取值普查：`buildableType` **只许**出现这四个。换数据源/换版本时若冒出
+    # 第五个取值，这里立刻红——否则它会像 `ALL` 一样，静静地把整图判成不可部署。
+    import json as _json                                             # noqa: PLC0415
+    import pathlib as _pathlib                                       # noqa: PLC0415
+
+    known = {"NONE", "MELEE", "RANGED", "ALL"}
+    root = _pathlib.Path(__file__).resolve().parent.parent
+    lv_dir = root / "data" / "gamedata" / "map.ark-nights.com" / "levels"
+    seen: dict[str, int] = {}
+    odd: list[str] = []
+    files = 0
+    if lv_dir.exists():
+        for p in lv_dir.rglob("level_*.json"):
+            try:
+                j = _json.loads(p.read_text(encoding="utf-8"))
+            except Exception:                                        # noqa: BLE001
+                continue
+            files += 1
+            for t in ((j.get("mapData") or {}).get("tiles") or []):
+                v = t.get("buildableType")
+                seen[v] = seen.get(v, 0) + 1
+                if v not in known:
+                    odd.append(f"{p.stem}:{v}")
+    if files:
+        check(f"★ 全量普查 {files} 个关卡：`buildableType` 没有第五个取值",
+              not odd, f"未见过载：{odd[:5]}；取值分布 {seen}")
+        check("  `ALL` 真的在用（不是理论取值）", seen.get("ALL", 0) > 0,
+              f"ALL×{seen.get('ALL', 0)}")
+    else:
+        skip("buildableType 普查", "没有本地关卡缓存")
+
 
 # ---------------------------------------------------------------- 3 田地几何
 
@@ -384,53 +448,81 @@ def check_sim_wiring() -> None:
     check("★ 有环境系统的关卡自动建好（默认 auto）", s.farmland is not None)
     if s.farmland is None:
         return
-    check("模拟器里的田地格数与单独构造一致",
-          len(s.farmland._index) == len(E.farmland_cells(st.map)),
-          f"{len(s.farmland._index)}")
+    # ★ 预置阻流阀**开场即在位**（它们走装置技能 2，没有持续时间），所以模拟器
+    #   一建好，那些格子就已经不算田地了。判据要跟"单独构造"差出阻流阀的格数。
+    from ak_tactic.battle import devices as D                              # noqa: PLC0415
+    blk = [d for d in D.parse_devices(st) if d.key == D.BLOCKER_KEY]
+    check("★ 模拟器里的田地 = 单独构造 − 预置阻流阀的格子（开场即在位）",
+          len(s.farmland._index) == len(E.farmland_cells(st.map)) - len(blk),
+          f"{len(s.farmland._index)} = {len(E.farmland_cells(st.map))} − {len(blk)}")
+    check("★ 预置阻流阀的格子开场就不是田地",
+          not any(s.farmland.is_farmland(*d.cell) for d in blk))
+    check("田地被这道坝切成多片（不是原地不动）",
+          len(s.farmland.fields) > 2, f"{len(s.farmland.fields)} 片")
 
-    # ⚠ 这一关**有病害的那片田地里确实有 10 个可部署格**，所以接线是有效的、
-    #   不是"建了对象但永远打不到人"。这是接线有没有意义的关键判据。
-    polluted = [f for f in s.farmland.fields if f.maximum > 0]
-    dep_in = [c for f in polluted for c in f.cells if st.map.tile(*c).deployable]
-    check("★ 有病害的田地里存在可部署格（否则接线毫无意义）",
-          len(dep_in) >= 1, f"{len(dep_in)} 格，如 {sorted(dep_in)[:4]}")
+    # ⚠ 接线判据要挂在**受污田地里真有可部署格**的关卡上，否则"接了线但永远
+    #   打不到人"。开场就断开田地的预置阻流阀让这件事变得很挑：`act31side_08`
+    #   的受污片只有 2 格、**没有可部署格**；`act31side_05` 的受污片有 10 格。
+    #   所以几何看 08、接线与逐秒对拍看 05。
+    st5 = stage("act31side_05")
+    s5 = sim("act31side_05")[0] if st5 is not None else None
+    if s5 is None or s5.farmland is None:
+        skip("接线判据", "act31side_05 没有环境系统")
+    else:
+        fs5 = s5.farmland
+        polluted = [f for f in fs5.fields if f.maximum > 0]
+        dep_in = [c for f in polluted for c in f.cells
+                  if st5.map.tile(*c).deployable]
+        check("★ 有病害的田地里存在可部署格（否则接线毫无意义）",
+              len(dep_in) >= 1, f"{len(dep_in)} 格，如 {sorted(dep_in)[:4]}")
 
-    # 逐格播种：开场只有污染点那一格有【实际】，同组其余格子从 0 爬升。
-    # 这条**钉住一个待裁定项**（另见 FarmlandSystem._seed 的文档）：
-    # 若改成整片播种，这里会红，提醒改的人去核对那处歧义。
-    hot = sorted(dep_in, key=lambda c: -s.farmland.actual_at(*c))
-    check("⚠ 逐格播种：开场时同组的可部署格【实际】为 0（待实机校正）",
-          all(s.farmland.actual_at(*c) == 0 for c in dep_in),
-          f"最高 {s.farmland.actual_at(*hot[0]):g}")
-    check("但所属田地的【最大】已经是 100",
-          all(s.farmland.maximum_at(*c) == 100 for c in dep_in))
+        # 逐格播种：开场只有污染点那一格有【实际】，同组其余格子从 0 爬升。
+        # 这条**钉住一个待裁定项**（另见 docs/verdicts-pending.md 的 E2）：
+        # 若改成整片播种，这里会红，提醒改的人去核对那处歧义。
+        seeds = set(fs5.params.init_pollut)
+        others = [c for c in dep_in if c not in seeds]
+        hot = sorted(others or dep_in, key=lambda c: -fs5.actual_at(*c))
+        check("⚠ 逐格播种：开场时同组的**其余**可部署格【实际】为 0（待实机校正）",
+              all(fs5.actual_at(*c) == 0 for c in others),
+              f"{len(others)} 格；最高 {fs5.actual_at(*hot[0]):g}")
+        seeded = [c for c in dep_in if c in seeds]
+        if seeded:
+            check("而播种点自己就是它的值（另注：这一点也可部署）",
+                  all(fs5.actual_at(*c) == fs5.params.init_pollut[c]
+                      for c in seeded),
+                  f"{[(c, fs5.actual_at(*c)) for c in seeded]}")
+        check("但所属田地的【最大】已经顶到污染点的值",
+              all(fs5.maximum_at(*c) > 0 for c in dep_in),
+              f"最低 {min(fs5.maximum_at(*c) for c in dep_in):g}")
 
-    # ⚠ 爬升是**渐近**的，不是恒速：步长 = ceil(差值/25 + 1) 随差值缩小而变小。
-    # 我第一版写的是「20 秒后到 100」，那是假设了恒速 5/秒——跑出 77 才暴露。
-    # 正确的判据是逐秒对拍那条**规律**，而不是某个秒数上的某个数。
-    fs = s.farmland
-    cell = dep_in[0]
-    mism: list[str] = []
-    trace: list[float] = []
-    for _ in range(30):
-        before = fs.actual_at(*cell)
-        mx = fs.maximum_at(*cell)
-        fs.tick(1.0)
-        after = fs.actual_at(*cell)
-        trace.append(after)
-        if after - before != E.actual_step(mx - before):
-            mism.append(f"{before:g}->{after:g}(max {mx:g})")
-    check("★ 逐秒对拍：增量恰好 = actual_step(最大 − 实际)", not mism,
-          "; ".join(mism[:3]) or "30 秒全对")
-    check("爬升单调不减、且绝不越过【最大】",
-          trace == sorted(trace) and all(v <= 100 for v in trace),
-          f"1/10/20/30 秒 = {trace[0]:g}/{trace[9]:g}/{trace[19]:g}/{trace[29]:g}")
-    check("30 秒后逼近但未达 100（渐近的必然结果）",
-          90 <= trace[-1] < 100, f"{trace[-1]:g}")
-    a = fs.actual_at(*cell)
-    check("每秒伤害恒 = basic_damage + 实际×damage_ratio",
-          fs.damage_per_second(*cell) == 20 + a * 3,
-          f"实际={a:g} → {fs.damage_per_second(*cell):g}")
+        # ⚠ 爬升是**渐近**的，不是恒速：步长 = ceil(差值/25 + 1) 随差值缩小而变小。
+        # 我第一版写的是「20 秒后到 100」，那是假设了恒速 5/秒——跑出 77 才暴露。
+        # 正确的判据是逐秒对拍那条**规律**，而不是某个秒数上的某个数。
+        fs = fs5
+        cell = dep_in[0]
+        mism: list[str] = []
+        trace: list[float] = []
+        for _ in range(30):
+            before = fs.actual_at(*cell)
+            mx = fs.maximum_at(*cell)
+            fs.tick(1.0)
+            after = fs.actual_at(*cell)
+            trace.append(after)
+            if after - before != E.actual_step(mx - before):
+                mism.append(f"{before:g}->{after:g}(max {mx:g})")
+        check("★ 逐秒对拍：增量恰好 = actual_step(最大 − 实际)", not mism,
+              "; ".join(mism[:3]) or "30 秒全对")
+        check("爬升单调不减、且绝不越过【最大】",
+              trace == sorted(trace)
+              and all(v <= fs.maximum_at(*cell) for v in trace),
+              f"1/10/20/30 秒 = {trace[0]:g}/{trace[9]:g}/{trace[19]:g}/{trace[29]:g}")
+        check("30 秒后逼近但未达顶（渐近的必然结果）",
+              trace[-1] < fs.maximum_at(*cell),
+              f"{trace[-1]:g} < {fs.maximum_at(*cell):g}")
+        a = fs.actual_at(*cell)
+        check("每秒伤害恒 = basic_damage + 实际×damage_ratio",
+              fs.damage_per_second(*cell) == 20 + a * 3,
+              f"实际={a:g} → {fs.damage_per_second(*cell):g}")
 
 
 def check_devices() -> None:
@@ -504,16 +596,71 @@ def check_devices() -> None:
         return
     check("模拟器读到了阻流阀的坐标",
           len(s._blocker_cells) == len(blockers), f"{len(s._blocker_cells)}")
-    check("开场时阻流阀还没建成（地块仍是田地）",
-          s.farmland.is_farmland(*blockers[0].cell))
-    s._t = 0.0
-    s._environment_tick(D.BUILD_SECONDS, D.BUILD_SECONDS)
-    check("★ 到 BUILD_SECONDS 后阻流阀建成、地块不再是田地",
-          not s.farmland.is_farmland(*blockers[0].cell),
-          f"{D.BUILD_SECONDS:g}s")
-    check("第二次 tick 不会重复切断（一次性事件）",
+    # ★ 预置阻流阀走**装置技能 2**（同名「阻流」，初始/消耗皆为 0、没有持续时间），
+    #   正文只写「阻隔水流」；「3秒后建成」是**玩家手动部署**那一支（技能 1）的事。
+    #   所以开场时它们已经在位——早先这里断言的是"开场还没建成、3 秒后才建成"，
+    #   那等于让每一张有田地的图前 3 秒多算了若干格田地。
+    check("★ 预置阻流阀开场即在位（技能 2，无持续时间）",
+          s._blockers_built and not s.farmland.is_farmland(*blockers[0].cell))
+    check("而它的生命值是满的（3.4% 是**手动部署**那一支的建成过程）",
+          all(d.hp == d.max_hp for d in s._devices))
+    check("只切了一次、没有重复切断",
           len({c for f in s.farmland.fields for c in f.cells})
           == len(s.farmland._index))
+
+    # ★ 装置有血、会被拆（AuraHit）；拆掉之后**地形还回去**。
+    #   这一整条用一个构造场景测：把一个阻流阀挪到一只田鼷脚下，
+    #   让它"进入范围"两次（50+50=100），看装置是否被拆、田地是否并回来。
+    from ak_tactic.battle.devices import (AURA_HIT_RADIUS, BLOCKER_KEY,      # noqa: PLC0415
+                                          DEVICE_HP, DeviceUnit, device_hp,
+                                          make_devices)
+    from ak_tactic.battle.environment import FarmlandSystem                 # noqa: PLC0415
+
+    check("三个装置的最大生命值都是 100（prts.wiki 装置信息）",
+          all(DEVICE_HP[k] == 100.0 for k in
+              (D.BLOCKER_KEY, D.PUMP_KEY, D.PILE_KEY)),
+          str(sorted(DEVICE_HP.items())))
+    check("AuraHit 半径 0.5 = 只有同格够得着",
+          AURA_HIT_RADIUS == 0.5 and AURA_HIT_RADIUS < 1.0)
+    unit = DeviceUnit(device=D.parse_devices(st)[0], max_hp=device_hp(D.BLOCKER_KEY))
+    check("新装置满血、已建成", unit.hp == 100.0 and unit.built and unit.alive)
+    check("★ 田鼷一次经过打掉目标最大生命值的 50%（=50 点）",
+          unit.take_damage(0.5 * unit.max_hp) == 50.0 and unit.hp == 50.0)
+    check("★ 再来一次拆掉（50+50 = 100）",
+          unit.take_damage(0.5 * unit.max_hp) == 50.0
+          and not unit.alive and unit.hp == 0.0)
+    check("建成期间的装置无敌（手动部署的阻流阀 3 秒内打不掉）",
+          DeviceUnit(device=D.parse_devices(st)[0], max_hp=100.0,
+                     build_left=1.0).take_damage(999.0) == 0.0)
+
+    # 地形还原：08 关的 (5,3) 是孤立的阻流阀格，拆掉它应当把那一格还回田地。
+    fs_r = FarmlandSystem(st, E.PolluteParams.from_stage(st, "NORMAL"))
+    for d in blockers:
+        fs_r.sever(*d.cell)
+    n_before, f_before = len(fs_r._index), len(fs_r.fields)
+    cells = [d.cell for d in blockers]
+    target_cell = (5, 3) if (5, 3) in cells else cells[0]
+    fs_r.restore(*target_cell)
+    check("★ 装置被拆 → 那一格还回田地",
+          fs_r.is_farmland(*target_cell), f"{target_cell}")
+    check("还回来的格数 +1",
+          len(fs_r._index) == n_before + 1,
+          f"{n_before} → {len(fs_r._index)}")
+    check("田地重新连片（片数不变或变少，绝不会变多）",
+          len(fs_r.fields) <= f_before,
+          f"{f_before} → {len(fs_r.fields)} 片")
+    check("还回来的格子【实际】从 0 起（它此前不是田地，没人污染过它）",
+          fs_r.actual_at(*target_cell) == 0.0)
+    # 高台/通道格即便被装置占了也不算田地：还回去应当什么都不做（不是报错）。
+    not_farm = next(((x, y) for y in range(st.map.height)
+                     for x in range(st.map.width)
+                     if not fs_r.is_farmland(x, y)), None)
+    if not_farm is not None:
+        before_n = len(fs_r._index)
+        fs_r.restore(*not_farm)
+        check("不是田地的格子还回去也不变成田地（无副作用）",
+              len(fs_r._index) == before_n and not fs_r.is_farmland(*not_farm),
+              f"{not_farm}")
 
 
 def check_pump() -> None:
@@ -855,12 +1002,18 @@ def check_enemy_mech() -> None:
 
         这一节测的是**污染落点与标记**，不是阻挡判定本身——阻挡关系由
         `check_battle.py` 管，这里只需一个能塞进 `blocked_by` 的位置。
+
+        `skill_active = False`：`_enemy_on_hit` 里「打中时按技能概率控场」
+        那一段要看它（另一个会话在加的机制）。桩不处在技能状态，如实写 False；
+        少了这个属性整节会直接 `AttributeError`，而那与本节要测的东西无关。
         """
 
         def __init__(self, pos):
             self.position = (float(pos[0]), float(pos[1]))
             self.alive = True
             self.retreated = False
+            self.skill = None
+            self.skill_active = False
 
     s2, e2 = mech_sim("enemy_1390_dhsbr_2", 0, cell)
     fld_self = s2.farmland.field_at(*cell)
@@ -1047,17 +1200,19 @@ def check_enemy_mech() -> None:
           f"缓存 {p_before:g}→{f8.cache if f8 else 0:g}")
     check("标记用掉即摘除（不会每帧重复污染）", not e8.marked_ops)
 
-    # 被击倒给装置的机制**只记账**：这是"数据对了、效果无处落地"的如实记录
+    # 被击倒给装置这条**已经接通**（2026-09-16）：额度进账 + `plan_device` 花得
+    # 出去 + 建成那一刻断田。这里核的是"进账"那一半，"花出去"那一半在 §12。
     s9, e9 = mech_sim("enemy_1397_dhtsxt", 0, cell)
     s9._damage_enemy(e9, e9.max_hp + 1, 1.0, DamageType.PHYSICAL)
     s9._enemy_mech_tick(0.05, 1.05)
-    check("★ 田鼷飞贼被击倒记下 2 个阻流阀（但模拟器没有部署装置层）",
+    check("★ 田鼷飞贼被击倒记下 2 个阻流阀（并进手上的额度）",
           s9.result.device_tokens
-          and s9.result.device_tokens[0][1:] == ("trap_139_dhtl", 2),
-          str(s9.result.device_tokens))
-    check("⚠ 这条机制仍标 TODO（只记账不算实现）",
+          and s9.result.device_tokens[0][1:] == ("trap_139_dhtl", 2)
+          and int(s9.device_token_balance.get("trap_139_dhtl", 0)) == 2,
+          f"{s9.result.device_tokens} / 额度 {s9.device_token_balance}")
+    check("★ 这条机制已标 DONE（部署层真的存在，不是只记账）",
           __import__("ak_tactic.activity", fromlist=["ENEMY_BB_REGISTRY"])
-          .ENEMY_BB_REGISTRY["DeathPassive."].status == "todo")
+          .ENEMY_BB_REGISTRY["DeathPassive."].status == "done")
 
     # ★ 前提守卫：SpeedUp 写 `haste_multiplier`、明识形态也写它，
     #   两者若落在**同一个敌人**身上就会互相覆盖。当前数据里两拨敌人不相交，
@@ -1068,6 +1223,44 @@ def check_enemy_mech() -> None:
             if lib.get(eid).speedup_move > 0 and lib.get(eid, 1).pm2_move > 0]
     check("★ 假设守卫：没有敌人同时带 SpeedUp 与明识形态（否则移速加成会打架）",
           not both, str(both))
+
+    # ------------------------------------------- 10.6b AuraHit：田鼷拆阻流阀
+    # 走**真链路**（`_device_tick`），不是只测 `DeviceUnit.take_damage`：
+    # 原文「进入阻流阀**半径 0.5** 范围内时**立刻**对其造成目标最大生命值
+    # 50%/70% 的**真实**伤害」。半径 0.5 = 只有同格够得着，所以把田鼷力士
+    # （0.5 → 50 点）放到阻流阀那一格上，"经过"两次就拆掉了。
+    blk_cell = s._blocker_cells[0] if s._blocker_cells else None
+    if blk_cell is not None:
+        sA, eA = mech_sim("enemy_1396_dhdts", 0, blk_cell)
+        dev = next(d for d in sA._devices if d.cell == blk_cell)
+        check("构造场景：田鼷力士站在阻流阀的格子上",
+              abs(eA.position[0] - blk_cell[0]) < 1e-9
+              and abs(eA.position[1] - blk_cell[1]) < 1e-9)
+        sA._device_tick(1 / 30, 0.0)
+        check("★ 进入范围立刻真伤 = 目标最大生命值 × 0.5（不是田鼷自己的 19000×0.5）",
+              abs(dev.hp - 50.0) < 1e-9, f"{dev.hp:g}/{dev.max_hp:g}")
+        check("装置挨打不进 `devices_lost`（还没拆掉）", not sA.result.devices_lost)
+        sA._device_tick(1 / 30, 1 / 30)
+        check("★ 是**进入**触发、不是站着每秒掉血（第二帧不再打）",
+              abs(dev.hp - 50.0) < 1e-9, f"{dev.hp:g}")
+        eA.position = (blk_cell[0] + 2.0, blk_cell[1])
+        sA._device_tick(1 / 30, 2 / 30)
+        eA.position = (float(blk_cell[0]), float(blk_cell[1]))
+        sA._device_tick(1 / 30, 3 / 30)
+        check("★ 两次经过 = 50+50 → 阻流阀被拆掉",
+              not dev.alive and dev.hp == 0.0, f"hp={dev.hp:g}")
+        check("★ 被拆记进 `devices_lost`（时刻、key、格子、谁拆的）",
+              len(sA.result.devices_lost) == 1
+              and sA.result.devices_lost[0][1] == "trap_139_dhtl"
+              and sA.result.devices_lost[0][2] == blk_cell
+              and sA.result.devices_lost[0][3] == eA.name,
+              str(sA.result.devices_lost))
+        check("★ 被拆之后地形**还回**田地（原文：重写只在『自技能结束到自身退场』期间有效）",
+              sA.farmland.is_farmland(*blk_cell))
+        check("拆掉的装置不再挨打、也不会再记一次",
+              dev.take_damage(999.0) == 0.0 and len(sA.result.devices_lost) == 1)
+    else:
+        skip("AuraHit 真链路", "这一关没有阻流阀")
 
     # ------------------------------------------- 10.7 「祟」整条链上真实几何
     # 上面几段都在桩场景里。这一段把 **ex08 的真实地图/装置/寻路**拿来，
@@ -1117,6 +1310,808 @@ def check_enemy_mech() -> None:
           f"pm2={e10.pm2_active} 连击={e10.attack_times}")
 
 
+def check_pile() -> None:
+    """天桩链：装置 → 天桩-甲 → 天桩-乙 → 身上的天标。
+
+    四跳里**只有一跳**是结构化字段（甲 → 乙，走 `CheckAwake…enemy_key`），
+    另外两跳只有正文，所以这一段同时把"正文里写的"与"数据里写的"逐条对齐：
+    值的来源、以及写死的那两张表都与数据一致（改数据会立刻红）。
+    """
+    print("\n[11] 天桩链")
+    import ak_tactic.battle.sim as S                                      # noqa: PLC0415
+    from ak_tactic.battle.devices import PILE_KEY, parse_devices          # noqa: PLC0415
+    from ak_tactic.battle.damage import DamageType                        # noqa: PLC0415
+    from ak_tactic.battle.sim import BattleSimulator                      # noqa: PLC0415
+    from ak_tactic.gamedata.enemy import EnemyLibrary                     # noqa: PLC0415
+
+    class _OpStub:
+        """干员桩：只带乙扑咬与天标附着要用的那几个接口。
+
+        这一节验的是"乙怎么飞过去、天标怎么扣血"，不是干员的属性模型——
+        防御给 500 是为了让"200 物理走 5% 保底 = 10"这条判据可读，
+        天标那 200 则是**不走防御**的定额伤害，两者对比才是重点。
+        """
+
+        def __init__(self, pos, hp=2000.0):
+            self.name = "干员桩"
+            self.position = (float(pos[0]), float(pos[1]))
+            self.alive = True
+            self.retreated = False
+            self.hp = self.max_hp = float(hp)
+            self.defense = 500.0
+            self.res = 20.0
+            self.dodge_phys = self.dodge_arts = 0.0
+            self.shield = 0.0
+
+        def take(self, amount):
+            amount = max(0.0, amount)
+            self.hp = max(0.0, self.hp - amount)
+            if self.hp <= 0:
+                self.alive = False
+            return amount
+
+        def current_defense(self):
+            return self.defense
+
+        def current_res(self):
+            return self.res
+
+    try:
+        lib = EnemyLibrary()
+    except Exception as exc:                                              # noqa: BLE001
+        skip("天桩链", f"敌人库不可用：{type(exc).__name__}: {exc}")
+        return
+
+    # ---------------------------------------------------- 11.1 数据对齐
+    check("装置 key 与设备表一致（天桩）", PILE_KEY == "trap_146_dhdcr",
+          PILE_KEY)
+    # 「装置 → 甲」**不是正文跳，是结构化字段**（2026-09-16 更正）：
+    # 装置 predefine 的 `overrideSkillBlackboard[branch_id]` → 关卡 `branches`
+    # → `key` 是甲、`routeIndex` 指向 `extraRoutes`。`PILE_CHILD` 降级为退路。
+    from ak_tactic.gamedata.stage import branch_prefix                     # noqa: PLC0415
+    check("★ 装置 key → 支线前缀（`trap_146_dhdcr` → `branch_dhdcr`）",
+          branch_prefix("trap_146_dhdcr") == "branch_dhdcr",
+          branch_prefix("trap_146_dhdcr"))
+    check("★ **没有支线语义的装置推不出前缀**（阻流阀/泵站不会被误配）",
+          branch_prefix("trap_139_dhtl") == "branch_dhtl"
+          and branch_prefix("trap_140_dhsb") == "branch_dhsb",
+          f"{branch_prefix('trap_139_dhtl')} / {branch_prefix('trap_140_dhsb')}")
+    check("★ 装置 → 甲的对照表退路与正文一致（正常路径已不用它）",
+          S.PILE_CHILD == {"trap_146_dhdcr": "enemy_1398_dhdcr"},
+          str(S.PILE_CHILD))
+    par = lib.get("enemy_1398_dhdcr")
+    check("★ 甲的黑板**自报**了它召唤谁（甲 → 乙那一跳）",
+          par.awake_enemy_key == "enemy_1399_dhtb",
+          f"黑板={par.awake_enemy_key}")
+    check("★ 甲的黑板四个数（1% 自伤 / 10% 一批 / 阈值 100 / 红闪 70）",
+          (par.awake_hp_ratio, par.awake_summon_ratio, par.awake_value,
+           par.awake_value_eff, par.awake_summon_cnt)
+          == (0.01, 0.1, 100.0, 70.0, 3),
+          f"{par.awake_hp_ratio}/{par.awake_summon_ratio}/"
+          f"{par.awake_value}/{par.awake_value_eff}/{par.awake_summon_cnt}")
+    # 写死的"乙 → 天标"：乙的 talentBlackboard 是**空的**，这一跳只有正文
+    # （「攻击命中时，在目标所在地块中心召唤1个[[身上的天标]]」）。
+    for diver, mark in sorted(S.PILE_MARK.items()):
+        d_stats = lib.get(diver)
+        m_stats = lib.get(mark)
+        check(f"★ {diver} → {mark}：正文那一跳的对照表对得上",
+              d_stats.name.startswith("天桩-乙") or "天桩-乙" in d_stats.name,
+              f"{d_stats.name} → {m_stats.name}")
+        check(f"  天标的附着伤害 = 它自己的 Passive.damage_value",
+              m_stats.passive_attach_damage in (200.0, 300.0),
+              f"{m_stats.name} 每秒 {m_stats.passive_attach_damage:g}")
+        check(f"  天标是「非首要目标」：嘲讽等级 −1（索敌排最后）",
+              m_stats.taunt_level == -1.0, f"{m_stats.taunt_level:g}")
+    check("★ 甲的「不可阻挡」用得上：它不是飞行单位（只能靠天赋挡不住）",
+          not par.is_flying and par.apply_way == "NONE" and par.atk == 1.0,
+          f"fly={par.is_flying} way={par.apply_way} atk={par.atk:g}")
+    check("甲两型的召唤配置与正文一致（默认 3 个 / 失控 4 个、8% 一批）",
+          (lib.get("enemy_1398_dhdcr_2").awake_summon_cnt,
+           lib.get("enemy_1398_dhdcr_2").awake_summon_ratio) == (4, 0.08),
+          f"{lib.get('enemy_1398_dhdcr_2').awake_summon_cnt} / "
+          f"{lib.get('enemy_1398_dhdcr_2').awake_summon_ratio:g}")
+
+    # 支线里写的是哪一型甲：**不是**全用默认型（2026-09-16 更正）——
+    # act31side_ex03 / ex07 / ex08 的支线里写的是失控天桩-甲 `_2`，
+    # 03/04/07/tr01/tr02 写的是关卡本地的 `enemy_1398_dhdcr_b`。
+    st = stage("act31side_08")
+    if st is None:
+        skip("天桩链（模拟器侧）", "缺 act31side_08 缓存")
+        return
+    levels = ["act31side_%02d" % i for i in range(1, 10)] + \
+             ["act31side_ex%02d" % i for i in range(1, 9)] + \
+             ["act31side_tr%02d" % i for i in range(1, 3)]
+    users, piles = [], 0
+    kinds: dict[str, list[str]] = {}
+    route_start_ok = route_start_bad = 0
+    for lid in levels:
+        stx = stage(lid)
+        if stx is None:
+            continue
+        ds = [d for d in parse_devices(stx) if d.key == PILE_KEY]
+        if not ds:
+            continue
+        users.append(lid)
+        piles += len(ds)
+        for d in ds:
+            br = stx.branch_for(d.branch_id, prefix=branch_prefix(d.key))
+            acts = stx.branch_actions(br)
+            if not acts:
+                continue
+            kinds.setdefault(acts[0].enemy_key, []).append(lid)
+            r = stx.extra_route(acts[0].route_index)
+            if r is not None and r.start == d.cell:
+                route_start_ok += 1
+            else:
+                route_start_bad += 1
+    check("★ 本活动里带天桩的关卡都在（9 关 / 32 个装置）",
+          len(users) >= 8 and piles >= 30,
+          f"{len(users)} 关 {piles} 个：{'、'.join(users)}")
+    check("★ 支线里的甲 key **不止一型**（默认 / 失控 / 关卡本地）",
+          set(kinds) == {"enemy_1398_dhdcr", "enemy_1398_dhdcr_2",
+                         "enemy_1398_dhdcr_b"},
+          str({k: len(v) for k, v in kinds.items()}))
+    check("★ 失控天桩-甲真的被用上了（ex03 / ex07 / ex08 三关）",
+          sorted(set(kinds.get("enemy_1398_dhdcr_2") or []))
+          == ["act31side_ex03", "act31side_ex07", "act31side_ex08"],
+          "、".join(sorted(set(kinds.get("enemy_1398_dhdcr_2") or []))))
+    check("★ 每个天桩装置格 == 它那条指派路径的起点格（32 个逐条核）",
+          route_start_bad == 0 and route_start_ok == piles,
+          f"{route_start_ok} 对 / {route_start_bad} 错")
+
+    # 关卡本地的敌人定义（`useDb: false`）：甲_b / 乙_b 不在属性库里
+    st3 = stage("act31side_03")
+    if st3 is not None:
+        loc = st3.local_enemies()
+        check("★ 关卡本地的敌人定义被读出来了（03 关：甲_b + 乙_b）",
+              set(loc) == {"enemy_1398_dhdcr_b", "enemy_1399_dhtb_b"},
+              str(sorted(loc)))
+        check("★ 本地敌人的 prefabKey 指得出库里的那一个",
+              st3.local_enemy_prefab("enemy_1398_dhdcr_b") == "enemy_1398_dhdcr"
+              and st3.local_enemy_prefab("enemy_1399_dhtb_b")
+              == "enemy_1399_dhtb",
+              st3.local_enemy_prefab("enemy_1398_dhdcr_b"))
+        a_b = lib.with_overwrite("enemy_1398_dhdcr_b", loc["enemy_1398_dhdcr_b"], 0)
+        check("★ 本地覆盖：数值与 prefab 同档一致（生命 5 万 / 防御 250）",
+              (a_b.max_hp, a_b.defense, a_b.atk) == (par.max_hp, par.defense,
+                                                     par.atk),
+              f"{a_b.max_hp:g}/{a_b.defense:g}/{a_b.atk:g}")
+        check("★ 本地覆盖**重算了派生字段**：03 关的甲_b 召 `…dhtb_b`",
+              a_b.awake_enemy_key == "enemy_1399_dhtb_b",
+              a_b.awake_enemy_key)
+        st7 = stage("act31side_07")
+        if st7 is not None:
+            a7 = lib.with_overwrite("enemy_1398_dhdcr_b",
+                                    st7.local_enemies()["enemy_1398_dhdcr_b"], 0)
+            check("★ 同 id 不同关，黑板不同（07 关的甲_b 召回默认乙）",
+                  a7.awake_enemy_key == "enemy_1399_dhtb",
+                  a7.awake_enemy_key)
+        check("★ 覆盖**不写回库**：库里的 prefab 仍是自己那一支",
+              lib.get("enemy_1398_dhdcr", 0).awake_enemy_key
+              == "enemy_1399_dhtb"
+              and lib.get("enemy_1398_dhdcr", 0).enemy_id
+              == "enemy_1398_dhdcr")
+        # 整条链在"本地敌人"这条路上也要通：甲_b → 乙_b → 天标（prefab 退路）
+        s3 = BattleSimulator(st3, enemy_at=lib.get)
+        s3._pile_tick(1 / 30, 0.0)
+        kid3 = next((e for e in s3.enemies if e.awake_value > 0), None)
+        check("★ 本地敌人也能被真召唤出来（模拟器走 prefab 覆盖取数）",
+              kid3 is not None and kid3.enemy_id == "enemy_1398_dhdcr_b"
+              and kid3.max_hp == 50000.0,
+              f"{getattr(kid3, 'enemy_id', None)} hp="
+              f"{getattr(kid3, 'max_hp', 0):g}")
+        if kid3 is not None:
+            check("  本地甲的召唤目标也来自**本关自己的黑板**",
+                  kid3.awake_enemy_key == "enemy_1399_dhtb_b",
+                  kid3.awake_enemy_key)
+            diver3 = s3._build_enemy("enemy_1399_dhtb_b", 0, [(0.0, 0.0)],
+                                     [], 0.0, 0.0)
+            check("★ 本地乙（`…dhtb_b`）→ 天标：走 prefabKey 退路查表",
+                  s3._pile_mark_key(diver3) == "enemy_1400_dhtbgj",
+                  s3._pile_mark_key(diver3))
+
+    # ---------------------------------------------------- 11.2 模拟器：甲
+    s = BattleSimulator(st, enemy_at=lib.get)
+    check("装置不改写地块：天桩脚下的格子**仍是田地**（与阻流阀相反）",
+          s.farmland is not None and s.farmland.is_farmland(10, 3))
+    s._pile_tick(1 / 30, 0.0)
+    kids = [e for e in s.enemies if e.awake_value > 0]
+    check("★ 每个天桩装置召唤出 1 个甲，位置就在装置那一格",
+          len(kids) == len([d for d in s._devices if d.key == PILE_KEY])
+          and all(k.cell() == d.cell for k, d in zip(
+              sorted(kids, key=lambda e: e.cell()),
+              sorted([d for d in s._devices if d.key == PILE_KEY],
+                     key=lambda d: d.cell))),
+          f"{len(kids)} 个")
+    p = kids[0]
+    check("★ 甲**站着不动**：它的天赋第一句是「自缚」，路径是关卡指派给它的"
+          "（起点=装置格），不是行进计划",
+          len(p.route) == 1 and p.route_length == 0.0 and p.progress == 0.0,
+          f"route={p.route} 长度={p.route_length:g}")
+    p.advance(30.0, s.speed_scale)
+    check("  推 30 秒也不动、也不会被判成漏怪（单点路线长度为 0）",
+          p.position == (float(p.cell()[0]), float(p.cell()[1]))
+          and not p.reached_end and not p.leaked, str(p.position))
+    check("★ 甲开场是**监测状态**：无敌 + 不死，且从第 0 帧起就不可阻挡",
+          p.monitor and p.always_invincible and p.unblockable)
+    check("★ 监测状态重设生命百分比 = 所在地块病害值（这里是 0 → 压到 1 点，"
+          "**不会因此死亡**）", p.hp == 1.0 and p.monitor,
+          f"hp={p.hp:g} 病害值={s.farmland.actual_at(*p.cell()):g}")
+    before = s.result.damage_dealt
+    s._damage_enemy(p, 1e9, 0.0, DamageType.PHYSICAL)
+    check("★ 监测状态无敌：打它一下伤害为 0、也不算进「我方总伤害」",
+          p.hp == 1.0 and s.result.damage_dealt == before)
+
+    # 灌满它所在的那片田地 → 病害值到 100 → 激活
+    fld = s.farmland.field_at(*p.cell())
+    fld.cache = 100.0 * len(fld.cells)
+    for _ in range(200):
+        s.farmland.tick(0.2)
+    check("构造场景：那一片田地的实际病害值到了 100（= CheckAwake.value）",
+          s.farmland.actual_at(*p.cell()) >= 100.0,
+          f"{s.farmland.actual_at(*p.cell()):g}")
+    s._pile_tick(1 / 30, 1.0)
+    check("★ 病害值首次 ≥100 → 切**激活状态**，同时解除无敌",
+          (not p.monitor) and (not p.always_invincible))
+    check("激活那一刻生命百分比 = 100%（50000）", p.hp == p.max_hp,
+          f"{p.hp:g}/{p.max_hp:g}")
+    s._pile_tick(1.0, 2.0)
+    check("★ 激活后每秒受 1% 最大生命的**真实伤害**（不经 `_damage_enemy`）",
+          abs(p.hp - (p.max_hp - p.max_hp * 0.01)) < 1e-6,
+          f"{p.hp:g}")
+    check("  自伤不记进「我方总伤害」（它不是我打的）",
+          s.result.damage_dealt == before)
+
+    # 每损失 10% → 1.25s 后 3 个乙
+    t = 2.0
+    scheduled = None
+    while t < 20.0 and scheduled is None:
+        t += 1.0
+        s._pile_tick(1.0, t)
+        if p.awake_pending:
+            scheduled = (t, p.awake_pending[0], p.awake_batches)
+    check("★ 损失满 10% 的**那一刻**排下一批（10 秒 1%，第 10 秒到 10%）",
+          scheduled is not None and scheduled[2] == 1,
+          f"第 {scheduled[2] if scheduled else '?'} 批、"
+          f"t={scheduled[0] if scheduled else '?'}")
+    check("★ 排定的到点时刻 = 当时 + 1.25s（原文 1~1.5s 随机取中值）",
+          scheduled is not None
+          and abs(scheduled[1] - (scheduled[0] + S.PILE_SUMMON_DELAY)) < 1e-9,
+          f"{scheduled[1]:g} = {scheduled[0]:g} + {S.PILE_SUMMON_DELAY:g}")
+    check("  还没到点时**一个乙都不该冒出来**",
+          not [e for e in s.enemies if e.enemy_id in S.PILE_MARK])
+    landed_at = None
+    while t < (scheduled[1] if scheduled else 0.0) + 0.5:
+        t += 1 / 30
+        s._pile_tick(1 / 30, t)
+        if landed_at is None and any(
+                e.enemy_id in S.PILE_MARK and e.cell() == p.cell()
+                for e in s.enemies):
+            landed_at = t
+    # ⚠ 这一关的 10 个天桩**都在同一片田里**，所以 10 个甲一起激活、一起召唤：
+    #   判据必须按"这一个甲脚下那一格"筛，不然数出来的是 10×3。
+    new = [e for e in s.enemies
+           if e.enemy_id in S.PILE_MARK and e.cell() == p.cell()]
+    check("★ 到点后一次落地 3 个乙（一批 = cnt）", len(new) == 3,
+          f"{len(new)} 个（全场 {sum(1 for e in s.enemies if e.enemy_id in S.PILE_MARK)} 个）")
+    check("★ 落地时刻与排定时刻差不到一帧",
+          landed_at is not None and abs(landed_at - scheduled[1]) < 1.5 / 30,
+          f"t={landed_at:.2f} vs 排定 {scheduled[1]:.2f}")
+    check("  召唤延迟取中值 1.25s（原文 1~1.5s 随机，模拟器不掷骰）",
+          S.PILE_SUMMON_DELAY == 1.25)
+    check("★ 「1.0 边长正方形范围内随机位置」= 脚下那一格（不掷骰）",
+          all(e.cell() == p.cell() for e in new),
+          f"{len(new)} 个都落在这里 {p.cell()}")
+    check("★ 别的甲也在**自己脚下**召唤（不是一个甲替全场放怪）",
+          all(e.cell() == next(k.cell() for k in kids if k.cell() == e.cell())
+              for e in s.enemies if e.enemy_id in S.PILE_MARK))
+    check("★ 乙登场时持有 1 秒自缚（待机：不能移动也不能出手）",
+          all(e.idle_timer == S.PILE_SELF_BIND for e in new))
+    check("乙是飞行单位（地表干员挡不住它）", all(e.is_flying for e in new))
+
+    # 跑到甲自己把自己耗死 → 装置随它死亡
+    while p.hp > 0 and t < 200.0:
+        t += 1.0
+        s._pile_tick(1.0, t)
+    check("★ 激活后 100 秒耗完（每秒 1%），甲自己倒下", p.hp == 0.0,
+          f"t={t:g}")
+    dev = next(d for d in s._devices if d.key == PILE_KEY and d.cell == p.cell())
+    check("★ 甲退场 → 所在地块的天桩**自动死亡**", not dev.alive)
+    check("★ 这条死亡记进 `devices_lost`（装置 key、格子、由谁带来）",
+          any(r[1] == PILE_KEY and r[2] == p.cell() for r in s.result.devices_lost),
+          str(s.result.devices_lost[:1]))
+    check("  天桩死亡**不还田地**（它本来就没改写地块）",
+          s.farmland.is_farmland(*p.cell()))
+
+    # ---------------------------------------------------- 11.3 乙 → 天标
+    op = _OpStub(p.cell())
+    s2 = BattleSimulator(st, enemy_at=lib.get)
+    s2.farmland.field_at(*p.cell()).cache = 0.0
+    fld2 = s2.farmland.field_at(10, 3)
+    fld2.cache = 100.0 * len(fld2.cells)
+    for _ in range(200):
+        s2.farmland.tick(0.2)
+    s2._pile_tick(1 / 30, 0.0)
+    op.position = (9.0, 5.0)
+    s2.operators.append(op)
+    t = 0.0
+    diver = None
+    while t < 20.0 and diver is None:
+        t += 1 / 30
+        s2._pile_tick(1 / 30, t)
+        diver = next((e for e in s2.enemies
+                      if e.enemy_id in S.PILE_MARK and e.hp > 0), None)
+    if diver is None:
+        skip("乙 → 天标", "没能召唤出乙")
+        return
+    for e in s2.enemies:
+        if e.idle_timer > 0:
+            e.idle_timer = max(0.0, e.idle_timer - 1 / 30)
+    hp0 = op.hp
+    for _i in range(3000):
+        t += 1 / 30
+        if diver.idle_timer > 0:
+            diver.idle_timer = max(0.0, diver.idle_timer - 1 / 30)
+        diver.advance(1 / 30, s2.speed_scale)
+        s2._pile_tick(1 / 30, t)
+        if diver.attacked_once:
+            break
+    check("★ 乙扑到干员身上咬一口（200 物理，吃防御、走 5% 保底）",
+          diver.attacked_once and hp0 - op.hp > 0,
+          f"干员 {hp0:g} → {op.hp:g}（防御 500 → 保底 10）")
+    check("  咬中时落点就是目标那一格（地块中心）",
+          abs(diver.position[0] - 9.0) < 1e-9
+          and abs(diver.position[1] - 5.0) < 1e-9, str(diver.position))
+    check("★ 攻击结束（动作时间到）后强制击杀自身",
+          diver.self_destruct_at > 0)
+    marks = [e for e in s2.enemies if e.attach_damage > 0]
+    check("★ 命中即在目标所在地块中心召唤 1 个天标", len(marks) == 1,
+          f"{len(marks)} 个")
+    m = marks[0]
+    check("★ 附着对象 = **登场时**半径 0.3 内的我方单位（快照，就这一格的人）",
+          m.attached == [op] and abs(m.position[0] - 9.0) < 1e-9,
+          f"附着 {len(m.attached)} 人")
+    check("  附着伤害 = `Passive.damage_value`（200），不是 `extra_value`",
+          m.attach_damage == 200.0, f"{m.attach_damage:g}")
+    hp1 = op.hp
+    s2._pile_mark_tick(m, 1.0, t + 1)
+    check("★ 每秒 200 的**预计算无途径**伤害：定额扣血，不吃防御/法抗",
+          abs((hp1 - op.hp) - 200.0) < 1e-9, f"{hp1:g} → {op.hp:g}")
+    op.alive = False
+    s2._pile_mark_tick(m, 1 / 30, t + 2)
+    check("★ 任一附着对象的效果结束 → 天标强制击杀自身", m.hp == 0.0)
+    # 索敌：天标嘲讽 −1，干员优先打别人
+    check("★ 嘲讽 −1 真的在索敌里生效（同一格时正常敌人优先）",
+          sorted([m, diver], key=lambda e: (-e.taunt_level, -e.progress))[0]
+          is diver)
+
+
+def check_device_deploy() -> None:
+    """玩家**手动部署装置**这一层（`DeathPassive.` 的落点）。
+
+    「被击倒时予我方可部署装置」在此前只进账不花：额度算出来了，却没有"部署
+    装置"这条路，等于没接。这一节验的就是那条路：额度（关卡 `tokenCards`
+    给的 + 击杀掉落的）→ 费用（角色表 `cost`，阻流阀 5）→ 落点 → **3 秒建成
+    那一刻**才改写地块。
+    """
+    print("\n[12] 装置部署层（额度 / 费用 / 建成即断田）")
+    from ak_tactic.battle.devices import (BLOCKER_KEY, BUILD_SECONDS,
+                                          DeviceDeployment, device_cost,
+                                          initial_device_tokens)
+    from ak_tactic.battle.sim import BattleSimulator
+    from ak_tactic.gamedata.enemy import EnemyLibrary
+
+    check("★ 部署费用与角色表一致（阻流阀 5 费 / 泵站与天桩 0 费）",
+          (device_cost(BLOCKER_KEY), device_cost("trap_140_dhsb"),
+           device_cost("trap_146_dhdcr")) == (5, 0, 0),
+          f"{device_cost(BLOCKER_KEY)}/{device_cost('trap_140_dhsb')}/"
+          f"{device_cost('trap_146_dhdcr')}")
+    check("  表里没有的装置不猜费用（给 0，不收也不乱收）",
+          device_cost("trap_999_nope") == 0)
+
+    st = stage("act31side_03")
+    if st is None:
+        skip("装置部署层", "缺 act31side_03 缓存")
+        return
+    check("★ 关卡给的装置额度取自 `tokenCards[].initialCnt`",
+          initial_device_tokens(st) == {BLOCKER_KEY: 2},
+          str(initial_device_tokens(st)))
+
+    try:
+        lib = EnemyLibrary()
+    except Exception as exc:                                              # noqa: BLE001
+        skip("装置部署层", f"敌人库不可用：{type(exc).__name__}: {exc}")
+        return
+    sim = BattleSimulator(st, enemy_at=lib.get, verbose=False)
+    sim.cost_mode = "strict"
+    sim.cost = 100.0
+    check("★ 构造时就带着关卡给的额度", sim.device_token_balance == {BLOCKER_KEY: 2},
+          str(sim.device_token_balance))
+    free = [c for f in sim.farmland.fields for c in f.cells
+            if not any(d.alive and d.cell == c for d in sim._devices)]
+    check("  找到一格空地（不是预置装置那一格）", bool(free), f"{len(free)} 格可放")
+    cell = free[0]
+    sim.plan_device(DeviceDeployment(time=1.0, device_key=BLOCKER_KEY,
+                                     position=cell, direction="RIGHT"))
+    sim._do_deploy_device(sim.device_deployments[0], 1.0)
+    check("★ 放下去：扣 5 费、额度 −1、记进 `devices_deployed`",
+          sim.cost == 95.0 and sim.device_token_balance[BLOCKER_KEY] == 1
+          and sim.result.devices_deployed == [(1.0, BLOCKER_KEY, cell)],
+          f"费 {sim.cost:g} 余 {sim.device_token_balance[BLOCKER_KEY]}")
+    new_dev = [d for d in sim._devices if d.cell == cell][0]
+    check("★ 落下去**还没断田**（那 3 秒里它仍算田地）",
+          sim.farmland.is_farmland(*cell) and not new_dev.built
+          and new_dev.building_invincible,
+          f"建成倒计时 {new_dev.build_left:g}s，无敌={new_dev.building_invincible}")
+    check("  建成期间生命值只有最大值的 3.4%（原文）",
+          abs(new_dev.hp - new_dev.max_hp * 0.034) < 1e-9,
+          f"{new_dev.hp:g}/{new_dev.max_hp:g}")
+    for _ in range(int(BUILD_SECONDS * 30) + 1):
+        sim._device_tick(1 / 30, 1.0)
+    check("★ **建成那一刻**才改写地块：那一格不再是田地",
+          new_dev.built and not sim.farmland.is_farmland(*cell)
+          and cell in sim._blocker_cells,
+          f"建成={new_dev.built} 片数={len(sim.farmland.fields)}")
+
+    # ---- 三类拒收都要留痕
+    before = len(sim.result.device_deploy_rejected)
+    sim._do_deploy_device(DeviceDeployment(time=2.0, device_key=BLOCKER_KEY,
+                                           position=cell), 2.0)
+    check("★ 同一格放第二个 → 拒收并写明理由",
+          len(sim.result.device_deploy_rejected) == before + 1
+          and "已经有装置" in sim.result.device_deploy_rejected[-1][2],
+          sim.result.device_deploy_rejected[-1][2])
+    other = [c for c in free if c != cell]
+    sim._do_deploy_device(DeviceDeployment(time=2.0, device_key=BLOCKER_KEY,
+                                           position=other[0]), 2.0)
+    check("★ 第二次放得下去（额度 1 → 0）",
+          sim.device_token_balance[BLOCKER_KEY] == 0
+          and len(sim.result.devices_deployed) == 2,
+          str(sim.device_token_balance))
+    sim._do_deploy_device(DeviceDeployment(time=3.0, device_key=BLOCKER_KEY,
+                                           position=other[1]), 3.0)
+    check("★ 额度用完 → 拒收（不是白送一个）",
+          "额度" in sim.result.device_deploy_rejected[-1][2]
+          and len(sim.result.devices_deployed) == 2,
+          sim.result.device_deploy_rejected[-1][2])
+    sim.device_token_balance[BLOCKER_KEY] = 2      # 假设又打死了几只飞贼
+    sim.cost = 0.0
+    sim._do_deploy_device(DeviceDeployment(time=4.0, device_key=BLOCKER_KEY,
+                                           position=other[1]), 4.0)
+    check("★ 有额度但费不够 → 同样拒收（与干员部署同一道闸门）",
+          "费用不足" in sim.result.device_deploy_rejected[-1][2]
+          and sim.result.cost_denied, sim.result.device_deploy_rejected[-1][2])
+
+    # ---- `DeathPassive.` 掉落的额度真的进账
+    sim2 = BattleSimulator(st, enemy_at=lib.get)
+    class _Thief:
+        name, death_token, death_cnt = "田鼷飞贼", BLOCKER_KEY, 2
+        passive_pollut, passive_radius = 0.0, 1.0
+    sim2._on_enemy_death(_Thief(), 5.0)         # type: ignore[arg-type]
+    check("★ 击杀掉落**进额度**（关卡给的 2 + 掉的 2 = 4）",
+          sim2.device_token_balance[BLOCKER_KEY] == 4
+          and sim2.result.device_tokens == [(5.0, BLOCKER_KEY, 2)],
+          str(sim2.device_token_balance))
+
+
+class _ProbeOp:
+    """干员桩（模块级）：只带"技能攻击打上去"要用的那几个接口。
+
+    不是干员属性模型——防御/法抗给 0 是为了让"物理 100% + 法术 104%"
+    这两段在数值上可读，`block_cnt` 则用来验「部署于地面」那一条。
+    """
+
+    def __init__(self, pos, name="干员桩", hp=5000.0, block=2):
+        self.name = name
+        self.position = (float(pos[0]), float(pos[1]))
+        self.alive = True
+        self.retreated = False
+        self.hp = self.max_hp = float(hp)
+        self.defense = 0.0
+        self.res = 0.0
+        self.dodge_phys = self.dodge_arts = 0.0
+        self.shield = 0.0
+        self.block_cnt = block
+        self.skill = None
+        self.skill_active = False
+        self.sp = 0.0
+
+    def take(self, amount):
+        amount = max(0.0, amount)
+        self.hp = max(0.0, self.hp - amount)
+        if self.hp <= 0:
+            self.alive = False
+        return amount
+
+    def current_defense(self):
+        return self.defense
+
+    def current_res(self):
+        return self.res
+
+
+def check_skill_attack() -> None:
+    """敌方**技能出手**：怀黍离「玷 / 勿玷」的技能「污」。
+
+    这一节同时钉两件事：① 技能黑板那两个数是**结构化**的、并且 rune
+    `enemy_skill_blackb_mul` 真的改到了派生字段；② 正文那五件事（1 名 /
+    地面 / 十字 / 100% / 不做普攻）确实写死在 `PROSE_SKILL_ATTACK` 里。
+    """
+    print("\n[13] 敌方技能出手（玷 / 勿玷 的技能「污」）")
+    import inspect
+    from ak_tactic.battle.damage import DamageType
+    from ak_tactic.battle.sim import BattleSimulator
+    from ak_tactic.battle.stage_mul import parse_rune_muls, wrap_enemy_at
+    from ak_tactic.gamedata.enemy import (EnemyLibrary, PROSE_SKILL_ATTACK,
+                                          skill_attack_fields)
+
+    spec = PROSE_SKILL_ATTACK.get("Drink")
+    check("★ 正文规格写死在表里（技能 `Drink` → 1 名 / 十字 / 地面 / 100%）",
+          spec is not None and spec["targets"] == 1 and spec["cross"] == 1
+          and spec["ground_only"] and spec["scale_phys"] == 1.0,
+          str(spec))
+    # 正文那五件事必须在**代码注释**里留下原文，免得日后被人"顺手"改数
+    src = inspect.getsource(skill_attack_fields)
+    flat = src.replace(" ", "").replace("\n", "")
+    check("★ 那五件事的出处（prts 图鉴原文）就写在派生函数的文档里",
+          all(t in flat for t in ("不进行远程普通攻击", "周围4格",
+                                  "攻击力100%的物理伤害", "病害值+5")),
+          f"文档 {len(src)} 字符")
+
+    try:
+        lib = EnemyLibrary()
+    except Exception as exc:                                              # noqa: BLE001
+        skip("敌方技能出手", f"敌人库不可用：{type(exc).__name__}: {exc}")
+        return
+    e0 = lib.get("enemy_1393_dhele_2", 0)
+    check("★ 技能攻击的字段由**技能黑板**派生（0.8 / +5 / 首手 7 / 不做普攻）",
+          (e0.skill_atk_key, e0.skill_atk_scale_magic, e0.skill_atk_pollut,
+           e0.skill_atk_init, e0.skill_atk_no_normal)
+          == ("Drink", 0.8, 5.0, 7.0, True),
+          f"{e0.skill_atk_key} magic={e0.skill_atk_scale_magic} "
+          f"pollut={e0.skill_atk_pollut}")
+    check("  另一型玷（`enemy_1393_dhele`）同规格（两型共用技能 `Drink`）",
+          lib.get("enemy_1393_dhele", 0).skill_atk_scale_magic == 0.8)
+    check("  没有这个技能的敌人**全是 0/False**（不会误伤别的敌人）",
+          lib.get("enemy_1390_dhsbr", 0).skill_atk_key == ""
+          and lib.get("enemy_1390_dhsbr", 0).skill_atk_scale_magic == 0.0)
+
+    st = stage("act31side_ex04")
+    if st is None:
+        skip("敌方技能出手（模拟器侧）", "缺 act31side_ex04 缓存")
+        return
+    muls = parse_rune_muls(st.raw.get("runes"), "FOUR_STAR")
+    at4 = wrap_enemy_at(lib.get, muls)
+    check("★ rune `enemy_skill_blackb_mul` 真的改到了**派生字段**（0.8 → 1.04）",
+          abs(at4("enemy_1393_dhele_2", 0).skill_atk_scale_magic - 1.04) < 1e-9,
+          f"{at4('enemy_1393_dhele_2', 0).skill_atk_scale_magic}")
+    check("  乘数**不写回库**（别的关卡还是 0.8）",
+          lib.get("enemy_1393_dhele_2", 0).skill_atk_scale_magic == 0.8)
+
+    # ---------------- 模拟器侧：打谁、打几格、附加法术、污染
+    sim = BattleSimulator(st, enemy_at=at4, verbose=False)
+    if sim.farmland is None:
+        skip("敌方技能出手（模拟器侧）", "ex04 没开田地系统")
+        return
+    fld = sim.farmland.fields[0]
+    cell = sorted(fld.cells)[0]
+    ops = {}
+    for name, pos, block in (("远处近战", (cell[0] + 6, cell[1]), 2),
+                             ("十字高台", (cell[0] + 1, cell[1]), 0),
+                             ("目标近战", cell, 2)):
+        op = _ProbeOp(pos, name, block=block)
+        ops[name] = op
+        sim.operators.append(op)          # 顺序 = 部署顺序，最后那个才是目标
+    e = sim._build_enemy("enemy_1393_dhele_2", 0,
+                         [(float(cell[0]), float(cell[1]))], [], 0.0, 0.0)
+    sim.enemies.append(e)
+    check("★ 技能攻击的数值进了 `EnemyUnit`（物理 100% / 法术 1.04 / +5）",
+          (e.skill_atk_scale_phys, e.skill_atk_scale_magic, e.skill_atk_pollut)
+          == (1.0, 1.04, 5.0),
+          f"{e.skill_atk_scale_phys}/{e.skill_atk_scale_magic}/{e.skill_atk_pollut}")
+    far = ops["远处近战"]
+    check("★ 挑目标是**全图**（射程 −1 也照打）且只要**地面**单位（`block_cnt>0`）",
+          sim._skill_atk_target(e) is ops["目标近战"],
+          f"选中 {sim._skill_atk_target(e).name}")
+    ops["目标近战"].block_cnt = 0
+    check("  地面限定真的生效：唯一的地面单位变成高台后就不打了",
+          sim._skill_atk_target(e) is ops["远处近战"]
+          or sim._skill_atk_target(e) is None,
+          str(getattr(sim._skill_atk_target(e), "name", None)))
+    ops["目标近战"].block_cnt = 2
+
+    # ① 自身**不在**受污染田地上：只有物理那一段，也不污染
+    t = 0.0
+    hp0 = ops["目标近战"].hp
+    while t < 7.5 and ops["目标近战"].hp == hp0:
+        t += 1 / 30
+        sim._skill_attack_tick(1 / 30, t)
+    dmg = hp0 - ops["目标近战"].hp
+    check("★ 首手在 `initCooldown`(7s) 到点时出手；这一下是**攻击力 100% 物理**",
+          abs(dmg - e.atk) < 1e-6 and abs(t - 7.0) < 0.1,
+          f"t={t:.2f} 伤害 {dmg:g}（攻击力 {e.atk:g}）")
+    check("★ 十字：目标**及其四邻**都吃这一下",
+          abs((hp0 - ops["十字高台"].hp) - dmg) < 1e-6, "四邻同样掉血")
+    check("★ 远处（不在十字里）的单位**不掉血**",
+          far.hp == far.max_hp, f"{far.hp:g}")
+    check("  自身不在受污染的田地上 → **没有**附加法术、也不污染目标地块",
+          sim.farmland.field_at(*cell).cache == 0.0,
+          f"缓存 {sim.farmland.field_at(*cell).cache:g}")
+
+    # ② 把它挪到受污染的田地上：附加法术 + 目标地块 +5（记入缓存）
+    other = None
+    for f in sim.farmland.fields:
+        for c in sorted(f.cells):
+            if c != cell:
+                other = c
+                break
+        if other:
+            break
+    if other is None:
+        skip("敌方技能出手（② 附加法术）", "找不到第二片田地")
+        return
+    f2 = sim.farmland.field_at(*other)
+    f2.cache = 100.0 * len(f2.cells)
+    for _ in range(200):
+        sim.farmland.tick(0.2)
+    e.route = [(float(other[0]), float(other[1]))]
+    e.position = (float(other[0]), float(other[1]))
+    ops["目标近战"].position = (float(other[0]), float(other[1]))
+    ops["十字高台"].position = (float(other[0]), float(other[1] + 1))
+    check("构造场景：它脚下那格的病害值 > 0",
+          sim.farmland.actual_at(*other) > 0.0,
+          f"{sim.farmland.actual_at(*other):g}")
+    cache0 = sim.farmland.field_at(*other).cache
+    # 目标给 30 法抗：两段**分开减抗**的话，法术那段要乘 (1−0.3)；
+    # 把两段加起来当一次物理打则不会。这是这两行代码唯一的可判区别。
+    ops["目标近战"].res = 30.0
+    ops["十字高台"].res = 30.0
+    hp1 = ops["目标近战"].hp
+    t = 7.0
+    while t < 14.5 and ops["目标近战"].hp == hp1:
+        t += 1 / 30
+        sim._skill_attack_tick(1 / 30, t)
+    dmg2 = hp1 - ops["目标近战"].hp
+    phys = e.atk                       # 物理那段：攻击力 100%，目标防御 0
+    mag = e.atk * 1.04 * (1 - 0.30)    # 法术那段：攻击力 104% 再减 30 法抗
+    check("★ 站在受污染田地上 → **额外附加**攻击力 ×`atk_scale_magic` 的法术伤害",
+          abs(dmg2 - (phys + mag)) < 1e-6,
+          f"实得 {dmg2:g} = 物理 {phys:g} + 法术 {mag:.0f}")
+    check("★ 两段**分开减抗**（不是加起来打一次）：法术那段按 30 法抗折算",
+          abs(dmg2 - (phys + e.atk * 1.04)) > 1.0,
+          f"合并打一次会得 {phys + e.atk * 1.04:.0f}，实得 {dmg2:g}")
+    check("★ 令**目标地块**病害值 +5（记入【缓存】，不是当场改实际）",
+          abs(sim.farmland.field_at(*other).cache - (cache0 + 5.0)) < 1e-9,
+          f"缓存 {cache0:g} → {sim.farmland.field_at(*other).cache:g}")
+    check("  第二次出手与第一次相隔 `attack_interval`（7s）",
+          abs(t - 14.0) < 0.1, f"t={t:.2f}")
+    check("  普攻那一路**关掉了**（天赋「不进行远程普通攻击」）",
+          e.skill_atk_no_normal and sim._enemy_target(e) is None,
+          f"no_normal={e.skill_atk_no_normal}")
+    check("★ 伤害类型用的是 `DamageType.MAGIC`（写 `ARTS` 会直接抛异常）",
+          DamageType.MAGIC == "MAGIC")
+
+
+def check_settlement_props() -> None:
+    """[14] 结算判据：**「既打不死又不会离场」的单位不能挡住"打完了"**。
+
+    博士 2026-09-18 报的「TUI 解算无论选什么都是 0 条结果，似乎没接上模拟器」
+    根因之一就在这里：主循环原先的完成判据是"场上还有活着的敌人就不算打完"，
+    而天桩-甲是「自缚 + 监测状态无敌不死」——它既不会被打死，也不会走到目标点，
+    于是**凡是有天桩的关卡永远跑满时间上限**，判定成"失败 0 星"。搜索于是永远
+    搜不到三星方案，用户看到的就是"0 条结果"。
+
+    这一节钉三件事：真数据里它在场时这一局**照样能结束**；判据是**窄**的
+    （普通敌人还活着时该跑满就跑满，不能顺手把结算放宽）；以及归因措辞
+    （跑满上限 ≠ 生命归零）。
+    """
+    print("\n[14] 结算判据（清不掉的单位不挡结算）")
+    from ak_tactic.battle.sim import BattleSimulator                      # noqa: PLC0415
+    from ak_tactic.gamedata.enemy import EnemyLibrary                     # noqa: PLC0415
+    from ak_tactic.gamedata.stage import load_stage                       # noqa: PLC0415
+
+    try:
+        lib = EnemyLibrary()
+        st = load_stage("act31side_03")
+    except Exception as exc:                                              # noqa: BLE001
+        skip("结算判据", f"数据不可用：{type(exc).__name__}: {exc}")
+        return
+
+    def fresh():
+        s = BattleSimulator(st, enemy_at=lib.get)
+        s._pile_tick(1 / 30, 0.0)          # 装置召唤出真甲（1 个天桩）
+        s._spawns[:] = []                  # 出怪表当作已经放完
+        return s
+
+    s = fresh()
+    jia = [e for e in s.enemies if e.owner_device is not None]
+    check("构造场景：真甲已在场（装置召唤）且**只**剩它一个",
+          len(jia) == 1 and jia[0].awake_value > 0.0
+          and jia[0].owner_device is not None,
+          f"{len(jia)} 个")
+    check("★ 它同时满足「打不死」与「不会离场」两个条件",
+          BattleSimulator._cannot_clear(jia[0])
+          and jia[0].always_invincible and jia[0].route_length == 0.0,
+          f"无敌={jia[0].always_invincible} 路线长={jia[0].route_length:g}")
+    r = s.run()
+    check("★ 只剩它时这一局**当场结束**（不是跑满上限）",
+          r.won and not r.timed_out, f"won={r.won} timed_out={r.timed_out} "
+          f"elapsed={r.elapsed:.1f}")
+    check("  甲确实还站在场上（无敌不死，它不会自己走）",
+          any(e.owner_device is not None and e.alive for e in s.enemies))
+    check("  它也没被算成击杀/漏怪（两本账都不认它）",
+          r.kills == 0 and r.leaks == 0, f"杀 {r.kills} 漏 {r.leaks}")
+
+    # 反向对照：把「打不死」这一条摘掉，同一条判据必须**仍然拒绝收场**。
+    # 没有这一条，"排除清不掉的单位"就变成了"顺手把结算放宽"也无从发现。
+    s2 = fresh()
+    for e in s2.enemies:
+        e.always_invincible = False
+    r2 = s2.run()
+    check("★ 反向对照：同一个甲**摘掉无敌之后**这一局就收不了场",
+          (not r2.won) and r2.timed_out,
+          f"won={r2.won} timed_out={r2.timed_out} elapsed={r2.elapsed:.1f}")
+    # 反向对照之二：会走的不算。`route_length` 是只读属性（真实单位的路线在
+    # 构造时就定了），所以这一条拿一个最小对象来问同一个判据。
+    from types import SimpleNamespace                                     # noqa: PLC0415
+    walker = SimpleNamespace(always_invincible=True, route_length=3.0)
+    mortal = SimpleNamespace(always_invincible=False, route_length=0.0)
+    check("★ 反向对照之二：能走的无敌单位**不算**清不掉（它走掉了这一局就完了）",
+          not BattleSimulator._cannot_clear(walker)
+          and not BattleSimulator._cannot_clear(mortal)
+          and BattleSimulator._cannot_clear(
+              SimpleNamespace(always_invincible=True, route_length=0.0)),
+          f"会走={BattleSimulator._cannot_clear(walker)} "
+          f"会死={BattleSimulator._cannot_clear(mortal)}")
+
+    # 归因口径：跑满上限 ≠ 生命归零。原先两者共用一句话，会写出
+    # 「失败：生命归零（初始 3 点，共漏 0 只、扣了 0 点）」这种自相矛盾的话。
+    from ak_tactic.verify import Verdict, Verifier                        # noqa: PLC0415
+
+    vf = Verifier(verbose=False)
+    fake = Verdict(0, False, 3, 3, 0, 0, r2.elapsed, 0.0, title="跑满上限的局")
+    said = " ".join(vf._diagnose(fake, s2, r2, 3))
+    check("★ 跑满上限的归因说的是「跑满时间上限」而不是「生命归零」",
+          "跑满时间上限" in said and "生命归零" not in said, said)
+    check("  并且点名留下的是什么（天桩-甲）", "天桩-甲" in said, said)
+
+    # 真·生命归零那一支照旧：把 timed_out 摘掉，说的必须还是「生命归零」
+    r2.timed_out = False
+    said2 = " ".join(vf._diagnose(fake, s2, r2, 3))
+    check("  生命真的归零时，归因仍说「生命归零」",
+          "生命归零" in said2, said2)
+
+    # ---------------------------------------------------- 14.2 端到端那一局
+    #
+    # 上面两条是**构造场景**（把出怪表清空，只留一个甲）。这里补上真跑一场：
+    # 同一关、同一套落位，修好前是"跑满上限、0 星"，修好后应当 **247.7s 三星**。
+    # 这条就是博士报的「TUI 算不出结果」的回归坐标——搜索层一个字没改，
+    # 改的只是主循环的完成判据。
+    #
+    # **不读本机名册**：练度写成内联表（只写"这个人精二 90 潜 1 模组 3"，
+    # 不含任何账号数据），`Verifier` 走的仍是与 CLI/TUI 相同的取数路径
+    # （天赋、模组、真实攻击范围表），所以强度没有打折。
+    from ak_tactic.plan import DeployOrder, Plan, Roster                  # noqa: PLC0415
+    from ak_tactic.verify import Verifier                                 # noqa: PLC0415
+
+    roster = Roster({"圣聆初雪": {"char_id": "char_1046_sbell2", "elite": 2,
+                                 "level": 90, "potential": 1,
+                                 "module": "uniequip_002_sbell2",
+                                 "module_level": 3}})
+    plan = Plan(stage="act31side_03", deploys=[
+        DeployOrder("圣聆初雪", (3, 1), "Right", skill=0, mastery=0, elite=2,
+                    level=90, potential=1, module="uniequip_002_sbell2",
+                    module_level=3, auto_skill=True)], title="1 人")
+    got = Verifier(verbose=False).run(plan, roster=roster)
+    check("★ HS-3 端到端收得了场（修好前这里跑满上限、0 星）",
+          bool(got.won) and got.stars == 3, got.line())
+    check("  耗时 247.7s、击杀 38、漏怪 0（回归坐标）",
+          abs(got.elapsed - 247.67) < 0.1 and got.kills == 38 and got.leaks == 0,
+          f"{got.elapsed:.2f}s 杀 {got.kills} 漏 {got.leaks}")
+    check("  归因说的是三星，而不是「跑满上限」",
+          "三星" in " ".join(got.diagnosis), " ".join(got.diagnosis))
+
+
 def main() -> int:
     print("=" * 68)
     print("关卡环境机制自检（ak_tactic/battle/environment.py）")
@@ -1131,6 +2126,10 @@ def main() -> int:
     check_devices()
     check_pump()
     check_enemy_mech()
+    check_pile()
+    check_device_deploy()
+    check_skill_attack()
+    check_settlement_props()
     print("\n" + "=" * 68)
     tail = f"通过 {_PASSED} 项，失败 {len(_FAILED)} 项"
     if _SKIPPED:
