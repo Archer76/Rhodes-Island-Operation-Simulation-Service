@@ -77,13 +77,26 @@ def go_fields(go_dir: Path) -> dict[str, list[str]]:
 
 
 def spec_keys(node, path: str = "", out: dict[str, set[str]] | None = None):
-    """规格里出现过的键 → 它出现在哪些路径（路径只留最后一两段，便于报错）。"""
+    """规格里出现过的**字段名** → 它出现在哪些路径（路径只留最后一两段，便于报错）。
+
+    ⚠ 只收"能当字段名"的键（标识符形状）。规格里有一批**映射形式的字典**：
+    `spawns[].reborn_summons[].paths` 是 `{"10,4": [...], ...}`，键是坐标串。
+    把这些键也当字段名收进来，会得到 43 条"Go 没声明"的**假账**——本工具因此
+    长期退出码 1，真账混在假账里看不出来。这正是仓库明令禁止的一类事：宁可
+    报得少，也不能拿假账充数，更不能因此把守卫放宽。
+
+    非标识符键的**值**照样往下走（`path + "{}"`）：映射里的元素形状还是要查，
+    否则真字段会跟着一起漏掉。
+    """
     if out is None:
         out = {}
     if isinstance(node, dict):
         for k, v in node.items():
-            out.setdefault(k, set()).add(path or "<根>")
-            spec_keys(v, f"{path}.{k}", out)
+            if isinstance(k, str) and k.isidentifier():
+                out.setdefault(k, set()).add(path or "<根>")
+                spec_keys(v, f"{path}.{k}", out)
+            else:
+                spec_keys(v, path + "{}", out)
     elif isinstance(node, list):
         for item in node[:1]:                      # 同一列表里的元素形状相同，取第一个
             spec_keys(item, path + "[]", out)
