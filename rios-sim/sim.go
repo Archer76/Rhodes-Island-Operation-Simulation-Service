@@ -32,6 +32,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"rios-sim/mech"
@@ -416,9 +417,21 @@ func runSim(spec *Spec) (*Verdict, error) {
 			sp := spec.Spawns[cursor]
 			e := newEnemy(sp, cursor, [2]float64{}, ctx)
 			e.legIndex = 0
-			// 起点 = 第一段的第一个点（`_build_enemy` 给的是 `pts[0]`）
-			if len(sp.Legs) > 0 && len(sp.Legs[0].Points) > 0 {
-				e.position = sp.Legs[0].Points[0]
+			// 起点 = **第一段有点的腿**的第一个点。
+			//
+			// 原版 `_build_enemy` 给的是 `position=pts[0] if pts else (0,0)`，
+			// 而 `pts` 是拼接后的整条路线——开头的待命段（`kind: wait`）**没有点**，
+			// 所以原版的起点是**待命段之后那条走段的首点**，也就是出生点。
+			//
+			// 这里原来只看 `Legs[0].Points`，遇到"待命打头"的出怪（怀黍离 HS-EX-8
+			// 的头三只就是）就取不到，位置留在 (0, 0)：那几只在待命期间**不在
+			// 出生点、进不了任何人的范围**，白挨一段时间的打没了。实测差三次高台
+			// 溅射、604.6 点伤害，判决从"守住"变成"漏怪"。
+			for _, leg := range sp.Legs {
+				if len(leg.Points) > 0 {
+					e.position = leg.Points[0]
+					break
+				}
 			}
 			enemies = append(enemies, e)
 			verdict.Events = append(verdict.Events,
@@ -1236,9 +1249,20 @@ func traitSplash(op *operator, spec *Spec, enemies []*enemy, target *enemy,
 				hi++
 			}
 		}
-		trace("SPLASH-CENTER t=%.4f op=%s target=%s pos=%.4f,%.4f cells=%d highland=%d",
+		// 场上敌人清单也一起打：溅射的受害者是按"格"挑的，两边算出的覆盖面
+		// 一模一样却少打中一次时，唯一还没比过的就是**那一刻谁站在哪一格**。
+		parts := make([]string, 0, len(enemies))
+		for _, e := range enemies {
+			if e.hp <= 0 || e.leaked {
+				continue
+			}
+			cx, cy := e.cell()
+			parts = append(parts, fmt.Sprintf("%s@%.4f,%.4f#%d,%d/hp%.1f",
+				e.spec.Name, e.position[0], e.position[1], cx, cy, e.hp))
+		}
+		trace("SPLASH-CENTER t=%.4f op=%s target=%s pos=%.4f,%.4f cells=%d highland=%d enemies=%s",
 			t, op.spec.Name, target.spec.Name, target.position[0],
-			target.position[1], len(cells), hi)
+			target.position[1], len(cells), hi, strings.Join(parts, "|"))
 	}
 	scale := op.spec.SplashScale * op.spec.SplashDamageScale
 	for _, e := range enemies {
