@@ -71,6 +71,24 @@ def source_literals() -> set[str]:
     return out
 
 
+def detector_text() -> str:
+    """`ak_tactic/` 全部源码的**文本**（不做字面量提取）。
+
+    **为什么不能拿 `source_literals()` 查天赋名**：那个提取器只认 ASCII 字符串
+    ——`"atk"` 提得出来，`"万众巨潮"` 提不出来。拿它查中文天赋名会**一律查不到**，
+    第三道筛子就变成一台"所有天赋都没有检测器"的误报机器（第一版正是如此，
+    连已经接好线的「万众巨潮」都被报成没有检测器）。
+
+    **查名字用文本包含，查键用字面量**——两件事的量纲不同，不能共用一个提取器。
+    """
+    out: list[str] = []
+    for p in (ROOT / "ak_tactic").rglob("*.py"):
+        if "__pycache__" in p.parts:
+            continue
+        out.append(p.read_text(encoding="utf-8"))
+    return "\n".join(out)
+
+
 def load_roster() -> list[tuple[str, str, str, str]]:
     """按名册文件的**行序**（= 练度序）返回 (名字, charId, 精英, 等级)。"""
     hits = sorted((ROOT / "docs").glob("roster-*.md"))
@@ -108,6 +126,34 @@ def keys_of(cid: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     return sk_keys, t_keys
 
 
+def talent_names_of(cid: str) -> list[str]:
+    """该干员的天赋名（去重保序）。
+
+    **第三道筛子**要用它。前两道筛子都是**按黑板键**判的，于是漏掉了一整类：
+
+    * 第一道问"`_classify` 认不认"——`atk` / `def` / `max_hp` /
+      `attack_speed` / `prob` 这些**都认**；
+    * 第二道只在**第一道失败**的键上跑——所以这些键**根本进不了第二道**。
+
+    结果是：一个天赋哪怕**整个没有检测器**，只要它的键都归得了类，就会被报成
+    "零欠账"。能天使的「天使的祝福」「快速弹匣」、星熊的「特种作战策略」
+    「战术装甲」四个天赋就是这么被漏掉的——源码里一个字都没有，审计却报 0。
+
+    天赋的机制是靠 `ak_tactic/battle/talents.py` 里一个个**具名检测器**
+    （`is_*_talent` / `find_*`）落地的，所以"这个名字有没有出现在源码里"
+    就是"有没有检测器"的可用代理。这是**天赋级**的判据，不是键级的。
+    """
+    out: list[str] = []
+    try:
+        for t in TalentBook().for_operator(cid):
+            n = getattr(t, "name", "")
+            if n and n not in out:
+                out.append(n)
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--top", type=int, default=0)
@@ -133,11 +179,14 @@ def main() -> int:
         roster = [r for r in roster if r[2] == "E2"]
 
     lits = source_literals()
+    det = detector_text()
     rows = []
     unclass_global: Counter[str] = Counter()
     unclass_who: defaultdict[str, list[str]] = defaultdict(list)
     dead_global: Counter[str] = Counter()
     dead_who: defaultdict[str, list[str]] = defaultdict(list)
+    nodet_global: Counter[str] = Counter()
+    nodet_who: defaultdict[str, list[str]] = defaultdict(list)
     for name, cid, elite, lvl in roster:
         sk_keys, t_keys = keys_of(cid)
         allk = sk_keys + t_keys
@@ -146,26 +195,33 @@ def main() -> int:
         bad = [(src, k) for src, k in allk if _classify(k) is None]
         # 第二道：源码里没人读过 = 真的没建模
         dead = [(src, k) for src, k in bad if not is_read(k, lits)]
+        # 第三道：**天赋整个没有检测器**（见 `talent_names_of` 的说明）
+        no_det = [n for n in talent_names_of(cid) if n not in det]
         for _src, k in bad:
             unclass_global[k] += 1
             unclass_who[k].append(name)
         for _src, k in dead:
             dead_global[k] += 1
             dead_who[k].append(name)
+        for n in no_det:
+            nodet_global[n] += 1
+            nodet_who[n].append(name)
         buckets = Counter((_classify(k) or ("other",))[0] for _s, k in allk)
         rows.append((len(dead), len(bad), len(allk), name, cid, elite, lvl,
-                     buckets, dead))
+                     buckets, dead, no_det))
 
-    rows.sort(key=lambda r: (-r[0], -r[1], r[3]))
+    rows.sort(key=lambda r: (-(len(r[9]) * 1000 + r[0]), -r[1], r[3]))
     if a.top:
         rows = rows[:a.top]
 
-    print(f"{'干员':<14}{'E/L':<9}{'键数':>5}{'未归类':>7}{'无人读':>7}  分桶")
-    print("-" * 74)
-    for ndead, nbad, ntot, name, cid, elite, lvl, buckets, _d in rows:
+    print(f"{'干员':<14}{'E/L':<9}{'键数':>5}{'未归类':>7}{'无人读':>7}"
+          f"{'无检测器':>8}  分桶")
+    print("-" * 84)
+    for ndead, nbad, ntot, name, cid, elite, lvl, buckets, _d, nodet in rows:
         b = " ".join(f"{k}={v}" for k, v in sorted(buckets.items()))
-        flag = "  ←" if ndead else ("  ·" if nbad else "")
-        print(f"{name:<14}{elite + ' ' + lvl:<9}{ntot:>5}{nbad:>7}{ndead:>7}  {b}{flag}")
+        flag = "  ←" if (ndead or nodet) else ("  ·" if nbad else "")
+        print(f"{name:<14}{elite + ' ' + lvl:<9}{ntot:>5}{nbad:>7}{ndead:>7}"
+              f"{len(nodet):>8}  {b}{flag}")
 
     print()
     print("=" * 74)
@@ -185,6 +241,22 @@ def main() -> int:
         if k not in dead_global:
             who = "、".join(dict.fromkeys(unclass_who[k]))[:36]
             print(f"  {n:>3} 位  {k:<34} {who}")
+
+    print()
+    print("=" * 74)
+    print(f"第三道（**天赋整个没有检测器**）：{len(nodet_global)} 个天赋、"
+          f"{sum(nodet_global.values())} 位次  ← 前两道看不见的那一类")
+    print("=" * 74)
+    print("  前两道筛子都是按**黑板键**判的，所以它们看不见这样一个事实：一个")
+    print("  天赋哪怕**整个没有检测器**，只要它的键都归得了类（`atk` / `def` /")
+    print("  `max_hp` / `attack_speed` / `prob` 都归得了），就会被报成零欠账。")
+    print("  能天使的「天使的祝福」「快速弹匣」、星熊的「特种作战策略」「战术")
+    print("  装甲」就是这么被漏掉的。这一栏补的就是这个盲区。")
+    if not nodet_global:
+        print("  （空）")
+    for k, n in nodet_global.most_common():
+        who = "、".join(dict.fromkeys(nodet_who[k]))[:36]
+        print(f"  {n:>3} 位  {k:<34} {who}")
     return 0
 
 
