@@ -166,9 +166,6 @@ def _enemy_reasons(sim) -> list[str]:
     """
     bad: list[str] = []
     field_why = {
-        "skill_atk_scale_phys": "敌方技能出手（物理）",
-        "skill_atk_scale_magic": "敌方技能出手（法术）",
-        "skill_atk_pollut": "敌方技能出手",
         "phit_pollut": "蜕皮被动",
         "phit_block_pollut": "蜕皮被动（被阻挡时）",
         "reborn_pollut": "重生吸病害值",
@@ -176,11 +173,12 @@ def _enemy_reasons(sim) -> list[str]:
         "awake_value": "按田地病害值觉醒",
         "hp_drain_per_sec": "持续自伤",
     }
-    #: `passive_pollut`（被击倒污染田地）**已经接线**，所以不在这张表里：
-    #: 原版 `sim.py:3891-3905` 的 `_on_enemy_death` 对应 Go 侧的 `PostAttack`
-    #: （帧序 7.5），两条黑板数值随敌人规格送过去（`_spawn_spec`）。
-    #: 它曾经在这张表里——那是对的：没接线的时候放行，等于让 Go 少算一层病害值
-    #: 却照样给判决。
+    #: `skill_atk_*`（敌方技能出手「污」）与 `passive_pollut`（被击倒污染田地）
+    #: **都已经接线**，所以不在这张表里：
+    #:  * 技能出手 → Go 侧的 `AttackTick`（帧序 7.2，`sim.py:3468`）；
+    #:  * 被击倒污染 → Go 侧的 `PostAttack`（帧序 7.5，`sim.py:3891`）。
+    #: 两条黑板数值都随敌人规格送过去（`_spawn_spec`）。
+    #: 它们曾经都在表里，那是对的：没接线的时候放行，等于让 Go 少算一层却照样给判决。
     names: dict[str, set[str]] = {}
     for e in mech._spawns_of(sim):
         for attr, why in field_why.items():
@@ -224,6 +222,35 @@ def _talent_reason(op, finder: str) -> bool:
         return True          # 判不了就当有：宁可拒跑
 
 
+def _talent_dodge(op: Any, d: Any) -> tuple[float, float]:
+    """这名干员的**天赋常驻闪避**（原版 `sim.py:2682-2689`）。
+
+    ⚠ 必须在这里自己算一遍，不能读 `op.talent_dodge_phys`：那个字段是在
+    **部署的那一刻**由 `_do_deploy` 写上的（`sim.py:2688`），而规格是在**跑之前**
+    生成的——此刻它还是初值 0。这与 `_operator_spec` 里补 `op.position` 是同一个
+    坑，而且**不报错**：只表现为"这名干员少了一截抵挡"。
+
+    取的是与 `_do_deploy` **同一个来源**（`d.talents` → `find_damage_block` →
+    `value("prob")`），不是自己另立一套判据；`tools/check_simgo.py` 里有一条
+    "跑完之后这两个数必须等于规格里送的"的守卫，两处口径一旦分开就会响。
+    """
+    try:
+        from ..battle import talents as _talents
+    except Exception:                                          # noqa: BLE001
+        return 0.0, 0.0
+    fn = getattr(_talents, "find_damage_block", None)
+    if fn is None:
+        return 0.0, 0.0
+    try:
+        block = fn(getattr(d, "talents", None) or [])
+    except Exception:                                          # noqa: BLE001
+        return 0.0, 0.0
+    if block is None:
+        return 0.0, 0.0
+    value = float(block.value("prob", 0.0) or 0.0)
+    return value, value
+
+
 def _operator_spec(sim, d) -> dict[str, Any]:
     """一名干员的规格。数值取**无技能帧**的那一套，外加技能开启期间的那一套。
 
@@ -257,6 +284,10 @@ def _operator_spec(sim, d) -> dict[str, Any]:
         "redeploy_time": float(getattr(op, "redeploy_time", 70.0) or 70.0),
         "range": sorted([int(x), int(y)] for x, y in cells),
     }
+    talent_phys, talent_arts = _talent_dodge(op, d)
+    if talent_phys or talent_arts:
+        out["talent_dodge_phys"] = talent_phys
+        out["talent_dodge_arts"] = talent_arts
     if skill is not None:
         out["skill"] = skill
         out["active"] = active
@@ -309,6 +340,16 @@ def _spawn_spec(sim, t: float, sp) -> dict[str, Any]:
         # 那一格）——那不是"敌人是什么"的一部分，是"当时场上是谁"的一部分。
         "passive_pollut": float(getattr(e, "passive_pollut", 0.0) or 0.0),
         "passive_radius": float(getattr(e, "passive_radius", 0.0) or 0.0),
+        # 敌方**技能出手**（怀黍离「玷 / 勿玷」技能「污」）。这一组数送的是
+        # 黑板里的量；"1 名 / 地面 / 十字五格 / 100%"四件事只在正文里，
+        # 落在 Go 侧的 `AttackTick` 上（`sim.py:3471-3482` 的来历）。
+        "skill_atk_scale_phys": float(getattr(e, "skill_atk_scale_phys", 0.0) or 0.0),
+        "skill_atk_scale_magic": float(getattr(e, "skill_atk_scale_magic", 0.0) or 0.0),
+        "skill_atk_init": float(getattr(e, "skill_atk_init", 0.0) or 0.0),
+        "skill_atk_interval": float(getattr(e, "skill_atk_interval", 0.0) or 0.0),
+        "skill_atk_cross": int(getattr(e, "skill_atk_cross", 0) or 0),
+        "skill_atk_pollut": float(getattr(e, "skill_atk_pollut", 0.0) or 0.0),
+        "skill_atk_ground_only": bool(getattr(e, "skill_atk_ground_only", False)),
         "legs": _legs_spec(e.legs),
     }
 

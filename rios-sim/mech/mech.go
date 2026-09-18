@@ -87,6 +87,18 @@ type EnvTicker interface {
 	EnvTick(ctx Ctx, dt float64)
 }
 
+// AttackTicker 在**两次出手之间**被调用（原版 `sim.py:2221` 之前那一处
+// `_skill_attack_tick`，帧序 7.2）。
+//
+// 为什么它和 `PostAttacker` 分成两个钩子：这两个回调在**同一帧的两处**，
+// 原版把它们排在普攻之后、结算之前，但**先后有别**——技能出手先算（它自己的
+// 出手会占住敌人的动作时间），被击倒的一次性效果后算（技能出手可能正好打死人，
+// 那个"打死"要等到 7.5 才结算）。合成一个钩子就必须在机制内部自己排序，
+// 而那正是"机制之间不许有顺序"想避免的事。
+type AttackTicker interface {
+	AttackTick(ctx Ctx, dt float64)
+}
+
 // PostAttacker 在**两次出手之后、结算之前**被调用。
 //
 // 对应原版 `sim.py:2221` 的 `_enemy_mech_tick`（帧序 7.5）。这一处专门处理
@@ -143,6 +155,23 @@ type Ctx interface {
 	//: 回血不吃任何减伤、也不该触发受击类效果。怀黍离的田地就是它的第一个使用者
 	//: （病害值为 0 的田地每秒回 `hp_recovery_per_sec`，`sim.py:1373-1375`）。
 	HealOperator(index int, amount float64)
+	//: 按**单位对象下标**打一次**分类型**的伤害（原版 `resolve_damage` 那一路）：
+	//: `raw` 是"攻击力 × 倍率"（机制自己算），防御/法抗/闪避与保底由主循环按这名
+	//: 干员**这一刻**的数值结算——那些数只有主循环有，机制不该自己抄一份。
+	//:
+	//: 为什么不是复用 `DamageOperator`：那个是**真伤**（田地每秒伤害就不吃减伤）。
+	//: 敌方技能出手的两段是物理 + 法术，**各减一次**（`sim.py:3496-3498` 写明了
+	//: "不是把两部分加起来当一次伤害打"），通道必须分类型。
+	//:
+	//: 返回实际掉的血（含受击回技力那一步，与主循环自己出手时同一套）。
+	HitOperator(index int, raw float64, damageType string) float64
+	//: 按**出怪顺序下标**把这一只敌人的动作停顿至少推到这个时长
+	//: （原版 `e.attack_pause = max(e.attack_pause, self.enemy_windup)`：
+	//: 出手要占用一段动作时间，这期间它不走路）。
+	PauseEnemy(index int, seconds float64)
+	//: 这一关的"出手动作时间"（原版 `self.enemy_windup`）。机制需要它，是因为
+	//: 它自己发起的出手同样要占住那一小段时间——但这个数住在规格里，不在机制里。
+	EnemyWindup() float64
 	//: 按**出怪顺序下标**改这一只敌人的推进速度乘区（1.0 = 不变）。
 	ScaleEnemySpeed(index int, scale float64)
 	//: 写一行日志（进判决的 `events`，对拍时能看出机制什么时候动的手）。
@@ -158,6 +187,9 @@ type OpView struct {
 	HP     float64
 	MaxHP  float64
 	Alive  bool
+	//: 阻挡数。敌方技能出手的"部署于地面"取它（`block_cnt > 0`，
+	//: 原版 `_skill_atk_target` 3566-3580 与 `docs/verdicts-pending.md` E16）。
+	BlockCnt int
 }
 
 // EnemyView 是一只敌人在这一帧的样子（只读）。
@@ -186,6 +218,22 @@ type EnemyView struct {
 	//: 以及半径（原版 `passive_radius`，0 表示按 1.0）。
 	PollutOnDeath float64
 	PollutRadius  float64
+
+	//: 攻击力与普攻间隔——敌方**技能出手**那一路要用
+	//: （`e.atk × skill_atk_scale_*`；间隔在 `skill_atk_interval` 为 0 时回落到它）。
+	ATK            float64
+	AttackInterval float64
+
+	//: 敌方技能出手（怀黍离「玷 / 勿玷」技能「污」）。全 0 表示这一只没有这个技能，
+	//: 机制一帧都不多花。字段名与 `sim.py` 里的那一组同名，语义见
+	//: `_skill_attack_tick`（3468）与 `gamedata/enemy.py::skill_attack_fields`。
+	SkillAtkScalePhys  float64
+	SkillAtkScaleMagic float64
+	SkillAtkInit       float64
+	SkillAtkInterval   float64
+	SkillAtkCross      int
+	SkillAtkPollut     float64
+	SkillAtkGroundOnly bool
 }
 
 // ---- 注册表 ----
@@ -245,6 +293,7 @@ type Set struct {
 	ids      []ID
 	starters []hookStarter
 	envs     []hookEnv
+	attacks  []hookAttack
 	posts    []hookPost
 	framers  []hookFramer
 	all      []Mechanism
@@ -263,6 +312,11 @@ type hookEnv struct {
 type hookPost struct {
 	id ID
 	m  PostAttacker
+}
+
+type hookAttack struct {
+	id ID
+	m  AttackTicker
 }
 
 type hookFramer struct {
@@ -307,6 +361,9 @@ func Load(cfg map[string]json.RawMessage, ids ...string) (*Set, error) {
 		}
 		if p, ok := m.(PostAttacker); ok {
 			set.posts = append(set.posts, hookPost{id, p})
+		}
+		if a, ok := m.(AttackTicker); ok {
+			set.attacks = append(set.attacks, hookAttack{id, a})
 		}
 		if f, ok := m.(Framer); ok {
 			set.framers = append(set.framers, hookFramer{id, f})
@@ -365,6 +422,16 @@ func (s *Set) EnvTick(ctx Ctx, dt float64) {
 	}
 	for _, h := range s.envs {
 		h.m.EnvTick(ctx, dt)
+	}
+}
+
+// AttackTick 依次调用各机制的 AttackTick（位置见 `AttackTicker` 的注释）。
+func (s *Set) AttackTick(ctx Ctx, dt float64) {
+	if s == nil {
+		return
+	}
+	for _, h := range s.attacks {
+		h.m.AttackTick(ctx, dt)
 	}
 }
 

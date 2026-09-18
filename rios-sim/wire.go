@@ -80,6 +80,15 @@ type OperatorSpec struct {
 	DeployCost     int     `json:"deploy_cost"`
 	RedeployTime   float64 `json:"redeploy_time"`
 
+	//: 天赋给的**常驻闪避比例**（原版 `op.talent_dodge_phys/arts`，
+	//: 来源是 `battle/talents.py::find_damage_block`——库里目前只有星熊「战术装甲」）。
+	//:
+	//: 为什么单独一项：它**不随技能开关变**，而技能给的闪避随 `Active` 那套走
+	//: （原版刻意分了两个字段，`sim.py:2682-2689` 写明了不能混）。两个都是
+	//: "削掉多少比例"的期望值，不是概率掷骰。
+	TalentDodgePhys float64 `json:"talent_dodge_phys,omitempty"`
+	TalentDodgeArts float64 `json:"talent_dodge_arts,omitempty"`
+
 	//: 攻击范围（**绝对格**，已按落点与朝向展开；技能改范围在最小版本里不支持）
 	Range [][2]int `json:"range"`
 
@@ -120,6 +129,12 @@ type Profile struct {
 	//: 而且不报错、不崩，只表现为"这名干员打不死人"。实测就是这么咬了一口。
 	//: 判"有没有"只能看 `nil`（NaN 不行：JSON 里写不出 NaN）。
 	FinalHitScale *float64 `json:"final_hit_scale"`
+
+	//: **技能给的**闪避（原版 `sk.effects.dodge_phys/arts`，由技能描述驱动）。
+	//: 只在技能开启期间有效——所以它住在 `Profile`（"这一刻的数值"）里，
+	//: 而天赋那份常驻抵挡住在 `OperatorSpec` 上（见那里的注释）。
+	DodgePhys float64 `json:"dodge_phys,omitempty"`
+	DodgeArts float64 `json:"dodge_arts,omitempty"`
 }
 
 // SkillSpec 是一个技能槽的**状态机参数**。
@@ -236,6 +251,19 @@ type SpawnSpec struct {
 	//: 被阻挡时取挡它的那个干员脚下那一格（原版 `_pollute_around` 1280-1298）。
 	PassivePollut float64 `json:"passive_pollut,omitempty"`
 	PassiveRadius float64 `json:"passive_radius,omitempty"`
+
+	//: 敌方**技能出手**（怀黍离「玷 / 勿玷」技能「污」，原版
+	//: `sim.py:3468` 的 `_skill_attack_tick`）。全 0 = 这一只没有这个技能。
+	//:
+	//: `SkillAtkCross` 是"周围 4 格"的开关（1 = 十字五格），**不是半径**：
+	//: 原文写的是"目标及其周围 4 格"，斜角不在内，与半径 1.0 的圆不是一回事。
+	SkillAtkScalePhys  float64 `json:"skill_atk_scale_phys,omitempty"`
+	SkillAtkScaleMagic float64 `json:"skill_atk_scale_magic,omitempty"`
+	SkillAtkInit       float64 `json:"skill_atk_init,omitempty"`
+	SkillAtkInterval   float64 `json:"skill_atk_interval,omitempty"`
+	SkillAtkCross      int     `json:"skill_atk_cross,omitempty"`
+	SkillAtkPollut     float64 `json:"skill_atk_pollut,omitempty"`
+	SkillAtkGroundOnly bool    `json:"skill_atk_ground_only,omitempty"`
 
 	Legs []LegSpec `json:"legs"`
 }

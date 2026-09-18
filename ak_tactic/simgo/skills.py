@@ -211,6 +211,17 @@ def _profile(sim, op, *, active: bool) -> dict[str, Any]:
             final = getattr(eff, "final_hit_scale", None)
             if final is not None:
                 out["final_hit_scale"] = float(final)
+            # 技能给的闪避（原版 `sim.py:2018-2019` 把这两个值写进
+            # `op.dodge_phys/arts`，`_deactivate` 清零）。**照送不误**，
+            # 哪怕当前白名单里没有一个技能带它：`dodge_*` 不在
+            # `_ALLOWED_*` 字段表里，带闪避的技能会被闸门整条拒跑，
+            # 所以送到这里必然是 0。真送了才有意义——哪天白名单放开，
+            # 两边不必再改一次衔接（而"Go 侧那两个字段恒为 0"这种假设，
+            # 正是这一路上最容易悄悄不成立的东西）。
+            for key in ("dodge_phys", "dodge_arts"):
+                value = float(getattr(eff, key, 0.0) or 0.0)
+                if value:
+                    out[key] = value
         return out
     finally:
         op.skill_active, op.skill_attack_type, op.effects_override = saved
