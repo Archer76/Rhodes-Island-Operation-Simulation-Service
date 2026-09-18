@@ -812,6 +812,34 @@ def check_desc_effects(book, book_t) -> None:
           qimera.effects.buffs.get("max_hp") == 1.0,
           f"实得 {qimera.effects.buffs.get('max_hp')}")
 
+    # ---- 真实伤害的第二条判据：**攻击本身被换掉**时，正文写的就是它的伤害
+    from ak_tactic.operator.skill import _wants_true_damage   # noqa: PLC0415
+    k2 = lv("char_1052_kalts2", 2)
+    check("凯尔希·思衡托技2 判为真实伤害"
+          "（「攻击变为射出医疗单元…造成相当于攻击力380%的真实伤害」）",
+          k2.effects.true_damage is True, f"实得 {k2.effects.true_damage}")
+    check("  这一击的倍率仍是 3.8（补判据只改类型，不许动倍率）",
+          close(k2.effects.atk_scale, 3.8, 1e-9),
+          f"实得 {k2.effects.atk_scale}")
+    # 全表命中面：含「真实伤害」的每一条都要有归处——是"这一击的类型"才认，
+    # 附加的那几笔一律不认。**只测标本不测面**是这条判据的老坑（2026-09-16
+    # 它曾一次误判 28 条），所以这里直接扫全表。
+    with sqlite3.connect(Path(__file__).resolve().parent.parent
+                         / "data" / "akdb.sqlite") as _c:
+        _rows = _c.execute(
+            "SELECT DISTINCT skill_id, description FROM skill_level "
+            "WHERE level = 10 AND description LIKE '%真实伤害%'").fetchall()
+    _hit = sorted(sid for sid, d in _rows if _wants_true_damage(d))
+    check("全表含「真实伤害」的 5 条里，判据只认 2 条（那一击的类型）",
+          len(_rows) == 5 and _hit == ["skchr_kalts2_2", "skchr_nearl2_3"],
+          f"{len(_rows)} 条里认了 {_hit}")
+    _add = ("skchr_cetsyr_2", "skchr_hodrer_3", "sktok_nearl2_3")
+    check("  反向：微尘碰撞 / 敌人每秒受到 X 点 / 耀阳部署时那三条都不认"
+          "（它们都是另加的一笔，不是这一击）",
+          not [sid for sid, d in _rows if sid in _add and _wants_true_damage(d)],
+          "、".join(sid for sid, d in _rows
+                    if sid in _add and _wants_true_damage(d)) or "（都不认）")
+
     # ---- 末击加倍（键名不可通用，只认描述）
     a2 = lv("char_1001_amiya2", 2)
     check("影霄·绝影末击倍率 = 常规的两倍",
@@ -3577,10 +3605,11 @@ def check_batch3_sample(stage, lib, calc, book_t) -> None:
     * 星熊的身份是**常态减伤 + 阻挡**：天赋 25% 抵挡在**真受击**里是不是正好
       0.75、被动技的 +30% 防御是不是不攒技力就常驻、阻挡是不是恰好 3 只。
 
-    ⚠️ 本节**故意不对账"每一笔伤害是多少"**：核验时发现平A 把技能倍率算了
-    两次（`current_atk()` 里一次、`resolve_damage(scale=…)` 里又一次），
-    零防目标上实得 / 正文 = **1.4500**。那是**基础模型**问题，改哪一侧等博士
-    裁定，见 `docs/uncertainties.md` §二十一；裁定落地后再补逐笔伤害的断言。
+    ⚠️ 逐笔伤害的期望值**从正文与面板写起**（"攻击力 595 × 145%"），
+    **不从 `current_atk()` 反推**：后者曾经自带 `atk_scale`，若哪天有人把
+    "倍率乘两次"改回来，用 `current_atk()` 写期望值的断言会跟着一起错、
+    照样通过。2026-09-18 的口径裁定（倍率只在 `resolve_damage(scale=…)` 乘一次）
+    就是为了这件事，见 `docs/uncertainties.md` §二十一。
     """
     print("\n[38] 零欠账样板：能天使（攻速/连发）× 星熊（抵挡/阻挡）")
     from ak_tactic.battle.talents import find_damage_block  # noqa: PLC0415
@@ -3615,7 +3644,7 @@ def check_batch3_sample(stage, lib, calc, book_t) -> None:
         s = mechanism_sim(stage, lib)
         op = build("char_103_angel", skill=skill)
         s.operators.append(op)
-        _dummy(s, stage, eid, (3, 3))
+        target = _dummy(s, stage, eid, (3, 3))
         s._activate(op, 0.0)
         seen: list[float] = []
         orig = s._damage_enemy
@@ -3627,11 +3656,18 @@ def check_batch3_sample(stage, lib, calc, book_t) -> None:
         s._damage_enemy = spy
         interval = op.current_interval()
         s._operators_attack(interval + 1e-6, 0.0)
-        return op, seen, interval
+        return op, seen, interval, target
 
-    op1, hits1, iv1 = fire(slots[1].level(7, 3))
-    _op2, hits2, _iv2 = fire(slots[2].level(7, 3))
-    _op3, hits3, iv3 = fire(slots[3].level(7, 3))
+    op1, hits1, iv1, tgt1 = fire(slots[1].level(7, 3))
+    _op2, hits2, _iv2, _t2 = fire(slots[2].level(7, 3))
+    _op3, hits3, iv3, _t3 = fire(slots[3].level(7, 3))
+    # 正文口径：技1 是「攻击力 145%」，**只乘一次**。期望值由面板与正文算出，
+    # 不经 `current_atk()`——正则见本节 docstring 的告示。
+    want1 = op1.atk * 1.45 - tgt1.defense
+    check("技1 每笔伤害 = 面板 595 × 145% − 防御（倍率**只乘一次**）",
+          len(hits1) == 3 and all(close(h, want1, 1e-6) for h in hits1),
+          f"实得 {[round(h, 1) for h in hits1]}，应为 {want1:,.1f}"
+          f"（靶子防御 {tgt1.defense:g}）")
     check("技1「冲锋模式」一次出手 **3 笔**（黑板 times=3）", len(hits1) == 3,
           f"实得 {len(hits1)} 笔")
     check("技2「扫射模式」**4 笔**、技3「过载模式」**5 笔**"
@@ -3736,6 +3772,38 @@ def check_batch3_sample(stage, lib, calc, book_t) -> None:
           f"（block_cnt={wall.block_cnt}）", len(held) == 3, f"实得 {len(held)} 只")
     check("  反向：剩下那一只**挡不住**（不是无限挡）",
           len(foes) - len(held) == 1, f"实得没挡住 {len(foes) - len(held)} 只")
+
+    # ---- 补的「真实伤害」判据要真的改到**结算**上 ----
+    # 只断言一个布尔字段是不够的：真正要证明的是这一击不再吃防御与法抗。
+    # 靶子给防御 5000（高过她的面板，物理口径只剩 5% 保底）与法抗 100（法术口径归零），
+    # 满额命中才算数。
+    kalts_slots = {s.slot: s for s in SkillBook().for_operator("char_1052_kalts2")}
+    sim5 = mechanism_sim(stage, lib)
+    kalts = build("char_1052_kalts2", skill=kalts_slots[2].level(7, 3))
+    sim5.operators.append(kalts)
+    tough = _dummy(sim5, stage, eid, (3, 3))
+    tough.defense = 5000.0
+    tough.res = 100.0
+    sim5._activate(kalts, 0.0)
+    hits5: list[float] = []
+    orig5 = sim5._damage_enemy
+
+    def spy5(*args, **kw):
+        hits5.append(args[1])
+        return orig5(*args, **kw)
+
+    sim5._damage_enemy = spy5
+    sim5._operators_attack(kalts.current_interval() + 1e-6, 0.0)
+    want5 = kalts.atk * (1.0 + 1.5) * 3.8
+    check("凯尔希·思衡托技2 打防御 5000 / 法抗 100 的靶子**仍是满额**"
+          "（真实伤害不吃防御与法抗）",
+          len(hits5) == 1 and close(hits5[0], want5, 1e-6),
+          f"实得 {[round(h, 1) for h in hits5]}，应为 {want5:,.1f}")
+    check("  反向：同一靶子若按物理口径只该剩 5% 保底"
+          "（说明上面那条不是怎么打都过的）",
+          close(resolve_damage(want5, damage_type=DamageType.PHYSICAL,
+                               defense=5000.0).final, want5 * 0.05, 1e-6),
+          f"物理口径 {resolve_damage(want5, damage_type=DamageType.PHYSICAL, defense=5000.0).final:,.1f}")
 
 
 def main() -> int:
