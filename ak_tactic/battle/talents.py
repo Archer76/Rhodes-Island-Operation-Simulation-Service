@@ -60,6 +60,9 @@ from dataclasses import dataclass, field
 from ..operator.talent import Talent
 
 __all__ = [
+    "CLASS_AURA_TALENTS",
+    "is_class_aura_talent",
+    "find_class_aura",
     "SnowField",
     "SNOW_KEYS",
     "is_snow_talent",
@@ -125,6 +128,26 @@ MODELED = {
 #:    「青色怒火」、医疗「诚挚期许」。所以指纹只认这对键、不认干员是谁；
 #:    术战者的黑板是 `atk`/`def`，不会误中。
 SP_KEYS = ("amiya_t_1[atk].sp", "amiya_t_1[kill].sp")
+
+
+#: 按**职业**发的全场光环：「在场时所有友方【重装】职业干员的防御力提升 6%」。
+#: 名字 → 主职业**代号**（不是中文名）。与「万众巨潮」按**阵营**分是两回事：
+#: 那是 `team_id`（哪个团），这是 `profession`（哪个职业）。
+#:
+#: 判据用**名字**而不是黑板键：这条天赋的黑板只有一个 `def`，而 `def` 满天飞，
+#: 按键判会把一大票干员都算进来。名字是唯一能把"这句话"钉死的锚。
+CLASS_AURA_TALENTS: dict[str, str] = {"特种作战策略": "TANK"}
+
+
+def is_class_aura_talent(t: Talent) -> bool:
+    return getattr(t, "name", "") in CLASS_AURA_TALENTS
+
+
+def find_class_aura(talents) -> Talent | None:
+    for t in talents or ():
+        if is_class_aura_talent(t):
+            return t
+    return None
 
 
 def is_sp_talent(t: Talent) -> bool:
@@ -250,13 +273,22 @@ class TeamAura:
     faction: frozenset[str] | None = None
     #: 阵营翻倍倍率（黑板 `scale_bonus`，写的是 2.0）
     faction_scale: float = 2.0
+    #: **只发给这个主职业代号的人**（`TANK` = 重装）；None = 不按职业分。
+    #: 与 `faction`（阵营 `team_id`）是**两回事**：那是"哪个团"，这是"哪个职业"。
+    profession: str | None = None
 
     def current(self, target=None) -> tuple[float, float]:
         """当前对 `target` 生效的 `(攻击力比例, 防御力比例)`。
 
-        `target` 是**吃光环的那个人**——万众巨潮要对它判阵营，所以这个参数
-        不是可选的装饰：不传就一律按不吃翻倍算。
+        `target` 是**吃光环的那个人**——万众巨潮要对它判阵营、特种作战策略要对它
+        判职业，所以这个参数不是可选的装饰：不传就一律按不吃翻倍/不匹配算。
         """
+        if self.profession is not None:
+            # 按职业发：**不吃倍率**，也不看主人开不开技能（星熊那条是常驻的）。
+            # 空职业（手工搭的试验体）不匹配任何职业光环。
+            if getattr(target, "profession", "") != self.profession:
+                return 0.0, 0.0
+            return self.atk_pct, self.def_pct
         op = self.operator
         active = op is not None and getattr(op, "skill_active", False)
         if self.skill_only:

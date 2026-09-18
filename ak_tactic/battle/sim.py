@@ -51,9 +51,11 @@ from typing import Callable, Iterable
 from ..eta import leading_wait, route_plans
 from ..gamedata.enemy import PROSE_SUMMON_EDGES
 from .damage import DamageType, resolve_damage
-from .talents import (FACTION_AURA_NAME, STUDENT_TEAM, RegenAura, SnowField,
-                      TeamAura, find_blessing, find_regen, find_snow,
-                      find_sp_on_action, find_summon_allowance, find_team_aura,
+from .talents import (CLASS_AURA_TALENTS, FACTION_AURA_NAME, STUDENT_TEAM,
+                      RegenAura, SnowField, TeamAura, find_blessing,
+                      find_class_aura, find_regen,
+                      find_snow, find_sp_on_action, find_summon_allowance,
+                      find_team_aura,
                       squad_cost_bonus)
 from .p3r import BreakState, TotalAttackDevice, affinity_multiplier, damage_slot
 from .summons import SummonDeployment, build_summon_unit
@@ -2137,11 +2139,13 @@ class BattleSimulator:
         if spa is not None:
             op.sp_per_attack_talent = spa.per_attack
             op.sp_per_kill_talent = spa.per_kill
-        # 天赋：全场光环。两种语义（见 `TeamAura` 的类文档）：
+        # 天赋：全场光环。三种语义（见 `TeamAura` 的类文档）：
         # 「青色怒火」= 常驻 + 主人开技能时加倍；「万众巨潮」= **只在技能期间
-        # 生效**，且对【乌萨斯学生自治团】翻倍。后者此前**完全没接**——它的
-        # `atk`/`def`/`scale_bonus` 三个键都在"无人读"里。注意 `scale_bonus`
-        # 与青色怒火的 `talent_scale` 是两个键，别互相当别名用。
+        # 生效**，且对【乌萨斯学生自治团】翻倍；「特种作战策略」= **按职业**发，
+        # 只给【重装】（`profession == "TANK"`），常驻、不吃倍率。
+        # 前两种此前都完全没接。注意 `scale_bonus` 与青色怒火的 `talent_scale`
+        # 是两个键，别互相当别名用；`profession`（职业）与 `faction`（阵营）
+        # 也是两个量，别混。
         aura = find_team_aura(op.talents)
         if aura is not None:
             if aura.name == FACTION_AURA_NAME:
@@ -2161,6 +2165,18 @@ class BattleSimulator:
                     def_pct=aura.value("def", 0.0),
                     operator=op,
                 ))
+            self._refresh_auras()
+        # 天赋：**按职业**发的全场光环（星熊「特种作战策略」）。
+        # 与上面那条是并列的、不是同一件事：同一名干员可能两者都有。
+        class_aura = find_class_aura(op.talents)
+        if class_aura is not None:
+            self.team_auras.append(TeamAura(
+                owner=op.name,
+                atk_pct=class_aura.value("atk", 0.0),
+                def_pct=class_aura.value("def", 0.0),
+                operator=op,
+                profession=CLASS_AURA_TALENTS[class_aura.name],
+            ))
             self._refresh_auras()
         if self.verbose:
             sk = f" 带技能「{op.skill.name}」" if op.skill is not None else ""

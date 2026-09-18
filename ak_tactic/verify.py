@@ -242,6 +242,9 @@ class Verifier:
             module_level=entry.get("module_level") or 0)
         kw = dict(
             name=st.name, char_id=cid, elite=entry["elite"],
+            # 主职业代号（TANK/WARRIOR/…）。按职业发光环的天赋要它——
+            # 与 `team_id`（阵营）不是一回事，别混。
+            profession=str(c.get("profession") or ""),
             max_hp=float(t["maxHp"]), atk=float(t["atk"]),
             defense=float(t["def"]),
             res=float(t.get("magicResistance", 0) or 0),
