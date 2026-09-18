@@ -144,6 +144,13 @@ type Profile struct {
 	AtkScale float64 `json:"atk_scale"`
 	//: 一次出手打几下（`effects.hit_count`）；无技能时是 1
 	HitCount int `json:"hit_count"`
+	//: 技能开启期间的**生命上限**（原版 `apply_max_hp_bonus`，unit.py:947）。
+	//:
+	//: 用指针的理由与 `FinalHitScale` 同族，但方向相反：这里"没有这个键"
+	//: 与"上限正好是 0"都能区分，而 Go 侧只在**有值**时才照着改上限、
+	//: 并在 `deactivate` 里还原。静态的 `max_hp`（干员规格里那个）始终是
+	//: 基准值，两个都不能少。
+	MaxHP *float64 `json:"max_hp,omitempty"`
 	//: 最后一击改用的倍率（`effects.final_hit_scale`）；**没有就整个键不出现**。
 	//:
 	//: 这里必须是**指针**：写成 `float64` 时，Python 送来的 `null` 会被

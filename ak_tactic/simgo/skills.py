@@ -169,6 +169,22 @@ def _dedup(items: list[str]) -> list[str]:
 # ---------------------------------------------------------------- 数值两套
 
 
+def _max_hp_after_bonus(op, eff) -> float:
+    """技能开着时的生命上限（原版 `apply_max_hp_bonus` 那一式的**求值**）。
+
+    `基准 × (1 + pct)`，`pct` 取 `effects.buffs["max_hp"]`——与
+    `sim.py:2498` 施加时读的是同一个键，不另立一份口径。
+
+    基准取 `_base_max_hp`：原版只有"身上已经有加成"时它才非 0（unit.py:949），
+    此时当前值已经被乘过一次，拿它当基准会越算越大。
+    """
+    base = float(getattr(op, "_base_max_hp", 0.0) or 0.0)
+    if base <= 0.0:
+        base = float(op.max_hp)
+    pct = float((getattr(eff, "buffs", None) or {}).get("max_hp", 0.0) or 0.0)
+    return base * (1.0 + pct)
+
+
 def _profile(sim, op, *, active: bool) -> dict[str, Any]:
     """一名干员的数值快照。
 
@@ -206,6 +222,23 @@ def _profile(sim, op, *, active: bool) -> dict[str, Any]:
             "max_target": int(op.current_max_target() if active else 1),
             "atk_scale": float(getattr(eff, "atk_scale", 1.0)) if active else 1.0,
             "hit_count": int(getattr(eff, "hit_count", 1)) if active else 1,
+            #: 技能开启期间的**生命上限**（原版 `sim.py:2498` →
+            #: `unit.py:947`：`apply_max_hp_bonus(buffs["max_hp"])`，即
+            #: `上限 = 基准 × (1 + pct)`，同时 `hp += 基准 × pct`；
+            #: 关技能时 `revert_max_hp_bonus` 还原并把血量按新上限夹一次）。
+            #:
+            #: ⚠ 不能直接读 `op.max_hp`：那是**主循环施加之后**的值，而
+            #: "主循环此刻是否正开着技能"与"这份快照是按 active=True 取的"
+            #: 是两件事。照原版那一句现算才不受调用时机影响。
+            #: 基准取 `_base_max_hp`（有加成在身时它才是基准，为 0 表示
+            #: 身上没有加成、当前值就是基准）。
+            #:
+            #: 这一段曾经**整条没送**：规格里的 `max_hp` 只有开场那一个静态
+            #: 值，于是"开技能把生命上限翻倍"的干员在 Go 侧少了一半血——
+            #: HS-EX-8 第 3 手圣聆初雪承受 2058 就倒，原版要到 4116（正好
+            #: 一半），整局因此短了 18 秒。
+            "max_hp": (_max_hp_after_bonus(op, eff) if active
+                       else float(op.max_hp)),
         }
         if active:
             final = getattr(eff, "final_hit_scale", None)
