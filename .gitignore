@@ -49,3 +49,11 @@ _proto/
 rios-sim/rios-sim
 rios-sim/rios-sim.exe
 rios-sim/*.test.exe
+
+# ---- 会话间交接的内部件：不进仓库 ----
+# `docs/handoff-internal.md` 记的是**当下实况**（哪些机制已经建模完成、落在哪个
+# 文件、用哪一节守卫复核、还剩什么卡在哪），写给接手这个任务的会话看。
+# 公开仓库里对应的是 `docs/batch3-handoff.md`（公开版，内容停在更早的进度）——
+# 两份分工是「公开的历史」与「当下的实况」。
+# 它含本机绝对路径与工作节奏，**不要 git add -f 强加**。
+docs/handoff-internal.md
