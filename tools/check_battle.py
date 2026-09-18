@@ -4282,6 +4282,151 @@ def check_steal_aspd(stage, lib, calc, book_t) -> None:
           f"攻速 {her2.current_attack_speed()}")
 
 
+def check_enemy_hitrate(stage, lib, calc, book_t) -> None:
+    """[48] 阿斯卡纶技3「残影」：使范围内**地面敌人命中率 −50%**。
+
+    正文（M3）：「攻击范围扩大，攻击力+50%，攻击间隔较大幅度缩短，使攻击范围内
+    的地面敌人物理与法术**命中率 −50%**。自身更易受到敌人攻击，敌人未命中自身
+    或自身闪避时回复 8% 最大生命值」。
+
+    ⚠️ **键名有两种写法**（全库一半一半，只认一种就漏一半）：
+
+    * 带前缀——她：`attack@damage_hitrate_physical` / `…_magical`（−0.5 @M3）；
+    * **裸键**——艾拉技1 与她的装置 `sktok_ela_1`：`damage_hitrate_*`（−0.4）。
+
+    这与迟钝那边是**同一个坑**（同一个量、一半带前缀一半不带），所以判据一次
+    收两种。守卫两头都钉了（她那支必须从前缀形取到、艾拉那支必须从裸键取到）。
+
+    ⚠️ **折在哪儿**：命中率是"这一击整个打空"的概率，所以折扣乘在**最终伤害**
+    上（`resolve_damage(...).final × factor`），**不是**乘在攻击力上——乘到
+    `e.atk` 上会先减防御再折扣，与"打空"不是一回事，高防目标能差出成倍。
+    这点与 `resolve_damage` 里 `dodge_*` 的期望值折法一致（不掷骰，作业可复现）。
+
+    可观测量取的是**干员实际掉的血**，不是 `enemy_hitrate_*` 那两个自己写进去的
+    字段。
+    """
+    print("\n[48] 阿斯卡纶技3：使范围内地面敌人命中率 −50%")
+    from ak_tactic.operator.skill import (  # noqa: PLC0415
+        _hitrate_values, _wants_enemy_hitrate)
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    v = Verifier()
+    slots = {sk.slot: sk for sk in SkillBook().for_operator("char_4132_ascln")}
+    s3 = slots[3].level(7, 3)
+    s2 = slots[2].level(7, 3)
+    check("  解析（技3）：物理与法术都是 −50%",
+          (s3.effects.enemy_hitrate_phys, s3.effects.enemy_hitrate_arts)
+          == (-0.5, -0.5),
+          f"{s3.effects.enemy_hitrate_phys} / {s3.effects.enemy_hitrate_arts}")
+    check("  反向：技2 不带这条（它是减速 + 击杀叠层）",
+          s2.effects.enemy_hitrate_phys == 0.0
+          and s2.effects.enemy_hitrate_arts == 0.0,
+          f"{s2.effects.enemy_hitrate_phys} / {s2.effects.enemy_hitrate_arts}")
+
+    with sqlite3.connect(Path(__file__).resolve().parent.parent
+                         / "data" / "akdb.sqlite") as _c:
+        _rows = _c.execute(
+            "SELECT DISTINCT skill_id, description, blackboard FROM skill_level "
+            "WHERE level = 10").fetchall()
+    _hits = sorted(sid for sid, d, b in _rows
+                   if _wants_enemy_hitrate(d, json.loads(b or "{}")))
+    check("判据命中面：她技3 + 艾拉技1 与装置（两种写法各一条）",
+          _hits == ["skchr_ascln_3", "skchr_ela_1", "sktok_ela_1"],
+          f"{_hits}")
+    _bb = {sid: json.loads(b or "{}") for sid, _d, b in _rows}
+    check("  她那条是**前缀**形、艾拉那条是**裸键**（两头都收得到）",
+          "attack@damage_hitrate_physical" in _bb["skchr_ascln_3"]
+          and "attack@damage_hitrate_physical" not in _bb["skchr_ela_1"]
+          and "damage_hitrate_physical" in _bb["skchr_ela_1"]
+          and _hitrate_values(_bb["skchr_ascln_3"]) == (-0.5, -0.5)
+          and _hitrate_values(_bb["skchr_ela_1"]) == (-0.4, -0.4),
+          f"她 {_hitrate_values(_bb['skchr_ascln_3'])}、"
+          f"艾拉 {_hitrate_values(_bb['skchr_ela_1'])}")
+
+    print("     —— 按类型取那一路（单位级）——")
+    sim0 = mechanism_sim(stage, lib)
+    u0 = v.unit({"char_id": "char_4132_ascln", "elite": 2, "level": 60,
+                 "trust": 100, "potential": 1})
+    u0.position = (2, 3)
+    u0.direction = "Right"
+    sim0.operators.append(u0)
+    e0 = _dummy(sim0, stage, _enemy_ids(stage)[0], (3, 3))
+    e0.hitrate_phys = -0.5
+    e0.hitrate_arts = -0.2
+    e0.attack_type = "PHYSICAL"
+    phys = sim0._hitrate_factor(e0)
+    e0.attack_type = "MAGIC"
+    arts = sim0._hitrate_factor(e0)
+    check("  物理攻击吃物理那一路（×0.5）、法术攻击吃法术那一路（×0.8）",
+          abs(phys - 0.5) < 1e-9 and abs(arts - 0.8) < 1e-9,
+          f"物理 {phys}、法术 {arts}")
+    e0.hitrate_phys = 0.0
+    e0.hitrate_arts = 0.0
+    e0.attack_type = "PHYSICAL"
+    check("  反向：没有这个场时是 ×1（一点不打折）",
+          abs(sim0._hitrate_factor(e0) - 1.0) < 1e-9,
+          f"×{sim0._hitrate_factor(e0)}")
+
+    print("     —— 端到端：干员**实际掉的血**减半 ——")
+
+    def _lost(skill_on: bool, frames: int = 400) -> float:
+        """同一套布阵跑两遍（开技 / 不开技），量她被同一只敌人打掉多少血。"""
+        sim = mechanism_sim(stage, lib)
+        u = v.unit({"char_id": "char_4132_ascln", "elite": 2, "level": 60,
+                    "trust": 100, "potential": 1})
+        u.position = (2, 3)
+        u.direction = "Right"
+        u.skill = s3
+        if skill_on:
+            u.skill_active = True
+            u.skill_timer = 1e9
+        sim.operators.append(u)
+        e = _dummy(sim, stage, _enemy_ids(stage)[0], (3, 3))
+        e.defense = 0.0
+        # **手动指定这只近战敌人打谁**：`_enemy_target` 对 MELEE 只看
+        # `blocked_by`，而手驱（不跑 `run()`）时阻挡配对不会自己成立。
+        # 配对本身不是这一节要测的东西——它由别的节管——这里只要敌人真的出手。
+        e.blocked_by = u
+        hp0 = u.hp
+        for i in range(frames):
+            if skill_on:
+                u.skill_timer = 1e9          # 手驱：不让它中途停机
+                sim._hitrate_tick(0.1)
+            sim._enemies_attack(0.1, i * 0.1)
+        return hp0 - u.hp
+
+    plain = _lost(False)
+    halved = _lost(True)
+    check("  不开技：她挨满伤害（正数，说明敌人真的打到了她）",
+          plain > 0.0, f"掉血 {plain:.1f}")
+    check("  开技：同样的敌人、同样的帧数，掉血**正好减半**"
+          "（−50% 命中率 ⇒ 期望 ×0.5）",
+          abs(halved / plain - 0.5) < 1e-6,
+          f"{plain:.1f} → {halved:.1f}，比值 {halved / plain:.6f}")
+
+    print("     —— 场的边界：位置与停机 ——")
+    sim2 = mechanism_sim(stage, lib)
+    u2 = v.unit({"char_id": "char_4132_ascln", "elite": 2, "level": 60,
+                 "trust": 100, "potential": 1})
+    u2.position = (2, 3)
+    u2.direction = "Right"
+    u2.skill = s3
+    u2.skill_active = True
+    u2.skill_timer = 1e9
+    sim2.operators.append(u2)
+    near = _dummy(sim2, stage, _enemy_ids(stage)[0], (3, 3))
+    far = _dummy(sim2, stage, _enemy_ids(stage)[0], (9, 3))
+    sim2._hitrate_tick(0.1)
+    check("  射程内的敌人被扣命中率、射程外的不吃",
+          near.hitrate_phys == -0.5 and far.hitrate_phys == 0.0,
+          f"近 {near.hitrate_phys}、远 {far.hitrate_phys}")
+    u2.skill_active = False
+    sim2._hitrate_tick(0.1)
+    check("  技能停掉之后**恢复原状**（场是按位置每帧重刷的，不留印子）",
+          near.hitrate_phys == 0.0 and near.hitrate_arts == 0.0,
+          f"{near.hitrate_phys} / {near.hitrate_arts}")
+
+
 def check_glider_mobility(stage, lib, calc, book_t) -> None:
     """[43] 焰狐龙梓兰天赋2「翔虫机动」——一个天赋横跨两个平面。
 
@@ -5089,6 +5234,7 @@ def main() -> int:
     check_target_growth(stage, lib, calc, book_t)
     check_hp_drain(stage, lib, calc, book_t)
     check_steal_aspd(stage, lib, calc, book_t)
+    check_enemy_hitrate(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

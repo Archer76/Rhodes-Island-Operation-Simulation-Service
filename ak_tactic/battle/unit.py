@@ -785,6 +785,15 @@ class EnemyUnit(Combatant):
     shield_max: float = 0.0
     #: 是否飞行。`motion == "FLY"` 的敌人**不可被地面干员阻挡**。
     is_flying: bool = False
+    #: 「使敌人物理/法术**命中率 −X%**」的场（阿斯卡纶技3「残影」、艾拉技1）：
+    #: 两个都是**负数**（−0.5 / −0.4 @M3），由模拟器每帧按"谁站在谁的射程里"
+    #: 重刷（`sim._hitrate_tick`），技能一关或走出范围就归零。
+    #:
+    #: 落点：**它出手打我方**那一笔乘 `(1 + 该值)`。命中率是概率事件，
+    #: 走的是**期望值折法**（与闪避同一口径，见 `resolve_damage` 的 `dodge_*`）
+    #: ——掷骰会让同一份作业每次跑出不同结果，搜索与回归都不可复现。
+    hitrate_phys: float = 0.0
+    hitrate_arts: float = 0.0
     #: 出手方式（`applyWay`）与射程（`rangeRadius`，格）。
     #: `RANGED` 的敌人**在射程内开火，但不会因此停下不走**——它只是
     #: 在攻击动作期间停一下（见 `attack_pause`），动作一结束就继续推进。

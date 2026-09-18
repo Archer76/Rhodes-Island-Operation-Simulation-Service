@@ -316,6 +316,41 @@ def _charge_volley(description: str, bb: dict[str, float]):
     return int(m.group(1)), int(shot.group(1)), scale
 
 
+def _hitrate_values(bb: dict[str, float]) -> tuple[float, float]:
+    """读出「使敌人物理/法术**命中率**下降」的两个值（都是**负数**）。
+
+    ⚠️ 这个键名有**两种写法**，全库各占一半，只认一种就会漏：
+
+    * 带前缀——阿斯卡纶技3「残影」：`attack@damage_hitrate_physical` /
+      `attack@damage_hitrate_magical`（−0.5 @M3）；
+    * **裸键**——艾拉技1（`skchr_ela_1`）与她的两个 `sktok_ela_1` /
+      `sktok_pirene_1`：`damage_hitrate_physical` / `damage_hitrate_magical`
+      （−0.4 @M3）。
+
+    这与迟钝那边踩过的是**同一个坑**（同一个量、一半带前缀一半不带），
+    所以这里一次把两种都收进来。没有这个形状就返回 (0.0, 0.0)。
+    """
+    phys = float(bb.get("damage_hitrate_physical",
+                        bb.get("attack@damage_hitrate_physical", 0.0)) or 0.0)
+    arts = float(bb.get("damage_hitrate_magical",
+                        bb.get("attack@damage_hitrate_magical", 0.0)) or 0.0)
+    return phys, arts
+
+
+def _wants_enemy_hitrate(description: str, bb: dict[str, float]) -> bool:
+    """是否「使（攻击范围内的）敌人物理与法术**命中率** −X%」。
+
+    判据两段：正文里有「命中率」**且**黑板上有那两个键之一且为负。
+    全表实测（全等级）：带这两个键的技能只有 4 条——阿斯卡纶技3（带前缀）、
+    艾拉技1 与她的两个装置（裸键），正是这条机制的两家写法。
+    """
+    text = _TAG.sub("", description or "")
+    if "命中率" not in text:
+        return False
+    phys, arts = _hitrate_values(bb)
+    return phys < 0.0 or arts < 0.0
+
+
 def _wants_steal_aspd(description: str, bb: dict[str, float]) -> bool:
     """是否「**立即偷取**攻击范围内 1 名**友方干员** X 点攻击速度」。
 
@@ -867,6 +902,15 @@ class SkillEffects:
     #: 「如果成功偷取攻击速度则额外获得 5 发弹药」——**只有真的偷到了**才加，
     #: 范围内没有友方就不加（这是它的判据，守卫里两头都钉了）。
     steal_bonus_ammo: int = 0
+    #: 「使（范围内的地面）敌人**物理/法术命中率 −X%**」——阿斯卡纶技3「残影」
+    #: 与艾拉技1 的同一机制（前者带前缀、后者裸键，见 `_hitrate_values`）。
+    #: 两个值都是**负数**（−0.5 / −0.4 @M3），0.0 表示这一路没有。
+    #:
+    #: 落点在**敌人**身上：它出手打我方时按类型乘 `(1 + 该值)`。这是概率事件的
+    #: **期望值折法**（与闪避同一套口径）——掷骰会让同一份作业每次跑出不同结果，
+    #: 搜索与回归都不可复现。
+    enemy_hitrate_phys: float = 0.0
+    enemy_hitrate_arts: float = 0.0
     #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
     #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
     #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
@@ -1551,6 +1595,10 @@ class SkillBook:
             # 但键是 `addtional_ammo_each`（5，全表只有她）。正文那句是**条件**
             # （成功才给），不是无条件，所以判据要留给模拟器，不能在这里加。
             lv.effects.steal_bonus_ammo = int(bb.get("addtional_ammo_each") or 0)
+        # 「使敌人命中率 −X%」（技3「残影」）：两个负数，按类型分。
+        if _wants_enemy_hitrate(lv.description, bb):
+            (lv.effects.enemy_hitrate_phys,
+             lv.effects.enemy_hitrate_arts) = _hitrate_values(bb)
         # 技能结束时的**自身**效果：晕眩与强制退场。两者的数值/语义都
         # 只在描述里，且都与"打在敌人身上"的那套（`control`）无关。
         lv.effects.self_stun = _wants_self_stun(lv.description, bb)

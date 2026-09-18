@@ -1783,6 +1783,51 @@ class BattleSimulator:
         op.steal_amount = 0.0
         op.aspd_steal_bonus = 0.0
 
+    def _hitrate_tick(self, dt: float) -> None:
+        """「使范围内地面敌人**命中率 −X%**」的场（阿斯卡纶技3「残影」/ 艾拉技1）。
+
+        为什么是**每帧重刷**而不是"开技时贴上去、关技时撕下来"：
+
+        * 条件是**位置**——敌人走出她的射程就该恢复，走进来就该生效，
+          贴一次就管不了这两个方向；
+        * 技能关了、她离场了、她自己被打倒了，也都该恢复——重刷天然覆盖这几种。
+
+        多条同类场同时在时取**最负**的那个（命中率减得最多的赢）。这是**裁定
+        前的保守读法**：多条同类减益是取最负、还是相乘、还是相加，正文与备注
+        都没写；本批十位里只有她一条，所以这个分歧暂时看不出来，已记进
+        `docs/uncertainties.md`。
+
+        「地面敌人」：飞行的不吃（`is_flying`），与正文一致。
+        """
+        for e in self.enemies:
+            e.hitrate_phys = 0.0
+            e.hitrate_arts = 0.0
+        for op in self.operators:
+            if not op.alive or op.effects is None:
+                continue
+            eff = op.effects
+            if eff.enemy_hitrate_phys == 0.0 and eff.enemy_hitrate_arts == 0.0:
+                continue
+            cells = self._range_of(op)
+            for e in self.enemies:
+                if e.hp <= 0 or e.leaked or e.is_flying:
+                    continue
+                if e.position not in cells:
+                    continue
+                e.hitrate_phys = min(e.hitrate_phys, eff.enemy_hitrate_phys)
+                e.hitrate_arts = min(e.hitrate_arts, eff.enemy_hitrate_arts)
+
+    def _hitrate_factor(self, e: EnemyUnit) -> float:
+        """敌人这一笔出手的**命中率折扣**——按它自己的伤害类型取那一路。
+
+        只有**普通攻击**（含挂在上面的附加伤害）吃这一项：正文说的是"命中率"，
+        而敌人**技能**伤害算不算命中率，正文与 prts 备注都没写，所以这里不碰
+        技能那两处（怀黍离的疫病齐射），已记进留档。
+        """
+        penalty = (e.hitrate_arts if e.attack_type == "MAGIC"
+                   else e.hitrate_phys)
+        return max(0.0, 1.0 + penalty)
+
     def _trait_tick(self, dt: float) -> None:
         """每帧的**特性**结算（与技能状态无关的那一类）。
 
@@ -2258,6 +2303,9 @@ class BattleSimulator:
             # 4.9 特性（怪杰的生命流失）：与技能无关，所以排在技能之前、
             #     但同在"我方出手之前"这一簇里——本帧掉的血本帧就见效。
             self._trait_tick(dt)
+            # 4.95「命中率 −X%」的场（阿斯卡纶技3 / 艾拉技1）：它按**位置**刷，
+            #      且要在本帧我方出手、敌方出手之前都是最新的，所以放在这里。
+            self._hitrate_tick(dt)
             self._skill_tick(dt, t)
 
             # 5.4 全场光环（青色怒火）：数值随光环主人的技能状态变，所以必须排在
@@ -3377,6 +3425,11 @@ class BattleSimulator:
             # 停在原地不走完整条路线——动作一结束就继续推进）。
             e.attack_pause = max(e.attack_pause, self.enemy_windup)
             dealt = 0.0
+            # 「命中率 −X%」的折扣：**乘在最终伤害上**，不是乘在攻击力上。
+            # 命中率是"这一击整个打空"的概率，所以是整笔的期望折扣；乘到
+            # `e.atk` 上会先减防御再折扣，与"打空"不是一回事（高防目标能差出
+            # 成倍），这点与 `resolve_damage` 里 `dodge_*` 的折法一致。
+            hit_scale = self._hitrate_factor(e)
             # 明识形态的普攻是 **2 连击**（原文「自身普通攻击变为2连击」）。
             # 逐段结算：两段的防御/法抗各减一次。把 atk 乘 2 再打一次会
             # 少减一次防御，对高防目标能差出成倍的伤害。
@@ -3388,7 +3441,7 @@ class BattleSimulator:
                     # 掷骰会让同一份作业每次跑出不同结果，搜索与回归都不可复现。
                     dodge_phys=op.dodge_phys + op.talent_dodge_phys,
                 dodge_arts=op.dodge_arts + op.talent_dodge_arts,
-                ).final)
+                ).final * hit_scale)
                 if op.hp <= 0 or op.retreated:
                     break
             # 【怀黍离】重生后的普攻附加伤害（瘴 / 鄙瘴）：
@@ -3404,7 +3457,7 @@ class BattleSimulator:
                         defense=0.0, res=op.current_res(),
                         dodge_phys=op.dodge_phys + op.talent_dodge_phys,
                 dodge_arts=op.dodge_arts + op.talent_dodge_arts,
-                    ).final)
+                    ).final * hit_scale)
             # 受击回复的技力
             if dealt > 0 and op.skill is not None and not op.skill.is_passive \
                     and not op.skill_active:
