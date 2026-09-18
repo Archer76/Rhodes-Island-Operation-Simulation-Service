@@ -76,6 +76,28 @@ FPS = 30
 #: 无限持续的技能用这个值当倒计时，省得每次都判 None
 _INFINITE = float("inf")
 
+# ------------------------------------------------------ 贯穿弹道（焰狐龙梓兰 技3）
+# 这四个数**黑板里都没有**，出处是 prts.wiki「焰狐龙梓兰」页 `|备注=` 原文：
+# 「其具有 10 格/秒（≈0.333 格/帧）的飞行速度与 0.5 的碰撞半径……持续存在
+# 30 秒……从自身的弹道受击点（始终具有向北方向约 0.2323 格的偏移）向自身
+# 正前方发射」。板上的 `max_dist`/`dist_interval` 管的是另一回事（最大飞行
+# 距离与结算间隔），别混。
+#: 弹道飞行速度（格/秒）。
+_ARROW_SPEED = 10.0
+#: 碰撞半径（格）。**判定按连续坐标的欧氏距离**，不是格子相等——
+#: 半径 0.5 配上 0.25 的结算间隔，正好让一个质点敌人吃 4 次结算。
+_ARROW_RADIUS = 0.5
+#: 弹道存在时长（秒）。
+_ARROW_LIFETIME = 30.0
+#: 生成点相对自身的**向北**偏移（格）。MAA 口径 y 向下 ⇒ 北 = −y。
+_ARROW_SPAWN_OFFSET = 0.2323
+#: 首次开启动画与之后各开启动画的时长（秒）。由备注给的两个总时长
+#: （3.67 / 3.0）**减去**那 1.5 秒蓄力（`wait_duration`）反推出来。
+_ARROW_ANIM_FIRST = 2.17
+_ARROW_ANIM_LATER = 1.5
+#: 蓄力结束后到弹道真正出现之间的那约 3 帧（备注：≈0.1 秒）。
+_ARROW_PROJECTILE_DELAY = 0.1
+
 #: 「全场总攻击」装置的 characterKey。关卡 `predefines.tokenInsts` 里出现它就启用。
 TOTAL_ATTACK_KEY = "trap_335_totalattack"
 
@@ -542,6 +564,12 @@ class BattleSimulator:
         self._knocks: dict[int, int] = {}
         #: 场上所有活着的剑气（赤刃明霄陈 技3）。
         self._qis: list[dict] = []
+        #: 场上所有活着的**贯穿弹道**（焰狐龙梓兰 技3「龙之箭」）。与剑气分开：
+        #: 判定是**连续坐标 + 半径**、按距离分段结算、可重复命中同一敌人（带各自
+        #: 的推动冷却），而剑气是格子判定 + 一次命中。
+        self._arrows: list[dict] = []
+        #: 已开技但**还没出弹道**的（抬手＋蓄力要 3 秒上下，见 `_schedule_arrow`）。
+        self._pending_arrows: list[dict] = []
         #: 剑气移动速度（格/秒）。原文只写了"向前/遇障碍右转/技能结束消失"，
         #: 没写速度，故显式做成参数而不是埋在常量里——这是未知量，不是设定值。
         #: 结论对它的敏感度必须扫描给出（`tools/run_srx8.py --qi-sweep` 那类跑法）。
@@ -745,6 +773,182 @@ class BattleSimulator:
                             f"{t:7.1f}s  剑气穿过 {e.name} 造成 {final:,.0f} 法术伤害")
             alive.append(q)
         self._qis = alive
+
+    # ------------------------------------------------ 贯穿弹道（焰狐龙梓兰 技3）
+
+    def _schedule_arrow(self, op: OperatorUnit, t: float, *,
+                        first: bool, eff) -> None:
+        """排一次「龙之箭」的发射（技3）。
+
+        开技之后**先走抬手＋蓄力**才出弹道，时间取 prts.wiki 该页 `|备注=`：
+
+        > 「蓄力 3 秒后」实为从技能开启动画播放完毕后开始 **1.5 秒**蓄力计时……
+        > 首次开启时将需要约 **110 帧（≈3.67 秒）**、非首次开启需要约
+        > **90 帧（≈3 秒）**才能开始发射龙之箭，随后约 **3 帧（0.1 秒）**后
+        > 产生弹道
+
+        两个总时长里都**含**那 1.5 秒蓄力（`wait_duration`），所以动画段是
+        3.67 − 1.5 = 2.17 与 3.0 − 1.5 = 1.5。首次更长是**天赋1 改了开启动画**
+        （备注里点名），判据就是"这是本局第几次开技"。
+
+        参数在这里**拍快照**：弹道离开她之后就与她的属性/技能状态无关
+        （PRTS「弹道」页：「弹道携带着许多完成一次攻击所需的信息」）。
+        """
+        anim = _ARROW_ANIM_FIRST if first else _ARROW_ANIM_LATER
+        delay = anim + float(eff.pierce_charge or 0.0) + _ARROW_PROJECTILE_DELAY
+        d = {"Right": (1, 0), "Left": (-1, 0), "Up": (0, -1), "Down": (0, 1)}
+        dx, dy = d.get(op.direction, (1, 0))
+        self._pending_arrows.append({
+            "at": t + delay,
+            "op": op,
+            # 出弹道点是"自身的弹道受击点"，备注写明**始终向北偏移约 0.2323 格**。
+            # MAA 口径 y 向下 ⇒ 北 = −y。
+            "x": float(op.position[0]),
+            "y": float(op.position[1]) - _ARROW_SPAWN_OFFSET,
+            "dx": dx, "dy": dy,
+            "atk": float(op.atk),
+            "phys": float(eff.atk_scale or 0.0),
+            "magic": float(eff.pierce_magic_scale or 0.0),
+            "step": float(eff.pierce_step or 0.0),
+            "max_dist": float(eff.pierce_max_dist or 0.0),
+            "force": float(eff.pierce_force or 0.0),
+            "push_cd": float(eff.pierce_push_cd or 0.0),
+        })
+        if self.verbose:
+            self.result.log.append(
+                f"{t:7.1f}s  {op.name} 开始蓄力（{delay:.2f}s 后发射龙之箭）")
+
+    def _arrow_tick(self, dt: float, t: float) -> None:
+        """推进所有贯穿弹道：到点生成 → **每走 `pierce_step` 格结算一次**。
+
+        结算规则（备注 + 玩家 0.1 倍速慢放实测，出处见 `docs/uncertainties.md`
+        §十三之三）：
+
+        * 每走 `dist_interval`（0.25 格）结算一次，**每次对碰撞半径 0.5 内的
+          所有敌人**各造成**先物理、后法术**两笔伤害。
+        * 所以在半径 0.5 的圆里，一个敌人会吃到 4 次左右的结算——实测原话
+          「1.5 萬血閃盾一下判定 4 下死亡」正合这个几何（1.0 格 ÷ 0.25 = 4）。
+          敌人**不是质点**时（BOSS 体积大）判定更多，实测歲相是 13 次；
+          本项目把敌人当质点，所以对大体型敌人偏少，这条边界记在留档里。
+        * 推动沿**弹道方向**，对**每个敌人各自**有 `knockback_duration`
+          （1 秒）的冷却。
+        """
+        if not self._arrows and not self._pending_arrows:
+            return
+        # 1) 到点的先出弹道
+        still_pending = []
+        for rec in self._pending_arrows:
+            if t + 1e-9 < rec["at"]:
+                still_pending.append(rec)
+                continue
+            rec.pop("at")
+            rec["travelled"] = 0.0
+            rec["acc"] = 0.0
+            rec["life"] = _ARROW_LIFETIME
+            rec["push_at"] = {}
+            # 碰撞状态：`inside` = 此刻在半径内的，`spent` = 已经**离开过**这条
+            # 弹道的。见 `_arrow_probe` 里那条博士裁定。
+            rec["inside"] = set()
+            rec["spent"] = set()
+            self._arrows.append(rec)
+            if self.verbose:
+                self.result.log.append(
+                    f"{t:7.1f}s  {rec['op'].name} 射出龙之箭")
+        self._pending_arrows = still_pending
+
+        # 2) 推进并结算
+        speed = _ARROW_SPEED
+        alive = []
+        for a in self._arrows:
+            a["life"] -= dt
+            travel = speed * dt
+            step = float(a["step"] or 0.25)
+            # **按累计距离结算**：每飞满 `pierce_step`（0.25 格）才打一次。
+            # 早先的写法是把每帧位移切成 0.25 的整数块、**余数也当成一个结算点**
+            # （10 格/秒 ÷ 30 帧 = 0.333 = 0.25 + 0.083），于是每帧多打一次：
+            # 一个静止靶子被判定 6 次，而几何上只该有 3~4 次。用累加器就没有这问题。
+            a["x"] += a["dx"] * travel
+            a["y"] += a["dy"] * travel
+            a["travelled"] += travel
+            a["acc"] += travel
+            while a["acc"] >= step - 1e-9 and a["life"] > 0.0:
+                a["acc"] -= step
+                self._arrow_probe(a, t)
+            if (a["life"] > 0.0
+                    and (a["max_dist"] <= 0.0
+                         or a["travelled"] < a["max_dist"])
+                    and self._on_map(a["x"], a["y"])):
+                alive.append(a)
+            elif self.verbose:
+                self.result.log.append(
+                    f"{t:7.1f}s  龙之箭消失（飞了 {a['travelled']:.1f} 格）")
+        self._arrows = alive
+
+    def _on_map(self, x: float, y: float) -> bool:
+        """坐标是否还落在地图范围内（给弹道用）。
+
+        **箭是飞过地形的**：它从"弹道受击点"出去后直线飞行、射程"无限远"，
+        所以不能拿 `walkable` 判——干员常常站在**高台**上，而高台格对地面单位
+        不可走，用 `walkable` 会让弹道在出膛那一帧就被删掉（这个坑当时真的踩了：
+        弹道一条都没活下来，靶子毫发无伤）。真正让它消失的只有三种情况：
+        存在 30 秒走完、飞满 `max_dist`（99 格）、或飞出地图。
+        """
+        tiles = getattr(self.stage.map, "tiles", None)
+        if not tiles:
+            return True
+        h = len(tiles)
+        w = len(tiles[0]) if h else 0
+        return -1.0 <= x <= w and -1.0 <= y <= h
+
+    def _arrow_probe(self, a: dict, t: float) -> None:
+        """一次结算：半径内的每个敌人各吃物理＋法术两笔，推动带各自冷却。
+
+        **同一条弹道对同一个敌人只碰一次。**（博士 2026-09-18 裁定）备注写了
+        「推动效果对每个敌人具有 1 秒的冷却（每个敌人单独计算）」，而弹道本身
+        以 10 格/秒飞行——被推开的敌人在那 1 秒里根本追不上、也回不到碰撞半径
+        内，所以**同一条龙之箭不存在第二次接触**。
+
+        实现上不按"碰过就打勾"，而是**离开半径才算用掉**（`spent`）：一次接触
+        期间每 0.25 格仍然各结算一次（这正是实测里"閃盾一下判定 4 下"的来源），
+        但敌人一旦被推离半径，这条弹道对它就再也不结算了。
+        """
+        op = a["op"]
+        for e in self.enemies:
+            if not e.alive or e.leaked or e.off_map:
+                continue
+            inside = math.hypot(e.position[0] - a["x"],
+                                e.position[1] - a["y"]) <= _ARROW_RADIUS
+            if not inside:
+                if id(e) in a["inside"]:
+                    a["inside"].discard(id(e))
+                    a["spent"].add(id(e))
+                continue
+            if id(e) in a["spent"]:
+                continue
+            a["inside"].add(id(e))
+            # **先物理、后法术**（备注原话），两笔各自吃防御/法抗。
+            for dtype, scale in ((DamageType.PHYSICAL, a["phys"]),
+                                 (DamageType.MAGIC, a["magic"])):
+                if scale <= 0.0:
+                    continue
+                dmg = resolve_damage(a["atk"], damage_type=dtype, scale=scale,
+                                     defense=e.defense, res=e.res)
+                self._damage_enemy(e, dmg.final, t, dtype, source=op)
+            if not e.alive:
+                continue
+            # 推动：沿弹道方向、每个敌人各自 1 秒冷却。
+            last = a["push_at"].get(id(e), float("-inf"))
+            if t - last < a["push_cd"]:
+                continue
+            a["push_at"][id(e)] = t
+            level = displace.skill_force_level(
+                a["force"], getattr(op, "base_force_level", 0.0) or 0.0)
+            dist = displace.push_distance(level, e.weight, ballistic=True)
+            if dist > 0.0:
+                e.apply_push(a["dx"] * dist, a["dy"] * dist)
+                if self.verbose:
+                    self.result.log.append(
+                        f"{t:7.1f}s  龙之箭推动 {e.name} {dist:.2f} 格")
 
     def _adaptive_damage_raw(self, raw: float, target: EnemyUnit):
         """「弱点伤害」的另一种入口：手里只有一个伤害值（剑气那种按倍率算好的）。
@@ -1551,6 +1755,11 @@ class BattleSimulator:
         # 在 == 0 时触发。
         if op.sp_charges == 0 and op.power_attack_count > 0:
             op.power_attack_left = op.power_attack_count
+        # 技3「龙之箭」：开技只是**开始蓄力**，弹道要 3 秒上下才出（`_schedule_arrow`）。
+        # `first` 判据同上面那条——`sp_charges` 还没自增，"0" 就是本局第一次开技，
+        # 而首次的开启动画更长（备注点名是天赋1 改的动画）。
+        if eff_now.pierce_step > 0.0:
+            self._schedule_arrow(op, t, first=(op.sp_charges == 0), eff=eff_now)
         op.skill_active = True
         # 「第二次及以后使用」的取值：黑板用 `[second]` 变体给。怒潮凛冬技2
         # 「绝不罢休」——第 1 次 atk+90% / def+60% / 16 秒；第 2 次起
@@ -1840,6 +2049,8 @@ class BattleSimulator:
             # 天赋欠下的那次范围冻结（圣山的祝福）在这里兑现
             self._blessing_tick(t)
             self._qi_tick(dt, t)
+            # 贯穿弹道（焰狐龙梓兰 技3）：到点生成 + 按距离分段结算
+            self._arrow_tick(dt, t)
             # 技能自打的伤害：五连锤击按时刻表兑现（不吃攻速）
             self._hammer_tick(t)
 
