@@ -138,6 +138,28 @@ def mechanism_sim(stage, lib, **kw):
     return BattleSimulator(stage, enemy_at=lib.get, **kw)
 
 
+def _dummy(sim, stage, eid: str, cell, *, progress: float = 0.0,
+           hp: float = 1_000_000.0):
+    """在 `cell` 上放一只**站着不动**的受控靶子（受击、被挡、被溅射都用它）。
+
+    路线只有一格、长度为 0 ⇒ **一推进就算"走到终点"漏出场**。所以拿它当靶子
+    时**不要跑 `run()`**，直接驱动要测的那一步（`docs/uncertainties.md`
+    §二十之二里记过这个坑：靶子没了，会被读成"机制没生效"）。
+
+    血量默认给到一百万，是为了让多次出手都落在**同一只**还活着的目标上——
+    靶子被打死会让"第二个目标有没有吃到"这类断言静默变成"没目标"。
+    """
+    pts = [(float(cell[0]), float(cell[1]))]
+    e = sim._build_enemy(eid, 1, pts,
+                         [RouteLeg(kind="walk", points=pts, length=0.0)],
+                         0.0, 0.0)
+    e.position = (float(cell[0]), float(cell[1]))
+    e.progress = progress
+    e.max_hp = e.hp = hp
+    sim.enemies.append(e)
+    return e
+
+
 def check_baseline(stage, lib, calc) -> None:
     """1-7 三条阵容、不开技能。**部署时刻已按真实费用机制重排。**
 
@@ -3388,15 +3410,7 @@ def check_hammer_strikes(stage, lib, calc, book_t) -> None:
     sim2.operators.append(op2)
 
     def mk(s, cell, progress=0.0):
-        pts = [(float(cell[0]), float(cell[1]))]
-        e = s._build_enemy(eid, 1, pts,
-                           [RouteLeg(kind="walk", points=pts, length=0.0)],
-                           0.0, 0.0)
-        e.position = (float(cell[0]), float(cell[1]))
-        e.progress = progress
-        e.max_hp = e.hp = 1_000_000.0
-        s.enemies.append(e)
-        return e
+        return _dummy(s, stage, eid, cell, progress=progress)
 
     front = mk(sim2, (3, 3), progress=5.0)   # 正前方一格 → 主目标
     near = mk(sim2, (4, 3))                  # 正交一格 → 溅射
@@ -3545,6 +3559,180 @@ def check_hammer_strikes(stage, lib, calc, book_t) -> None:
           op6.hp == hp1, f"实得掉血 {hp1 - op6.hp:,.1f}")
 
 
+def check_batch3_sample(stage, lib, calc, book_t) -> None:
+    """[38] 本批「零欠账」两位的**实战核验**（能天使 × 星熊）。
+
+    审计的两道筛子只回答"这个键有没有人读"，**不回答"读出来的数有没有真的
+    改变战场"**——所以零欠账不等于已收口。本节按这个原则取数：每条都测该机制
+    **真正改变的那个可观测量**，而不是"某个函数被调用过"。
+
+    * 能天使的身份是**攻速 + 连发**：常驻 +12 攻速折算出的出手间隔、一次出手
+      打几笔、技能把间隔改掉多少；反向用潜能档位（+12 与 +15 是两档）与
+      "别的技能的连发数不要串门"。
+    * 星熊的身份是**常态减伤 + 阻挡**：天赋 25% 抵挡在**真受击**里是不是正好
+      0.75、被动技的 +30% 防御是不是不攒技力就常驻、阻挡是不是恰好 3 只。
+
+    ⚠️ 本节**故意不对账"每一笔伤害是多少"**：核验时发现平A 把技能倍率算了
+    两次（`current_atk()` 里一次、`resolve_damage(scale=…)` 里又一次），
+    零防目标上实得 / 正文 = **1.4500**。那是**基础模型**问题，改哪一侧等博士
+    裁定，见 `docs/uncertainties.md` §二十一；裁定落地后再补逐笔伤害的断言。
+    """
+    print("\n[38] 零欠账样板：能天使（攻速/连发）× 星熊（抵挡/阻挡）")
+    from ak_tactic.battle.talents import find_damage_block  # noqa: PLC0415
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    v = Verifier()
+    eid = _enemy_ids(stage)[0]
+
+    def build(cid, potential=1, skill=None):
+        op = v.unit({"char_id": cid, "elite": 2, "level": 60,
+                     "trust": 100, "potential": potential})
+        op.skill = skill
+        op.position = (2, 3)
+        op.direction = "Right"
+        return op
+
+    # ---- 能天使：天赋「快速弹匣」是**常驻**攻速 ----
+    a = build("char_103_angel")
+    check("能天使 精2 潜1 的常驻攻速 = 100 + 12（天赋「快速弹匣」）",
+          close(a.attack_speed, 112.0, 1e-9), f"实得 {a.attack_speed}")
+    check("  出手间隔 = 1.0 × 100/112（攻速对**平A**同样折算，不是只在开技能时折）",
+          close(a.current_interval(), 100.0 / 112.0, 1e-9),
+          f"实得 {a.current_interval():.4f}s")
+    a3 = build("char_103_angel", potential=3)
+    check("  反向：潜能 3 档才是 +15 那一档（天赋候选按 required_potential_rank 分）",
+          close(a3.attack_speed, 115.0, 1e-9), f"实得 {a3.attack_speed}")
+
+    # ---- 连发：一次出手打几笔（技1/2/3 = 3/4/5）----
+    slots = {s.slot: s for s in SkillBook().for_operator("char_103_angel")}
+
+    def fire(skill):
+        s = mechanism_sim(stage, lib)
+        op = build("char_103_angel", skill=skill)
+        s.operators.append(op)
+        _dummy(s, stage, eid, (3, 3))
+        s._activate(op, 0.0)
+        seen: list[float] = []
+        orig = s._damage_enemy
+
+        def spy(*args, **kw):
+            seen.append(args[1])
+            return orig(*args, **kw)
+
+        s._damage_enemy = spy
+        interval = op.current_interval()
+        s._operators_attack(interval + 1e-6, 0.0)
+        return op, seen, interval
+
+    op1, hits1, iv1 = fire(slots[1].level(7, 3))
+    _op2, hits2, _iv2 = fire(slots[2].level(7, 3))
+    _op3, hits3, iv3 = fire(slots[3].level(7, 3))
+    check("技1「冲锋模式」一次出手 **3 笔**（黑板 times=3）", len(hits1) == 3,
+          f"实得 {len(hits1)} 笔")
+    check("技2「扫射模式」**4 笔**、技3「过载模式」**5 笔**"
+          "（各技能的连发数不串门）",
+          len(hits2) == 4 and len(hits3) == 5,
+          f"实得 {len(hits2)} / {len(hits3)} 笔")
+    check("  同一个技能的连发**每笔一样大**（连发是同倍率重复，不是递减）",
+          len({round(h, 6) for h in hits3}) == 1,
+          f"实得 {[round(h, 1) for h in hits3]}")
+    check("技3 的间隔被 `base_attack_time = -0.11` 缩短：(1.0 − 0.11) × 100/112",
+          close(iv3, (1.0 - 0.11) * 100.0 / 112.0, 1e-9), f"实得 {iv3:.4f}s")
+    check("  反向：技1 的间隔仍是 1.0 × 100/112（缩短只属于技3）",
+          close(iv1, 100.0 / 112.0, 1e-9), f"实得 {iv1:.4f}s")
+
+    # ---- 星熊：天赋「战术装甲」= 常驻伤害抵挡 ----
+    def hsguma(skill=None):
+        return build("char_136_hsguma", skill=skill)
+
+    tal = book_t.for_operator("char_136_hsguma", elite=2, level=60, potential=1)
+    blk = find_damage_block(tal)
+    check("「战术装甲」精2 潜1 读数是 25%",
+          blk is not None and close(blk.value("prob"), 0.25, 1e-9),
+          f"实得 {blk.value('prob') if blk else None}")
+    blk3 = find_damage_block(book_t.for_operator("char_136_hsguma", elite=2,
+                                                 level=60, potential=3))
+    check("  反向：潜能 3 档是 28%（第一天赋效果增强）",
+          blk3 is not None and close(blk3.value("prob"), 0.28, 1e-9),
+          f"实得 {blk3.value('prob') if blk3 else None}")
+
+    def soak(dodge_on: bool) -> tuple[float, float]:
+        """让同一只远程敌人打同一位星熊六下。
+
+        两次布置**只翻转"抵挡"这一个字段**（天赋本身照给，位置、练度、敌人
+        全同），否则测出来的差值里混着"少了 6% 防御光环"那一份。
+        """
+        s = mechanism_sim(stage, lib)
+        op = hsguma()
+        s.operators.append(op)
+        s._do_deploy(Deployment(0.0, op, (2, 3), "Right", talents=tal), 0.0)
+        if not dodge_on:
+            op.talent_dodge_phys = 0.0
+            op.talent_dodge_arts = 0.0
+        _dummy(s, stage, "enemy_1028_mocock", (3, 3))
+        hp0 = op.hp
+        for k in range(6):
+            s._enemies_attack(1.0, float(k))
+        return hp0 - op.hp, op.talent_dodge_phys
+
+    with_tal, field_with = soak(True)
+    no_tal, field_without = soak(False)
+    check("抵挡落在**独立字段**上（不是技能的闪避字段，开一关技能也不会清）",
+          close(field_with, 0.25, 1e-9) and close(field_without, 0.0, 1e-12),
+          f"带天赋 {field_with}，置 0 后 {field_without}")
+    check("**实战**：带上 25% 抵挡后同一次受击的掉血 = 不带时的 75%",
+          no_tal > 0.0 and close(with_tal, no_tal * 0.75, 1e-6),
+          f"带 {with_tal:,.2f} vs 不带 {no_tal:,.2f}")
+
+    # ---- 被动技「荆棘」：不攒技力、永不关闭 ----
+    hsg = {s.slot: s for s in SkillBook().for_operator("char_136_hsguma")}
+    sim2 = mechanism_sim(stage, lib)
+    thorn = hsguma(skill=hsg[2].level(7, 3))
+    sim2.operators.append(thorn)
+    base_def = thorn.defense
+    sim2._skill_tick(0.5, 0.5)
+    check("技2「荆棘」是**被动**：部署后不用攒技力就已经生效",
+          thorn.skill_active and thorn.effects is not None,
+          f"skill_active={thorn.skill_active}")
+    want_def = base_def * (1.0 + 0.30 + thorn.aura_def_pct)
+    check("  防御 = 面板 × (1 + 0.30 + 职业光环)",
+          close(thorn.current_defense(), want_def, 1e-6),
+          f"实得 {thorn.current_defense():.1f}，应为 {want_def:.1f}"
+          f"（光环 {thorn.aura_def_pct}）")
+    for k in range(120):
+        sim2._skill_tick(0.5, 0.5 + 0.5 * k)
+    check("  60 秒后仍然开着（被动永不关闭），且技力始终 0（不耗技力）",
+          thorn.skill_active and thorn.sp == 0.0,
+          f"开={thorn.skill_active} sp={thorn.sp}")
+
+    # ---- 技3「力之锯」：攻击 +140% / 防御 +90% ----
+    sim3 = mechanism_sim(stage, lib)
+    force = hsguma(skill=hsg[3].level(7, 3))
+    sim3.operators.append(force)
+    d0, a0 = force.defense, force.atk
+    sim3._activate(force, 0.0)
+    check("技3「力之锯」开启后攻击力 ×2.40（1 + 1.40）",
+          close(force.current_atk(), a0 * 2.40, 1e-6),
+          f"实得 {force.current_atk():.1f}，应为 {a0 * 2.40:.1f}")
+    want_d = d0 * (1.0 + 0.90 + force.aura_def_pct)
+    check("  防御 ×1.90（1 + 0.90）",
+          close(force.current_defense(), want_d, 1e-6),
+          f"实得 {force.current_defense():.1f}，应为 {want_d:.1f}")
+
+    # ---- 阻挡 3（特性「能够阻挡三个敌人」）----
+    sim4 = mechanism_sim(stage, lib)
+    wall = hsguma()
+    sim4.operators.append(wall)
+    sim4._do_deploy(Deployment(0.0, wall, (2, 3), "Right", talents=tal), 0.0)
+    foes = [_dummy(sim4, stage, eid, (2, 3)) for _ in range(4)]
+    sim4._update_blocking()
+    held = [f for f in foes if f.blocked_by is wall]
+    check("特性「能够阻挡三个敌人」：四只挤在同一格时**恰好挡住 3 只**"
+          f"（block_cnt={wall.block_cnt}）", len(held) == 3, f"实得 {len(held)} 只")
+    check("  反向：剩下那一只**挡不住**（不是无限挡）",
+          len(foes) - len(held) == 1, f"实得没挡住 {len(foes) - len(held)} 只")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="战斗与技能的回归检查")
     ap.parse_args()
@@ -3596,6 +3784,7 @@ def main() -> int:
     check_push(stage, lib, calc, book_t)
     check_trait_splash(stage, lib, calc, book_t)
     check_hammer_strikes(stage, lib, calc, book_t)
+    check_batch3_sample(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:
