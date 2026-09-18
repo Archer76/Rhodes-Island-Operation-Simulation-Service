@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import json
 import pathlib
 import sqlite3
 import sys
@@ -36,13 +37,31 @@ from ak_tactic.simgo import Simgo, build_spec, compare, find_binary  # noqa: E40
 #:     被击倒时给田地加病害 → 走**被击倒污染**那一路（帧序 7.5）；
 #:   - HS-EX-1：出怪最多（73 只），用来压一压机制在长局里的稳定性。
 CASES = [
+    # 带「玷 / 勿玷」技能出手的关：编队里**必须有一名近战**（`block_cnt > 0`）。
+    # 技能是"只打部署于地面的我方单位"，全高台编队会让它一次都放不出来——
+    # 那时对拍全绿也证明不了这段代码（反证会当场报出来）。
+    dict(stage="HS-4", chars=["char_002_amiya", "char_123_fang"]),
+    # ⚠ HS-EX-3／HS-EX-7 不在这里：它们的**装置有影响**（实测把装置摘掉判决就变），
+    # 而装置层（阻流阀被拆 → 地形还原、天桩链）还没移植。放行它们等于把
+    # "装置层没做"这件事藏起来，所以那一关的结论是"等装置层"，不是"已对上"。
     dict(stage="HS-EX-2", chars=["char_002_amiya"]),
     dict(stage="HS-EX-2", chars=["char_002_amiya", "char_123_fang"]),
-    dict(stage="HS-TR-2", chars=["char_002_amiya"]),
+    dict(stage="HS-TR-2", chars=["char_002_amiya", "char_123_fang"]),
     dict(stage="HS-2", chars=["char_002_amiya"]),
-    dict(stage="HS-6", chars=["char_002_amiya"]),
-    dict(stage="HS-1", chars=["char_002_amiya", "char_123_fang"]),
-    dict(stage="HS-EX-1", chars=["char_002_amiya"]),
+    dict(stage="HS-6", chars=["char_002_amiya", "char_123_fang", "char_124_kroos"]),
+    dict(stage="HS-EX-1", chars=["char_124_kroos", "char_123_fang"]),
+]
+
+#: **只验"闸门放行 + 判决逐项一致"**的关（不做"田地咬到人"的对照）。
+#:
+#: 为什么单独一组：目标关卡 HS-EX-4 与 HS-5 的田地机制，在本探针试过的编队×落位下
+#: 都咬不到人（开/关环境判决完全相同），而它们又必须留在视野里——那是要拿来做
+#: 解算提速基准的关。于是把话说小：这一组只证明"Go 能诚实跑完这一关、判决与原版
+#: 逐项一致"，**不证明**田地机制在这一关上被走到了（那一层由上面 8 例负责）。
+#: 反过来，一支"没被走到却全绿"的检查比没有更糟：它会把"没测"说成"测过"。
+SPEC_ONLY = [
+    dict(stage="HS-EX-4", chars=["char_002_amiya", "char_124_kroos"]),
+    dict(stage="HS-5", chars=["char_002_amiya", "char_123_fang"]),
 ]
 
 STATS_KW = dict(elite=2, level=80, trust=100, potential=6)
@@ -82,6 +101,53 @@ def spots_of(stage) -> list[tuple[int, int]]:
         for c in getattr(stage.map, attr, None) or []:
             out.append((int(c[0]), int(c[1])))
     return out
+
+
+def negative_controls(go, spec: dict, verdict: dict) -> list[str]:
+    """反证：把这一层的东西**摘掉**之后，判决必须跟着变。
+
+    为什么非要有这一条：只比"Go 与原版一致"是**可以被伪造的**——
+    Go 那边把 `skill_atk_*` 整组读漏、或者机制根本没挂上，只要那一趟恰好不影响
+    胜负，判决照样一模一样，检查全绿。所以每一个新接线的量都要配一条"把它摘掉
+    就应当变"的实测（这层已经吃过一次：三条机制零开技却给了绿灯）。
+
+    返回不成立的原因（空 = 反证成立）。
+    """
+    problems = []
+    has_skill_atk = any(s.get("skill_atk_scale_phys") or s.get("skill_atk_scale_magic")
+                        for s in spec.get("spawns", []))
+    if has_skill_atk:
+        mutant = json.loads(json.dumps(spec))
+        for s in mutant["spawns"]:
+            for key in ("skill_atk_scale_phys", "skill_atk_scale_magic",
+                        "skill_atk_pollut"):
+                s.pop(key, None)
+        got = go.sim(mutant)
+        if _same_core(verdict, got):
+            problems.append("把敌方技能出手整组清零，判决一字不变"
+                            "（这一趟它没落地，用例证明不了它被用上了）")
+    has_pollut = any(s.get("passive_pollut") for s in spec.get("spawns", []))
+    if has_pollut:
+        mutant = json.loads(json.dumps(spec))
+        for s in mutant["spawns"]:
+            s.pop("passive_pollut", None)
+        got = go.sim(mutant)
+        if _same_core(verdict, got):
+            problems.append("把被击倒污染清零，判决一字不变（这一趟它没落地）")
+    if spec.get("mechanisms"):
+        mutant = json.loads(json.dumps(spec))
+        mutant["mechanisms"] = []
+        mutant.pop("mech_config", None)
+        got = go.sim(mutant)
+        if _same_core(verdict, got):
+            problems.append("把机制整层摘掉，判决一字不变（挂没挂上分不出来）")
+    return problems
+
+
+def _same_core(a: dict, b: dict) -> bool:
+    """两份判决在**核心指标**上是否相同（与对拍台同一套口径）。"""
+    return all(a.get(k) == b.get(k) for k in
+               ("won", "kills", "leaks", "elapsed", "damage_dealt"))
 
 
 def candidate_cells(sim, stage) -> list[tuple[int, int]]:
@@ -136,12 +202,19 @@ def run_py(stage, squad, calc, *, environment: str = "auto", spec_out: bool = Fa
     return (spec, sim, res) if spec_out else (sim, res)
 
 
-def pick_biting_cells(stage, squad, calc, *, tries: int = 10):
-    """找一个"这一关测得出田地机制"的落位。
+def pick_biting_cells(stage, squad, calc, go=None, *, tries: int = 12):
+    """找一个"这一关**真的把这层代码走到了**"的落位。
 
-    判据：同一个落位、同一套编队，**开环境与关环境的判决必须不同**。相同就说明
-    田地这一场没起作用（干员没站在田地上、或污染没落到他们身上），那么后面
-    "Go 与 Python 一致"就是一条**没有内容的绿灯**——两边都合起来算错也照样通过。
+    两条判据都要成立，缺一不算：
+
+    1. **能区分**：同一个落位、同一套编队，开环境与关环境的判决必须不同。
+       相同就说明田地这一场没起作用，那么后面"Go 与 Python 一致"就是一条
+       **没有内容的绿灯**——两边都合起来算错也照样通过。
+    2. **反证成立**（这一关有对应机制时才要求）：把这一层的数据从规格里摘掉
+       （敌方技能出手整组清零 / 被击倒污染清零），Go 的判决必须跟着变。
+       不成立就说明**这一趟它压根没落地**——比如 HS-EX-4／HS-5 的技能出手是
+       "只打地面单位"，而阿米娅、克洛丝都是高台（阻挡 0），技能一次都没触发：
+       这时"Go 与原版一致"证明的是别的东西，不是这段代码。
 
     返回 (落位表, 开环境结果)；试遍了都不行则返回 (None, None)。
     """
@@ -153,10 +226,26 @@ def pick_biting_cells(stage, squad, calc, *, tries: int = 10):
         pick = cells[i:] + cells[:i]
         _, res_on = run_py(stage, squad, CALC, cells=pick)
         _, res_off = run_py(stage, squad, CALC, environment="off", cells=pick)
-        if res_on.won != res_off.won or res_on.kills != res_off.kills \
-                or abs(res_on.elapsed - res_off.elapsed) > 1e-9:
+        if res_on.won == res_off.won and res_on.kills == res_off.kills \
+                and abs(res_on.elapsed - res_off.elapsed) <= 1e-9:
+            continue
+        if go is not None and _has_negative_control(stage, squad, pick, go):
+            return pick, res_on
+        elif go is None:
             return pick, res_on
     return None, None
+
+
+def _has_negative_control(stage, squad, cells, go) -> bool:
+    """这一趟的规格在 Go 那边摘掉本层数据后，判决会不会变（见 `pick_biting_cells`）。"""
+    spec, _, _ = run_py(stage, squad, CALC, spec_out=True, cells=cells)
+    if spec["unsupported"]:
+        return False
+    try:
+        base = go.sim(spec)
+    except RuntimeError:
+        return False
+    return bool(negative_controls(go, spec, base)) is False
 
 
 def farmland_state_diff(sim, verdict: dict) -> str:
@@ -213,6 +302,44 @@ def farmland_touched(sim) -> float:
     return sum(float(v) for v in fs.actual.values())
 
 
+def _spec_only_pass(exe, src) -> int:
+    """`SPEC_ONLY` 那一组：只验"闸门放行 + 判决逐项一致 + 机制状态一致"。
+
+    返回失败条数。**不要求**田地机制在这一关被咬到（原因见 `SPEC_ONLY` 的注释）。
+    """
+    bad = 0
+    with Simgo(exe) as go:
+        for case in SPEC_ONLY:
+            code, squad = case["stage"], case["chars"]
+            label = f"{code} {squad}（只验判决）"
+            stage = load_stage(code, source=src)
+            cells = candidate_cells(BattleSimulator(stage, enemy_at=lib_get(stage)),
+                                   stage)
+            spec, sim_on, res_on = run_py(stage, squad, CALC, spec_out=True, cells=cells)
+            if spec["unsupported"]:
+                print(f"❌ {label}：闸门没放行 {spec['unsupported']}")
+                bad += 1
+                continue
+            try:
+                verdict = go.sim(spec)
+            except RuntimeError as exc:
+                print(f"❌ {label}：Go 拒跑 {exc}")
+                bad += 1
+                continue
+            diff = compare(res_on, verdict)
+            mech_diff = farmland_state_diff(sim_on, verdict)
+            ok = diff["ok"] and not mech_diff
+            print(f"{'✅' if ok else '❌'} {label}："
+                  f"Go {verdict.get('kills')}杀 {verdict.get('leaks')}漏 "
+                  f"{verdict.get('elapsed', 0):.3f}s 伤害 {verdict.get('damage_dealt', 0):.1f}"
+                  f"；机制={spec['mechanisms']}")
+            if mech_diff:
+                print(f"      机制状态不一致：{mech_diff}")
+            if not ok:
+                bad += 1
+    return bad
+
+
 def main() -> int:
     exe = find_binary()
     if exe is None:
@@ -239,7 +366,7 @@ def main() -> int:
             code, squad = case["stage"], case["chars"]
             label = f"{code} {squad}"
             stage = load_stage(code, source=SRC)
-            cells, res_on_probe = pick_biting_cells(stage, squad, CALC)
+            cells, res_on_probe = pick_biting_cells(stage, squad, CALC, go)
             if cells is None:
                 print(f"⊘ {label}：这套编队在这关**咬不到田地机制**"
                       f"（试遍了可部署格，开/关环境判决都相同）——不计入通过数")
@@ -275,13 +402,18 @@ def main() -> int:
                 continue
             diff = compare(res_on, verdict)
             mech_diff = farmland_state_diff(sim_on, verdict)
+            weak_controls = negative_controls(go, spec, verdict)
             dirty = farmland_touched(sim_on)
-            print(f"{'✅' if diff['ok'] and not mech_diff else '❌'} {label}："
-                  f"落位 {cells[0]}，开环境 {tuple(round(x, 3) if isinstance(x, float) else x for x in on)} → "
+            print(f"{'✅' if diff['ok'] and not mech_diff and not weak_controls else '❌'} "
+                  f"{label}：落位 {cells[0]}，"
+                  f"开环境 {tuple(round(x, 3) if isinstance(x, float) else x for x in on)} → "
                   f"关环境 {tuple(round(x, 3) if isinstance(x, float) else x for x in off)}；"
                   f"机制={spec['mechanisms']}，收尾病害值合计 {dirty:.1f}")
             if mech_diff:
                 print(f"      机制状态不一致：{mech_diff}")
+                bad += 1
+            for why in weak_controls:
+                print(f"      反证不成立：{why}")
                 bad += 1
             if mech_diff:
                 print(f"      机制状态不一致：{mech_diff}")
@@ -296,6 +428,7 @@ def main() -> int:
     if len(CASES) - bad - weak == 0:
         print("❌ 一条有效证据都没有：这不算通过")
         return 1
+    bad += _spec_only_pass(exe, SRC)
     return 0 if bad == 0 else 1
 
 

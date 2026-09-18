@@ -237,6 +237,31 @@ func (o *operator) res() float64 {
 	return o.spec.RES
 }
 
+// dodgeVs 是这名干员针对某个伤害类型的闪避比例（原版
+// `op.dodge_phys + op.talent_dodge_phys` 那一族）。
+//
+// 两项来源不同、生命周期也不同，所以规格里分开送：
+//
+//   - **技能给的**（`dodge_phys/arts`）只在技能开启期间有效，随 `Active` 那套走；
+//   - **天赋给的常驻抵挡**（星熊「战术装甲」）跟着人走，整场不变。
+//
+// 真实伤害两类都不吃闪避（原版 `damage.py:144`）。
+func (o *operator) dodgeVs(damageType string) float64 {
+	skillDodge := 0.0
+	if p := o.profile(); p != nil {
+		if damageType == "MAGIC" {
+			skillDodge = p.DodgeArts
+		} else {
+			skillDodge = p.DodgePhys
+		}
+	}
+	talent := o.spec.TalentDodgePhys
+	if damageType == "MAGIC" {
+		talent = o.spec.TalentDodgeArts
+	}
+	return skillDodge + talent
+}
+
 func (o *operator) interval() float64 {
 	if p := o.profile(); p != nil {
 		return p.Interval

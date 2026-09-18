@@ -65,6 +65,14 @@ type enemy struct {
 
 func (e *enemy) alive() bool { return e.hp > 0 }
 
+// dodgeVs 是这只敌人针对某个伤害类型的闪避比例。
+//
+// **恒为 0**，与原版同值：原版 `sim.py:3921` 读 `target.dodge_phys +
+// target.talent_dodge_phys`，而 `EnemyUnit.dodge_phys` 是个没有任何地方写过的
+// 字段、敌人侧也没有天赋抵挡那一对字段。留着这个方法是为了让"这一路上有没有闪避"
+// 这件事**有名字**——写成裸 0 会让下一个人以为这里漏了。
+func (e *enemy) dodgeVs(string) float64 { return 0 }
+
 func (e *enemy) reachedEnd() bool {
 	return e.legIndex >= len(e.spec.Legs)
 }
@@ -297,6 +305,14 @@ func runSim(spec *Spec) (*Verdict, error) {
 		// ---- 7. 敌方出手（1873 → 2882）
 		enemiesAttack(ops, enemies, dt, t, spec, verdict)
 
+		// ---- 7.2 关卡特有机制：敌方**技能出手**（原版 2221 之前那一处，帧序 7.2）
+		//
+		// 排在普攻之后、被击倒效果之前：技能出手自己会占住敌人的动作时间，
+		// 也可能正好把人打死——那个"打死"要到 7.5 才结算。
+		if !mechanisms.Empty() {
+			mechanisms.AttackTick(ctx, dt)
+		}
+
 		// ---- 7.5 关卡特有机制：**两次出手之后、结算之前**（原版 2221）
 		//
 		// 这一处专门处理"这一帧谁把谁打倒了"之后的一次性效果（怀黍离：被击倒的
@@ -406,13 +422,13 @@ func (c *simCtx) speedFor(index int) float64 {
 // 为 false）。用对象下标而不是"在场列表的下标"：后者随部署顺序增长，机制拿到的
 // 编号会随着场上人数变化而漂。
 func (c *simCtx) Operators() []mech.OpView {
-	objs := *c.objs
-	out := make([]mech.OpView, 0, len(objs))
-	for i, o := range objs {
+	out := make([]mech.OpView, 0, len(*c.objs))
+	for i, op := range *c.objs {
 		out = append(out, mech.OpView{
-			Index: i, CharID: o.spec.CharID, Name: o.spec.Name,
-			Cell: o.spec.Cell, HP: o.hp, MaxHP: o.spec.MaxHP,
-			Alive: o.alive(),
+			Index: i, CharID: op.spec.CharID, Name: op.spec.Name,
+			Cell: [2]int{int(op.cell[0]), int(op.cell[1])}, HP: op.hp,
+			MaxHP: op.spec.MaxHP,
+			Alive: op.alive(), BlockCnt: op.spec.BlockCnt,
 		})
 	}
 	return out
@@ -426,6 +442,14 @@ func (c *simCtx) Enemies() []mech.EnemyView {
 			HP: e.hp, Alive: e.alive(), Blocked: e.blockedBy != nil,
 			Leaked: e.leaked, OffMap: e.offMap,
 			PollutOnDeath: e.spec.PassivePollut, PollutRadius: e.spec.PassiveRadius,
+			ATK: e.spec.ATK, AttackInterval: e.spec.Interval,
+			SkillAtkScalePhys:  e.spec.SkillAtkScalePhys,
+			SkillAtkScaleMagic: e.spec.SkillAtkScaleMagic,
+			SkillAtkInit:       e.spec.SkillAtkInit,
+			SkillAtkInterval:   e.spec.SkillAtkInterval,
+			SkillAtkCross:      e.spec.SkillAtkCross,
+			SkillAtkPollut:     e.spec.SkillAtkPollut,
+			SkillAtkGroundOnly: e.spec.SkillAtkGroundOnly,
 		}
 		// 原版 `_pollute_around` 读的是 `e.blocked_by is not None and
 		// e.blocked_by.alive`——**活着**的阻挡者才算数（挡它的那位这一帧刚倒，
@@ -488,6 +512,41 @@ func (c *simCtx) ScaleEnemySpeed(index int, scale float64) {
 	}
 	c.speedReq[index] = scale
 }
+
+// HitOperator 施加机制发起的一次**分类型**伤害（原版 `resolve_damage` 那一路）。
+//
+// 与 `DamageOperator` 的分工：那个是真伤（田地每秒伤害就不吃减伤），这个要先过
+// 这名干员**这一刻**的防御/法抗/闪避与 5% 保底——那些数只有主循环有，机制不该
+// 自己抄一份（抄了就会随技能开关而漂）。受击回技力也在这里补上，与主循环自己
+// 出手时共用 `spOnHit`。
+func (c *simCtx) HitOperator(index int, raw float64, damageType string) float64 {
+	objs := *c.objs
+	if index < 0 || index >= len(objs) {
+		return 0
+	}
+	op := objs[index]
+	if !op.alive() {
+		return 0
+	}
+	dealt := op.take(resolveDamage(raw, damageType, 1.0,
+		op.defense(), op.res(), op.dodgeVs(damageType)))
+	spOnHit(op, dealt)
+	return dealt
+}
+
+// PauseEnemy 把这一只敌人的动作停顿推到一个下限（原版
+// `e.attack_pause = max(e.attack_pause, self.enemy_windup)`）。
+func (c *simCtx) PauseEnemy(index int, seconds float64) {
+	for _, e := range *c.enemies {
+		if e.index == index {
+			e.attackPause = math.Max(e.attackPause, seconds)
+			return
+		}
+	}
+}
+
+// EnemyWindup 是这一关的"出手动作时间"（原版 `self.enemy_windup`）。
+func (c *simCtx) EnemyWindup() float64 { return c.spec.EnemyWindup }
 
 func (c *simCtx) Log(format string, args ...any) {
 	c.verdict.Events = append(c.verdict.Events, Event{
@@ -667,8 +726,12 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 				if hasFinal && i == hits-1 {
 					hitScale = finalScale
 				}
+				// 闪避走 `target.dodgeVs`：这一路（我方打敌方）原版读的是**敌人**
+				// 的 `dodge_phys + talent_dodge_phys`（`sim.py:3921`）。那个值恒为 0
+				// （原因写在 `enemy.dodgeVs` 上），所以这里不是"先不管"，
+				// 而是"与原版同值、并且有名字"。
 				dmg := resolveDamage(power, dmgType, hitScale,
-					target.spec.DEF, target.spec.RES)
+					target.spec.DEF, target.spec.RES, target.dodgeVs(dmgType))
 				dealt := target.take(dmg)
 				trace("        打 %s 攻=%.1f 类型=%s 倍率=%.3f 防=%.1f 抗=%.1f 伤害=%.3f 实扣=%.3f 剩=%.3f",
 					target.spec.Name, power, dmgType, hitScale, target.spec.DEF,
@@ -798,7 +861,7 @@ func enemiesAttack(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec,
 		dealt := 0.0
 		for seg := 0; seg < times; seg++ {
 			dmg := resolveDamage(e.spec.ATK, e.spec.DamageType, 1.0,
-				op.defense(), op.res())
+				op.defense(), op.res(), op.dodgeVs(e.spec.DamageType))
 			dealt += op.take(dmg)
 			if !op.alive() {
 				op.deathTime = t
@@ -884,28 +947,42 @@ func (o *operator) take(amount float64) float64 {
 // 物理 `max(atk - def, atk × 5%)`；法术 `max(atk × (1 - res/100), atk × 5%)`，
 // 但 `res >= 100` 是**免疫**，保底不覆盖它；真实伤害就是 `atk`。
 // 闪避在最小版本里没有（会走 `unsupported`）。
-func resolveDamage(atk float64, damageType string, scale float64,
-	defense, res float64) float64 {
+// resolveDamage 是原版 `damage.py::resolve_damage` 的那一路（`sim.py` 到处在用）。
+//
+// 次序照原文：先算防御/法抗，**再**按伤害类型折闪避（真实伤害两类都不吃闪避）。
+// `dodge` 是受击方针对这个伤害类型的闪避比例（0.6 = 削掉 60%）——原版把它当期望值
+// 线性折进去，Go 侧同样不掷骰。
+//
+// ⚠ 早先这个函数**没有闪避参数**，而原版的三条打人路（敌方普攻 3442、敌方技能
+// 3536/3544、我方打敌方 3921）**都**在传闪避。24 例对拍语料里的干员恰好都没有
+// 闪避，所以一直没暴露：那不是"两边一致"，是"这一路上两边都没走到"。
+// 库里目前唯一带常驻闪避的是星熊的「战术装甲」（`DAMAGE_BLOCK_TALENTS` 只有它）。
+func resolveDamage(atk float64, damageType string, scale, defense, res,
+	dodge float64) float64 {
 	raw := atk * scale
 	floor := raw * 0.05
+	var dealt float64
 	switch damageType {
 	case "MAGIC":
 		if res >= 100.0 {
-			return 0
+			dealt = 0
+		} else {
+			eff := math.Min(100.0, math.Max(-100.0, res))
+			dealt = raw * (100.0 - eff) / 100.0
+			if dealt < floor {
+				dealt = floor
+			}
 		}
-		eff := math.Min(100.0, math.Max(-100.0, res))
-		dealt := raw * (100.0 - eff) / 100.0
-		if dealt < floor {
-			return floor
-		}
-		return dealt
 	case "TRUE":
-		return raw
+		dealt = raw
 	default: // PHYSICAL
-		dealt := raw - math.Max(0, defense)
+		dealt = raw - math.Max(0, defense)
 		if dealt < floor {
-			return floor
+			dealt = floor
 		}
-		return dealt
 	}
+	if damageType != "TRUE" && dodge > 0 {
+		dealt *= 1.0 - math.Min(1.0, math.Max(0.0, dodge))
+	}
+	return dealt
 }

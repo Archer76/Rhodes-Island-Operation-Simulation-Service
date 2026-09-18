@@ -672,6 +672,8 @@ type farmlandMech struct {
 	envTimer float64
 	//: 已经结算过"被击倒"效果的那几只（原版每只敌人身上的 `death_done`）。
 	dead map[int]bool
+	//: 敌方技能出手的计时（键 = 出怪顺序下标），见 `AttackTick`。
+	skillTimers map[int]*skillAtkState
 }
 
 func newFarmlandMech(cfg json.RawMessage) (Mechanism, error) {
@@ -758,6 +760,137 @@ func (m *farmlandMech) EnvTick(ctx Ctx, dt float64) {
 }
 
 func init() { RegisterFactory(FarmlandID, newFarmlandMech) }
+
+// AttackTick 对应原版 `sim.py:3468` 的 `_skill_attack_tick`：怀黍离
+// 「玷 / 勿玷」的技能「污」。
+//
+// 【正文来历】prts 图鉴「玷 / 勿玷」技能 0 原文：
+//
+//	天赋：**不进行远程普通攻击**
+//	技能0「污」（初始 7）：攻击场上**1 名部署于地面**的我方单位，
+//	对**目标及其周围 4 格**的单位造成**攻击力 100% 的物理伤害**；
+//	自身位于病害值 > 0 的田地地块时，当次攻击**额外附加攻击力 80% 的
+//	法术普通伤害**，且**令目标地块病害值 +5**；※此技能不可沉默
+//
+// 四件事必须与原版一致：
+//
+//  1. **"全图"= 不看射程**（`rangeRadius` 是 −1，正是"不进行远程普攻"的后果），
+//     挑的是**最后部署的那一名地面干员**（`block_cnt > 0` 判"地面"）。
+//     ⚠ 挑不到人时**计时器已经清零了**（原版 3513-3517 就是这个顺序）：
+//     不是"等人来了马上放"，而是"这一拍空过、重新计 7 秒"。
+//  2. **"周围 4 格"是曼哈顿距离 1 的十字五格**（目标格 + 上下左右），
+//     **不是**半径 1.0 的圆：斜角不在里面。别复用 `PolluteArea` 的圆。
+//  3. **两段各减一次**：物理那段照常结算，法术那段在物理之后**再减一次法抗**
+//     （原版 3496-3498 写明了"不是把两部分加起来当一次伤害打"）。
+//  4. **法术附加与"目标地块 +5"共用一个条件**：出手者**自己**站在受污染的田地上
+//     （`actual_at(自己那格) > 0`）——不是目标那格，也不是"这一关有田地"。
+func (m *farmlandMech) AttackTick(ctx Ctx, dt float64) {
+	if m.skillTimers == nil {
+		m.skillTimers = map[int]*skillAtkState{}
+	}
+	windup := ctx.EnemyWindup()
+	for _, e := range ctx.Enemies() {
+		if e.SkillAtkScalePhys == 0 && e.SkillAtkScaleMagic == 0 {
+			continue
+		}
+		if !e.Alive || e.Leaked || e.OffMap {
+			continue
+		}
+		st := m.skillTimers[e.Index]
+		if st == nil {
+			// 原版每只敌人的 `skill_atk_first` 初值为真（`unit.py` 的字段默认值）。
+			st = &skillAtkState{first: true}
+			m.skillTimers[e.Index] = st
+		}
+		st.timer += dt
+		if st.timer < st.need(e) {
+			continue
+		}
+		st.timer = 0
+		st.first = false
+		target, ok := skillAtkTarget(ctx, e)
+		if !ok {
+			continue
+		}
+		ctx.PauseEnemy(e.Index, windup)
+		cx, cy := target.Cell[0], target.Cell[1]
+		cells := [][2]int{{cx, cy}, {cx + 1, cy}, {cx - 1, cy}, {cx, cy + 1}, {cx, cy - 1}}
+		if e.SkillAtkCross <= 0 {
+			cells = [][2]int{{cx, cy}}
+		}
+		polluted := m.field.ActualAt(int(e.Position[0]), int(e.Position[1])) > 0
+		mag := 0.0
+		if polluted {
+			mag = e.ATK * e.SkillAtkScaleMagic
+		}
+		for _, c := range cells {
+			op, ok := opAtCell(ctx, c)
+			if !ok {
+				continue
+			}
+			// ① 基础物理（正文 100% → `skill_atk_scale_phys`），逐目标减防
+			ctx.HitOperator(op.Index, e.ATK*e.SkillAtkScalePhys, "PHYSICAL")
+			// ② 附加法术，单独再减一次法抗
+			if mag > 0 {
+				ctx.HitOperator(op.Index, mag, "MAGIC")
+			}
+		}
+		// ③ 令**目标地块**病害值 +N（记入【缓存】，不是直接改【实际】）
+		if polluted && e.SkillAtkPollut > 0 {
+			if got := m.field.PolluteCell(cx, cy, e.SkillAtkPollut); got > 0 {
+				ctx.Log("%s 技能「污」→ (%d,%d) 田地病害 +%g 记入缓存",
+					e.Name, cx, cy, got)
+			}
+		}
+	}
+}
+
+// skillAtkState 是一只敌人的技能出手计时（原版敌人对象上的
+// `skill_atk_timer` 与 `skill_atk_first` 两个字段）。
+type skillAtkState struct {
+	timer float64
+	first bool
+}
+
+// need 是这一拍等多久：第一次用**初始**值，之后用间隔；
+// 间隔为 0 时回落到普攻间隔（原版 3509-3510）。
+func (st *skillAtkState) need(e EnemyView) float64 {
+	if st.first {
+		return e.SkillAtkInit
+	}
+	if e.SkillAtkInterval != 0 {
+		return e.SkillAtkInterval
+	}
+	return e.AttackInterval
+}
+
+// skillAtkTarget 挑谁（原版 `_skill_atk_target` 3566-3580）：
+// **全图**、只要地面单位，取**最后部署**的那一名（与既有敌方索敌口径一致）。
+func skillAtkTarget(ctx Ctx, e EnemyView) (OpView, bool) {
+	var picked OpView
+	found := false
+	for _, op := range ctx.Operators() { // 顺序 = 部署顺序，越靠后越晚
+		if !op.Alive || op.HP <= 0 {
+			continue
+		}
+		if e.SkillAtkGroundOnly && op.BlockCnt <= 0 {
+			continue
+		}
+		picked, found = op, true
+	}
+	return picked, found
+}
+
+// opAtCell 取这一格上的我方单位（原版 `_alive_op_at`：
+// `op.alive and op.position == cell`；同一格不会站两个人）。
+func opAtCell(ctx Ctx, cell [2]int) (OpView, bool) {
+	for _, op := range ctx.Operators() {
+		if op.Alive && op.Cell == cell {
+			return op, true
+		}
+	}
+	return OpView{}, false
+}
 
 // State 把田地状态交给判决（对拍用，见 `Snapshotter`）。
 //
