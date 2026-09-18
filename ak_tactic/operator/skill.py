@@ -1122,6 +1122,20 @@ class SkillEffects:
     #: 实际扣掉多少费。触发条件是「在**战术点效果范围**内部署干员」（见
     #: `sim._refund_on_deploy`）。
     cost_return: float = 0.0
+    #: 「投递坐标处的炮击」（新约能天使技3「使命必达！」）。
+    #:
+    #: 正文「若存在投递坐标，立即对该处造成一次相当于攻击力 250% 的物理溅射
+    #: 伤害并将一名再部署时间最长的地面干员部署至该处，使其获得 6 点技力」
+    #: → 黑板 `attack@cannon_atk_scale = 2.5`、`attack@sp = 6`、
+    #: `max_deploy_character = 99`（这一技能的**投递名额**）。
+    #:
+    #: ⚠️ 溅射**半径无数据**（正文只说"溅射"，黑板里没有半径类键），
+    #: 暂用仓库既有的 3×3 重叠判定口径（半径 1.0），已记 `docs/uncertainties.md`。
+    cannon_atk_scale: float = 0.0
+    #: 被投递到坐标处的干员获得的技力（`attack@sp`）。
+    cannon_sp: float = 0.0
+    #: 这次技能**最多投递几个干员**（`max_deploy_character`，她这里是 99）。
+    cannon_deploy_cap: int = 0
     #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
     #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
     #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
@@ -1877,6 +1891,12 @@ class SkillBook:
         # `cost_return`。消费点在 `sim._refund_on_deploy`（部署当帧结算）。
         if "返还部署费用" in lv.description:
             lv.effects.cost_return = float(bb.get("cost_return") or 0.0)
+        # 「投递坐标」（新约能天使技3「使命必达！」）：判据锚正文里那三个字。
+        if "投递坐标" in lv.description:
+            lv.effects.cannon_atk_scale = float(
+                bb.get("attack@cannon_atk_scale") or 0.0)
+            lv.effects.cannon_sp = float(bb.get("attack@sp") or 0.0)
+            lv.effects.cannon_deploy_cap = int(bb.get("max_deploy_character") or 0)
         # 技能结束时的**自身**效果：晕眩与强制退场。两者的数值/语义都
         # 只在描述里，且都与"打在敌人身上"的那套（`control`）无关。
         lv.effects.self_stun = _wants_self_stun(lv.description, bb)

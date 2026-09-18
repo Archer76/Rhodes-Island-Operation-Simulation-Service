@@ -384,6 +384,9 @@ class OperatorUnit(Combatant):
     #: 技2→`x-4`、技3→`x-6`），配她的槽号才配得上。挂技能时顺手记下来
     #: （2026-09-19，被守卫 [54] 逼出来的）。
     skill_slot: int = 0
+    #: 这位干员**还能投递几个干员**（新约能天使技3 的 `max_deploy_character`）。
+    #: 开技时按技能黑板重置；每一次成功投递减一。0 = 没开这类技能或名额用完。
+    delivery_left: int = 0
     #: 「阻挡半径倍率」的**天赋级**增量（凯尔希 / 凯尔希·思衡托「遗尘守望」的
     #: `block_radius_scale`）。与技能上的同名键之间**取最高**，见
     #: `current_block_radius_scale`。

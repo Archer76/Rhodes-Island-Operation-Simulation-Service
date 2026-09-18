@@ -311,6 +311,9 @@ class BattleSimulator:
         range_provider: Callable[[str, int, str, tuple[int, int]], set] | None = None,
         #: 战术点效果范围取数钩子：`(token_key, 技能槽) -> range_id | None`。
         token_range_provider: Callable[[str, int], str | None] | None = None,
+        #: **投递坐标**的落点（新约能天使技3「使命必达！」用的那个格子）。
+        #: 没有坐标时技3 只当普通的攻击强化技能——正文写的是"若存在投递坐标"。
+        delivery_point: tuple[float, float] | None = None,
         skill_book=None,
         summon_book=None,
         fps: int = FPS,
@@ -389,6 +392,8 @@ class BattleSimulator:
         #: 自己的技能给的**（可露希尔的「指挥中心」带技1/2/3 → `x-5`/`x-4`/`x-6`）。
         #: 与 `range_provider` 同样：战斗层不连库，取不到就当没有战术点范围。
         self.token_range_provider = token_range_provider
+        #: 投递坐标（新约能天使技3）；`None` = 场上没有这个坐标。
+        self.delivery_point = delivery_point
         self.skill_book = skill_book
         #: 技能效果的来源策略。三者都建立在**黑板**之上，区别只在描述那一路
         #: 走多远：
@@ -2433,6 +2438,10 @@ class BattleSimulator:
         if eff_now.pierce_step > 0.0:
             self._schedule_arrow(op, t, first=(op.sp_charges == 0), eff=eff_now)
         op.skill_active = True
+        # 新约能天使技3「使命必达！」：开技时**若存在投递坐标**，立即在该处炸一次
+        # 物理溅射，并开放这一技能的投递名额（`max_deploy_character`）。
+        if eff_now.cannon_atk_scale > 0.0:
+            self._fire_delivery_cannon(op, t, eff_now)
         # 「第二次及以后使用」的取值：黑板用 `[second]` 变体给。怒潮凛冬技2
         # 「绝不罢休」——第 1 次 atk+90% / def+60% / 16 秒；第 2 次起
         # atk+180% / def+120%，且**持续时间无限**。
@@ -3065,6 +3074,68 @@ class BattleSimulator:
         if self.verbose:
             self.result.log.append(f"{t:7.1f}s  {op.name} 落地被拒：{why}")
 
+    def _fire_delivery_cannon(self, op: OperatorUnit, t: float, eff) -> None:
+        """技3「使命必达！」的**投递坐标炮击**：一次物理溅射 + 开放投递名额。
+
+        取数：正文「若存在投递坐标，立即对该处造成一次相当于攻击力 250% 的物理
+        溅射伤害并将一名再部署时间最长的地面干员部署至该处，使其获得 6 点技力」；
+        黑板 `attack@cannon_atk_scale` = 2.5、`attack@sp` = 6、
+        `max_deploy_character` = 99（这一技能的**投递名额**）。
+
+        三处如实记的边界（详见 `docs/uncertainties.md`）：
+
+        * **溅射半径无数据**：正文只说"溅射"，黑板里没有半径类键，暂用仓库既有的
+          3×3 重叠判定口径（`splash_tiles(..., 1.0)`）；
+        * **「再部署时间最长的地面干员」由谁投递没建模**：那是"从待部署区自动挑
+          人"，而本仓库的部署一律来自计划。这里只实现「落点在坐标上的干员拿到
+          `attack@sp` 点技力、并占掉一个投递名额」（见 `_grant_delivery_sp`）；
+        * 名额 99 在正常关卡里不会是瓶颈（关卡自己的可部署人数上限更小），但它
+          是这条技能自己的量，照样按它判、不许当没看见。
+        """
+        op.delivery_left = int(eff.cannon_deploy_cap)
+        if self.delivery_point is None or op.delivery_left <= 0:
+            return
+        center = (float(self.delivery_point[0]), float(self.delivery_point[1]))
+        cells = splash_tiles(center, 1.0)
+        hit = 0
+        for e in list(self.enemies):
+            if not e.alive or e.cell() not in cells:
+                continue
+            final = resolve_damage(op.current_atk(), scale=eff.cannon_atk_scale,
+                                   damage_type="PHYSICAL",
+                                   defense=e.defense, res=e.res).final
+            self._damage_enemy(e, final, t, "PHYSICAL", source=op)
+            hit += 1
+        if self.verbose and hit:
+            self.result.log.append(
+                f"{t:7.1f}s  {op.name} 的投递坐标炮击命中 {hit} 个敌人"
+                f"（{eff.cannon_atk_scale:.0%} 攻击力）")
+
+    def _grant_delivery_sp(self, newbie: OperatorUnit, t: float) -> None:
+        """落点在**投递坐标**上的干员，从开着技3的主人手里领 `attack@sp` 点技力。"""
+        if self.delivery_point is None:
+            return
+        cell = (int(round(newbie.position[0])), int(round(newbie.position[1])))
+        want = (int(round(float(self.delivery_point[0]))),
+                int(round(float(self.delivery_point[1]))))
+        if cell != want:
+            return
+        for owner in self.operators:
+            if owner is newbie or not owner.alive or owner.delivery_left <= 0:
+                continue
+            if not getattr(owner, "skill_active", False):
+                continue
+            eff = getattr(getattr(owner, "skill", None), "effects", None)
+            if eff is None or float(eff.cannon_sp) <= 0.0:
+                continue
+            newbie.sp += float(eff.cannon_sp)
+            owner.delivery_left -= 1
+            if self.verbose:
+                self.result.log.append(
+                    f"{t:7.1f}s  投递：{newbie.name} 落在坐标处，获得 "
+                    f"{eff.cannon_sp:g} 点技力（主人还剩 {owner.delivery_left} 个名额）")
+            return
+
     def _token_cells(self, token: OperatorUnit, slot: int) -> set:
         """战术点的**效果范围**格子（两步都取到才算数）。
 
@@ -3167,6 +3238,8 @@ class BattleSimulator:
                 break
         # 「在战术点效果范围内部署干员时返还部署费用」（可露希尔技2）。
         self._refund_on_deploy(op, t)
+        # 「落在投递坐标上的干员拿技力」（新约能天使技3）。
+        self._grant_delivery_sp(op, t)
 
         # 部署瞬间的一次性环境伤害：`first_basic_damage + 实际 × first_damage_ratio`。
         # 它**额外于**每秒结算，不是它的第一次——原文两句分开写
