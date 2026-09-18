@@ -655,6 +655,18 @@ class EnemyUnit(Combatant):
     #: 但仍然可以攻击——这与眩晕/冻结不同，别混。
     #: 标本：凯尔希·思衡托「保护性拒止」`sluggish 5.0`。
     sluggish_timer: float = 0.0
+    #: 【迟钝】的**层表**——可露希尔技3「Q.E.D.」那条「施加持续 3 秒的 6% 迟钝
+    #: 效果（可叠加，最高 60%）」。元素是**每层各自**的剩余秒数，所以它是一条
+    #: 列表而不是一个计数器：三秒前打的那层该掉就掉，不因为刚又打了一层而续命。
+    #:
+    #: ⚠️ 与【停顿】是两个量，**不可合并**：停顿是关键词（能否移动），迟钝是
+    #: **可叠加的百分比移速降低**（乘在 `advance()` 的速度式上）。既有裁定见
+    #: `docs/uncertainties.md` 的速度条目。
+    slow_timers: list[float] = field(default_factory=list)
+    #: 每层的移速降低比例（黑板 `slow_down`，她技3 = 0.06）。
+    slow_per_stack: float = 0.0
+    #: 迟钝的封顶（黑板 `slow_down_max`，她技3 = 0.6）。0 表示不封顶。
+    slow_max: float = 0.0
     #: 剩余【束缚】秒数（技能黑板里的 `unmovable`）。**束缚 = 不能移动，
     #: 但可以攻击**——与【停顿】一样拦移动、不拦开火，与【晕眩】不同
     #: （晕眩还缴械）。
@@ -997,6 +1009,54 @@ class EnemyUnit(Combatant):
             return sum(leg.length for leg in self.legs)
         return path_length(self.route)
 
+    def apply_slow(self, per_stack: float, max_pct: float,
+                   duration: float) -> None:
+        """给这个敌人加**一层**【迟钝】（可露希尔技3「Q.E.D.」）。
+
+        每命中一次加一层、**每层各自计时**。到顶之后再来一层，做的是
+        **刷新最老那层**的计时，而不是丢弃：她技能期间攻击间隔很短、
+        每下都挂一次，若到顶就丢弃，敌人会在"一直被命中"的情况下掉回 0 ——
+        那是明显的错。所以取"续最老的一层"，让总量维持在封顶。
+        （游戏内逐层计时的精确规则 PRTS 没有写死，这里取的是**行为上唯一
+        说得通**的那一种；留档见 `docs/uncertainties.md`。）
+        """
+        if per_stack <= 0.0 or duration <= 0.0:
+            return
+        self.slow_per_stack = per_stack
+        self.slow_max = max_pct
+        cap = (max(1, int(round(max_pct / per_stack)))
+               if max_pct > 0.0 else len(self.slow_timers) + 1)
+        if len(self.slow_timers) < cap:
+            self.slow_timers.append(duration)
+            return
+        # 到顶：把**最老**（剩余最少）那层续成整段。
+        oldest = min(range(len(self.slow_timers)),
+                     key=lambda i: self.slow_timers[i])
+        self.slow_timers[oldest] = duration
+
+    def tick_slow(self, dt: float) -> None:
+        """迟顿时钟——**逐层**各自递减。
+
+        写在主循环里而不是 `advance()` 里：`advance()` 在停顿/束缚/待命时
+        开头就 return，写进去会永远减不动（`sluggish_timer` 当初就踩过）。
+        """
+        if not self.slow_timers:
+            return
+        keep: list[float] = []
+        for left in self.slow_timers:
+            left -= dt
+            if left > 0.0:
+                keep.append(left)
+        self.slow_timers = keep
+
+    @property
+    def slow_pct(self) -> float:
+        """当前迟钝总量（层数 × 每层比例，封顶 `slow_max`）。"""
+        if not self.slow_timers or self.slow_per_stack <= 0.0:
+            return 0.0
+        pct = self.slow_per_stack * len(self.slow_timers)
+        return min(pct, self.slow_max) if self.slow_max > 0.0 else pct
+
     def advance(self, dt: float, speed_scale: float = 1.0) -> None:
         """向前推进 dt 秒。待命、被阻挡、或被减速效果放慢时按规则处理。"""
         if not self.alive:
@@ -1033,7 +1093,7 @@ class EnemyUnit(Combatant):
         if self.blocked_by is not None:
             return
         speed = (self.move_speed * speed_scale * self.speed_multiplier
-                 * self.haste_multiplier)
+                 * self.haste_multiplier * (1.0 - self.slow_pct))
         if speed <= 0:
             return
         if self.displaced is not None:

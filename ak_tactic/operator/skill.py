@@ -316,6 +316,41 @@ def _charge_volley(description: str, bb: dict[str, float]):
     return int(m.group(1)), int(shot.group(1)), scale
 
 
+def _slowdown_values(bb: dict[str, float]) -> tuple[float, float, float]:
+    """从黑板里取迟钝的三个数：每层比例 / 每层秒数 / 封顶。
+
+    **两种写法都收**（`slow_down` 与 `attack@slow_down`）：技能槽标记有时
+    保留前缀、有时被拆掉，这是同一个坑的第三次（贯穿弹道那条也踩过）。
+    """
+    def _get(name: str) -> float:
+        return float(bb.get(name) or bb.get(f"attack@{name}") or 0.0)
+
+    return (_get("slow_down"), _get("slow_down_time"), _get("slow_down_max"))
+
+
+def _wants_stackable_slow(description: str, bb: dict[str, float]) -> bool:
+    """是否「施加持续 X 秒的 Y% **迟钝**效果（**可叠加**，最高 Z%）」。
+
+    迟钝是【移动速度】那一路的量（不是「停顿」，两者不可合并——既有裁定），
+    而且它**按层叠加**：每层各自计时。判据三段：
+
+    ① 正文里有「迟钝」（prts.wiki 该页 `|备注=` 把它点名为 `术语|ba.slowdown`
+       ——「仅能对敌人类敌方单位施加迟钝」）；
+    ② 黑板里有 `slow_down`（**每层**的减速比例）；
+    ③ 黑板里有 `slow_down_time`（每层的持续秒数）。
+
+    全表实测（level=10）：带 `slow_down` 的技能有两条，但**正文含「迟钝」的
+    只有可露希尔技3「Q.E.D.」**——另一条（`skchr_bdhkgt_2`）只有
+    `slow_down_duration`，是族里另一个键，不认。
+
+    上限 `slow_down_max` 与叠层上限 `max_stack_cnt` 是同一件事的两种写法
+    （0.06 × 10 = 0.6），守卫里两头对过。
+    """
+    text = _TAG.sub("", description or "")
+    per_stack, duration, _cap = _slowdown_values(bb)
+    return "迟钝" in text and per_stack > 0.0 and duration > 0.0
+
+
 def _wants_pierce_arrow(description: str, bb: dict[str, float]) -> bool:
     """是否「直线飞行的**贯穿**箭矢，每飞行一段距离都会对周围所有敌人造成…」。
 
@@ -759,6 +794,19 @@ class SkillEffects:
     pierce_force: float = 0.0
     pierce_push_cd: float = 0.0
     pierce_charge: float = 0.0
+    #: **可叠加的迟钝**（移动速度降低）——可露希尔技3「Q.E.D.」那一条。
+    #: 判据见 `_wants_stackable_slow`，prts.wiki 把「迟钝」点名为 `ba.slowdown`。
+    #:
+    #: * `slow_per_stack`——**每层**降多少移速（`slow_down` 0.06）；
+    #: * `slow_time`——**每层各自**持续多少秒（`slow_down_time` 3.0）；
+    #: * `slow_max`——叠满封顶（`slow_down_max` 0.6）。
+    #:
+    #: ⚠️ 它与「停顿」（`control["sluggish"]`）是**两个量**：停顿是关键词、
+    #: 走 `sluggish_timer`；迟钝是**可叠加的百分比移速降低**、走独立的层表。
+    #: 既有裁定明写两者不可合并（见 `docs/uncertainties.md` 的速度那几条）。
+    slow_per_stack: float = 0.0
+    slow_time: float = 0.0
+    slow_max: float = 0.0
     #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
     #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
     #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
@@ -1425,6 +1473,12 @@ class SkillBook:
         if _wants_landing_hit(lv.description, bb):
             lv.effects.landing_scale = lv.effects.damage.get("atk_scale_end")
             lv.effects.final_hit_scale = lv.effects.landing_scale
+        # 可叠加的迟钝（技3「Q.E.D.」）：三个数一次收齐。**每命中一次加一层**，
+        # 上限从两个地方各写了一遍——`slow_down_max` 0.6 与 `slow_down ×
+        # max_stack_cnt` 0.06 × 10 是同一个封顶，守卫里两头对过。
+        if _wants_stackable_slow(lv.description, bb):
+            (lv.effects.slow_per_stack, lv.effects.slow_time,
+             lv.effects.slow_max) = _slowdown_values(bb)
         # 技能结束时的**自身**效果：晕眩与强制退场。两者的数值/语义都
         # 只在描述里，且都与"打在敌人身上"的那套（`control`）无关。
         lv.effects.self_stun = _wants_self_stun(lv.description, bb)

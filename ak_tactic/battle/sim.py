@@ -2070,6 +2070,8 @@ class BattleSimulator:
             for e in self.enemies:
                 if e.sluggish_timer > 0:
                     e.sluggish_timer = max(0.0, e.sluggish_timer - dt)
+                # 【迟钝】的层表也在这里减——**逐层**各自计时（可露希尔技3）。
+                e.tick_slow(dt)
                 # 【束缚】与停顿一样拦移动，所以同样要在这里减——写进
                 # `advance()` 里会永远减不动（那两条在开头就 return 了）。
                 if e.root_timer > 0:
@@ -3135,6 +3137,12 @@ class BattleSimulator:
                     if eff is not None and eff.control.get("sluggish"):
                         target.sluggish_timer = max(
                             target.sluggish_timer, eff.control["sluggish"])
+                    # 技能附带的【迟钝】（可露希尔技3「Q.E.D.」）：**每命中一次
+                    # 加一层**，每层各自计时、叠到 `slow_down_max` 封顶。它与
+                    # 停顿是两个量，所以走独立的层表，不碰 `sluggish_timer`。
+                    if eff is not None and eff.slow_per_stack > 0.0:
+                        target.apply_slow(eff.slow_per_stack, eff.slow_max,
+                                          eff.slow_time)
                     # 天赋「死亡拘审」（阿斯卡纶）：**每次攻击**给目标续一层
                     # 持续法术伤害。与技能无关，所以不看 `eff`。
                     # `op.talents` 至多三个，逐次扫的开销可以忽略；换来的是
