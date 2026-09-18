@@ -284,7 +284,12 @@ def _parity_one(src, lib, calc, code, char_id, kw, BattleSimulator, Deployment,
     if getattr(res, "skill_activations", 0):
         return False, "原版开了技能（最小实现没有技能，用例不该带技能）"
     sim_nd = fresh()
-    sim_nd._devices = []
+    # "装置运行期对本局无影响"的证据：**只关** `_device_tick`（建成/进入触发/被拆还原）
+    # 与 `_pile_tick`（天桩链），**不碰** `_devices`——开场的断田几何是构造时算进
+    # `sim.farmland` 的，Go 的规格带着它。早先写 `sim_nd._devices = []` 是问错了问题：
+    # 那一清连几何一起摘了，于是把"Go 已经有几何"的关也判成"装置有影响"。
+    sim_nd._device_tick = lambda dt, t: None
+    sim_nd._pile_tick = lambda dt, t: None
     r_nd = sim_nd.run()
     dev_ok = (r_nd.kills, r_nd.leaks, round(r_nd.elapsed, 6)) == (
         res.kills, res.leaks, round(res.elapsed, 6))

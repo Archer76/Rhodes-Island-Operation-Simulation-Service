@@ -41,6 +41,14 @@ CASES = [
     # 技能是"只打部署于地面的我方单位"，全高台编队会让它一次都放不出来——
     # 那时对拍全绿也证明不了这段代码（反证会当场报出来）。
     dict(stage="HS-4", chars=["char_002_amiya", "char_123_fang"]),
+    # HS-EX-3（15 个天桩装置）与 HS-EX-7（16 个阻流阀）曾经被判"装置有影响"而挡在
+    # 门外——那是**对照问错了问题**（清空 `_devices` 连开场断田几何一起摘了）。
+    # 改成只关运行期（建成/进入触发/被拆还原、天桩链）之后，这两关的判决一字不变，
+    # 也就是 Go 那份"带着几何、不带运行期"的规格对它们已经够了。
+    dict(stage="HS-EX-3", chars=["char_002_amiya", "char_123_fang"]),
+    dict(stage="HS-EX-7", chars=["char_002_amiya", "char_123_fang"]),
+    dict(stage="HS-8", chars=["char_002_amiya", "char_123_fang"]),
+    dict(stage="HS-TR-1", chars=["char_002_amiya", "char_123_fang"]),
     # ⚠ HS-EX-3／HS-EX-7 不在这里：它们的**装置有影响**（实测把装置摘掉判决就变），
     # 而装置层（阻流阀被拆 → 地形还原、天桩链）还没移植。放行它们等于把
     # "装置层没做"这件事藏起来，所以那一关的结论是"等装置层"，不是"已对上"。
@@ -182,7 +190,7 @@ def plan_for(sim, stage, squad, calc, cells: list[tuple[int, int]] | None = None
 
 
 def run_py(stage, squad, calc, *, environment: str = "auto", spec_out: bool = False,
-           drop_devices: bool = False, cells=None):
+           drop_device_runtime: bool = False, cells=None):
     """跑一次原版。
 
     ⚠ `spec_out=True` 时规格取的是**跑之前**的那个状态（`build_spec` 是纯读，
@@ -190,11 +198,18 @@ def run_py(stage, squad, calc, *, environment: str = "auto", spec_out: bool = Fa
     life 已经是 0（漏光了），Go 收到一份 life=0 的规格会当场判负、一帧都不跑——
     实测就是这么撞上的。所以规格与参考结果只能来自**同一份计划的两个对象**。
 
-    `drop_devices=True` 是"装置摘掉结果一字不变"那条证据的实测手段（见 `main`）。
+    `drop_device_runtime=True` 是"装置运行期对判决没有影响"那条证据的实测手段。
+
+    ⚠ 这里**只关运行期那两段**（`_device_tick` 建成/进入触发/被拆还原、
+    `_pile_tick` 天桩链），**不碰 `_devices`**——开场的断田几何是构造时算进
+    `sim.farmland` 的，Go 的规格**带着**它。早先写成 `sim._devices = []` 是问错了
+    问题：那连几何一起摘了，于是把"Go 已经有几何"的关也判成"装置有影响"
+    （HS-EX-3 就这么被误挡了一轮）。
     """
     sim = BattleSimulator(stage, enemy_at=lib_get(stage), environment=environment)
-    if drop_devices:
-        sim._devices = []
+    if drop_device_runtime:
+        sim._device_tick = lambda dt, t: None
+        sim._pile_tick = lambda dt, t: None
     for d in plan_for(sim, stage, squad, calc, cells):
         sim.plan(d)
     spec = build_spec(sim, allow_devices=True) if spec_out else None
@@ -380,14 +395,16 @@ def main() -> int:
                 print(f"❌ {label}：选出来的落位反而不区分了（探针自己不一致）")
                 bad += 1
                 continue
-            # `allow_devices` 是**要带证据打开**的口子：先实测"把装置摘掉判决一字
-            # 不变"，通过了才敢让 Go 那边只挂开场那道 `sever` 的几何。
-            # 不实测就传 True，等于把"装置层还没移植"这件事藏起来。
-            _, res_nodev = run_py(stage, squad, CALC, drop_devices=True, cells=cells)
+            # `allow_devices` 是**要带证据打开**的口子：先实测"**只关装置运行期**
+            # （建成/进入触发/被拆还原、天桩链）、保留开场断田几何"判决一字不变，
+            # 通过了才敢让 Go 那边只挂几何。不实测就传 True，等于把"装置运行期
+            # 与天桩链还没移植"这件事藏起来。
+            _, res_nodev = run_py(stage, squad, CALC, drop_device_runtime=True,
+                                  cells=cells)
             dev_key = tuple(getattr(res_nodev, k) for k in key)
             if dev_key != tuple(on):
-                print(f"❌ {label}：这一关的装置**有影响**"
-                      f"（摘掉后 {dev_key} ≠ {tuple(on)}），装置层还没移植，不该放行")
+                print(f"❌ {label}：这一关的**装置运行期/天桩链有影响**"
+                      f"（只关它们后 {dev_key} ≠ {tuple(on)}），那两层还没移植，不该放行")
                 bad += 1
                 continue
             if spec["unsupported"]:

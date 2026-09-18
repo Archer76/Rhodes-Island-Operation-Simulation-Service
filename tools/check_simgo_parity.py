@@ -103,11 +103,14 @@ def run_case(src, lib, calc, code: str, label: str, squad) -> tuple[bool, str]:
     if getattr(res, "skill_activations", 0):
         return False, "原版开了技能（这一版最小实现没有技能，用例不该带技能）"
 
-    # 装置：不假设没用——摘掉重跑，一字不变才算它没参与这一局
+    # 装置运行期：不假设没用——但**只关** `_device_tick`／`_pile_tick` 重跑，
+    # 一字不变才算它没参与这一局。⚠ 不能写 `nd._devices = []`：那一清连开场断田
+    # 的几何一起摘了，而几何 Go 的规格里**有**，照那个口径量到的是"几何有影响"。
     nd = BattleSimulator(stage, enemy_at=lib.get)
     for d in plan:
         nd.plan(d)
-    nd._devices = []
+    nd._device_tick = lambda dt, t: None
+    nd._pile_tick = lambda dt, t: None
     res_nd = nd.run()
     dev_ok = (res_nd.kills, res_nd.leaks, round(res_nd.elapsed, 6)) == (
         res.kills, res.leaks, round(res.elapsed, 6))

@@ -69,7 +69,16 @@ def unsupported_reasons(sim, *, allow_devices: bool = False,
 
     `allow_devices` / `allow_skills` 是**给对拍台用的、必须带着证据打开**的两个口子：
 
-    * `allow_devices` —— 只有对拍台**实测过**"把装置摘掉结果一字不变"时才传 True；
+    * `allow_devices` —— 只有对拍台**实测过**"**只关装置运行期**、保留开场断田几何，
+    结果一字不变"时才传 True。口径要说准，这里踩过一次：
+
+      - **不是**"把 `sim._devices` 清空判决不变"。那是问错了问题——清空连开场的
+        断田几何一起摘了，而几何**已经在 Go 的规格里**（随 `farmland.actual`/`groups`
+        送过去）。照那个口径，HS-EX-3 被误判成"装置有影响"、白挡了一轮。
+      - **是**把 `_device_tick`（建成 / AuraHit 进入触发 / 被拆后把地形还回去）
+        与 `_pile_tick`（天桩链）换成空操作之后判决不变。这两段才是 Go 没有的东西。
+      - ⚠ 泵站**不在这条口子里**：泵水住在 `_environment_tick`（`sim.py:1363`），
+        Go 的田地机制已经实现了它。关掉 `_device_tick` 时泵水**照旧**，这正是要的。
     * `allow_skills` —— 打开之后，技能**逐条走 `simgo.skills` 的白名单**：
       落在已移植子集里的放行，其余逐条写明理由（理由的粒度是
       "谁 + 哪一项"，方便直接看出该补哪一块）。关着的时候一律拒跑——
