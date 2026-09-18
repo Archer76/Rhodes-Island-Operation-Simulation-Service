@@ -151,6 +151,46 @@ SelectionList {
     margin: 0 2;
 }
 
+/* ---- 选人屏的两行分类（博士 2026-09-18 的图）----
+ *
+ * 图上主职业行是**大字**。终端做不到变字号，能做到的是字重与留白，所以这一行
+ * 用「加粗 + 上下留白」去逼近：`#prof-row` 留白 1 行，项与项之间空两格
+ * （`PickerRow.big`）。子职业行不加粗、项之间空一格，一眼能分出"选大方向"与
+ * "再细一层"。
+ *
+ * **两行都由 `PickerRow` 自己折行**（不是 `Tabs`）：中文是双宽字符，近卫一族
+ * 14 个子职业加「全部」光名字就 78 列，80 列的窗口里 `Tabs` 会把最后几个直接
+ * 截掉、方向键也够不到。折行后 80 列下占 2 行、120 列下 1 行（博士已定：
+ * 「子职业放不下的话可以分两行」）。
+ *
+ * 矮窗口的让路在 `SquadPickScreen._fit_extra` 里按高度切。 */
+#prof-row {
+    height: auto;
+    padding: 1 2;
+    background: $panel;
+    text-style: bold;
+}
+
+#prof-row:focus {
+    background: $panel-lighten-1;
+}
+
+#sub-row {
+    height: auto;
+    padding: 0 2;
+    text-style: none;
+}
+
+#sub-row:focus {
+    background: $panel-lighten-1;
+}
+
+/* 练度门槛：**整行宽**（图上就是一行，右侧一个 ▼）。 */
+#f-trained {
+    width: 100%;
+    margin: 0 0;
+}
+
 #hint {
     height: auto;
     padding: 0 2;

@@ -1702,6 +1702,240 @@ def check_squad_grouping() -> None:
     check("界面上真有那个练度下拉框", got["has_select"], "f-trained")
 
 
+def check_squad_rows() -> None:
+    """[12b] 选人屏的两行分类（博士 2026-09-18 的图 + 三条裁定）。
+
+    裁定原文：① 主职业行最左加「全部」、默认停在它上面，此时**子职业行不显示**；
+    选中某个主职业时子职业行显示这个职业所有的子职业；② `initial` 要自行核查；
+    ③ 行首那个 `x` 是自带选中样式、不改。补充：「子职业放不下的话可以分两行」。
+
+    这一节量三件事：
+    * **折行**——`Tabs` 会把排不下的项横向截掉（中文双宽，近卫 14 个子职业
+      光名字 78 列），折行后每一项都要落在行内、不重不漏；
+    * **筛选**——选职业 / 选子职业 / 各自回到「全部」，列表人数与勾选状态
+      全都要对得上，**换范围不丢已勾的人**；
+    * **模组三态**——`initial` 到底是什么（答：初始证章，没有战斗数值）。
+    """
+    print("\n[12b] 选人屏：主职业行（含「全部」）/ 子职业行（折行）/ 模组三态")
+    from rich.cells import cell_len
+    from textual.widgets import Select, SelectionList
+
+    from ak_tactic.tui import app as A
+    from ak_tactic.tui import data as D
+
+    try:
+        import textual                                              # noqa: F401
+    except ImportError as exc:
+        skip("选人两行", f"textual 没装（{exc}）")
+        return
+
+    # ---- 折行（不依赖界面） ----
+    check("中文按**双列**算（终端就是这么排的）",
+          A._cell_width("术战者") == 6 and A._cell_width("AB") == 2
+          and A._cell_width("近卫·术战者") == 11,
+          f"{A._cell_width('术战者')} / {A._cell_width('AB')} / "
+          f"{A._cell_width('近卫·术战者')}")
+    check("宽度尺子与**画图的那把**是同一把（Rich 的 cell_len，不是自己数）",
+          A._cell_width("术战者") == cell_len("术战者")
+          and A._cell_width("·") == cell_len("·"),
+          "东亚歧义字符两边算法若不同，点上去就会选错人")
+
+    long_names = ["术战者", "撼地者", "领主", "收割者", "无畏者", "强攻手", "解放者",
+                  "剑豪", "教官", "斗士", "武者", "本源近卫", "佣兵", "重剑手"]
+    row = A.PickerRow(big=True)
+    row.set_items([("", D.PROF_ALL)] + [(n, n) for n in long_names], active="")
+    at80 = row._layout(80)
+    flat = [k for ln in at80 for k, _l, _x, _w in ln]
+    check("近卫那 14 个子职业在 80 列里排不下 → **折成两行**（博士已定）",
+          len(at80) == 2, f"{len(at80)} 行")
+    check("折行后每一项都完整落在行内（没有横幅截断）",
+          all(x + w <= 80 for ln in at80 for _k, _l, x, w in ln),
+          str([(l, x, w) for _k, l, x, w in at80[0]][-3:]))
+    check("折行不重不漏：15 项正好各一次",
+          sorted(flat) == sorted([""] + long_names), f"{len(flat)} 项")
+    check("窗口够宽就回到一行（不是永远折着）",
+          len(row._layout(140)) == 1, f"{len(row._layout(140))} 行")
+
+    # 折行之后第二行上的项**也要点得到**：命中判定与渲染同源，格子带着行号
+    row.set_items([("", D.PROF_ALL)] + [(n, n) for n in long_names], active="")
+    row.render()                                  # 没挂载时按 80 列渲染
+    line2 = [b for b in row._boxes if b[0] == 1]
+    hit2 = [row._hit(1, b[1] + b[2] // 2) for b in line2[:3]]
+    check("折行后**第二行上的项照样点得到**（命中判定认行号）",
+          bool(line2) and all(ok and k for ok, k in hit2),
+          f"{len(line2)} 项，命中 {hit2}")
+    check("点在两格之间的空隙上不算命中（不会误选隔壁）",
+          not row._hit(0, 7)[0] and not row._hit(0, 999)[0],
+          "x=7 是「全部」与「先锋」之间的空隙")
+
+    # 布局与渲染是同一份：点击命中就靠它，错位就等于点错人
+    row.set_items([("a", "先锋"), ("b", "近卫"), ("c", "术师")], active="b")
+    text = row.render()
+    boxes = list(row._boxes)
+    check("渲染与布局同源：三个项各有一个格子",
+          len(boxes) == 3 and {k for _l, _x, _w, k in boxes} == {"a", "b", "c"},
+          str(boxes))
+    check("选中的那一项在渲染里被反显（`reverse`）",
+          any("reverse" in str(span.style) for span in text.spans), str(text.spans))
+
+    # ---- 模组三态（`initial` 的核查结论） ----
+    ini = D.Operator("c", "德克萨斯", module="uniequip_001_texas", module_level=1,
+                     module_name="德克萨斯证章", equipped_status="initial")
+    spc = D.Operator("c", "提丰", module="uniequip_004_typhon", module_level=1,
+                     module_name="提丰特限证章", equipped_status="special")
+    ok = D.Operator("c", "望", module="uniequip_002_wang", module_level=3,
+                    module_name="兽形棋盒", equipped_status="ok")
+    check("`initial` = **初始证章**：印出来是中文，并写明它不加数值",
+          ini.module_label() == "  初始证章（不加数值）", repr(ini.module_label()))
+    check("`special`（特勤/特限证章）印名册里的模组名，不猜分类",
+          spc.module_label() == "  提丰特限证章", repr(spc.module_label()))
+    check("`ok` 照旧只写「模组N」",
+          ok.module_label() == "  模组3", repr(ok.module_label()))
+    check("没有模组的人那一小段是空的（不留半个空括号）",
+          D.Operator("c", "n").module_label() == "")
+    check("旧写法那种英文状态词不再出现在界面上",
+          "initial" not in ini.label() and "special" not in spc.label(),
+          ini.label())
+
+    roster = D.load_roster()
+    if roster is None or not roster.top():
+        skip("选人两行的界面部分", "没有名册，跳过（逻辑部分已断）")
+        return
+    top = roster.top()
+    subs_pioneer = D.sub_professions_in(top, "PIONEER")
+
+    async def flow() -> dict:
+        got: dict = {}
+        app = A.RiosApp(skip_login=True, stage="SR-EX-8")
+        async with app.run_test(size=(80, 20)) as pilot:
+            await pilot.pause()
+            app.screen.dismiss(app.screen._choices[1])      # [2a] 我自己选
+            await pilot.pause()
+            scr = app.screen
+            sl = scr.query_one("#squad", SelectionList)
+
+            def people() -> list:
+                return [o for o in sl._options
+                        if not o.prompt.plain.startswith("──")]
+
+            prof = scr.query_one("#prof-row", A.PickerRow)
+            got["prof_items"] = [lab for _k, lab in prof._items]
+            got["prof_active0"] = prof.active
+            got["sub_display0"] = str(scr.query_one("#sub-row").styles.display)
+            got["trained_w"] = scr.query_one("#f-trained", Select).region.width
+
+            sl.action_first()
+            await pilot.press("space")
+            await pilot.pause()
+            got["picked0"] = sorted(sl.selected)
+            got["people_all"] = len(people())
+
+            # 键盘：主职业行上右移一格 → 第一个主职业
+            prof.focus()
+            await pilot.press("right")
+            await pilot.pause()
+            got["prof1"] = scr._prof
+            sub = scr.query_one("#sub-row", A.PickerRow)
+            got["sub_display1"] = str(sub.styles.display)
+            got["sub_items"] = [lab for _k, lab in sub._items]
+            got["people_prof"] = len(people())
+            got["picked1"] = sorted(sl.selected)
+
+            # 子职业行上再右移一格 → 第一个子职业
+            sub.focus()
+            await pilot.press("right")
+            await pilot.pause()
+            got["sub1"] = scr._sub
+            got["people_sub"] = len(people())
+            got["subs_shown"] = sorted({(o.sub_profession or "")
+                                        for o in scr._visible()})
+
+            # 一路退回「全部」
+            await pilot.press("left")
+            await pilot.pause()
+            got["sub_back"] = scr._sub
+            got["people_prof2"] = len(people())
+            prof.focus()
+            await pilot.press("left")
+            await pilot.pause()
+            got["prof_back"] = scr._prof
+            got["sub_display2"] = str(scr.query_one("#sub-row").styles.display)
+            got["people_all2"] = len(people())
+            got["picked2"] = sorted(sl.selected)
+
+            # 范围也写在顶上那句说明里（矮窗口下两行会被压扁时靠它）
+            prof.focus()
+            await pilot.press("right")
+            await pilot.pause()
+            got["mode_line"] = _plain_text(
+                str(scr.query_one("#mode-line").render()))
+
+            # **鼠标**：点分类行上的某一项（博士是拿鼠标挑的）。控件内坐标 =
+            # 格子坐标 + padding，点格子中间。
+            def click_offset(wdg, key: str) -> tuple[int, int]:
+                _l, bx, bw, _k = [b for b in wdg._boxes if b[3] == key][0]
+                pad = wdg.styles.padding
+                return bx + (pad.left or 0) + bw // 2, _l + (pad.top or 0)
+
+            got["prof_before_click"] = scr._prof
+            await pilot.click("#prof-row", offset=click_offset(prof, "MEDIC"))
+            await pilot.pause()
+            got["prof_after_click"] = scr._prof
+            got["picked3"] = sorted(sl.selected)
+        return got
+
+    got = asyncio.run(flow())
+    check("主职业行最左是「全部」，**默认**停在它上面",
+          got["prof_items"][0] == "全部" and got["prof_active0"] == "",
+          f"{got['prof_items'][:3]} 选中={got['prof_active0']!r}")
+    check("主职业行按游戏顺序列出名册里真有的职业（不列 TOKEN/TRAP）",
+          got["prof_items"][1:] == ["先锋", "近卫", "重装", "狙击", "术师",
+                                    "医疗", "辅助", "特种"],
+          str(got["prof_items"]))
+    check("停在「全部」时**子职业行整行不显示**",
+          got["sub_display0"] == "none", got["sub_display0"])
+    check("练度门槛是**整行宽**（图上就是一行）",
+          got["trained_w"] == 80, f"{got['trained_w']} 列")
+    check("方向键右移到第一个主职业（主职业行能聚焦、能用方向键走）",
+          got["prof1"] == "PIONEER", repr(got["prof1"]))
+    check("选中主职业后子职业行出现，首项也是「全部」",
+          got["sub_display1"] == "block" and got["sub_items"][0] == "全部",
+          f"{got['sub_display1']} {got['sub_items']}")
+    check("子职业行列出这个职业**所有的**子职业（名册里有的，按练度序）",
+          got["sub_items"][1:] == subs_pioneer, str(got["sub_items"][1:]))
+    check("选主职业就把列表筛到该职业（人数等于名册里该职业的人数）",
+          got["people_prof"] == len([o for o in top if o.profession == "PIONEER"]),
+          f"{got['people_prof']}")
+    check("子职业行右移一格 → 筛到第一个子职业",
+          got["sub1"] == (subs_pioneer[0] if subs_pioneer else None)
+          and got["people_sub"] == 1,
+          f"{got['sub1']!r} / {got['people_sub']} 人")
+    check("筛出来的每个人**都真的**属于那个子职业",
+          got["subs_shown"] == [subs_pioneer[0]] if subs_pioneer else True,
+          str(got["subs_shown"]))
+    check("子职业行退回「全部」→ 不再按子职业筛",
+          got["sub_back"] is None and got["people_prof2"] == got["people_prof"],
+          f"{got['sub_back']!r} / {got['people_prof2']}")
+    check("主职业行退回「全部」→ 子职业行又藏起来、列表回到全名册",
+          got["prof_back"] is None and got["sub_display2"] == "none"
+          and got["people_all2"] == got["people_all"],
+          f"{got['prof_back']!r} {got['sub_display2']} {got['people_all2']}")
+    check("**换范围不丢已勾的人**（选职业 / 选子职业 / 两次退回都带着）",
+          got["picked0"] and got["picked1"] == got["picked0"]
+          and got["picked2"] == got["picked0"],
+          f"{got['picked0']} → {got['picked1']} → {got['picked2']}")
+    check("顶上那句说明里带着当前范围",
+          "范围：" in got["mode_line"] and "先锋" in got["mode_line"],
+          got["mode_line"].splitlines()[0][:70])
+    check("**鼠标点**分类行也能切范围（点格子中间，落到「医疗」）",
+          got["prof_before_click"] != "MEDIC"
+          and got["prof_after_click"] == "MEDIC",
+          f"{got['prof_before_click']!r} → {got['prof_after_click']!r}")
+    check("鼠标切换也不丢已勾的人",
+          got["picked3"] == got["picked0"],
+          f"{got['picked0']} → {got['picked3']}")
+
+
 def check_key_cases() -> None:
     """[14] **单字母绑定必须大小写都收**。
 
@@ -2293,6 +2527,9 @@ def check_small_window() -> None:
 
     async def sweep() -> dict:
         got: dict = {}
+        # 列表还剩几行单独记账：`got` 里存的都是"看不见的项"的清单，
+        # 把行数混进去会让「行数=4」这种正常值被当成失败（踩过）。
+        heights: dict = {}
         for size in ((80, 12), (80, 16), (80, 20), (100, 30), (120, 44)):
             app = A2.RiosApp()
             async with app.run_test(size=size) as pilot:
@@ -2313,6 +2550,27 @@ def check_small_window() -> None:
                 app.push_screen(A2.GuidesDirScreen())
                 await pilot.pause()
                 got[("改目录", size)] = unreachable(app.screen, size)
+                app.pop_screen()
+                await pilot.pause()
+                # 选人屏的两行分类：**最坏情况**是子职业折成两行（近卫 14 个子
+                # 职业），所以这里把子职业行直接填成最长的那个再量——夹具名册里
+                # 每个职业只有 4 个子职业，折不出来，量不到这个风险。
+                app.push_screen(A2.SquadPickScreen())
+                await pilot.pause()
+                got[("选人屏", size)] = unreachable(app.screen, size)
+                scr = app.screen
+                if type(scr).__name__ == "SquadPickScreen":
+                    names = ["术战者", "撼地者", "领主", "收割者", "无畏者",
+                             "强攻手", "解放者", "剑豪", "教官", "斗士", "武者",
+                             "本源近卫", "佣兵", "重剑手"]
+                    scr._prof = "WARRIOR"
+                    subrow = scr.query_one("#sub-row", A2.PickerRow)
+                    subrow.styles.display = "block"
+                    subrow.set_items([("", "全部")] + [(n, n) for n in names])
+                    scr._fill()
+                    await pilot.pause()
+                    got[("选人屏·子职业两行", size)] = unreachable(scr, size)
+                    heights[size] = scr.query_one("#squad").region.height
                 app.pop_screen()
                 await pilot.pause()
                 # 解算屏：把搜索换成空实现，只量排版（真跑一轮要几十秒）
@@ -2358,15 +2616,19 @@ def check_small_window() -> None:
                 await pilot.pause()
                 got[("弹窗", size)] = unreachable(app.screen, size)
                 app.pop_screen()
-        return got
+        return got, heights
 
-    got = asyncio.run(sweep())
+    got, heights = asyncio.run(sweep())
     bad = {f"{k[0]}@{k[1][0]}x{k[1][1]}": v for k, v in got.items() if v}
     check("每一屏在每一档窗口下都**不滚动就能看全**（80x12 起）",
           not bad, str(list(bad.items())[:3]))
     check("最矮那档（80x12）与常见那档（80x20）都跑到了（判据不是空转）",
           ("主界面", (80, 12)) in got and ("解算中", (80, 20)) in got,
           f"{len(got)} 个组合")
+    check("最坏情况（子职业折成两行）也在 80x12 里装得下、列表还留得下 3 行",
+          not got[("选人屏·子职业两行", (80, 12))]
+          and heights[(80, 12)] >= 3,
+          f"{got[('选人屏·子职业两行', (80, 12))]} 列表 {heights[(80, 12)]} 行")
     check("紧凑模式（compact）确实在矮窗口上生效",
           A2.RiosScreen.COMPACT_HEIGHT == 22
           and A2.RiosScreen.TINY_HEIGHT == 16)
@@ -2973,6 +3235,7 @@ def main() -> int:
         check_stage_layers()
         check_completion()
         check_squad_grouping()
+        check_squad_rows()
         check_key_cases()
         check_login_screen()
         check_esc_steps()

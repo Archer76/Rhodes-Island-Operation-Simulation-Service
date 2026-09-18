@@ -33,6 +33,7 @@ from textual.widgets import (Button, DataTable, Footer, Header, Input, Label,
                              ProgressBar, Select, SelectionList, Static)
 from textual.widgets.selection_list import Selection
 
+from rich.cells import cell_len
 from rich.text import Text
 
 from .. import maa_export as maa
@@ -1575,21 +1576,207 @@ class SquadAskScreen(RiosScreen):
         self.dismiss(None)
 
 
+class PickerRow(Static):
+    """一行可选项（主职业行 / 子职业行）。
+
+    ## 为什么不用 `Tabs`
+
+    `Tabs` 排不下就**横向截断**，而中文是双宽字符：近卫一族 14 个子职业加上
+    「全部」，光名字就是 78 列，再加每项的留白——80 列的窗口里最后 4 个直接
+    看不见，**方向键也够不到**（实测见 `_proto/squad_rows_probe.py`：80x20 下
+    「武者 本源近卫 佣兵 重剑手」落在行外）。分类行被截断比列表挤一点严重得多：
+    截掉的那几个等于这个筛选维度不存在。
+
+    所以这一行**自己折行**：排不下就多占一行，点得到、方向键也走得到。
+    矮窗口下的让路规则见 `SquadPickScreen._fit_extra`。
+
+    ## 布局与命中判定是同一份
+
+    `_layout()` 既喂 `render()` 又喂点击命中，所以"看到的"和"点得到的"不会错位。
+    渲染刻意不交给 Rich 的自动换行：那会多一层"实际折在哪"的推断，而命中判定
+    必须与它逐格对齐。
+
+    ## 一移动就生效
+
+    方向键走到的同时就切筛选（不需要再按回车）。**这不是偷懒**：本屏的回车是
+    `priority` 绑定（开始解算），若把"确认"也压在回车上，用户在分类行上按回车
+    会直接开跑。
+    """
+
+    can_focus = True
+
+    BINDINGS = [
+        Binding("left", "move(-1)", "上一个", show=False),
+        Binding("right", "move(1)", "下一个", show=False),
+        Binding("home", "move(-999)", "头一个", show=False),
+        Binding("end", "move(999)", "末一个", show=False),
+    ]
+
+    class Changed(Message):
+        """选中项变了。`key` 为 None 时是「全部」。"""
+
+        def __init__(self, row: "PickerRow", key: str | None) -> None:
+            self.row = row
+            self.key = key
+            super().__init__()
+
+    def __init__(self, *, big: bool = False, **kw) -> None:
+        super().__init__("", **kw)
+        self.big = big                      #: 主职业行（加粗、留白多）
+        self._items: list[tuple[str, str]] = []   #: (key, 显示名)
+        self._active: str | None = None
+        self._boxes: list[tuple[int, int, int, str | None]] = []  # (行, x, 宽, key)
+
+    # ---- 数据 ----
+
+    def set_items(self, items: list[tuple[str, str]],
+                  active: str | None = None) -> None:
+        self._items = list(items)
+        self._active = active
+        self.refresh()
+
+    @property
+    def active(self) -> str | None:
+        return self._active
+
+    def set_active(self, key: str | None) -> None:
+        if key == self._active:
+            return
+        self._active = key
+        self.refresh()
+
+    def index(self) -> int:
+        for i, (k, _l) in enumerate(self._items):
+            if (k or None) == (self._active or None):
+                return i
+        return 0
+
+    # ---- 布局 ----
+
+    def _layout(self, width: int) -> list[list[tuple[str, str, int, int]]]:
+        """折成若干行：`[[(key, 显示名, 起始列, 占宽), …], …]`。
+
+        每项的形式是 ` 名字 `（两侧各一格空格）：格子之间靠这层空格分开，
+        所以相邻两项至少隔两格。宽度用 `_cell_width`（即 Rich 的 `cell_len`），
+        与"画出来占几列"同一把尺子。
+        """
+        gap = 2 if self.big else 1
+        lines: list[list[tuple[str, str, int, int]]] = [[]]
+        x = 0
+        for key, label in self._items:
+            w = _cell_width(label) + 2
+            if lines[-1] and x + w > width:
+                lines.append([])
+                x = 0
+            if not lines[-1] and w > width:
+                w = width              # 窄到一项都放不下：让它占满，别消失
+            lines[-1].append((key, label, x, w))
+            x += w + gap
+        return [ln for ln in lines if ln]
+
+    def render(self) -> Text:
+        width = max(8, self.size.width or 80)
+        # 横向留白由 CSS 的 padding 负责，这里的 width 已经是内容宽度
+        self._boxes = []
+        out = Text()
+        for li, line in enumerate(self._layout(width)):
+            if li:
+                out.append("\n")
+            for key, label, x, w in line:
+                on = (key or None) == (self._active or None)
+                out.append(" ")
+                out.append(label, style="bold reverse" if on else
+                           ("bold" if self.big else ""))
+                out.append(" ")
+                self._boxes.append((li, x, w, key or None))
+        return out
+
+    # ---- 交互 ----
+
+    def _keys(self) -> list[str | None]:
+        return [k or None for k, _l in self._items]
+
+    def _hit(self, line: int, x: int) -> tuple[bool, str | None]:
+        """内容坐标 → 命中的项。返回 `(命中没有, 项的 key)`。
+
+        单独抽出来是为了能**不挂载**就量折行后的命中（第二行照样点得到）：
+        `on_click` 只负责把控件内坐标换算成内容坐标，判定全在这里。
+        """
+        for ln, bx, bw, key in self._boxes:
+            if ln == line and bx <= x < bx + bw:
+                return True, key
+        return False, None
+
+    def action_move(self, delta: int) -> None:
+        keys = self._keys()
+        if not keys:
+            return
+        i = max(0, min(len(keys) - 1, self.index() + delta))
+        if keys[i] != (self._active or None):
+            self._active = keys[i]
+            self.refresh()
+            self.post_message(self.Changed(self, keys[i]))
+
+    def on_click(self, event) -> None:
+        """点哪一项就选哪一项（命中判定用 `render()` 记下的格子）。
+
+        `event.x/y` 是**控件内坐标**（含 padding），而格子记的是**内容坐标**，
+        所以要减掉 `content_region` 相对控件原点的那一段。折行后第二行上的项
+        同样点得到——格子带着自己的行号。
+        """
+        if not self._boxes:
+            self.render()
+        off = self.content_region.offset - self.region.offset
+        hit, key = self._hit(event.y - off.y, event.x - off.x)
+        if hit:
+            if key != (self._active or None):
+                self._active = key
+                self.refresh()
+                self.post_message(self.Changed(self, key))
+            event.stop()
+
+
+def _cell_width(s: str) -> int:
+    """字符串在终端里占几列。
+
+    直接用 Rich 的 `cell_len`，**不自己数 `east_asian_width`**：这一行最终是
+    Textual/Rich 画出来的，命中判定必须跟"画出来的格子"对齐，而不是跟终端
+    （或我）对东亚歧义字符的另一种理解对齐。差一格，点上去就会选错人。
+    """
+    return cell_len(s)
+
+
 class SquadPickScreen(RiosScreen):
-    """[2b] 选编队：按职业分类 + 练度门槛 + 两种模式。
+    """[2b] 选编队：主职业行 + 子职业行 + 练度门槛 + 两种模式。
 
-    三条交互都是博士定的（2026-09-17）：
+    交互是博士定的（2026-09-17、2026-09-18 两次）：
 
-    - **按主职业分类展示**，按 `G` 循环切换成「主职业-子职业」；
+    - **主职业行**（`#prof-row`）最左边有「全部」，**默认停在「全部」上**；
+      选中某个主职业时，**子职业行**（`#sub-row`）才出现，列出这个职业的子职业；
+      停在「全部」时子职业行**整行不显示**（博士 2026-09-18 的原话）。
+    - 子职业行里也有「全部」＝不按子职业再筛一层——**必须有它**，否则选中一个
+      主职业的瞬间就被第一个子职业筛住了，用户会以为这个职业只有那么几个人。
     - 练度门槛做成**一个三档下拉**（不限 / ≥精英二60 / 精英二90），
       而不是「精英化」「等级」两个独立下拉——独立的两个会让人去凑
       「精英 0 且 90 级」这种筛不出东西的组合；
-    - `M` 仍然切「允许程序补充 / 只用我选的」。
+    - `G` 仍然切列表表头的粗细（「主职业」↔「主职业·子职业」），`M` 仍然切
+      「允许程序补充 / 只用我选的」。
 
     **换分类或换门槛都不能丢已勾的人**：勾选状态另存一份 `_picked`，
     列表重建后逐条选回来。否则用户勾了五个人、手一抖切了下分类，
     五个勾全没了——而列表看上去只是「重排了一下」。
+
+    ## 终端里没有"字号"
+
+    图上那一行是**大号字**，终端做不到变字号——能变的是**字重与留白**。
+    所以这里把「大字」落实成：加粗 + 上下各留一行 + 每个项之间空两格
+    （`#prof-row` 高 3、`Tabs Tab` 左右内边距 2）。矮窗口下这些留白全部让路
+    （见 `_fit_extra`），一行也不多占。
     """
+
+    #: 矮窗口（`_fit_extra` 里按高度赋值）。类属性先给个默认值：
+    #: `_render_mode` 在 `on_mount` 里就会跑一次，那会儿还没有 `_fit_extra`。
+    _compact = False
 
     BINDINGS = both_cases([
         # **priority=True 是必需的**：`SelectionList` 自己会吃掉回车，
@@ -1605,28 +1792,86 @@ class SquadPickScreen(RiosScreen):
         yield Header()
         yield Static(theme.step_bar(2), id="steps")
         yield Static("", id="mode-line")
-        with Horizontal(id="filters"):
-            yield Select([(label, str(i))
-                          for i, (label, _e, _l) in enumerate(D.TRAINED_FILTERS)],
-                         prompt="练度门槛", id="f-trained", allow_blank=True)
+        # 练度门槛：**整行宽**（图上就是一行，右侧一个 ▼）。原先套在
+        # `Horizontal` 里，宽度被压成内容宽，下拉框看上去像个附注。
+        yield Select([(label, str(i))
+                      for i, (label, _e, _l) in enumerate(D.TRAINED_FILTERS)],
+                     prompt="练度门槛", id="f-trained", allow_blank=True)
+        yield PickerRow(big=True, id="prof-row")
+        yield PickerRow(id="sub-row")
         yield SquadList(id="squad")
         yield Footer()
 
     def on_mount(self) -> None:
         self._group = "prof"                  # prof | sub
+        self._prof: str | None = None         # None = 全部
+        self._sub: str | None = None          # None = 该职业下不再筛
         self._min = (0, 1)                    # (精英段下限, 段内等级下限)
         self._picked: set[str] = set(self.app.state.squad)
+        self._build_prof_row()
+        self._build_sub_row()
         self._fill()
         self._render_mode()
+
+    # ---- 两行分类 ----
+
+    def _roster_ops(self) -> list:
+        r = self.app.state.roster
+        return list(r.top()) if r is not None else []
+
+    def _build_prof_row(self) -> None:
+        """主职业行：`全部` + 名册里实际有的主职业（按游戏顺序）。"""
+        row = self.query_one("#prof-row", PickerRow)
+        row.set_items([("", D.PROF_ALL)]
+                      + [(code, D.PROFESSION_CN.get(code, code))
+                         for code in D.professions_in(self._roster_ops())],
+                      active="")
+
+    def _build_sub_row(self) -> None:
+        """子职业行：只在选中了某个主职业时显示（博士 2026-09-18）。
+
+        行内首项是「全部」（＝这一职业下不再按子职业筛）。名册里取不到任何
+        子职业名（老版名册、或这个职业只有一个人）时**整行不显示**——显示一行
+        只有一个「全部」的按钮没有任何意义。
+        """
+        row = self.query_one("#sub-row", PickerRow)
+        subs = (D.sub_professions_in(self._roster_ops(), self._prof)
+                if self._prof else [])
+        self._sub = None
+        if not subs:
+            row.set_items([])
+            row.styles.display = "none"
+            return
+        row.styles.display = "block"
+        row.set_items([("", D.PROF_ALL)] + [(name, name) for name in subs],
+                      active="")
+
+    def on_picker_row_changed(self, event: PickerRow.Changed) -> None:
+        """两行分类各自接一次（按 `row.id` 分派）。"""
+        row_id = event.row.id or ""
+        if row_id == "prof-row":
+            self._prof = event.key or None
+            self._build_sub_row()   # 主职业变了 → 子职业行重建并回到「全部」
+            self._fill()
+            self._render_mode()
+        elif row_id == "sub-row":
+            self._sub = event.key or None
+            self._fill()
+            self._render_mode()
 
     # ---- 列表构建 ----
 
     def _visible(self) -> list:
-        r = self.app.state.roster
-        if r is None:
+        ops = self._roster_ops()
+        if not ops:
             return []
         elite_min, level_min = self._min
-        ops = [o for o in r.top() if D.meets_trained(o, elite_min, level_min)]
+        ops = [o for o in ops if D.meets_trained(o, elite_min, level_min)]
+        if self._prof:                        # 主职业行选了某个职业
+            ops = [o for o in ops if o.profession == self._prof]
+        if self._prof and self._sub:          # 子职业行再筛一层
+            ops = [o for o in ops
+                   if (o.sub_profession or "").strip() == self._sub]
         # 先按主职业、再按子职业**稳定排序**：`sorted` 是稳定的，而 `r.top()`
         # 已经是练度降序，所以组内会自动保持「练度高的在前」。
         ops.sort(key=lambda o: (
@@ -1653,10 +1898,15 @@ class SquadPickScreen(RiosScreen):
                 lst.select(name)
             except Exception:                     # noqa: BLE001
                 pass                              # 被门槛筛掉或名册里没这个人
-        lst.focus()
-        # **上车就要把光标落在第一项**：`SelectionList` 初始 `highlighted=None`，
-        # 此时按空格**什么都不会发生**（`action_select` 找不到落点），
-        # 症状正是博士说的「空格也是选人/按了没反应」——其实一个都没勾上。
+        # **焦点不能被它抢走**：用户正在分类行上用方向键挑范围，每挑一次都会
+        # 重建列表；这时把焦点塞回列表，下一次方向键就落到列表上——表现是
+        # 「方向键只用得了一次」（自检里就是这么红的）。
+        if not isinstance(self.app.focused, PickerRow):
+            lst.focus()
+        # **光标要有落点**：`SelectionList` 初始 `highlighted=None`，此时按空格
+        # **什么都不会发生**（`action_select` 找不到落点），症状正是博士说的
+        # 「空格也是选人/按了没反应」——其实一个都没勾上。重建后落点是 None，
+        # 所以这里每次都补一下。
         lst.action_first()
 
     def on_selection_list_selected_changed(
@@ -1681,8 +1931,23 @@ class SquadPickScreen(RiosScreen):
         st = self.app.state
         head = ("分组：[bold]主职业[/]" if self._group == "prof"
                 else "分组：[bold]主职业-子职业[/]")
-        shown = len([o for o in (self._visible())])
-        txt = (f"{head}　"
+        # 当前筛到哪一档也写在这里：分类行在窄窗口里会折行，而说明这行永远看得见，
+        # 「我现在看的是哪个职业」至少有一处说得清。
+        scope = D.PROFESSION_CN.get(self._prof or "", self._prof or "") or D.PROF_ALL
+        if self._prof and self._sub:
+            scope = f"{scope}·{self._sub}"
+        shown = len(self._visible())
+        mode = ("允许程序补充" if st.mode == "auto" else "只用我选的")
+        if self._compact:
+            # 矮窗口里这行**只占一行**：省下的那一行给子职业行折出来的第二行。
+            # 计数与范围一个字都不少，少的是那句解释——而那句按 M 切换时本来就
+            # 一眼能看出来，不必常驻。
+            self.query_one("#mode-line", Static).update(
+                f"范围：[bold]{scope}[/]　筛出 [bold]{shown}[/] 人　"
+                f"已勾 [bold]{len(self._picked)}[/] 人　"
+                f"[dim]{head}　{mode}[/]")
+            return
+        txt = (f"{head}　范围：[bold]{scope}[/]　"
                f"筛出 [bold]{shown}[/] 人　"
                f"已勾 [bold]{len(self._picked)}[/] 人\n")
         if st.mode == "auto":
@@ -1706,6 +1971,33 @@ class SquadPickScreen(RiosScreen):
         self._group = "sub" if self._group == "prof" else "prof"
         self._fill()
         self._render_mode()
+
+    # ---- 矮窗口：两行分类的留白让路，行本身留着 ----
+
+    def _fit_extra(self, h: int) -> None:
+        """分类行**一行都不许少**，让掉的只是留白。
+
+        主职业行平时占 3 行（加粗 + 上下各留一行，这是终端里能做到的"大字"），
+        矮窗口下把留白收掉。子职业行按内容折行，矮窗口下**不压**（见下）。
+        两行都留着，是因为少了任何一行，用户就**没法把范围调回来**
+        （只有列表可滚动、而列表里没有"全部"这一项）。
+        """
+        compact = h < RiosScreen.COMPACT_HEIGHT
+        self._compact = compact
+        self.query_one("#prof-row", PickerRow).styles.padding = (
+            (0, 2) if compact else (1, 2))
+        # 子职业行本就把放不下的项折到下一行（博士 2026-09-18：子职业放不下
+        # 可以分两行），所以这里**不动它的高度**——压了就等于把折出来的第二行
+        # 藏掉。各占几行由 `PickerRow` 按内容定（`height: auto`）。
+        #
+        # 矮窗口里顶上那句说明收成一行（见 `_render_mode`）：80x12 下省下的
+        # 那一行正好把子职业行折出来的第二行装进去，列表还留得下 3 行。
+        # **不要动 `#f-trained` 的高度**：把它压成 1 行，它内部的当前值那格就
+        # 落到可见区外了（自检里 `选人屏@80x12` 报的正是这个），得不偿失。
+        try:
+            self._render_mode()
+        except Exception:                                     # noqa: BLE001
+            pass                    # 还没 mount 完时 `#mode-line` 取不到
 
     def action_go(self) -> None:
         self.dismiss(sorted(self._picked))
