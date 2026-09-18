@@ -1105,6 +1105,14 @@ class SkillEffects:
     stand_kill_scale: float = 0.0
     stand_kill_damage: float = 0.0
     stand_heal_targets: int = 0
+    #: 「阻挡范围扩大」——提升「**阻挡半径倍率**」属性（凯尔希·思衡托技1）。
+    #:
+    #: 语义有 prts 备注作准：「阻挡范围加成为提升受益者的『阻挡半径倍率』属性，
+    #: **可以对凯尔希自身生效，但与天赋间同名效果取最高**」。所以它与天赋
+    #: 「遗尘守望」上的同名键之间**取最高、不相加**（两边都是 0.23，相加会算成
+    #: 0.46）。它的作用对象是「持有【对地规避】的友方」——也就是"起飞"的那一族，
+    #: 见 `docs/uncertainties.md`。
+    block_radius_scale: float = 0.0
     #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
     #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
     #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
@@ -1850,6 +1858,12 @@ class SkillBook:
                 bb.get("attack@kill_damage") or 0.0)
             lv.effects.stand_heal_targets = int(
                 bb.get("attack@max_target_heal") or 0)
+        # 「阻挡范围扩大」（凯尔希·思衡托技1）：正文那一句 + 黑板
+        # `attack@block_radius_scale`。它改的是「阻挡半径倍率」属性，与天赋上的
+        # 同名键**取最高**（prts 备注原话），消费点在 `sim._update_blocking`。
+        if "阻挡范围扩大" in lv.description:
+            lv.effects.block_radius_scale = float(
+                bb.get("attack@block_radius_scale") or 0.0)
         # 技能结束时的**自身**效果：晕眩与强制退场。两者的数值/语义都
         # 只在描述里，且都与"打在敌人身上"的那套（`control`）无关。
         lv.effects.self_stun = _wants_self_stun(lv.description, bb)

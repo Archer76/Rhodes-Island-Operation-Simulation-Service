@@ -5131,6 +5131,122 @@ def check_stand_state_machine(stage, lib, calc, book_t) -> None:
           f"duration={me4.stand_duration:g}、alive={me4.alive}")
 
 
+def check_kaltsit_radius_and_regen(stage, lib, calc, book_t) -> None:
+    """[53] 凯尔希·思衡托（`char_1052_kalts2`）：阻挡半径倍率 + 【罗德岛】翻倍。
+
+    她这一批的四条欠账是两件事的两种写法：
+
+    * `block_radius_scale`（天赋1「遗尘守望」）与 `attack@block_radius_scale`
+      （技1）——prts 备注把语义钉死了：「阻挡范围加成为提升（自身/受益者）的
+      『**阻挡半径倍率**』属性」，且「与天赋间同名效果**取最高**」。**不是相加**：
+      两边都是 0.23，相加会算成 0.46。
+    * `rhodes_bonus` 与 `attack@rhodes_bonus`（天赋2「医者丰碑」）——「增益治疗对
+      【罗德岛】干员的效果翻倍」。翻的是**速率**（每秒 50 → 100），不是时长。
+
+    ⚠️ 用例之间**必须各起一个 sim**：`op.blocking` 是 latch，上一例挡下的敌人
+    即使从 `sim.enemies` 里拿掉，`blocking` 仍占着位（`block_cnt` = 1），下一例
+    会"看起来没生效"。这一条是本次实测踩出来的。
+    """
+    print("\n[53] 凯尔希·思衡托：阻挡半径倍率（`block_radius_scale`）与【罗德岛】翻倍")
+    from ak_tactic.battle.talents import (find_medic_monument,   # noqa: PLC0415
+                                          find_relic_watch)
+    from ak_tactic.battle.unit import POSITION_TOL  # noqa: PLC0415
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    v = Verifier()
+    cid = "char_1052_kalts2"
+    slots = {sk.slot: sk for sk in SkillBook().for_operator(cid)}
+    tals = list(book_t.for_operator(cid))
+    watch, monument = find_relic_watch(tals), find_medic_monument(tals)
+    check("  两条天赋都有**具名检测器**（名 + 键双锚定）：遗尘守望 / 医者丰碑",
+          watch is not None and monument is not None,
+          f"遗尘守望={watch is not None}、医者丰碑={monument is not None}")
+    check("  解析：技1「阻挡范围扩大」落进 `block_radius_scale`（0.23）",
+          abs(slots[1].level(7, 3).effects.block_radius_scale - 0.23) < 1e-9,
+          f"{slots[1].level(7, 3).effects.block_radius_scale}")
+
+    def blocked_at(dist: float, *, skill: bool = False, talents=None):
+        """把敌人放到离她 `dist` 格处，走**真实** `_update_blocking` 看谁挡下它。"""
+        sim = mechanism_sim(stage, lib)
+        sim.dp = 999.0
+        me = v.unit({"char_id": cid, "elite": 2, "level": 60, "trust": 100,
+                     "potential": 1})
+        sim._do_deploy(Deployment(
+            0.0, me, (2, 3), "Right",
+            skill=slots[1].level(7, 3) if skill else None,
+            talents=talents if talents is not None else tals), 0.0)
+        e = _dummy(sim, stage, _enemy_ids(stage)[0], (2, 3))
+        e.position = (2.0 + dist, 3.0)
+        sim._update_blocking()
+        return e.blocked_by, me
+
+    base = POSITION_TOL
+    wide = POSITION_TOL * 1.23
+    _got, _me = blocked_at(base * 0.85)
+    check("  基线：0.30 格（基础半径 0.35 之内）本来就挡得住，天赋不是必需品",
+          _got is not None, f"基础容差 {base:g}")
+    got_no, _ = blocked_at(0.40, talents=[])
+    check("  反向：**没有**这条天赋时，0.40 格挡不住（0.40 > 0.35）",
+          got_no is None, f"容差仍是 {base:g}")
+    got_tal, me_tal = blocked_at(0.40)
+    check("  有「遗尘守望」时，0.40 格**挡得住**了——半径按倍率放大到 1.23×",
+          got_tal is not None and abs(me_tal.block_tol2 ** 0.5 - wide) < 1e-9,
+          f"实际半径 {me_tal.block_tol2 ** 0.5:.4f}（期望 {wide:.4f}）")
+    got_far, _ = blocked_at(0.55)
+    check("  反向：放大也有边——0.55 格仍然挡不住",
+          got_far is None, "0.55 > 0.4305")
+    got_sk, me_sk = blocked_at(0.40, skill=True)
+    check("  技1 期间同样挡得住；且天赋与技1 **同名取最高**（0.23，不是 0.46）",
+          got_sk is not None
+          and abs(me_sk.current_block_radius_scale() - 0.23) < 1e-9
+          and abs(me_sk.block_tol2 ** 0.5 - wide) < 1e-9,
+          f"倍率 {me_sk.current_block_radius_scale():.3f}")
+    sim_x = mechanism_sim(stage, lib)
+    sim_x.dp = 999.0
+    other = v.unit({"char_id": "char_103_angel", "elite": 2, "level": 60,
+                    "trust": 100, "potential": 1})
+    sim_x._do_deploy(Deployment(0.0, other, (2, 3), "Right"), 0.0)
+    check("  反向：没这条天赋的人倍率是 0（空面，不是「人人都有」）",
+          other.current_block_radius_scale() == 0.0,
+          f"{other.current_block_radius_scale():g}")
+
+    print("     —— 医者丰碑：对【罗德岛】翻倍 ——")
+    sim = mechanism_sim(stage, lib)
+    sim.dp = 999.0
+    me = v.unit({"char_id": cid, "elite": 2, "level": 60, "trust": 100,
+                 "potential": 1})
+    sim._do_deploy(Deployment(0.0, me, (2, 3), "Right", talents=tals), 0.0)
+    in_range = [c for c in sorted(sim._range_of(me)) if c != (2, 3)]
+    pair = []
+    for cid2 in ("char_002_amiya", "char_103_angel"):
+        for cell in in_range:
+            u = v.unit({"char_id": cid2, "elite": 2, "level": 60, "trust": 100,
+                        "potential": 1})
+            sim._do_deploy(Deployment(0.0, u, cell, "Right", talents=[]), 0.0)
+            if u in sim.operators and u not in pair:
+                pair.append(u)
+                break
+    rhodes = next((u for u in pair if u.nation_id == "rhodes"), None)
+    othern = next((u for u in pair if u.nation_id != "rhodes"), None)
+    check("  取到一位【罗德岛】与一位非【罗德岛】友方（都在她射程内）",
+          rhodes is not None and othern is not None,
+          f"罗德岛={rhodes.name if rhodes else None}、"
+          f"非罗德岛={othern.name if othern else None}")
+    for aura in sim.regen_auras:
+        aura.tick(1.0, sim.operators, sim._range_of)
+    check("  光环把【罗德岛】的每秒回血**翻倍**（50 → 100），别的仍是 50",
+          rhodes is not None and othern is not None
+          and abs(rhodes.regen_per_sec - 100.0) < 1e-6
+          and abs(othern.regen_per_sec - 50.0) < 1e-6,
+          f"{rhodes.regen_per_sec if rhodes else 0:.0f} / "
+          f"{othern.regen_per_sec if othern else 0:.0f}")
+    check("  如实记下的一处：天赋正文里的「立刻获得 1 层护盾」**黑板里没有键**"
+          "（层数只写在正文），所以护盾那一层不建模——不是漏读，是无数据可读",
+          not any(k for k in (monument.blackboard if monument else {})
+                  if "shield" in k),
+          f"医者丰碑黑板键：{sorted((monument.blackboard if monument else {}))}")
+
+
 def check_glider_mobility(stage, lib, calc, book_t) -> None:
     """[43] 焰狐龙梓兰天赋2「翔虫机动」——一个天赋横跨两个平面。
 
@@ -5943,6 +6059,7 @@ def main() -> int:
     check_cost_skills(stage, lib, calc, book_t)
     check_decay_barrier_and_radio(stage, lib, calc, book_t)
     check_stand_state_machine(stage, lib, calc, book_t)
+    check_kaltsit_radius_and_regen(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

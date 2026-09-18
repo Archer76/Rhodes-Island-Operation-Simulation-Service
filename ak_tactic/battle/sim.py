@@ -55,6 +55,7 @@ from .talents import (CLASS_AURA_TALENTS, FACTION_AURA_NAME, STUDENT_TEAM,
                       RegenAura, SnowField, TeamAura, find_blessing,
     find_ammo_covenant, find_bomb_radio, LATERANO_NATION,
     find_persona_power, find_sees_leader,
+    find_relic_watch, find_medic_monument,
                       RHODES_NATION, find_angel_blessing, find_class_aura, find_damage_block,
                       find_dot_on_hit,
                       find_limit_dispatch,
@@ -3064,6 +3065,12 @@ class BattleSimulator:
         op.trait_blackboard = (_trait_at(op.char_id)
                                if _trait_at is not None else {})
         self._stand_setup(op)
+        # 「阻挡半径倍率」（凯尔希 / 凯尔希·思衡托 天赋「遗尘守望」）：天赋级增量，
+        # 与技1 上的同名键**取最高**（见 `unit.current_block_radius_scale`）。
+        watch = find_relic_watch(op.talents)
+        if watch is not None:
+            op.block_radius_scale = float(
+                watch.value("block_radius_scale", 0.0) or 0.0)
         self._attach_skill(op, d)
         self.operators.append(op)
         self._mobility_on_deploy(op, d, t)
@@ -3106,6 +3113,9 @@ class BattleSimulator:
             op.blessing_self_freeze = bless.value("freeze", 0.0)
             op.blessing_cold = bless.value("cold", 0.0)
         # 天赋：增益治疗光环（「友方进入攻击范围时每秒回复生命值」）
+        # 「医者丰碑」对【罗德岛】翻倍：势力与倍率都从天赋黑板取
+        # （`rhodes_bonus` = 2.0），**不写死 2.0**——同一个键将来给别的数也能用。
+        monument = find_medic_monument(op.talents)
         regen = find_regen(op.talents)
         if regen is not None:
             self.regen_auras.append(RegenAura(
@@ -3113,6 +3123,9 @@ class BattleSimulator:
                 hp_per_sec=regen.value("hp_recovery_per_sec", 0.0),
                 duration=regen.value("buff_duration", 0.0),
                 operator=op,
+                nation_double=RHODES_NATION if monument is not None else "",
+                nation_mult=(float(monument.value("rhodes_bonus", 1.0) or 1.0)
+                             if monument is not None else 1.0),
             ))
         # 天赋：情绪吸收（每次出手 / 每次击杀额外回技力）。落到干员身上，
         # 由出手与击杀两处结算——它**叠加**在技能的 sp_type 之上，不是替代。
@@ -3272,6 +3285,9 @@ class BattleSimulator:
             if blocking:
                 op.blocking = [e for e in blocking
                                if e.hp > 0 and e.blocked_by is op]
+            # 阻挡半径（「阻挡半径倍率」属性）每帧刷一次。干员数是个位数，
+            # 而下面是"敌人 × 干员"的双重循环——`max()` 不能放进内层。
+            op.refresh_block_radius()
         for e in self.enemies:
             # 离场传送中的敌人不在地图上，不占阻挡位
             # 【倒地】不可阻挡；飞行单位任何地面干员都挡不住；
@@ -3289,7 +3305,9 @@ class BattleSimulator:
                 ox, oy = op.position
                 dx = ex - ox
                 dy = ey - oy
-                if dx * dx + dy * dy <= POSITION_TOL2:
+                # 阈值取**这个干员**的阻挡半径（默认 = 基础容差；被「阻挡半径
+                # 倍率」放大后连格边附近的敌人也挡得住），不是全场一个常数。
+                if dx * dx + dy * dy <= op.block_tol2:
                     e.blocked_by = op
                     op.blocking.append(e)
                     break
