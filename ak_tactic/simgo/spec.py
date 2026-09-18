@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from . import skills
+from . import mech, skills
 
 #: 攻击间隔的下限与攻速下限，与 `battle/unit.py` 同源（那里写死 0.05 / 20）
 MIN_INTERVAL = 0.05
@@ -90,8 +90,12 @@ def unsupported_reasons(sim, *, allow_devices: bool = False,
         bad.append(f"增益治疗光环 ×{len(sim.regen_auras)}")
     if getattr(sim, "snow_fields", None):
         bad.append(f"积雪 ×{len(sim.snow_fields)}")
+    bad += _enemy_reasons(sim)
     if getattr(sim, "farmland", None) is not None:
-        bad.append("场地机制（田地/病害值）")
+        # 田地本身**已接线**（Go 的 `mech/huai_shu_li.go`）：几何与参数随规格送过去，
+        # 时间由 Go 跑。所以这里不再一刀切拒跑，改成按**这一关实际用到的东西**逐条判
+        # ——没接线的部分（敌人侧污染、天桩链、拆阀还原）由 `mech.port_reasons` 报。
+        bad += mech.port_reasons(sim)
     if getattr(sim, "_devices", None) and not allow_devices:
         bad.append(f"关卡装置 ×{len(sim._devices)}")
     if getattr(sim, "total_attack", None) is not None:
@@ -148,6 +152,50 @@ def unsupported_reasons(sim, *, allow_devices: bool = False,
             seen.add(item)
             out.append(item)
     return out
+
+
+def _enemy_reasons(sim) -> list[str]:
+    """敌人侧：Go 侧还没建模的敌人行为，逐条给理由。
+
+    **字段驱动**：照着 `EnemyUnit` 的字段列（每个字段在 `sim.py` 里都有一个消费点），
+    字段非零就说明那一段代码这一局会跑。判据不看名字、不看描述关键词。
+
+    这一条闸门是补上来的：在此之前，"敌人有技能出手 / 会重生 / 会换形态"这种关
+    会被原样交给 Go——而 Go 那边这些行为**一行都没有**，判决却照样给出来。
+    那正是"对拍通过但两边算的不是同一场战斗"。
+    """
+    bad: list[str] = []
+    field_why = {
+        "skill_atk_scale_phys": "敌方技能出手（物理）",
+        "skill_atk_scale_magic": "敌方技能出手（法术）",
+        "skill_atk_pollut": "敌方技能出手",
+        "passive_pollut": "被击倒的被动",
+        "phit_pollut": "蜕皮被动",
+        "phit_block_pollut": "蜕皮被动（被阻挡时）",
+        "reborn_pollut": "重生吸病害值",
+        "pm2_mark_pollut": "明识形态",
+        "awake_value": "按田地病害值觉醒",
+        "hp_drain_per_sec": "持续自伤",
+    }
+    names: dict[str, set[str]] = {}
+    for e in mech._spawns_of(sim):
+        for attr, why in field_why.items():
+            if getattr(e, attr, 0):
+                names.setdefault(why, set()).add(e.name)
+        for attr, why in mech.ENEMY_BEHAVIOR_ATTRS.items():
+            if getattr(e, attr, None):
+                names.setdefault(why, set()).add(e.name)
+        # 「被击倒给可部署装置」的额度**只在计划里真放装置时才起作用**：不给额度，
+        # `_do_deploy_device` 会拒放；给不给额度本身不改判决（原版把它记进
+        # `res.device_tokens`，那是记录不是效果）。而"计划里有没有放装置"由
+        # `device_deployments` 那一条独立判——所以这里只在放装置时才报，
+        # 否则会把"敌人会掉装置"这个**没有后果**的事实，报成不能跑的理由。
+        if getattr(e, "death_cnt", 0) and getattr(e, "death_token", None) \
+                and getattr(sim, "device_deployments", None):
+            names.setdefault("被击倒给可部署装置", set()).add(e.name)
+    for why, who in names.items():
+        bad.append(f"{why}：{'/'.join(sorted(who))}")
+    return bad
 
 
 def _talent_reason(op, finder: str) -> bool:
@@ -263,12 +311,19 @@ def build_spec(sim, *, stage_label: str = "", allow_devices: bool = False,
     只读 `sim` 的状态（`_spawn` 与 `_range_of` 都是纯读；后者要先补 position——
     见 `_operator_spec` 的说明），不改战斗状态。`allow_*` 见 `unsupported_reasons`。
 
-    `mechanisms` 是**关卡特有机制**的名字（博士 2026-09-18：「机制单独成层、
-    每个活动分开、按需取用」）：Go 侧照名字从 `mech` 包里取，取不到就拒跑。
-    这一版机制层还是空的，所以默认一个都不挂；等 `rios-sim/mech/` 里落了真机制，
-    调用方（对拍台 / 搜索）再按关卡点名。**名字是 Python 与 Go 之间的契约**，
-    两边都得改的时候一起改。
+    `mechanisms` 是**额外的**关卡特有机制名字（博士 2026-09-18：「机制单独成层、
+    每个活动分开、按需取用」）。**这一关需要哪几个，由规格生成这一侧自己判**
+    （`mech.names_for`），不由调用方点：调用方只知道自己给了什么阵容，不知道地图
+    里有什么；漏点一个名字的症状是 Go 侧什么都不做却照样给判决。
+    传进来的名字与自动判出来的**取并集**（调用方偶尔要点名一个自动判不出的机制时
+    用得上）。**名字是 Python 与 Go 之间的契约**，两边都得改的时候一起改。
     """
+    mechanisms = list(dict.fromkeys([*mech.names_for(sim), *mechanisms]))
+    mech_config: dict[str, Any] = {}
+    if mech.FARMLAND_ID in mechanisms:
+        farm = mech.farmland_spec(sim)
+        if farm is not None:
+            mech_config[mech.FARMLAND_ID] = farm
     operators: list[dict[str, Any]] = []
     deploys: list[dict[str, Any]] = []
     for d in sorted(sim.deployments, key=lambda d: d.time):
@@ -302,5 +357,6 @@ def build_spec(sim, *, stage_label: str = "", allow_devices: bool = False,
         "skill_uses": skill_uses,
         "unsupported": unsupported_reasons(
             sim, allow_devices=allow_devices, allow_skills=allow_skills),
-        "mechanisms": list(mechanisms),
+        "mechanisms": mechanisms,
+        "mech_config": mech_config,
     }

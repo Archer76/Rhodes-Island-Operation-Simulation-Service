@@ -44,16 +44,17 @@ import (
 
 // FarmlandID 是这一层的机制名（Python 与 Go 之间的契约，改名等于改协议）。
 //
-// ⚠ **本文件暂时没有 `init()` 注册**，这是刻意的：注册等于对 Python 宣称
-// "这个名字我能跑"，而主循环还没在正确的帧位置回调它（环境伤害/回复、部署伤害、
-// 敌人侧的污染调用点、装置的断田与泵水都还没接线）。先注册再接线，会让一份
-// 点名了 `huai_shu_li.farmland` 的规格**被接受却什么都不做**——
-// 那正是这一层立规矩要防的那种错（"少挂一个机制"与"本来没这机制"分不开）。
+// 已在文件末尾 `init()` 注册。**能注册的那一条判据**是：主循环已经在原版的
+// 帧位置回调它（`EnvTicker` = 原版 `sim.py:2164`），而且规格里的每一样东西它
+// 都真的用得上——不是"代码写得出来"就算数。还有两处**没接线**，所以 Python 侧
+// 的闸门（`simgo/mech.py` 的 `port_reasons`）现在会拒掉用到它们的那几关：
 //
-// 接线完成、且 `_proto/mech_parity.py` 在真关卡上逐项对上之后，再在文件末尾
-// 加 `func init() { Register(...) }`。
+//   - 敌人侧的污染来源（被击倒的 `passive_pollut` 等，原版 `sim.py:2221` 的
+//     帧位置）——`PostAttacker` 钩子还没加；
+//   - 装置的运行期行为（田鼷拆阀 → 地形还原、天桩链）。
 //
-// 现在它由 `farmland_golden_test.go` 直接驱动来验证数值口径。
+// 这两件事都只在"点名了本机制、又用到了它们"时才危险，所以闸门按**这一关实际
+// 用到的东西**逐条判，而不是一刀切。
 const FarmlandID ID = "huai_shu_li.farmland"
 
 // Cell 是一格坐标（MAA 口径：原点左上、y 向下）。
@@ -654,3 +655,108 @@ func (fs *Farmland) Snapshot() Snapshot {
 	})
 	return Snapshot{Fields: frs, Actual: out}
 }
+
+// ================================================================ 主循环里的那一半
+
+// farmlandMech 是田地/病害值在**主循环里**的那一半：状态机在上面的 `Farmland`，
+// 这里只负责"什么时候动它"。
+//
+// 分开的理由与整层同源：状态机可以脱离战斗单独验证（`farmland_golden_test.go`
+// 就是这么驱的），而帧位置只能对着原版逐行核。
+type farmlandMech struct {
+	field *Farmland
+	pumps []SpecDevice
+	//: 环境伤害的**整秒累加器**（原版 `self._env_timer`）。用整数计数而不是
+	//: "≥1 秒就清零"：掉帧时 dt 会一次跨过不止一秒，只结一次等于把伤害漏掉，
+	//: 而 `fps=1` 的粗扫正是搜索里用得最多的档（原版 1344-1351 写的就是这个）。
+	envTimer float64
+}
+
+func newFarmlandMech(cfg json.RawMessage) (Mechanism, error) {
+	if len(cfg) == 0 {
+		return nil, fmt.Errorf("没收到田地规格（点名了 %s，规格里却没有它的参数）",
+			FarmlandID)
+	}
+	var spec FarmlandSpec
+	if err := json.Unmarshal(cfg, &spec); err != nil {
+		return nil, fmt.Errorf("田地规格解不开：%w", err)
+	}
+	fs, err := NewFarmland(&spec)
+	if err != nil {
+		return nil, err
+	}
+	m := &farmlandMech{field: fs}
+	for _, d := range spec.Devices {
+		switch d.Kind {
+		case "pump":
+			m.pumps = append(m.pumps, d)
+		case "valve":
+			// 阻流阀在**规格生成时**就已经把田地断开了（`sever`），运行期它只需要
+			// 站着；"被拆掉之后还原"归装置层，本机制不管（Python 侧会按这一关
+			// 实际用没用到它来判要不要放行）。
+		default:
+			// 天桩那类：本机制不碰，也不许装作碰了。
+			if d.Kind != "" {
+				return nil, fmt.Errorf("田地规格里有本机制不处理的装置 %q（%s @%v）",
+					d.Kind, d.Key, d.Cell)
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m *farmlandMech) ID() ID { return FarmlandID }
+
+// EnvTick 对应原版 `sim.py:1327-1375` 的 `_environment_tick`。
+// 三个节拍各归各的：【缓存】每 0.2s 释放、【实际】每秒靠拢（都在 `field.Tick`
+// 里），而**环境伤害按整秒**结算——因为原文写的是「每秒受到 … 环境法术伤害」。
+func (m *farmlandMech) EnvTick(ctx Ctx, dt float64) {
+	m.field.Tick(dt)
+
+	m.envTimer += dt
+	ticks := int(m.envTimer)
+	if ticks <= 0 {
+		return
+	}
+	m.envTimer -= float64(ticks)
+
+	// 泵水必须排在伤害结算**之前**：泵水改的是病害值，而这一秒的伤害要按**泵过
+	// 之后**的值算。反过来写的话，玩家用泵站压低病害值的那一秒仍会按旧值挨打，
+	// 而且这个偏差每秒都发生（原版 1353-1355 写明了）。
+	if len(m.pumps) > 0 {
+		ally := map[Cell]bool{}
+		for _, o := range ctx.Operators() {
+			if o.Alive {
+				ally[Cell{o.Cell[0], o.Cell[1]}] = true
+			}
+		}
+		for _, d := range m.pumps {
+			dir := directions[d.Direction]
+			src := Cell{d.Cell[0] - dir[0], d.Cell[1] - dir[1]}
+			m.field.Pump(d.Cell, d.Direction, ally[src])
+		}
+	}
+
+	for _, o := range ctx.Operators() {
+		if !o.Alive {
+			continue
+		}
+		cell := Cell{o.Cell[0], o.Cell[1]}
+		if !m.field.IsFarmland(cell[0], cell[1]) {
+			continue
+		}
+		// 环境伤害走 `Combatant.take`（`unit.py:104`）：**只过屏障，不减防御与法抗**，
+		// 所以这里按真伤报。
+		if dmg := m.field.DamagePerSecond(cell[0], cell[1]); dmg > 0 {
+			ctx.DamageOperator(o.Index, dmg*float64(ticks), true)
+			continue
+		}
+		// 病害值为 0 的田地改成回血，回复量与病害值无关（恒 `hp_recovery_per_sec`）。
+		// 这是同一个机制的两面，不是两个机制。
+		if heal := m.field.RegenPerSecond(cell[0], cell[1]); heal > 0 {
+			ctx.HealOperator(o.Index, heal*float64(ticks))
+		}
+	}
+}
+
+func init() { RegisterFactory(FarmlandID, newFarmlandMech) }
