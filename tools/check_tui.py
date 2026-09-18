@@ -692,6 +692,43 @@ def check_maa_export() -> None:
     check("minimum_required 在", bool(data.get("minimum_required")),
           str(data.get("minimum_required")))
 
+    # ---- ③b 人读清单里的模组写法：**模组名 + 类型字母 + 等级**（博士 2026-09-18 定）
+    #
+    # 原先印的是模组 id 加括号（`uniequip_002_chen3(X→1)`）：id 与 MAA 的编号都
+    # 不是游戏里看得见的东西，照着抄不下去。名字与字母才是。
+    mplan = Plan(stage="main_01-07", deploys=[
+        DeployOrder("甲", (1, 1), "Right", skill=0, time=0.0),
+        DeployOrder("乙", (2, 1), "Right", skill=0, time=1.0),
+        DeployOrder("丙", (3, 1), "Right", skill=0, time=2.0),
+        DeployOrder("丁", (4, 1), "Right", skill=0, time=3.0),
+    ])
+    mroster = {
+        "甲": {"module": "uniequip_002_chen3", "module_level": 3},      # X 型，Lv3
+        "乙": {"module": "uniequip_001_chen3", "module_level": 1},      # 基础证章
+        "丙": {"module": "uniequip_002_sbell2"},                        # 名册没记等级
+        "丁": {},                                                       # 没有模组
+    }
+    mlines = maa.operators_lines(mplan, mroster)
+    check("模组写法 = 「模组名 类型字母 等级」（不再印 uniequip id 与 MAA 编号）",
+          "模组 记忆残页 X 3" in mlines[0] and "uniequip" not in mlines[0],
+          mlines[0])
+    check("换个模组/换个等级照实写（千分之一的心 Y → 1）",
+          "模组 千分之一的心 Y " in mlines[2], mlines[2])
+    check("基础证章（typeName2 为空）**不算模组**，写「无」",
+          "模组 无" in mlines[1] and "证章" not in mlines[1], mlines[1])
+    check("没有模组的写「无」", "模组 无" in mlines[3], mlines[3])
+    check("名册没记模组等级时写 `-`（不编一个数）",
+          "模组 千分之一的心 Y -" in mlines[2], mlines[2])
+    check("模组名取自 uniequip 表（module_name 已公开）",
+          maa.module_name("uniequip_002_chen3") == "记忆残页"
+          and maa.module_name("uniequip_001_chen3") == "赤刃明霄陈证章",
+          str(maa.module_name("uniequip_002_chen3")))
+    check("查不到的模组 id 返回 None（调用方不许编名字）",
+          maa.module_name("uniequip_999_nope") is None
+          and maa.module_name(None) is None)
+    check("doc.details 里的模组一格与新写法一致（同一份 _mod_text，两处不会漂）",
+          "记忆残页 X " in det, det.splitlines()[0] if det else "")
+
     # ---- ④ detail 的等待秒要累加成绝对时刻
     rows = [("A", (1, 1), "Right", 3), ("B", (2, 2), "Left", 2), ("C", (3, 3), "Right", 0)]
     detail = [(10.0, "A", (1, 1), "Right", 3, 3, 20),
