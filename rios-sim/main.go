@@ -9,9 +9,9 @@
 //
 // 「保留原版项目结构不动，另写一份新的模拟器」。所以：
 //
-//   * `ak_tactic/battle/*` **一行不改**，它继续是三关基线与 793 项自检的权威实现；
-//   * 这一份是**另起**的，自带构建、自成一体；
-//   * **判决必须逐位对齐**才有资格接班——对拍台见 `docs/tui-plan.md` 第十二节。
+//   - `ak_tactic/battle/*` **一行不改**，它继续是三关基线与 793 项自检的权威实现；
+//   - 这一份是**另起**的，自带构建、自成一体；
+//   - **判决必须逐位对齐**才有资格接班——对拍台见 `docs/tui-plan.md` 第十二节。
 //
 // ## 它是怎么被调用的
 //
@@ -43,8 +43,8 @@ import (
 	"time"
 )
 
-//: 协议版本。Python 侧连上来先 `ping` 一次核对它——二进制与调用方版本不一致时，
-//: 症状会是"判决微妙地对不上"，那是最难查的一类错，所以要在这里挡住。
+// : 协议版本。Python 侧连上来先 `ping` 一次核对它——二进制与调用方版本不一致时，
+// : 症状会是"判决微妙地对不上"，那是最难查的一类错，所以要在这里挡住。
 const protocolVersion = 1
 
 type request struct {
@@ -67,7 +67,7 @@ type pong struct {
 	OS       string `json:"os"`
 	Arch     string `json:"arch"`
 	Started  string `json:"started"`
-	SpecDone bool   `json:"spec_done"` //: `sim` 是否已经实现（最小版本落地前为 false）
+	SpecDone bool   `json:"spec_done"` //: `sim` 是否已经实现（最小版本落地后为 true）
 }
 
 func main() {
@@ -112,13 +112,30 @@ func handle(req *request, started string) response {
 		return response{ID: req.ID, OK: true, Pong: &pong{
 			Version: protocolVersion, Go: runtime.Version(),
 			OS: runtime.GOOS, Arch: runtime.GOARCH, Started: started,
-			SpecDone: false,
+			SpecDone: true,
 		}}
 	case "sim":
-		// 最小版本还在落地中（见 docs/tui-plan.md 第十二节）。**不要**在这里返回
-		// 一个假的判决：调用方拿它当"跑完了"，对拍台就再也测不出东西。
-		return response{ID: req.ID, OK: false,
-			Error: "sim 尚未实现（最小版本落地中）"}
+		if len(req.Spec) == 0 {
+			return response{ID: req.ID, OK: false,
+				Error: "sim 少了 spec"}
+		}
+		var spec Spec
+		if err := json.Unmarshal(req.Spec, &spec); err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("spec 解析失败：%v", err)}
+		}
+		verdict, err := runSim(&spec)
+		if err != nil {
+			// **宁可什么都不回，也不回一个残缺的判决**：对拍台把"这一局不支持"
+			// 当成失败，把"缺了机制的结果"当成通过，后者才是真危险。
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(verdict)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("判决序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Verdict: raw}
 	default:
 		return response{ID: req.ID, OK: false,
 			Error: fmt.Sprintf("不认识的命令：%q（支持 ping / sim）", req.Cmd)}
