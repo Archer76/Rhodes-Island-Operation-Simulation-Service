@@ -497,8 +497,8 @@ func runSim(spec *Spec) (*Verdict, error) {
 			// 逐帧坐标（按名字门控，见 `tracePosName`）。`blocked/sluggish/freeze`
 			// 一起记：坐标不动有三种截然不同的原因，不写清楚就得分不出来。
 			if traceOn && tracePosName != "" && e.spec.Name == tracePosName {
-				trace("POS t=%.4f idx=%d x=%.4f y=%.4f hp=%.1f blocked=%t pause=%.2f sluggish=%.2f freeze=%.2f",
-					*ctx.time, e.index, e.position[0], e.position[1], e.hp,
+				trace("POS t=%.4f idx=%d name=%s x=%.4f y=%.4f hp=%.1f blocked=%t pause=%.2f sluggish=%.2f freeze=%.2f",
+					*ctx.time, e.index, e.spec.Name, e.position[0], e.position[1], e.hp,
 					e.blockedBy != nil, e.attackPause, e.sluggishTimer, e.freezeTimer)
 			}
 		}
