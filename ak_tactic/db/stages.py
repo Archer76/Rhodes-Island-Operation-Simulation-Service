@@ -287,6 +287,26 @@ def _cn_num(n: int) -> str:
     return head + (_CN_DIGITS[ones] if ones else "")
 
 
+def _chapter_head(zone: dict[str, Any]) -> str:
+    """主线那一类的**章号**：「第一章」「序章」「第十六章」；非主线返回空串。
+
+    第 1-14 章 `name_first` 直接写着「第一章」…「第十四章」，用它就行；
+    **第 15-17 章是 `MAINLINE_ACTIVITY`**，`name_first` 是英文
+    （Critical Phase Transition），章号只在 `name_title`（"17"）——得自己拼成
+    中文数字，与前十四章统一；序章的 `name_title` 是 "00"，不算章号。
+    这段只此一份：`zone_title()` 与 `chapter_label()` 都从它取，免得两处漂。
+    """
+    first = (zone.get("name_first") or "").strip()
+    title = (zone.get("name_title") or "").strip()
+    if first.startswith("第") and first.endswith("章"):
+        return first                                  # 第一章…第十四章
+    if title.isdigit() and title != "00":
+        return f"第{_cn_num(int(title))}章"            # MAINLINE_ACTIVITY
+    if title == "00":
+        return first or "序章"                         # 序章
+    return ""
+
+
 def zone_title(zone: dict[str, Any] | None) -> str:
     """把一个 zone 记录拼成**人看的章节名**。
 
@@ -300,16 +320,40 @@ def zone_title(zone: dict[str, Any] | None) -> str:
         return ""
     first = (zone.get("name_first") or "").strip()
     second = (zone.get("name_second") or "").strip()
-    title = (zone.get("name_title") or "").strip()
-    if first.startswith("第") and first.endswith("章"):
-        return first                                  # 第一章…第十四章
-    if title.isdigit() and title != "00":
-        # MAINLINE_ACTIVITY：章号要自己拼（用中文数字与前十四章统一），
-        # 副标题挂在后面——「第十六章　反常光谱」
-        return f"第{_cn_num(int(title))}章" + (f"　{second}" if second else "")
-    if title == "00":
-        return first or "序章"                         # 序章
+    head = _chapter_head(zone)
+    if head:
+        # 章号后面挂副标题——「第十六章　反常光谱」。第 1-14 章不带副标题
+        # （`zone_title` 是通用名，别处当分部名用），菜单那一层要的排版见
+        # `chapter_label()`。
+        if head.startswith("第") and second and not first.startswith("第"):
+            return f"{head}　{second}"
+        return head
     return second or first or (zone.get("zone_id") or "")
+
+
+def chapter_label(zone: dict[str, Any] | None) -> str:
+    """主线章节在**菜单第一层**的写法：【第X章 ‘章节标题’】（博士 2026-09-18）。
+
+    「给主线关标题改成【第X章 ’章节标题‘】」——博士原话。引号用中文单引号
+    ‘…’；副标题取 `name_second`（第一至十四章是「黑暗时代·下」这类，第十五至
+    十七章是「离解复合」）。序章没有章号，就写【序章 ‘黑暗时代·上’】。
+
+    只认主线（`MAINLINE` 与 `MAINLINE_ACTIVITY`——第 15-17 章也是主线）：
+    活动、剿灭作战、插曲那些分部的名字都由活动名或分部名出，不走这里，
+    返回空串，调用方退回 `zone_title()`。
+
+    与 `zone_title()` 的分工：那个是**通用**章节名（还当着分部名用），
+    这个是菜单第一层的排版。两处各写一份必然会漂，所以章号共用
+    `_chapter_head()`。
+    """
+    if not zone or (zone.get("type") or "") not in ("MAINLINE",
+                                                    "MAINLINE_ACTIVITY"):
+        return ""
+    head = _chapter_head(zone)
+    if not head:
+        return ""
+    sub = (zone.get("name_second") or "").strip()
+    return f"【{head} ‘{sub}’】" if sub else f"【{head}】"
 
 
 def _rows(index: dict[str, dict[str, Any]],
@@ -621,7 +665,7 @@ def list_chapters(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             # → 最后才把内部 id（`act1multi`）摆上台面。缺了活动名那一退，
             # 「奇象巡展」「卫戍协议」这六个单 zone 活动会显示成空白行——
             # 实测就是空白，不是「名字太长被截了」。
-            title = zone_title(first) or act_name or key
+            title = chapter_label(first) or zone_title(first) or act_name or key
             subtitle = ""
         else:
             # 活动名优先；拿不到活动名时退回分部的章节名，别把内部 id 摆上台面
@@ -658,11 +702,9 @@ def _part_title(zone: dict[str, Any],
     """
     if (zone.get("type") or "") == "CAMPAIGN" and stage_names:
         return "、".join(stage_names)
-    second = (zone.get("name_second") or "").strip()
-    title = (zone.get("name_title") or "").strip()
-    if title.isdigit() and second and title != "00":
-        return f"第{_cn_num(int(title))}章　{second}"
-    return second or zone_title(zone)
+    # 主线（含第 15-17 章）与第一层同一套写法：【第X章 ‘章节标题’】
+    return chapter_label(zone) or (zone.get("name_second") or "").strip() \
+        or zone_title(zone)
 
 
 def list_zones(conn: sqlite3.Connection, *,

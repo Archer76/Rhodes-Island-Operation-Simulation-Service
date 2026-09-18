@@ -1149,9 +1149,22 @@ class ChapterPickScreen(Screen):
             or any(k in p["zone_id"].upper() for p in c["parts"])
         ]
         for c in self._shown:
-            parts = ("、".join(p["title"] for p in c["parts"])
-                     if len(c["parts"]) > 1 else "")
-            t.add_row(c["title"], str(c["levels"]), parts, key=c["key"])
+            t.add_row(c["title"], str(c["levels"]), self._parts_cell(c),
+                      key=c["key"])
+
+    #: 分部那一列最多写几个。剿灭作战有 15 个分部、35 个图名，全塞进一格会横到
+    #: 屏幕外（实测那一格三百多字符），把「章节／活动」那列挤没了。筛选照旧
+    #: 按**全部分部**匹配，这里只管显示。
+    PARTS_SHOWN = 2
+
+    @classmethod
+    def _parts_cell(cls, chapter: dict) -> str:
+        ps = chapter["parts"]
+        if len(ps) < 2:                       # 单分部不给第二层菜单，这列留空
+            return ""
+        head = "、".join(p["title"] for p in ps[:cls.PARTS_SHOWN])
+        rest = len(ps) - cls.PARTS_SHOWN
+        return f"{head}　…（共 {len(ps)} 个分部）" if rest > 0 else head
 
     def _pick_key(self, key: str) -> None:
         for c in self._shown:
