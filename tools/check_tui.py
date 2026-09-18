@@ -567,9 +567,27 @@ def check_squad_keys() -> None:
     shown = [b.key for b in SquadList.BINDINGS if getattr(b, "show", True)]
     check("SquadList 显式把 space 的提示亮出来", "space" in shown, str(shown))
     enter_b = [b for b in SquadPickScreen.BINDINGS if b.key == "enter"]
-    check("选人屏的 enter 绑定带 priority=True（否则被控件吃掉）",
-          bool(enter_b) and getattr(enter_b[0], "priority", False),
-          "不带这个参数时回车只会反复勾选、永远推不动")
+    list_enter = [b for b in SquadList.BINDINGS if b.key == "enter"]
+    # 博士实测报过两个**相反方向**的 bug，这一条把两头同时钉住：
+    #   ① 回车被列表吃掉 → 永远进不了解算（旧的 `priority=True` 是治它的，
+    #      但那会连下拉框的回车一起抢走 → ② 门槛下拉框打不开、确认不了）。
+    # 现在的分工：**列表这边让**（`skip_enter` → `SkipAction`），屏上不抢。
+    check("选人屏的 enter **不再用 priority 硬抢**"
+          "（硬抢会把门槛下拉框的回车一起抢走，那个框就锁死了）",
+          bool(enter_b) and not any(getattr(b, "priority", False)
+                                    for b in enter_b),
+          str([(b.key, getattr(b, "priority", False)) for b in enter_b]))
+    check("列表那边把回车**让出来**（`skip_enter`，且不带 priority）"
+          "——不然回车只会反复勾选、永远推不动",
+          [(b.action, getattr(b, "priority", False)) for b in list_enter]
+          == [("skip_enter", False)], str([(b.key, b.action) for b in list_enter]))
+    # 让出去的那条**必须还是可见的**：Footer 按键去重、取最近的一条，
+    # `show=False` 会把屏上那句「Enter 开始解算」顶掉，底部就瞎了。
+    check("列表上那条让位的回车**仍然把说明亮给 Footer**"
+          "（否则底部看不见「Enter 开始解算」）",
+          [(b.key_display, b.description, b.show) for b in list_enter]
+          == [("Enter", "开始解算", True)],
+          str([(b.key_display, b.description, b.show) for b in list_enter]))
 
     async def run() -> dict:
         out: dict = {}
@@ -1599,9 +1617,14 @@ def check_squad_grouping() -> None:
     check("G 键切分类、M 键切模式、回车进解算",
           ("g", "toggle_group") in binds and ("m", "toggle_mode") in binds
           and any(k == "enter" and a == "go" for k, a in binds), str(binds))
-    check("回车仍是 priority（需求第 8 条不能被这次改动弄坏）",
-          any(b.key == "enter" and b.priority for b in A.SquadPickScreen.BINDINGS),
-          str([(b.key, b.priority) for b in A.SquadPickScreen.BINDINGS]))
+    check("回车仍在屏上（需求第 8 条不能被这次改动弄坏）"
+          "——「不被控件吃掉」现在由列表侧的 `skip_enter` 保证，"
+          "行为在 [12b] 里实测（列表上按回车真的推进了流程）",
+          any(k == "enter" and a == "go" for k, a in binds)
+          and any(b.key == "enter" and b.action == "skip_enter"
+                  for b in A.SquadList.BINDINGS),
+          str([(b.key, b.action, getattr(b, "priority", False))
+               for b in A.SquadPickScreen.BINDINGS]))
 
     labels = [t[0] for t in D.TRAINED_FILTERS]
     check("练度门槛是博士定的三档",
@@ -1764,10 +1787,15 @@ def check_squad_rows() -> None:
     check("折行后**第二行上的项照样点得到**（命中判定认行号）",
           bool(line2) and all(ok and k for ok, k in hit2),
           f"{len(line2)} 项，命中 {hit2}")
-    check("点在两格之间的空隙上不算命中（不会误选隔壁）",
-          not row._hit(0, 7)[0] and not row._hit(0, 999)[0],
-          "x=7 是「全部」与「先锋」之间的空隙")
-
+    # 项的框之间**没有缝**：有缝就会出现"点上去没反应"的列（以前按 gap 记坐标，
+    # 那些列实际画着别的项，正是错位的来源）。框紧挨着 = 行进间每一列都有主。
+    # 只在**同一行内**比：折行处上一行末尾到下一行开头本来就不连续。
+    gaps = [(row._boxes[i][1] + row._boxes[i][2], row._boxes[i + 1][1])
+            for i in range(len(row._boxes) - 1)
+            if row._boxes[i][0] == row._boxes[i + 1][0]]
+    check("同一行里相邻两项的框**紧挨着、没有缝**（缝＝点上去没反应的列）",
+          all(a == b for a, b in gaps) and not row._hit(0, 999)[0],
+          f"缝：{[g for g in gaps if g[0] != g[1]] or '无'}")
     # 布局与渲染是同一份：点击命中就靠它，错位就等于点错人
     row.set_items([("a", "先锋"), ("b", "近卫"), ("c", "术师")], active="b")
     text = row.render()
@@ -1777,6 +1805,24 @@ def check_squad_rows() -> None:
           str(boxes))
     check("选中的那一项在渲染里被反显（`reverse`）",
           any("reverse" in str(span.style) for span in text.spans), str(text.spans))
+
+    # **格子坐标必须等于画出来的列**。这一条是博士实测报上来的 bug：
+    # `_layout` 里按 gap 推进坐标、`render()` 却没把那几格空格写进 Text，
+    # 于是 `_boxes` 越往右偏得越多（第 k 项偏 k*gap 列）——点左边几项就点错人。
+    # 判据从**渲染出来的字符串**里数，不从布局里算（自己算就是自证自洽）。
+    row.set_items([("", D.PROF_ALL), ("P", "先锋"), ("W", "近卫"),
+                   ("T", "重装")], active="W")
+    drawn = row.render().plain
+    drift = []
+    for _l, x, _w, key in row._boxes:
+        label = "全部" if key is None else {"P": "先锋", "W": "近卫",
+                                            "T": "重装"}[key]
+        want = x + 1                       # 项的形式是「 名字 」，名字在第二格
+        got = cell_len(drawn[:drawn.find(label)])
+        if got != want:
+            drift.append((label, want, got))
+    check("**格子坐标 = 画出来的列**（自己算的坐标不算证据）",
+          not drift, f"错位：{drift}" if drift else "四项全部对齐")
 
     # ---- 模组三态（`initial` 的核查结论） ----
     ini = D.Operator("c", "德克萨斯", module="uniequip_001_texas", module_level=1,
@@ -1882,6 +1928,55 @@ def check_squad_rows() -> None:
             await pilot.pause()
             got["prof_after_click"] = scr._prof
             got["picked3"] = sorted(sl.selected)
+
+            # ---- 练度门槛：下拉里不许有空白项，喂它一个 NULL 也不许崩 ----
+            sel = scr.query_one("#f-trained", Select)
+            got["trained_opts"] = [str(_p) for _p, _v in sel._options]
+            got["trained_values"] = [str(_v) for _p, _v in sel._options]
+            got["trained_value"] = sel.value
+            got["trained_min0"] = scr._min
+
+            class _FakeChanged:                #: 最小事件桩：只要 select 与 value
+                class select:                  # noqa: N801
+                    id = "f-trained"
+
+                value = Select.NULL
+
+            try:
+                scr.on_select_changed(_FakeChanged)     # type: ignore[arg-type]
+                got["null_ok"] = True
+            except Exception as exc:                    # noqa: BLE001
+                got["null_ok"] = f"{type(exc).__name__}: {exc}"
+            got["trained_min_null"] = scr._min
+
+            # ---- 回车：列表上=开始解算；下拉框上=开它自己的菜单 ----
+            goes: list[str] = []
+            real_go = scr.action_go
+
+            def spy_go(*_a, **_k) -> None:
+                goes.append("go")
+
+            scr.action_go = spy_go                 # type: ignore[method-assign]
+            try:
+                sl.focus()
+                before = len(goes)
+                await pilot.press("enter")
+                await pilot.pause()
+                got["go_on_list"] = len(goes) - before
+                # Footer 显示的是 `active_bindings`：焦点在列表上时，
+                # 回车那一条还得是「Enter 开始解算」（不是空白说明）
+                got["footer_enter"] = [
+                    (ab.binding.key_display, ab.binding.description)
+                    for k, ab in app.active_bindings.items() if k == "enter"]
+                sel.focus()
+                await pilot.pause()
+                before = len(goes)          # 按次数算：`goes` 是累积的
+                await pilot.press("enter")
+                await pilot.pause()
+                got["go_on_select"] = len(goes) - before
+                got["select_expanded"] = sel.expanded
+            finally:
+                scr.action_go = real_go            # type: ignore[method-assign]
         return got
 
     got = asyncio.run(flow())
@@ -1934,6 +2029,27 @@ def check_squad_rows() -> None:
     check("鼠标切换也不丢已勾的人",
           got["picked3"] == got["picked0"],
           f"{got['picked0']} → {got['picked3']}")
+    check("门槛下拉里**没有空白项**（以前有一条标签就叫「练度门槛」的空白项）",
+          len(got["trained_opts"]) == len(D.TRAINED_FILTERS)
+          and "练度门槛" not in "".join(got["trained_opts"]),
+          str(got["trained_opts"]))
+    check("门槛下拉**开局就有值**（不是空白态，显示「不限」）",
+          got["trained_value"] == "0" and got["trained_opts"][0] == "不限",
+          f"{got['trained_value']!r} {got['trained_opts'][:1]}")
+    check("喂一个 `Select.NULL` **不崩**，退回「不限」"
+          "（以前这里 `int('Select.NULL')` 直接崩掉整个程序）",
+          got["null_ok"] is True and got["trained_min_null"] == (0, 1),
+          f"{got['null_ok']!r} → min={got['trained_min_null']}")
+    check("**回车在列表上 = 开始解算**",
+          got["go_on_list"] == 1, f"触发了 {got['go_on_list']} 次")
+    check("焦点在列表上时，底部仍写着「Enter 开始解算」（Footer 按键去重，"
+          "让位那条若不亮说明就会被顶掉）",
+          got["footer_enter"] == [("Enter", "开始解算")], str(got["footer_enter"]))
+    check("**回车在下拉框上 = 开它的菜单**，不是开始解算"
+          "（`priority` 抢回车会把这个下拉框彻底锁死）",
+          got["go_on_select"] == 0 and got["select_expanded"] is True,
+          f"开始解算触发 {got['go_on_select']} 次；菜单展开="
+          f"{got['select_expanded']}")
 
 
 def check_key_cases() -> None:

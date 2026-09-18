@@ -24,6 +24,7 @@ import unicodedata
 from pathlib import Path
 
 from textual import work
+from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -1508,16 +1509,35 @@ def _resolve_stage(query: str) -> dict | None:
 # ================================================================ [2] 选编队
 
 class SquadList(SelectionList[str]):
-    """选人用的列表框：只把「空格 勾选」露给 Footer，行为一字不改。
+    """选人用的列表框：只把「空格 勾选」露给 Footer，并把**回车让出去**。
 
     `SelectionList` 的 `space → select` 与父类 `OptionList` 的 `enter → select`
     都是 `show=False`（Textual 想让调用方自己写提示），于是底部只剩
     Enter / M / Esc——**用户根本看不出空格能勾人**。子类只改 `show`。
+
+    回车这一条是**必须顶掉的**：父类 `OptionList` 的 `enter → select` 会把回车
+    吃在列表里，屏上那个"开始解算"就永远等不到它（博士实测过：「回车与空格都是
+    选人」）。这里改用 `skip_enter` → `SkipAction`，Textual 收到它在**不当作已处理**，
+    键继续往上走，落到屏上的 `enter`。
+
+    为什么不像以前那样在屏上用 `priority=True` 硬抢：那样连 `Select` 自己的回车
+    也一起抢走了——门槛下拉框于是**打不开、也确认不了**（博士实测到的第二个 bug）。
+    `priority` 是"从 App 往下查"、`skip_enter` 是"从焦点往上让"，后者只让出该让的。
     """
 
     BINDINGS = both_cases([
         Binding("space", "select", "勾选", key_display="空格", show=True),
+        # 回车这条**要 show=True 并写上同一个说明**：Textual 的 Footer 按"键"去重，
+        # 取离焦点最近的那一条——列表上挂一条 `show=False` 的 enter，就会把屏上
+        # 那条「Enter 开始解算」顶掉，底部于是**看不见回车干什么**（实测如此）。
+        # 说明写的是**回车真正会做的事**，不是这条绑定自己做的事。
+        Binding("enter", "skip_enter", "开始解算", key_display="Enter",
+                show=True),
     ])
+
+    def action_skip_enter(self) -> None:
+        """回车不吃：交给屏上的绑定（`SkipAction` = "这条我没处理"）。"""
+        raise SkipAction()
 
 
 class SquadAskScreen(RiosScreen):
@@ -1656,11 +1676,15 @@ class PickerRow(Static):
     def _layout(self, width: int) -> list[list[tuple[str, str, int, int]]]:
         """折成若干行：`[[(key, 显示名, 起始列, 占宽), …], …]`。
 
-        每项的形式是 ` 名字 `（两侧各一格空格）：格子之间靠这层空格分开，
-        所以相邻两项至少隔两格。宽度用 `_cell_width`（即 Rich 的 `cell_len`），
-        与"画出来占几列"同一把尺子。
+        每项的形式是 ` 名字 `（两侧各一格空格）：**间隔就是这两格空格**，
+        所以 `gap` 是 0。这一条踩过坑：曾经 `gap=2` 只加在坐标推进里、没写进
+        `render()` 的 Text，于是 `_boxes` 记的位置与画面越往右偏得越多
+        （第 k 项偏 `k*gap` 列），点左边几项就选错人。**算法里算进去的列，
+        必须真的写进 Text**——下面 `render()` 里那句 `" " * gap` 就是为这条留的。
+
+        宽度用 `_cell_width`（即 Rich 的 `cell_len`），与"画出来占几列"同一把尺子。
         """
-        gap = 2 if self.big else 1
+        gap = 0
         lines: list[list[tuple[str, str, int, int]]] = [[]]
         x = 0
         for key, label in self._items:
@@ -1678,14 +1702,17 @@ class PickerRow(Static):
         width = max(8, self.size.width or 80)
         # 横向留白由 CSS 的 padding 负责，这里的 width 已经是内容宽度
         self._boxes = []
+        gap = 0                       # 与 `_layout` 里的 gap 必须一致
         out = Text()
         for li, line in enumerate(self._layout(width)):
             if li:
                 out.append("\n")
-            for key, label, x, w in line:
-                on = (key or None) == (self._active or None)
+            for i, (key, label, x, w) in enumerate(line):
+                if i:
+                    out.append(" " * gap)
                 out.append(" ")
-                out.append(label, style="bold reverse" if on else
+                out.append(label, style="bold reverse" if
+                           (key or None) == (self._active or None) else
                            ("bold" if self.big else ""))
                 out.append(" ")
                 self._boxes.append((li, x, w, key or None))
@@ -1779,10 +1806,10 @@ class SquadPickScreen(RiosScreen):
     _compact = False
 
     BINDINGS = both_cases([
-        # **priority=True 是必需的**：`SelectionList` 自己会吃掉回车，
-        # 不加这一个参数，回车只会反复切换勾选、永远进不了解算
-        # （博士实测到的 bug：「回车与空格都是选人」）。
-        Binding("enter", "go", "开始解算", key_display="Enter", priority=True),
+        # 回车＝开始解算。**不用 `priority=True`**：那会连 `Select` 自己的回车
+        # 一起抢走（门槛下拉框打不开、确认不了）。列表那边用 `skip_enter` 把
+        # 回车让出来，见 `SquadList` 的说明。
+        Binding("enter", "go", "开始解算", key_display="Enter"),
         Binding("m", "toggle_mode", "切换模式", key_display="M"),
         Binding("g", "toggle_group", "切换分类", key_display="G"),
         Binding("escape", "back", "返回", key_display="Esc"),
@@ -1794,9 +1821,14 @@ class SquadPickScreen(RiosScreen):
         yield Static("", id="mode-line")
         # 练度门槛：**整行宽**（图上就是一行，右侧一个 ▼）。原先套在
         # `Horizontal` 里，宽度被压成内容宽，下拉框看上去像个附注。
+        #
+        # **`allow_blank=False` + 给初值**：`allow_blank=True` 时下拉里会多出
+        # 一条空白项，标签是 `prompt`（于是博士看到选项里有一项就叫「练度门槛」），
+        # 选中它给的是 `Select.NULL` ——以前拿它直接 `int()` 就崩掉整个程序。
+        # 现在没有那一项，当前档位写在上面那行说明里（`练度：…`）。
         yield Select([(label, str(i))
                       for i, (label, _e, _l) in enumerate(D.TRAINED_FILTERS)],
-                     prompt="练度门槛", id="f-trained", allow_blank=True)
+                     allow_blank=False, value="0", id="f-trained")
         yield PickerRow(big=True, id="prof-row")
         yield PickerRow(id="sub-row")
         yield SquadList(id="squad")
@@ -1806,6 +1838,7 @@ class SquadPickScreen(RiosScreen):
         self._group = "prof"                  # prof | sub
         self._prof: str | None = None         # None = 全部
         self._sub: str | None = None          # None = 该职业下不再筛
+        self._min_index = 0                   #: 门槛档位下标（写进顶上那行说明）
         self._min = (0, 1)                    # (精英段下限, 段内等级下限)
         self._picked: set[str] = set(self.app.state.squad)
         self._build_prof_row()
@@ -1915,13 +1948,22 @@ class SquadPickScreen(RiosScreen):
         self._render_mode()
 
     def on_select_changed(self, event: Select.Changed) -> None:
+        """练度门槛变了。
+
+        **任何"不是合法档位"的值都退回「不限」**，绝不做 `int()` 硬解：
+        Textual 在没选值时给的是 `Select.NULL`（`str()` 出来是 `"Select.NULL"`），
+        以前那一版就是这么把整个程序崩掉的（博士实测）。多一个分支不花什么，
+        崩一次要重开。
+        """
         if event.select.id != "f-trained":
             return
-        if event.value is Select.BLANK:
-            self._min = (0, 1)
-        else:
-            _label, e, lv = D.TRAINED_FILTERS[int(str(event.value))]
-            self._min = (e, lv)
+        try:
+            idx = int(str(event.value))
+            _label, e, lv = D.TRAINED_FILTERS[idx]
+        except (TypeError, ValueError, IndexError):
+            idx, (e, lv) = 0, (0, 1)
+        self._min_index = idx
+        self._min = (e, lv)
         self._fill()
         self._render_mode()
 
@@ -1938,16 +1980,21 @@ class SquadPickScreen(RiosScreen):
             scope = f"{scope}·{self._sub}"
         shown = len(self._visible())
         mode = ("允许程序补充" if st.mode == "auto" else "只用我选的")
+        # 门槛这一档也写在这儿：下拉框本身只显示当前值（「不限」/「≥ 精英二 60 级」），
+        # 而"这行是练度门槛"得有个地方说得清——写在这一行不额外占高度（矮窗口
+        # 一行都不能多花）。
+        train = D.TRAINED_FILTERS[self._min_index][0]
         if self._compact:
             # 矮窗口里这行**只占一行**：省下的那一行给子职业行折出来的第二行。
             # 计数与范围一个字都不少，少的是那句解释——而那句按 M 切换时本来就
             # 一眼能看出来，不必常驻。
             self.query_one("#mode-line", Static).update(
-                f"范围：[bold]{scope}[/]　筛出 [bold]{shown}[/] 人　"
+                f"范围：[bold]{scope}[/]　练度：[bold]{train}[/]　"
+                f"筛出 [bold]{shown}[/] 人　"
                 f"已勾 [bold]{len(self._picked)}[/] 人　"
                 f"[dim]{head}　{mode}[/]")
             return
-        txt = (f"{head}　范围：[bold]{scope}[/]　"
+        txt = (f"{head}　范围：[bold]{scope}[/]　练度：[bold]{train}[/]　"
                f"筛出 [bold]{shown}[/] 人　"
                f"已勾 [bold]{len(self._picked)}[/] 人\n")
         if st.mode == "auto":
