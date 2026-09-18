@@ -51,8 +51,8 @@ from typing import Callable, Iterable
 from ..eta import leading_wait, route_plans
 from ..gamedata.enemy import PROSE_SUMMON_EDGES
 from .damage import DamageType, resolve_damage
-from .talents import (RegenAura, SnowField, TeamAura, find_blessing,
-                      find_regen, find_snow,
+from .talents import (FACTION_AURA_NAME, STUDENT_TEAM, RegenAura, SnowField,
+                      TeamAura, find_blessing, find_regen, find_snow,
                       find_sp_on_action, find_summon_allowance, find_team_aura,
                       squad_cost_bonus)
 from .p3r import BreakState, TotalAttackDevice, affinity_multiplier, damage_slot
@@ -2137,15 +2137,30 @@ class BattleSimulator:
         if spa is not None:
             op.sp_per_attack_talent = spa.per_attack
             op.sp_per_kill_talent = spa.per_kill
-        # 天赋：全场光环（「青色怒火」——全场友方攻防提升，主人开技能时加倍）
+        # 天赋：全场光环。两种语义（见 `TeamAura` 的类文档）：
+        # 「青色怒火」= 常驻 + 主人开技能时加倍；「万众巨潮」= **只在技能期间
+        # 生效**，且对【乌萨斯学生自治团】翻倍。后者此前**完全没接**——它的
+        # `atk`/`def`/`scale_bonus` 三个键都在"无人读"里。注意 `scale_bonus`
+        # 与青色怒火的 `talent_scale` 是两个键，别互相当别名用。
         aura = find_team_aura(op.talents)
         if aura is not None:
-            self.team_auras.append(TeamAura(
-                owner=op.name,
-                atk_pct=aura.value("atk", 0.0),
-                def_pct=aura.value("def", 0.0),
-                operator=op,
-            ))
+            if aura.name == FACTION_AURA_NAME:
+                self.team_auras.append(TeamAura(
+                    owner=op.name,
+                    atk_pct=aura.value("atk", 0.0),
+                    def_pct=aura.value("def", 0.0),
+                    operator=op,
+                    skill_only=True,
+                    faction=STUDENT_TEAM,
+                    faction_scale=aura.value("scale_bonus", 2.0),
+                ))
+            else:
+                self.team_auras.append(TeamAura(
+                    owner=op.name,
+                    atk_pct=aura.value("atk", 0.0),
+                    def_pct=aura.value("def", 0.0),
+                    operator=op,
+                ))
             self._refresh_auras()
         if self.verbose:
             sk = f" 带技能「{op.skill.name}」" if op.skill is not None else ""
@@ -2158,14 +2173,17 @@ class BattleSimulator:
         """把全场光环的当前数值刷到每个干员身上。
 
         每帧做一次，因为「光环主人开技能期间效果加倍」是随时间变的。
-        多个光环**相加**（目前只有「青色怒火」一个来源）。
+        多个光环**相加**（目前只有「青色怒火」与「万众巨潮」两个来源）。
+
+        **按目标逐个算**，不能先算一份再刷给所有人：万众巨潮对
+        【乌萨斯学生自治团】翻倍、对其他干员不翻，取值因人而异。
         """
-        atk = def_ = 0.0
-        for a in self.team_auras:
-            x, y = a.current()
-            atk += x
-            def_ += y
         for op in self.operators:
+            atk = def_ = 0.0
+            for a in self.team_auras:
+                x, y = a.current(op)
+                atk += x
+                def_ += y
             op.aura_atk_pct = atk
             op.aura_def_pct = def_
 

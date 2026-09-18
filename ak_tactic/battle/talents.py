@@ -181,14 +181,38 @@ def find_regen(talents) -> Talent | None:
 #: ```
 TEAM_AURA_NAME = "青色怒火"
 
+#: 「技能期间**才**生效、且对某一阵营翻倍」的另一族全场光环：
+#: 怒潮凛冬天赋2「万众巨潮」——「技能期间所有场上干员攻击力和防御力 +14%
+#: （潜3 起 +18%），【乌萨斯学生自治团】干员获得加成效果翻倍」。
+FACTION_AURA_NAME = "万众巨潮"
+
+#: 【乌萨斯学生自治团】的成员（`operator.team_id == 'student'`）。
+#:
+#: 用 char_id 常量而不是查库：**战斗层不连数据库**，而阵营是稳定的游戏数据。
+#: 复核命令：`SELECT char_id, name FROM operator WHERE team_id='student';`
+STUDENT_TEAM: frozenset[str] = frozenset({
+    "char_1051_headb2",   # 怒潮凛冬
+    "char_115_headbr",    # 凛冬
+    "char_194_leto",      # 烈夏
+    "char_195_glassb",    # 真理
+    "char_196_sunbr",     # 古米
+    "char_197_poca",      # 早露
+    "char_405_absin",     # 苦艾
+})
+
 
 def is_team_aura_talent(t: Talent) -> bool:
     return t.name == TEAM_AURA_NAME and t.has("atk", "def")
 
 
+def is_faction_aura_talent(t: Talent) -> bool:
+    """「万众巨潮」：技能期间才生效，且对【乌萨斯学生自治团】翻倍。"""
+    return t.name == FACTION_AURA_NAME and t.has("atk", "def")
+
+
 def find_team_aura(talents) -> Talent | None:
     for t in talents or ():
-        if is_team_aura_talent(t):
+        if is_team_aura_talent(t) or is_faction_aura_talent(t):
             return t
     return None
 
@@ -197,10 +221,17 @@ def find_team_aura(talents) -> Talent | None:
 class TeamAura:
     """一个干员发给**全场友方**的攻击力/防御力光环。
 
-    描述：「在场时所有友方单位的攻击力和防御力 +7%，**技能开启期间效果加倍**」。
-    「加倍」的主语是**光环的主人自己**——博士 2026-09-17 裁定。阿米娅开技能
-    的那段时间全场吃到双倍，她不开就只有基础值；别人开不开技能与她无关。
-    技2 黑板里的 `talent_scale: 2.0` 正是这个倍率的数据化表达。
+    两种语义共用一个类，靠 `skill_only` 分开：
+
+    * **青色怒火**（`skill_only=False`）——「在场时所有友方单位的攻击力和
+      防御力 +7%，**技能开启期间效果加倍**」。「加倍」的主语是**光环的主人
+      自己**——博士 2026-09-17 裁定。阿米娅开技能的那段时间全场吃到双倍，
+      她不开就只有基础值；别人开不开技能与她无关。技2 黑板里的
+      `talent_scale: 2.0` 正是这个倍率的数据化表达。
+    * **万众巨潮**（`skill_only=True`）——「**技能期间**所有场上干员攻击力和
+      防御力 +14%，【乌萨斯学生自治团】干员获得加成效果翻倍」。底子不是常驻
+      的：主人不开技能就**一点都没有**（返回 0），这与青色怒火"常驻 + 开技能
+      加倍"是两种形状，不能用同一个 `k` 表达。
 
     与 `RegenAura` 的关键差别：那个是**射程内**才生效，这个是**全场**，
     不看位置，所以没有 `cells_of`、也没有"进入"那一刻的歧义。
@@ -213,13 +244,29 @@ class TeamAura:
     double_scale: float = 2.0
     #: 光环主人本体（模拟器填），翻倍与否要看它开着技能没有
     operator: object = None
+    #: 「技能期间**才**生效」。False = 常驻（青色怒火）。
+    skill_only: bool = False
+    #: 只对这些 char_id 翻倍（万众巨潮的【乌萨斯学生自治团】）；None = 不按阵营分
+    faction: frozenset[str] | None = None
+    #: 阵营翻倍倍率（黑板 `scale_bonus`，写的是 2.0）
+    faction_scale: float = 2.0
 
-    def current(self) -> tuple[float, float]:
-        """当前生效的 `(攻击力比例, 防御力比例)`。"""
-        k = 1.0
+    def current(self, target=None) -> tuple[float, float]:
+        """当前对 `target` 生效的 `(攻击力比例, 防御力比例)`。
+
+        `target` 是**吃光环的那个人**——万众巨潮要对它判阵营，所以这个参数
+        不是可选的装饰：不传就一律按不吃翻倍算。
+        """
         op = self.operator
-        if op is not None and getattr(op, "skill_active", False):
-            k = self.double_scale
+        active = op is not None and getattr(op, "skill_active", False)
+        if self.skill_only:
+            if not active:
+                return 0.0, 0.0
+            k = 1.0
+            if self.faction and getattr(target, "char_id", None) in self.faction:
+                k = self.faction_scale
+            return self.atk_pct * k, self.def_pct * k
+        k = self.double_scale if active else 1.0
         return self.atk_pct * k, self.def_pct * k
 
 
