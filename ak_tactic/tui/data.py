@@ -23,8 +23,9 @@ __all__ = ["Operator", "Roster", "load_roster", "default_guides_dir",
            "load_config", "save_config", "config_path", "stage_rows",
            "chapter_rows", "zone_envs", "zone_diffs", "complete_dir",
            "operator_db_status",
-           "PROFESSION_CN", "PROFESSION_ORDER", "TRAINED_FILTERS",
-           "profession_cn", "group_label", "meets_trained",
+           "PROFESSION_CN", "PROFESSION_ORDER", "TRAINED_FILTERS", "PROF_ALL",
+           "profession_cn", "professions_in", "sub_professions_in",
+           "group_label", "meets_trained",
            "skland_uid", "skland_game_uid", "roster_file", "roster_meta",
            "roster_for_uid", "cached_roster_uids"]
 
@@ -91,6 +92,7 @@ class Operator:
     trust: float = 0.0
     module: str | None = None
     module_level: int = 0
+    module_name: str = ""              # 名册里那个模组的中文名（特限/特勤证章要它）
     equipped_status: str = ""
     skills: dict = field(default_factory=dict)
 
@@ -100,13 +102,35 @@ class Operator:
         return (self.elite, self.level, self.potential)
 
     def label(self) -> str:
-        mod = ""
-        if self.module and self.equipped_status == "ok":
-            mod = f"  模组{self.module_level}"
-        elif self.module:
-            mod = f"  ({self.equipped_status})"
         return (f"{self.name}  E{self.elite} {self.level}级  "
-                f"潜{self.potential}  信赖{self.trust:.0f}%{mod}")
+                f"潜{self.potential}  信赖{self.trust:.0f}%{self.module_label()}")
+
+    def module_label(self) -> str:
+        """模组那一小段。
+
+        `equipped_status` 有三个取值（2026-09-18 核过本机名册 211 人：`ok` 196、
+        `initial` 13、`special` 2），**只有 `ok` 是"装了正经模组"**：
+
+        | 取值 | 是什么 | 例（本机名册） |
+        |---|---|---|
+        | `ok` | 已生效的模组，有等级 | 圣聆初雪 `uniequip_002_sbell2` Lv3 → 「模组3」 |
+        | `initial` | **初始证章**：`uniequip_001_*`，名字以「证章」收尾，**没有战斗数值** | 德克萨斯「德克萨斯证章」 |
+        | `special` | **特勤/特限证章**：有战斗数值的一类特殊模组 | 提丰「提丰特限证章」、机械师「机械师特勤证章」 |
+
+        以前这里把非 `ok` 的取值**原样印成英文**，界面上就出现了 `(initial)`——
+        玩家看不懂，而它其实是"这位身上只有一个不生效的证章"。现在按状态给中文：
+        初始证章写明「初始证章」（并说明它不加数值），特勤/特限证章直接报名册里的
+        模组名（「提丰特限证章」），这样**不靠猜分类**也能读明白。
+        """
+        if not self.module:
+            return ""
+        status = (self.equipped_status or "").strip()
+        if status == "ok":
+            return f"  模组{self.module_level}"
+        if status == "initial":
+            return "  初始证章（不加数值）"
+        # 其余（含 `special`）：模组名比状态词有用，名册里有就直接用
+        return f"  {self.module_name}" if self.module_name else f"  ({status})"
 
 
 @dataclass
@@ -138,6 +162,15 @@ def _from_skland(path: Path) -> list[Operator]:
     data = json.loads(path.read_text(encoding="utf-8"))
     out: list[Operator] = []
     for r in data.get("opers") or []:
+        equipped = r.get("equipped_module") or r.get("module")
+        # 带上的那个模组的中文名在 `modules[]` 里（每条 `{id, level, locked,
+        # status, name}`）。特限/特勤证章那两类**只有名字能说清它是什么**
+        # （状态词是 `special`），所以顺手取出来。
+        name = ""
+        for m in (r.get("modules") or []):
+            if isinstance(m, dict) and m.get("id") == equipped:
+                name = m.get("name") or ""
+                break
         out.append(Operator(
             char_id=r.get("charId") or "",
             name=r.get("name") or r.get("charId") or "",
@@ -147,9 +180,10 @@ def _from_skland(path: Path) -> list[Operator]:
             level=int(r.get("level") or 1),
             potential=int(r.get("potential") or 1),
             trust=float(r.get("trust") or 0.0),
-            module=r.get("equipped_module") or r.get("module"),
+            module=equipped,
             module_level=int(r.get("equipped_module_level")
                              or r.get("module_level") or 0),
+            module_name=name,
             equipped_status=r.get("equipped_status") or "",
             skills={k: v for k, v in r.items()
                     if k.startswith("skill") or k == "defaultSkillId"},
@@ -422,10 +456,44 @@ TRAINED_FILTERS = (
     ("精英二 90 级", 2, 90),
 )
 
+#: 主职业行里「不筛职业」的那一项（博士 2026-09-18 定：放最左、默认停在它上面）。
+#: 用 `None` 当它的值——**不能拿空串代替**：「子职业缺失」退回主职业名那条路
+#: （见 `group_label`）用的就是空串，两者撞在一起会让"没筛"和"这项没数据"分不开。
+PROF_ALL = "全部"
+
 
 def profession_cn(op) -> str:
     return PROFESSION_CN.get(getattr(op, "profession", "") or "",
                              getattr(op, "profession", "") or "未知")
+
+
+def professions_in(ops) -> list[str]:
+    """名册里**实际有的**主职业代号，按游戏顺序排。
+
+    不把十个代号全列出来：`TOKEN` / `TRAP` 不可能是玩家的干员，列出来只会是
+    两个永远筛出 0 人的按钮。
+    """
+    have = {getattr(o, "profession", "") or "" for o in ops}
+    return [p for p in PROFESSION_ORDER if p in have]
+
+
+def sub_professions_in(ops, profession: str) -> list[str]:
+    """某个主职业下**名册里实际有的**子职业中文名。
+
+    顺序取"在名册里第一次出现的次序"——名册是按练度降序的，于是**有强干员的
+    子职业排在前面**，比按拼音或按数据表顺序都更贴合"我要挑人"这件事。
+
+    只列名册里有的：列一个筛出 0 人的子职业，等于给用户一个按下去什么都没有的
+    按钮。某个职业一个子职业名都取不到时返回空表，调用方据此**整行不显示**。
+    """
+    seen: list[str] = []
+    for o in ops:
+        if (getattr(o, "profession", "") or "") != profession:
+            continue
+        sub = (getattr(o, "sub_profession", "") or "").strip()
+        if sub and sub not in seen:
+            seen.append(sub)
+    return seen
 
 
 def group_label(op, mode: str = "prof") -> str:
