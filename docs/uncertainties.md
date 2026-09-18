@@ -629,3 +629,25 @@ blackboard = {"attack@ability_range_radius": 1.0, "attack@atk_scale_2": 0.5}
 
 **结论**：「极限调度」的攻击力半条是**现在就能做的**（加 `faction_only` 即可）；
 其余要先把**战术家结构**或**费用规则**落下来，或先查清 `add_cost_period` 的激活条件。
+
+### ⚠ 2026-09-18 补充：上面写的「复用 TeamAura + 加 faction_only 即可」**少说了一步**
+
+本轮去查【罗德岛】该从哪个字段取，**先踩了一个坑**：
+
+* `team_id` 那列**不是**答案。它的取值是 `rainbow`(8) / `student`(7) /
+  `reserve6`(7) / `action4`(6) …，而且 **能天使、阿米娅、可露希尔的
+  `team_id` 全是 `None`**——**`None` 既不等于罗德岛，也不等于没有归属**。
+  照 `team_id` 判会把企鹅物流的能天使也当成罗德岛。
+* 真正的字段是 **`nation_id`**：阿米娅 `rhodes`、可露希尔 `rhodes`、
+  **能天使 `lungmen`**、星熊 `lungmen`。所以【罗德岛】= **`nation_id == 'rhodes'`**。
+* （`group_id` 是第三个数：星熊 `lgd`、能天使 `penguin`，那是**组织**，
+  与 `nation_id` 的**国家/势力**、`team_id` 的**小队**各是三件事。）
+
+**所以做「极限调度」还要多接一条**：`OperatorUnit` 目前只有 `profession`
+（为「特种作战策略」加的），**没有 `nation_id`**。要照 `profession` 那条路
+再走一遍三处——`unit.py` 加字段、`verify.py` 的 `kw`、`tools/check_battle.py`
+的 `make_unit`——然后才轮到 `TeamAura.faction_only`。
+
+**教训与第十六节那条同源**：`team_id` 这个名字"看起来就是阵营"，
+而它其实是**小队**；一次全表核验（三人取值一摆）就能当场分辨。
+**凡新字段先全表核验再下判据**——这条已经是本项目第三次咬人了。
