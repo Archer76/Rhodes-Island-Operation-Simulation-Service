@@ -124,6 +124,14 @@ func activate(op *operator, t float64, spec *Spec, cost *float64,
 	}
 	op.ammoLeft = sk.Ammo
 	op.spCharges++
+	// 技能给的生命上限（原版 `sim.py:2498` → `unit.py:947`）：
+	// 「上限和当前血量一起涨」——`hp += 基准 × pct`，这里用绝对值反推：
+	// `pct × 基准 = 新上限 − 基准`。少了这一句，"开技能翻倍生命上限"的干员
+	// 会少一半血（HS-EX-8 第 3 手圣聆初雪：2058 就倒，原版到 4116）。
+	if p := op.profile(); p != nil && p.MaxHP != nil {
+		base := op.spec.MaxHP
+		op.hp = math.Min(*p.MaxHP, op.hp+(*p.MaxHP-base))
+	}
 	if sk.CostGain != 0 {
 		*cost = math.Min(spec.CostMax, *cost+sk.CostGain)
 	}
@@ -140,6 +148,20 @@ func deactivate(op *operator) {
 	op.skillTimer = 0
 	op.ammoLeft = 0
 	op.sp = 0
+	// 生命上限还原（原版 `revert_max_hp_bonus`，unit.py:956）：上限回到基准，
+	// 当前血量按新上限夹一次——**不是**把涨上去那部分再扣掉。
+	op.hp = math.Min(op.hp, op.spec.MaxHP)
+}
+
+// maxHP 这一刻的生命上限：技能开着且有值就用技能给的，否则用规格里的基准值。
+//
+// 凡是"夹血量 / 算血量比例"的地方都该走这里，而不是直接读 `spec.MaxHP`：
+// 直接读会在技能期间把上限算小（回血夹在旧上限、血量比例偏高）。
+func (o *operator) maxHP() float64 {
+	if p := o.profile(); p != nil && p.MaxHP != nil {
+		return *p.MaxHP
+	}
+	return o.spec.MaxHP
 }
 
 // spOnAttack 出手回复的技力（`_operators_attack` 尾部）。
