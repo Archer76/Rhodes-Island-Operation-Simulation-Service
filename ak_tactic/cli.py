@@ -1056,9 +1056,9 @@ def cmd_db(args: argparse.Namespace) -> int:
     if args.action == "stage-fetch":
         import time as _time
 
-        from .db.stages import (STATS_KEY, StageTableError, estimate_fetch,
-                                fetch_level_index, fetch_names, insert_stages,
-                                zone_title)
+        from .db.stages import (CHAPTER_TYPES, STATS_KEY, StageTableError,
+                                estimate_fetch, fetch_level_index, fetch_names,
+                                insert_stages, prune_foreign_rows, zone_title)
         from .fetchplan import EstimateReport, record
 
         target = path or DEFAULT_DB_PATH
@@ -1096,8 +1096,9 @@ def cmd_db(args: argparse.Namespace) -> int:
             name_err = str(exc)
 
         conn = connect(target, readonly=False)
+        prune_rep: dict[str, int] = {}
         try:
-            count = insert_stages(conn, index, names, zones)
+            count = insert_stages(conn, index, names, zones, report=prune_rep)
         finally:
             conn.close()
         secs = _time.time() - t0
@@ -1108,6 +1109,11 @@ def cmd_db(args: argparse.Namespace) -> int:
         codes = {v.get("code") for v in index.values() if v.get("code")}
         print(f"\n取到 {count} 个关卡（{len(codes)} 个关卡号），耗时 {secs:.1f} 秒，"
               f"已写入 {target}")
+        print(f"    只写这五类 zone：{'、'.join(CHAPTER_TYPES)}"
+              f"（其余类型与 zone 表里没有的关卡在同一个事务里清掉："
+              f"筛掉 {prune_rep.get('rows_skipped', 0)} 条索引条目、"
+              f"清掉 {prune_rep.get('zones_removed', 0)} 个 zone / "
+              f"{prune_rep.get('stages_removed', 0)} 个关卡）")
         if name_err:
             print(f"\n[警告] {name_err}")
             print("      索引已照常写入，但**关卡中文名与章节名是空的**"
@@ -1142,6 +1148,44 @@ def cmd_db(args: argparse.Namespace) -> int:
                 print("  月行水上的分部：" + "、".join(
                     f"{zone_title(z)}（{zid}）" for zid, z in sorted(act)))
         print("看几个：`db stages SR-EX`")
+        return 0
+
+    if args.action == "stage-prune":
+        # 不联网也能清：口径（只留这五类）是本地判定，不需要重取。
+        from .db.stages import CHAPTER_TYPES, clean_zone_names, prune_foreign_rows
+
+        target = path or DEFAULT_DB_PATH
+        if args.dry_run:
+            conn = connect(target)
+            try:
+                per_type = dict(conn.execute(
+                    "SELECT type, count(*) FROM zone GROUP BY type"))
+                gone_z = sum(n for t, n in per_type.items()
+                             if t not in CHAPTER_TYPES)
+                gone_s = conn.execute(
+                    "SELECT count(*) FROM stage WHERE zone_id IS NULL OR zone_id = '' "
+                    "OR zone_id NOT IN (SELECT zone_id FROM zone WHERE type IN (%s))"
+                    % ", ".join("?" * len(CHAPTER_TYPES)),
+                    CHAPTER_TYPES).fetchone()[0]
+            finally:
+                conn.close()
+            drop = {t: n for t, n in per_type.items() if t not in CHAPTER_TYPES}
+            print(f"（--dry-run）会清掉 {gone_z} 个 zone、{gone_s} 个关卡。")
+            print(f"    要清的 zone 类型：{drop}")
+            print(f"    留下的是：{'、'.join(CHAPTER_TYPES)}"
+                  f"（{sum(n for t, n in per_type.items() if t in CHAPTER_TYPES)} 个 zone）")
+            return 0
+        conn = connect(target, readonly=False)
+        try:
+            with conn:
+                gone = prune_foreign_rows(conn)
+                renamed = clean_zone_names(conn)
+        finally:
+            conn.close()
+        print(f"清掉 {gone[0]} 个 zone、{gone[1]} 个关卡（不在 "
+              f"{'、'.join(CHAPTER_TYPES)} 里的，以及 zone_id 在 zone 表里查不到的）")
+        print(f"活动名擦掉「复刻」后缀：{renamed} 条")
+        print(f"已写回 {target}")
         return 0
 
     if args.action == "tile-fetch":
@@ -1871,12 +1915,13 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("action", nargs="?", default="info",
                    choices=["build", "info", "char", "find", "skill", "talent",
                             "levels", "sql", "schema", "tiles", "tile-fetch",
-                            "stages", "stage-fetch"],
+                            "stages", "stage-fetch", "stage-prune"],
                    help="build 重建库 / info 版本与行数 / char 干员详情 / "
                         "find 找干员 / skill 搜技能 / talent 搜天赋 / "
                         "levels 一个技能的全等级 / sql 只读查询 / schema 表说明 / "
                         "tiles 查地块字典 / tile-fetch 重取地块字典 / "
-                        "stages 查关卡索引 / stage-fetch 取关卡索引（要联网）")
+                        "stages 查关卡索引 / stage-fetch 取关卡索引（要联网）/ "
+                        "stage-prune 清掉不属于这五类的 zone 与关卡（不联网）")
     d.add_argument("key", nargs="?", default="",
                    help="动作的对象：干员 id 或名字 / 关键词 / 技能 id / SQL /"
                         " 地块关键词或 tileKey / 关卡关键词")

@@ -317,6 +317,11 @@ CREATE TABLE IF NOT EXISTS stage (
 );
 
 -- 章节/区域（`zone_table.json`，477 条）。**第三张非 gamedata 来源的表**。
+-- **先过一道口径**（博士 2026-09-18）：`zone_table` 有 11 类，这里只留
+-- MAINLINE / BRANCHLINE / CAMPAIGN / MAINLINE_ACTIVITY / ACTIVITY 五类，
+-- 其余（肉鸽、爬塔、周常、导览、SIDESTORY、MAINLINE_RETRO）连同它们的关卡
+-- 一并清掉，进了库的也就 350 条。判据与实清数见 `db/stages.py` 的
+-- `CHAPTER_TYPES` / `prune_foreign_rows`，菜单口径见 `docs/tui-plan.md`。
 -- 关卡索引只有 zone_id，没有章节名与分部名，靠这张表补：
 --   第 1-14 章 type=MAINLINE，name_first 直接写着「第一章」…「第十四章」；
 --   **第 15-17 章是 MAINLINE_ACTIVITY**，name_first 是英文，中文副标题在
