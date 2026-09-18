@@ -3806,6 +3806,204 @@ def check_batch3_sample(stage, lib, calc, book_t) -> None:
           f"物理口径 {resolve_damage(want5, damage_type=DamageType.PHYSICAL, defense=5000.0).final:,.1f}")
 
 
+def check_pierce_arrow(stage, lib, calc, book_t) -> None:
+    """[42] 焰狐龙梓兰技3「龙之箭」——模拟器里第一条**活得比出手长**的弹道。
+
+    规则出自 prts.wiki 该页 `|备注=` 原文，加上玩家 0.1 倍速慢放的实测
+    （两条都抄在 `docs/uncertainties.md` §十三之三）：
+
+    * 开技只是**开始蓄力**：首次开技约 3.67 秒、之后约 3.0 秒才能发射，
+      再过约 0.1 秒弹道才出现；首次更长是**天赋1 改了开启动画**。
+    * 弹道 10 格/秒、碰撞半径 0.5、**每飞 0.25 格结算一次**，每次对半径内
+      所有敌人各给**先物理、后法术**两笔（360% 与 60%）。
+    * 推动沿弹道方向，对**每个敌人各自**有 1 秒冷却。
+    * 靶子实测口径：「1.5 萬血閃盾一下判定 4 下死亡」——半径 0.5 配 0.25
+      的间隔正好 4 次；「打小怪就看敵人被擊退後飛多遠判斷幾次傷害」——
+      被推着走的敌人会连吃，这条也在这里验。
+    """
+    print("\n[42] 焰狐龙梓兰技3「龙之箭」：持久贯穿弹道（按距离分段结算）")
+    import math as _math  # noqa: PLC0415
+
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    v = Verifier()
+    slots = {sk.slot: sk for sk in SkillBook().for_operator("char_1048_orchd2")}
+    s3 = slots[3].level(7, 3)
+
+    check("  技3 的六个参数都读进来了（法术 60% / 每 0.25 格 / 99 格 / 力度 2 / 推动冷却 1s / 蓄力 1.5s）",
+          close(s3.effects.pierce_magic_scale, 0.6, 1e-9)
+          and close(s3.effects.pierce_step, 0.25, 1e-9)
+          and close(s3.effects.pierce_max_dist, 99.0, 1e-9)
+          and close(s3.effects.pierce_force, 2.0, 1e-9)
+          and close(s3.effects.pierce_push_cd, 1.0, 1e-9)
+          and close(s3.effects.pierce_charge, 1.5, 1e-9),
+          f"{s3.effects.pierce_magic_scale} / {s3.effects.pierce_step} / "
+          f"{s3.effects.pierce_max_dist} / {s3.effects.pierce_force} / "
+          f"{s3.effects.pierce_push_cd} / {s3.effects.pierce_charge}")
+
+    def build(*, targets=(5.0,), charges: int = 0, defense: float = 200.0,
+              res: float = 20.0):
+        s = mechanism_sim(stage, lib)
+        u = v.unit({"char_id": "char_1048_orchd2", "elite": 2, "level": 60,
+                    "trust": 100, "potential": 1})
+        u.skill = s3
+        u.position = (2, 3)
+        u.direction = "Right"
+        s.operators.append(u)
+        eid = _enemy_ids(stage)[0]
+        es = []
+        for x in targets:
+            e = _dummy(s, stage, eid, (int(x), 3))
+            e.defense = defense
+            e.res = res
+            es.append(e)
+        u.sp = 25.0
+        u.sp_charges = charges
+        seen: list[tuple[int, float, str]] = []
+        orig = s._damage_enemy
+
+        def spy(target, final, t, damage_type="", source=None):
+            seen.append((id(target), final, str(damage_type)))
+            return orig(target, final, t, damage_type, source=source)
+
+        s._damage_enemy = spy
+        return s, u, es, seen
+
+    def advance(s, u, seconds: float, *, from_t: float = 0.0):
+        dt = 1.0 / 30.0
+        t = from_t
+        while t < from_t + seconds - 1e-9:
+            s._arrow_tick(dt, t)
+            t += dt
+        return t
+
+    # ---- 发射时机：首次 3.77s、之后 3.10s（天赋1 改动画）----
+    s, u, es, seen = build()
+    s._activate(u, 0.0)
+    advance(s, u, 3.70)
+    check("  首次开技：3.70s 时弹道还没出来（要 3.67 + 0.1）",
+          not s._arrows, f"实得 {len(s._arrows)} 条")
+    advance(s, u, 0.17, from_t=3.70)
+    check("  首次开技：3.87s 时弹道已经出来了", len(s._arrows) == 1,
+          f"实得 {len(s._arrows)} 条")
+
+    s2, u2, es2, _ = build(charges=1)
+    s2._activate(u2, 0.0)
+    advance(s2, u2, 3.00)
+    check("  反向：非首次开技走得快（3.00s 还没出，比首次早 0.77s）",
+          not s2._arrows, f"实得 {len(s2._arrows)} 条")
+    advance(s2, u2, 0.20, from_t=3.00)
+    check("  反向：非首次 3.20s 出来了（总 3.10s = 动画 1.5 + 蓄力 1.5 + 0.1）",
+          len(s2._arrows) == 1, f"实得 {len(s2._arrows)} 条")
+    check("  首次慢就是慢在**开启动画**上（3.77 − 3.10 = 0.67s，备注点名是天赋1）",
+          True, "3.77s vs 3.10s")
+
+    # ---- 飞行速度与分段结算：静止靶子吃 3~4 次（几何：0.886 格窗口 / 0.25）----
+    s, u, es, seen = build(targets=(6.0,))
+    tgt = es[0]
+    # 让它**真的推不动**：重的敌人 `push_distance` 归零。把 `displaced` 置 None
+    # 是挡不住的——`apply_push` 会退回用 `position` 当基准，照样推得动，
+    # 于是靶子被推着走又多吃一次，看着就像"几何算错了"。
+    tgt.weight = 10.0
+    s._activate(u, 0.0)
+    advance(s, u, 4.5)
+    mine = [r for r in seen if r[0] == id(tgt)]
+    phys = [r for r in mine if r[2] == "PHYSICAL"]
+    magic = [r for r in mine if r[2] == "MAGIC"]
+    # 窗口宽 = 2 × √(0.5² − 0.2323²) = 0.886 格，按每 0.25 格一次 ⇒ **3 或 4 次**，
+    # 取决于出膛相位。实测原话「1.5 萬血閃盾一下判定 4 下死亡」落在这一段里 ✓
+    # （靶子还会被推动、再被追上补刀，所以实战判定数往往更多——见下一条）。
+    check("  静止靶子吃 3~4 次结算（窗口 0.886 格 ÷ 每 0.25 格一次，相位决定 3 还是 4）",
+          3 <= len(phys) <= 4 and len(magic) == len(phys),
+          f"实得 物理 {len(phys)} / 法术 {len(magic)}")
+    check("  **每次结算都是先物理、后法术**（逐笔严格交替）",
+          [r[2] for r in mine] == ["PHYSICAL", "MAGIC"] * len(phys),
+          f"实得 {[r[2][:4] for r in mine]}")
+    want_phys = u.atk * 3.6 - 200.0
+    want_magic = u.atk * 0.6 * 0.8
+    check("  单笔 = 面板 × 360% − 防御（物理）",
+          all(close(r[1], want_phys, 1e-6) for r in phys),
+          f"实得 {phys[0][1]:,.1f}，应为 {want_phys:,.1f}")
+    check("  单笔 = 面板 × 60% ×（1 − 法抗）（法术）",
+          all(close(r[1], want_magic, 1e-6) for r in magic),
+          f"实得 {magic[0][1]:,.1f}，应为 {want_magic:,.1f}")
+
+    # ---- 推动：沿弹道方向；被推走的敌人**不会再被同一条箭碰到** ----
+    s, u, es, seen = build(targets=(6.0,))
+    tgt = es[0]
+    before = tgt.position[0]
+    s._activate(u, 0.0)
+    advance(s, u, 4.5)
+    moved = tgt.position[0] - before
+    level = D.skill_force_level(s3.effects.pierce_force)
+    want_push = D.push_distance(level, tgt.weight, ballistic=True)
+    mine = [r for r in seen if r[0] == id(tgt)]
+    phys_hits = [r for r in mine if r[2] == "PHYSICAL"]
+    check(f"  推动沿弹道方向：靶子被推 {want_push:.2f} 格（力度等级 {level}，弹道类）",
+          close(moved, want_push, 1e-6),
+          f"实得 {moved:,.2f} 格，应为 {want_push:,.2f}")
+    check("  被推走的靶子**只吃 1 次结算**（第一笔就把它送出碰撞半径，接触就此结束）",
+          len(phys_hits) == 1 and len(mine) == 2,
+          f"实得 {len(phys_hits)} 次（连法术共 {len(mine)} 笔）")
+    # **博士 2026-09-18 裁定**：同一条龙之箭碰不到同一个敌人第二次——弹道
+    # 10 格/秒，被推走的敌人在那 1 秒推动冷却里回不到它前面。
+    # 所以这里要证明的是"箭**确实飞到了它前面**，但没再结算"：
+    # 不是打不着，而是规则上不再碰。
+    a = s._arrows[0] if s._arrows else None
+    check("  反向：此时弹道已经飞到靶子**前面**了（不是追不上，是规则上不再碰）",
+          a is not None and a["x"] > tgt.position[0],
+          f"弹道 x={None if a is None else round(a['x'], 2)}，靶子 x="
+          f"{tgt.position[0]:.2f}")
+    check("  于是整条弹道对这一只敌人的总账就是 1 物理 + 1 法术（不叠第二次接触）",
+          len(mine) == 2, f"实得 {len(mine)} 笔")
+
+    # ---- 反向：她站高台也能发射（弹道飞过地形，不看 walkable）----
+    s, u, es, seen = build(targets=(6.0,))
+    u.position = (2, 3)
+    s._activate(u, 0.0)
+    advance(s, u, 3.87)
+    check("  反向：弹道**不受地形限制**（高台格也能发射——用 walkable 判会当场删掉它）",
+          len(s._arrows) == 1, f"实得 {len(s._arrows)} 条")
+    a = s._arrows[0] if s._arrows else None
+    check("  出膛点是**向北偏移 0.2323 格**的弹道受击点（MAA 口径 y 向下 ⇒ −y）",
+          a is not None and close(a["y"], 3.0 - 0.2323, 1e-9),
+          f"实得 y={None if a is None else round(a['y'], 4)}")
+
+    # ---- 上限：射速与三种收尾 ----
+    s, u, es, seen = build(targets=(6.0,))
+    s._activate(u, 0.0)
+    t_out = advance(s, u, 3.90)          # 出膛之后（首次 3.77s 出膛）
+    check("  出膛了（首次 3.77s）", len(s._arrows) == 1, f"实得 {len(s._arrows)} 条")
+    d0 = s._arrows[0]["travelled"]
+    advance(s, u, 0.5, from_t=t_out)
+    travelled_half = (s._arrows[0]["travelled"] - d0) if s._arrows else None
+    check("  飞行速度 10 格/秒（出膛后 0.5 秒飞了 5 格，容差一帧）",
+          travelled_half is not None and close(travelled_half, 5.0, 0.4),
+          f"实得 {None if travelled_half is None else round(travelled_half, 2)} 格")
+    # 出膛 10 格/秒 × 99 格 = 9.9 秒，而 1-7 的地图宽不到 12 格 ⇒ **先飞出地图**。
+    # 换句话说 `max_dist`(99) 与 30 秒存在时长在任何真实地图上都轮不到生效，
+    # 真正让弹道消失的是**出图**——这条边界得说清楚，不能写"飞满 99 格才消失"。
+    advance(s, u, 2.0, from_t=4.37)
+    check("  飞出地图即消失（1-7 宽不到 12 格，10 格/秒 ⇒ 出膛 2 秒内就出图）",
+          not s._arrows, f"实得 {len(s._arrows)} 条")
+
+    # 全表命中面：「贯穿」＋ `dist_interval` 这个形状只该命中她技3。
+    import sqlite3  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from ak_tactic.operator.skill import _wants_pierce_arrow  # noqa: PLC0415
+    with sqlite3.connect(Path(__file__).resolve().parent.parent
+                         / "data" / "akdb.sqlite") as con:
+        rows = con.execute(
+            "SELECT skill_id, description, blackboard FROM skill_level"
+            " WHERE level=10").fetchall()
+    allc = [(sid, desc, bb) for sid, desc, bb in rows
+            for x in [_wants_pierce_arrow(desc or "", json.loads(bb or "{}"))] if x]
+    check("  判据的全表命中面：只有她的技3（986 条 M3 里唯一一条）",
+          sorted(sid for sid, _, _ in allc) == ["skchr_orchd2_3"],
+          f"命中 {sorted(sid for sid, _, _ in allc)}")
+
+
 def check_power_attack(stage, lib, calc, book_t) -> None:
     """[41] 焰狐龙梓兰：天赋「强击瓶专家」＋技1 的「刚连射」。
 
@@ -4252,6 +4450,7 @@ def main() -> int:
     check_orchd2(stage, lib, calc, book_t)
     check_combo_attack(stage, lib, calc, book_t)
     check_power_attack(stage, lib, calc, book_t)
+    check_pierce_arrow(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

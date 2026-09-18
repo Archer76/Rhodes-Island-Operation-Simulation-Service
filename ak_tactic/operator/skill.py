@@ -316,6 +316,21 @@ def _charge_volley(description: str, bb: dict[str, float]):
     return int(m.group(1)), int(shot.group(1)), scale
 
 
+def _wants_pierce_arrow(description: str, bb: dict[str, float]) -> bool:
+    """是否「直线飞行的**贯穿**箭矢，每飞行一段距离都会对周围所有敌人造成…」。
+
+    判据两段：正文里有「贯穿」、且黑板里有 `dist_interval`（**每段结算的距离**）。
+    缺一段都不认——`dist_interval` 单独出现说明不了什么，而「贯穿」在别的干员
+    身上也可能只是形容。
+
+    全表实测（986 条 M3）：这个形状只出现在焰狐龙梓兰技3「龙之箭」上。
+    实机规格（prts.wiki 该页 `|备注=` 原文 + 玩家 0.1 倍速慢放实测）见
+    `docs/uncertainties.md` §十三之三。
+    """
+    text = _TAG.sub("", description or "")
+    return "贯穿" in text and float(bb.get("dist_interval") or 0.0) > 0.0
+
+
 def _wants_landing_hit(description: str, bb: dict[str, float]) -> bool:
     """是否「之后降落并对…造成攻击力 X%」——落地那一击算**独立的一次出手**。
 
@@ -726,6 +741,24 @@ class SkillEffects:
     charge_layers: int = 0
     charge_arrows: int = 0
     charge_scale: float = 0.0
+    #: 贯穿弹道（焰狐龙梓兰技3「龙之箭」）的六个参数。判据见 `_wants_pierce_arrow`；
+    #: **物理那一半走 `atk_scale`**（3.6），法术那一半在 `pierce_magic_scale`。
+    #:
+    #: * `pierce_magic_scale`——「攻击力 60% 的法术伤害」（`atk_scale_magic`）。
+    #:   备注写明**先物理、后法术**，所以是两笔独立伤害、各自吃防御/法抗。
+    #: * `pierce_step`——每飞行**这么多格**结算一次（`dist_interval` 0.25）。
+    #:   玩家 0.1 倍速慢放实测：「閃盾一下判定 4 下死亡」——0.5 碰撞半径内
+    #:   恰好跨 4 个 0.25 步，与这个数自洽。
+    #: * `pierce_max_dist`——最大飞行距离（`max_dist` 99，即"无限远"的占位）。
+    #: * `pierce_force`——推力**力度等级**（`force` 2.0 = 较大力度）。
+    #: * `pierce_push_cd`——推动对**每个敌人各自**的冷却（`knockback_duration` 1.0）。
+    #: * `pierce_charge`——抬手后的蓄力计时（`wait_duration` 1.5）。
+    pierce_magic_scale: float = 0.0
+    pierce_step: float = 0.0
+    pierce_max_dist: float = 0.0
+    pierce_force: float = 0.0
+    pierce_push_cd: float = 0.0
+    pierce_charge: float = 0.0
     #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
     #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
     #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
@@ -1375,6 +1408,20 @@ class SkillBook:
         if charge is not None:
             lv.effects.charge_layers, lv.effects.charge_arrows, \
                 lv.effects.charge_scale = charge
+        # 贯穿弹道（技3「龙之箭」）：六个参数一次收齐。物理那一半已经在
+        # `atk_scale` 上（3.6），这里补法术与几何/推力。
+        if _wants_pierce_arrow(lv.description, bb):
+            e3 = lv.effects
+            # 法术那一半**从黑板直接取**：`atk_scale_magic` 归不了类（它落在
+            # `other` 里），所以 `damage` 桶里没有它。两种前缀都收，理由同
+            # `_charge_volley`：她技3 的这条是裸键。
+            e3.pierce_magic_scale = float(
+                bb.get("atk_scale_magic") or bb.get("attack@atk_scale_magic") or 0.0)
+            e3.pierce_step = float(bb.get("dist_interval") or 0.0)
+            e3.pierce_max_dist = float(bb.get("max_dist") or 0.0)
+            e3.pierce_force = float(bb.get("force") or 0.0)
+            e3.pierce_push_cd = float(bb.get("knockback_duration") or 0.0)
+            e3.pierce_charge = float(bb.get("wait_duration") or 0.0)
         if _wants_landing_hit(lv.description, bb):
             lv.effects.landing_scale = lv.effects.damage.get("atk_scale_end")
             lv.effects.final_hit_scale = lv.effects.landing_scale
