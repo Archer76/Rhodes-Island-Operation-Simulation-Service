@@ -435,6 +435,17 @@ class OperatorUnit(Combatant):
     #: 判据在 `traits.read_hp_drain`（特性正文 + 特性黑板 `hp_ratio` 两段）。
     #: prts.wiki 该页备注没有提这条特性，速率只能取黑板那个 0.01。
     hp_drain_per_sec: float = 0.0
+    #: **偷来的**攻击速度（新约能天使技2）：白拿的点数，直接加进 `current_attack_speed`。
+    #: 技能一结束（或她离场）就归零——归零在 `sim._revert_steal` 一处。
+    aspd_steal_bonus: float = 0.0
+    #: **被偷走**的攻击速度（她是被偷的那一方）。同一个 `-` 号，但落在被偷者身上。
+    #: 与 `aspd_steal_bonus` 分开两个字段，是为了"谁欠谁"一目了然，也为了让
+    #: 归零时能分别对账。
+    aspd_loss: float = 0.0
+    #: 技2 偷到的**那一位**与她拿走的点数。要记住是谁——技能结束或她离场时
+    #: 得原样还回去（`sim._revert_steal`）。
+    steal_target: OperatorUnit | None = None
+    steal_amount: float = 0.0
 
     @property
     def is_summon(self) -> bool:
@@ -545,6 +556,11 @@ class OperatorUnit(Combatant):
         # 判一次就定死（见 `sim` 的部署处）。
         if self.aspd_high_ground and self.high_ground_neighbor:
             spd += self.aspd_high_ground
+        # 偷来的 / 被偷走的攻击速度（新约能天使技2「开火成瘾症」）。
+        # 两条都走这里，是因为**两边都是实时量**：被偷者在她开技期间一直少
+        # 这 70 点，她一结束就还回去。下限（`ASPD_MIN`）不在这里夹——
+        # 它由 `current_interval` 那一层管，免得两个地方各夹一次。
+        spd += self.aspd_steal_bonus - self.aspd_loss
         return spd
 
     def current_interval(self) -> float:

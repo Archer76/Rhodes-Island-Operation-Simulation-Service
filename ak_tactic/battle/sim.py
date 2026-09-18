@@ -1721,6 +1721,68 @@ class BattleSimulator:
                         self.result.effect_conflicts.append(
                             f"{op.char_id} {op.skill.name} {d.line()}")
 
+    def _steal_aspd(self, op: OperatorUnit, eff: SkillEffects,
+                    t: float) -> None:
+        """新约能天使技2：**立刻**从一名友方身上偷走攻速，加到自己头上。
+
+        正文：「立即偷取攻击范围内 1 名友方干员 70 点攻击速度（持续至技能结束
+        或新约能天使离场）……如果**成功**偷取攻击速度则额外获得 5 发弹药」。
+
+        * **挑谁**：prts.wiki 该技能 `|备注=` 原文是「选择的友方干员为攻击范围内
+          **仇恨值最高**的我方干员」。本仓库没有仇恨值模型（唯一的仇恨口径是
+          "敌人打**最后部署**者"，见 `_pick_targets`），所以这里按**同一口径**
+          取范围内最后部署的那一位；这条近似写进了 `docs/uncertainties.md`。
+        * **偷多少**：`steal`（70）夹在 `steal_max`（999）以内——她一次只偷 70、
+          够不到上限，所以那个上限在她身上是空转，但夹一下免得别的技能复用
+          这条通道时漏掉。
+        * **只有成功才加弹药**：范围内没有友方可偷 → 不加那 5 发。反过来，
+          加弹药也只给**弹药类**技能加（没有弹药的技能加了不起作用，也不该报错）。
+        """
+        amt = float(eff.steal_aspd)
+        if eff.steal_aspd_max > 0.0:
+            # `steal_max` 是**累计**上限（"最多 X 点"），不是单次上限：
+            # 她一次只偷 70、上限 999，所以这个夹子在**她身上**是空转；
+            # 写成累计式是为了别的技能复用这条通道时不至于偷超。
+            amt = min(amt, max(0.0, float(eff.steal_aspd_max)
+                               - op.aspd_steal_bonus))
+        if amt <= 0.0:
+            return
+        cells = self._range_of(op)
+        victim = None
+        for other in self.operators:
+            # 「友方**干员**」：召唤物不算（`is_summon`），自己不算，
+            # 已经倒下的不算，站在她射程外的也不算。
+            if other is op or other.is_summon or not other.alive:
+                continue
+            if other.position in cells:
+                victim = other          # 后部署的覆盖先部署的 → 取到最后部署者
+        if victim is None:
+            return
+        victim.aspd_loss += amt
+        op.aspd_steal_bonus += amt
+        op.steal_target = victim
+        op.steal_amount = amt
+        if op.skill is not None and op.skill.duration_type == "AMMO":
+            op.ammo_left += int(eff.steal_bonus_ammo)
+        self.result.log.append(
+            f"{t:7.1f}s  {op.name} 偷取 {victim.name} 的 {amt:g} 点攻击速度"
+            f"（技能结束时归还）")
+
+    def _revert_steal(self, op: OperatorUnit) -> None:
+        """把偷来的攻速**还回去**：技能结束、或她离场（倒下）时都走这里。
+
+        两处都要管，是因为正文写的是「持续至技能结束**或新约能天使离场**」——
+        只挂 `_deactivate` 的话，她在技能中途倒下就会把那 70 点永久扣在
+        队友身上。`_skill_tick` 每帧都会看到"她已经 `alive` 为假"，
+        所以那条路也能收尾。
+        """
+        victim = op.steal_target
+        if victim is not None and op.steal_amount > 0.0:
+            victim.aspd_loss = max(0.0, victim.aspd_loss - op.steal_amount)
+        op.steal_target = None
+        op.steal_amount = 0.0
+        op.aspd_steal_bonus = 0.0
+
     def _trait_tick(self, dt: float) -> None:
         """每帧的**特性**结算（与技能状态无关的那一类）。
 
@@ -1749,6 +1811,11 @@ class BattleSimulator:
         res = self.result
         for op in self.operators:
             if not op.alive:
+                # 她**在技能中途倒下**时也要把偷来的攻速还回去——正文写的是
+                # 「持续至技能结束或新约能天使离场」，而这条路不走 `_deactivate`
+                # （技能还开着），所以在这里兜。只要还欠着，还一次就清空。
+                if op.steal_target is not None:
+                    self._revert_steal(op)
                 continue
             # 自晕倒计时（技能结束后自身晕眩）。递减挂在这里只是因为它
             # 同样按帧走；晕眩本身与技能状态无关。
@@ -1887,6 +1954,10 @@ class BattleSimulator:
         else:
             op.skill_timer = _INFINITE if dur is None else float(dur)
         op.ammo_left = int(sk.effects.ammo or 0)
+        # 「立即偷取攻击范围内 1 名友方干员 X 点攻击速度」（新约能天使技2）。
+        # **在弹药初始化之后**：偷到了就由 `_steal_aspd` 给它添那 5 发。
+        if sk.effects.steal_aspd > 0.0:
+            self._steal_aspd(op, sk.effects, t)
         op.apply_max_hp_bonus(sk.effects.buffs.get("max_hp", 0.0))
         # 技能把这一击的伤害类型改写了（"真实伤害"这一族判据）。两种要分开：
         # `true_damage` 是整条技能每一次都真实；`true_from_final_hit` 只有
@@ -1932,6 +2003,9 @@ class BattleSimulator:
         op.ammo_left = 0
         op.skill_attack_type = None
         op.revert_max_hp_bonus()
+        # 偷来的攻速要还（「持续至技能结束或她离场」）。另一条路是她在技能
+        # **中途倒下**——那一条不走这里，由 `_skill_tick` 每帧兜住。
+        self._revert_steal(op)
         op.sp = 0.0
         # 击杀叠层清零：「持续至技能结束」。技能结束就要掉回原样，
         # 不能带到下一次开技能（阿米娅技2 整场只放一次，但机制上如此）。
