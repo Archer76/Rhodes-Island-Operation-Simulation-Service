@@ -2722,6 +2722,20 @@ class BattleSimulator:
 
             scale = skill_scale
             hits = eff.hit_count if eff is not None else 1
+            # 普攻连击（焰狐龙梓兰的隐藏天赋：普通攻击为三连击、每击 100%，
+            # **计算防御/法抗之后**再 ×33.3%）。只在**这一次出手是普攻**时生效：
+            # 技能自己写了攻击倍率就是技能攻击（她技1 的 4 支、技2 的 13 笔
+            # 走 `eff.hit_count`），不能叠。
+            # 「是不是普攻」的判据与上面 `deals` 同一套写法：**看技能有没有
+            # 改写这一击的攻击倍率**，不看技能开没开——她的技2 是+buff 型、
+            # 技1 是改攻击型，两者在这一点上不同。
+            combo_hits = 1
+            combo_dmg_scale = 1.0
+            if op.combo_hits > 1 and abs(skill_scale - 1.0) < 1e-9:
+                combo_hits = op.combo_hits
+                combo_dmg_scale = op.combo_damage_scale
+                hits = combo_hits
+                scale = op.combo_hit_scale
             # 「最后一击系数加倍」的末击倍率，没有就是 None。判据在
             # `skill._wants_final_double`（读描述）——**不按 `atk_scale_2`
             # 键名认**，那个键在空弦/雪猎/丰川祥子等人身上另有含义。
@@ -2773,8 +2787,10 @@ class BattleSimulator:
                             power, hit_scale, target, ign, ign_res)
                     # `source=op` 是给「祟」明识形态的**标记**用的：
                     # 它要记住"谁打过我"，那些干员退场时田地会被污染。
-                    dealt = self._damage_enemy(target, dmg.final, t, used_type,
-                                               source=op)
+                    # 普攻连击的 `combo_dmg_scale` **乘在这里**（`dmg.final` 之后）：
+                    # 备注写的是「计算防御/法抗后 ×33.3%」，不是倍率菜单里的一项。
+                    dealt = self._damage_enemy(target, dmg.final * combo_dmg_scale,
+                                               t, used_type, source=op)
                     # 技能附带的【停顿】：不能移动，但照样能开火
                     if eff is not None and eff.control.get("sluggish"):
                         target.sluggish_timer = max(

@@ -3806,6 +3806,106 @@ def check_batch3_sample(stage, lib, calc, book_t) -> None:
           f"物理口径 {resolve_damage(want5, damage_type=DamageType.PHYSICAL, defense=5000.0).final:,.1f}")
 
 
+def check_combo_attack(stage, lib, calc, book_t) -> None:
+    """[40] 焰狐龙梓兰的**隐藏天赋**：普攻三连击、每击 100%、**结算后** ×33.3%。
+
+    这条机制住在隐藏天赋里（`name`/`description` 都是 null、`is_hide_talent=1`），
+    所以审计三道筛子**没有一道照得到它**——出处是 prts.wiki 的 `|特性备注=`：
+    「普通攻击为三连击，每击造成攻击力 100% 的物理伤害……若为普通攻击的伤害，
+    则使该伤害降低至 33.3%（也即计算防御/法抗后，伤害 ×33.3%）」。
+    在补它之前，她的普攻在模型里是**单发 100%**。
+
+    两个可观测量，缺一不可：
+
+    * **打几笔**：靶子防御给 200（不是 0），三笔各自 `(面板 − 200) × 0.333`。
+    * **缩放乘在哪一侧**：`(877 − 200) × 0.333 = 225.4` 与
+      `877 × 0.333 − 200 = 92.1` 差 2.4 倍——只有"结算之后"才对得上。
+      拿防御 0 的靶子测这一条会**两种口径都通过**，所以靶子必须带防御。
+
+    反向两条：① 技能自己写了攻击倍率时**不叠**连击（技1 仍是 4 笔 160%）；
+    ② 别的干员（能天使）仍是 1 笔。
+    """
+    print("\n[40] 焰狐龙梓兰：普攻三连击（隐藏天赋）+ 结算后缩放")
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    v = Verifier()
+    eid = _enemy_ids(stage)[0]
+    op = v.unit({"char_id": "char_1048_orchd2", "elite": 2, "level": 60,
+                 "trust": 100, "potential": 1})
+    check("隐藏天赋读进来了：一次普攻 3 击", op.combo_hits == 3,
+          f"实得 {op.combo_hits}")
+    check("  每击倍率 100%、结算后缩放 0.333",
+          close(op.combo_hit_scale, 1.0, 1e-9)
+          and close(op.combo_damage_scale, 0.333, 1e-9),
+          f"{op.combo_hit_scale} / {op.combo_damage_scale}")
+    check("  交叉验证：3 × 0.333 = 0.999，正好少 0.1%（备注原话）",
+          close(3 * 0.333, 0.999, 1e-9), "")
+
+    def fire_plain(cid: str, slot=None, *, defense=200.0):
+        s = mechanism_sim(stage, lib)
+        u = v.unit({"char_id": cid, "elite": 2, "level": 60,
+                    "trust": 100, "potential": 1})
+        if slot is not None:
+            u.skill = slot
+        u.position = (2, 3)
+        u.direction = "Right"
+        s.operators.append(u)
+        target = _dummy(s, stage, eid, (3, 3))
+        target.defense = defense
+        if slot is not None:
+            s._activate(u, 0.0)
+        seen: list[float] = []
+        orig = s._damage_enemy
+
+        def spy(*args, **kw):
+            seen.append(args[1])
+            return orig(*args, **kw)
+
+        s._damage_enemy = spy
+        s._operators_attack(u.current_interval() + 1e-6, 0.0)
+        return u, seen, target
+
+    op1, hits1, tgt1 = fire_plain("char_1048_orchd2")
+    want_hit = (op1.atk - tgt1.defense) * 0.333
+    check("普攻打 3 笔，每笔 = (面板 − 防御) × 33.3%（缩放**在结算之后**）",
+          len(hits1) == 3 and all(close(h, want_hit, 1e-6) for h in hits1),
+          f"实得 {len(hits1)} 笔 {[round(h, 1) for h in hits1]}，"
+          f"应为 {want_hit:,.1f}")
+    check("  反向口径：若缩放乘在结算**之前**，每笔只该有 "
+          f"{op1.atk * 0.333 - tgt1.defense:,.1f}（差 2.4 倍，能分辨）",
+          not close(want_hit, op1.atk * 0.333 - tgt1.defense, 1.0),
+          "")
+    check("  一轮总和 ≈ 面板 − 防御（3 × 0.333 ≈ 1，即备注说的少 0.1%）",
+          close(sum(hits1), op1.atk - tgt1.defense, abs(op1.atk) * 0.002),
+          f"实得 {sum(hits1):,.1f}，应为 {op1.atk - tgt1.defense:,.1f}")
+
+    slots = {s.slot: s for s in SkillBook().for_operator("char_1048_orchd2")}
+    _op2, hits2, tgt2 = fire_plain("char_1048_orchd2", slots[1].level(7, 3))
+    want_arrow = op1.atk * 1.6 - tgt2.defense
+    check("  反向：技能改写了攻击倍率时不叠连击（技1 仍是 4 笔 × 160%，不吃 33.3%）",
+          len(hits2) == 4 and all(close(h, want_arrow, 1e-6) for h in hits2),
+          f"实得 {len(hits2)} 笔 {[round(h, 1) for h in hits2]}，"
+          f"应为 {want_arrow:,.1f}")
+
+    _op3, hits3, _t3 = fire_plain("char_103_angel")
+    check("  反向：别的干员没有这条（能天使普攻仍是 1 笔）", len(hits3) == 1,
+          f"实得 {len(hits3)} 笔")
+
+    # 全表命中面：这条判据只该命中她一位。隐藏天赋在库里也是行（`is_hide_talent=1`、
+    # 名字为 null），所以按**键的组合**扫全表，而不是按干员名。
+    import sqlite3  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from ak_tactic.battle.traits import read_combo_attack  # noqa: PLC0415
+    with sqlite3.connect(Path(__file__).resolve().parent.parent
+                         / "data" / "akdb.sqlite") as con:
+        ids = [r[0] for r in con.execute(
+            "SELECT char_id FROM operator WHERE is_operator=1 AND is_patch=0")]
+    face = sorted(cid for cid in ids if read_combo_attack(calc.character(cid)))
+    check("  判据的全表命中面：只有焰狐龙梓兰一位（隐藏天赋的形状是唯一的）",
+          face == ["char_1048_orchd2"], f"命中 {face}")
+
+
 def check_orchd2(stage, lib, calc, book_t) -> None:
     """[39] 焰狐龙梓兰（第三批③）：箭数、落地点射、概率晕眩。
 
@@ -3975,6 +4075,7 @@ def main() -> int:
     check_hammer_strikes(stage, lib, calc, book_t)
     check_batch3_sample(stage, lib, calc, book_t)
     check_orchd2(stage, lib, calc, book_t)
+    check_combo_attack(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

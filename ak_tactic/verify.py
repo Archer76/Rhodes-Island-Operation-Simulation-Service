@@ -18,7 +18,8 @@ from typing import Any
 
 from .battle import BattleSimulator, Deployment, RangeProvider
 from .battle.talents import squad_cost_bonus
-from .battle.traits import apply_splash_talent, read_trait_splash
+from .battle.traits import (apply_splash_talent, read_combo_attack,
+                            read_trait_splash)
 from .battle.unit import OperatorUnit
 from .gamedata import EnemyLibrary, GameDataSource, RangeTable, load_stage
 from .operator import OperatorCalculator, SkillBook, TalentBook
@@ -241,6 +242,11 @@ class Verifier:
             self.talents.for_operator(cid, elite=entry["elite"],
                                       level=entry["level"],
                                       potential=entry.get("potential", 1)))
+        # 「普攻连击 + 结算后缩放」（焰狐龙梓兰的隐藏天赋）。它与特性溅射一样
+        # 是从**原始 JSON**读的：`c["talents"]` 里连隐藏天赋一起在，
+        # 而库里的 `operator_talent` 只按 `is_hide_talent` 标记、名字是 null，
+        # 走库反而要多一次查询。
+        combo = read_combo_attack(c)
         tal_text = " ".join(
             (cand.get("description") or "")
             for t_ in (c.get("talents") or [])
@@ -274,6 +280,10 @@ class Verifier:
             splash_damage_scale=splash.damage_scale if splash else 1.0,
             highland_splash_scale=splash.highland_scale if splash else 0.0,
             highland_splash_sluggish=splash.highland_sluggish if splash else 0.0,
+            # 普攻连击（焰狐龙梓兰）：1 = 没有这条。
+            combo_hits=combo.hits if combo else 1,
+            combo_hit_scale=combo.hit_scale if combo else 1.0,
+            combo_damage_scale=combo.damage_scale if combo else 1.0,
         )
         self._unit_cache[key] = kw
         return OperatorUnit(**kw)
