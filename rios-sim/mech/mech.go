@@ -268,6 +268,11 @@ type Ctx interface {
 	//: 在 `cell` 造一个敌人，`template` 是**造它的人**规格里那段 JSON
 	//: （见 `Summoner`：甲/乙/天标三跳都走这里）。返回的下标终身有效。
 	Summon(template json.RawMessage, cell [2]float64) int
+	//: 当前时刻（秒）。痕迹要带时刻才和原版对得上账。
+	Now() float64
+	//: 写一行**痕迹**：`RIOS_TRACE=1` 才输出，只走 stderr，**不进判决**。
+	//: 与 `Log` 分开——`Log` 进判决的 `events`，痕迹不该改动判决的载荷。
+	Trace(format string, args ...any)
 	//: 写一行日志（进判决的 `events`，对拍时能看出机制什么时候动的手）。
 	Log(format string, args ...any)
 }

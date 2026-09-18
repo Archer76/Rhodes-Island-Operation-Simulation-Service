@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 )
 
 // FarmlandID 是这一层的机制名（Python 与 Go 之间的契约，改名等于改协议）。
@@ -1308,11 +1309,15 @@ func (m *farmlandMech) AttackTick(ctx Ctx, dt float64) {
 		if polluted {
 			mag = e.ATK * e.SkillAtkScaleMagic
 		}
+		// 一次技能出手的账：出手者、出手者自己的格、目标格、十字五格、中标者。
+		// 与 `SPLASH-CENTER` 同一用意——"打到了谁"必须能从痕迹上点数。
+		victims := make([]string, 0, len(cells))
 		for _, c := range cells {
 			op, ok := opAtCell(ctx, c)
 			if !ok {
 				continue
 			}
+			victims = append(victims, fmt.Sprintf("%s@%d,%d", op.Name, c[0], c[1]))
 			// ① 基础物理（正文 100% → `skill_atk_scale_phys`），逐目标减防
 			ctx.HitOperator(op.Index, e.ATK*e.SkillAtkScalePhys, "PHYSICAL")
 			// ② 附加法术，单独再减一次法抗
@@ -1320,6 +1325,9 @@ func (m *farmlandMech) AttackTick(ctx Ctx, dt float64) {
 				ctx.HitOperator(op.Index, mag, "MAGIC")
 			}
 		}
+		ctx.Trace("SKILLATK t=%.4f enemy=%s ecell=%d,%d target=%s tcell=%d,%d polluted=%t mag=%.2f victims=%s",
+			ctx.Now(), e.Name, e.Cell[0], e.Cell[1], target.Name, cx, cy, polluted, mag,
+			strings.Join(victims, "|"))
 		// ③ 令**目标地块**病害值 +N（记入【缓存】，不是直接改【实际】）
 		if polluted && e.SkillAtkPollut > 0 {
 			if got := m.field.PolluteCell(cx, cy, e.SkillAtkPollut); got > 0 {
