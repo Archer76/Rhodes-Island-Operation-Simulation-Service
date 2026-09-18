@@ -778,7 +778,7 @@ func (c *simCtx) Enemies() []mech.EnemyView {
 			Index: e.index, Name: e.spec.Name, Position: e.position,
 			Cell: [2]int{ex, ey},
 			HP:   e.hp, Alive: e.alive(), Blocked: e.blockedBy != nil,
-			Leaked: e.leaked, OffMap: e.offMap,
+			Leaked: e.leaked, OffMap: e.offMap, Frozen: e.freezeTimer > 0,
 			PollutOnDeath: e.spec.PassivePollut, PollutRadius: e.spec.PassiveRadius,
 			ATK: e.spec.ATK, AttackInterval: e.spec.Interval,
 			SkillAtkScalePhys:  e.spec.SkillAtkScalePhys,
