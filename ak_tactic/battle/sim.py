@@ -53,6 +53,7 @@ from ..gamedata.enemy import PROSE_SUMMON_EDGES
 from .damage import DamageType, resolve_damage
 from .talents import (CLASS_AURA_TALENTS, FACTION_AURA_NAME, STUDENT_TEAM,
                       RegenAura, SnowField, TeamAura, find_blessing,
+    find_ammo_covenant, find_bomb_radio, LATERANO_NATION,
                       RHODES_NATION, find_angel_blessing, find_class_aura, find_damage_block,
                       find_dot_on_hit,
                       find_limit_dispatch,
@@ -1771,6 +1772,12 @@ class BattleSimulator:
         op.steal_amount = amt
         if op.skill is not None and op.skill.duration_type == "AMMO":
             op.ammo_left += int(eff.steal_bonus_ammo)
+        # 「自身**与其**获得最大生命值 250% 的屏障，该屏障会持续衰减」——她自己
+        # 那一份在 `_activate` 里发了，被偷的这位在这里补（这里才知道偷的是谁）。
+        # prts 备注：「屏障均以**自身生命上限**为标准计算」，所以各按各自的上限。
+        if eff.barrier_decay_pct > 0.0:
+            self._grant_decay_barrier(victim, eff.barrier_decay_pct,
+                                      eff.barrier_decay_secs)
         self.result.log.append(
             f"{t:7.1f}s  {op.name} 偷取 {victim.name} 的 {amt:g} 点攻击速度"
             f"（技能结束时归还）")
@@ -2063,6 +2070,86 @@ class BattleSimulator:
             if sm.summon_of == op.char_id and sm.alive:
                 sm.grant_barrier(pct)
 
+    def _grant_decay_barrier(self, op: OperatorUnit, pct: float,
+                             secs: float) -> None:
+        """授予**会持续衰减**的屏障（新约能天使技2「开火成瘾症」）。
+
+        prts 该技能 `|备注=`：「获得的屏障均以**自身生命上限**为标准计算；屏障
+        **每秒衰减量为：初始屏障量/30**；**重复获得此屏障时，重置屏障量与衰减
+        速度**」。所以：
+
+        * 量走 `grant_barrier` 的既有口径（`pct × 各自的生命上限`，取较大者）；
+        * 衰减速率 = **这一次授予的量 ÷ `secs`**，每次授予都重算（"重置"）；
+        * 与 `barrier_pct` 那条**分开两个字段**：那个由 `_deactivate` 在技能结束
+          时清零，这个是自己按秒掉的，与技能何时结束无关。
+
+        发给谁由调用方决定（她一开技就发给**自己**，偷到攻速时再发给**被偷的那位**
+        ——「自身与其获得」）。
+        """
+        op.grant_barrier(pct)
+        op.barrier_decay_per_sec = ((pct * op.max_hp) / secs) if secs > 0.0 else 0.0
+
+    def _barrier_decay_tick(self, dt: float, t: float) -> None:
+        """会持续衰减的屏障按秒掉（新约能天使技2：250% / 30 秒）。"""
+        for op in self.operators:
+            if op.barrier_decay_per_sec <= 0.0:
+                continue
+            op.barrier = max(0.0, op.barrier - op.barrier_decay_per_sec * dt)
+            if op.barrier <= 0.0:
+                op.barrier = 0.0
+                op.barrier_decay_per_sec = 0.0
+
+    def _bomb_radio_on_ammo(self, consumer: OperatorUnit, rounds: int) -> None:
+        """天赋「火力电台」：**友方干员消耗弹药**时触发的自愈与轰炸。
+
+        正文：「在场时，每当有友方干员的**弹药被消耗**就会回复自身 6% 生命值，
+        并有 20%/25% 概率立即对**该干员攻击范围**的敌人召唤一次轰炸，造成相当于
+        **自身**攻击力 105%…的物理溅射伤害」。
+
+        prts `|备注=`（2026-09-18 取）补了四条正文没写、但决定怎么算的：
+
+        ① 按**本轮消耗数量循环处理**治疗与轰炸概率（一次消耗多发就按发数触发）；
+        ② 不论消耗数量，**每轮轰炸仅选取一次目标**，每次成功的概率判定都会增加
+           一次本轮的轰炸（单轮多次轰炸之间间隔 0.1s）；
+        ③ 轰炸半径 **1.3**，造成**预计算**的物理普通伤害；
+        ④ 轰炸时**借用消耗者的攻击范围**，由新约能天使判断该范围内的轰炸目标
+           （**始终使用默认索敌逻辑**）。
+
+        实现与**如实记下的取舍**：
+
+        * 自愈是**确定量**（每发 `hp_ratio` × 自身生命上限），直接累加；
+        * 轰炸按**期望值**折（每发 `prob` 次），落点在"借来的范围"里按**默认索敌**
+          选出的那一个目标身上——`_pick_targets` 就是本仓库的默认索敌；
+        * **溅射半径 1.3 没做**：本仓库唯一的溅射实现是撼地者那条按格子判重叠的
+          （半径 1.0），形状与判法都不是一回事，硬套会把两个机制搅在一起。
+          于是只打选中的目标本人，这条差额记进 `docs/uncertainties.md`；
+        * 0.1s 的多次轰炸间隔同样不建模（期望值口径下没有意义）。
+        """
+        for owner in self.operators:
+            if owner is None or not owner.alive:
+                continue
+            t = find_bomb_radio(owner.talents)
+            if t is None:
+                continue
+            heal_pct = float(t.value("hp_ratio", 0.0) or 0.0)
+            if heal_pct > 0.0:
+                owner.heal(owner.max_hp * heal_pct * rounds)
+            scale = float(t.value("aoe_atk_scale", 0.0) or 0.0)
+            prob = float(t.value("prob", 0.0) or 0.0)
+            expected = prob * rounds
+            if scale <= 0.0 or expected <= 0.0:
+                continue
+            picks = self._pick_targets(consumer, self._range_of(consumer), 1)
+            if not picks:
+                continue
+            target = picks[0]
+            dmg = resolve_damage(owner.current_atk(), scale=scale,
+                                 damage_type="PHYSICAL",
+                                 defense=target.defense,
+                                 res=target.res)
+            self._damage_enemy(target, dmg.final * expected, self._t,
+                               "PHYSICAL", source=owner)
+
     def _activate(self, op: OperatorUnit, t: float, *, passive: bool = False) -> None:
         sk = op.skill
         if sk is None:
@@ -2154,6 +2241,12 @@ class BattleSimulator:
         if sk.effects.barrier_pct > 0.0:
             self._grant_barrier(op, sk.effects.barrier_pct,
                                 to_summons=sk.effects.affects_summons)
+        # 会**持续衰减**的屏障（新约能天使技2）：先给**她自己**那一份；
+        # 「自身**与其**获得」的另一份在 `_steal_aspd` 偷到人时补给被偷的那位
+        # ——那里才知道偷的是谁，放在这里要猜。
+        if sk.effects.barrier_decay_pct > 0.0:
+            self._grant_decay_barrier(op, sk.effects.barrier_decay_pct,
+                                      sk.effects.barrier_decay_secs)
         # 回费技能（德克萨斯、桃金娘这一类）：开启时直接给费用
         gain_cost = sk.effects.buffs.get("cost", 0.0)
         # ⚠️ 「技能持续时间内**逐渐**获得」的那一族（可露希尔技1）**不许**在这里
@@ -2451,6 +2544,9 @@ class BattleSimulator:
             #      排在这里而不是帧首的费用回复那一步：那是**自然回复**，
             #      这是**技能给费**，两者各有各的节奏，混在一起对不上账。
             self._cost_trickle_tick(dt, t)
+            # 4.98 会**持续衰减**的屏障按秒掉（新约能天使技2 的 250% / 30 秒）。
+            #      与技能结束时清零的那条屏障分开：它自己掉，不看技能死活。
+            self._barrier_decay_tick(dt, t)
             self._skill_tick(dt, t)
 
             # 5.4 全场光环（青色怒火）：数值随光环主人的技能状态变，所以必须排在
@@ -2822,6 +2918,23 @@ class BattleSimulator:
                 def_pct=class_aura.value("def", 0.0),
                 operator=op,
                 profession=CLASS_AURA_TALENTS[class_aura.name],
+            ))
+            self._refresh_auras()
+        # 天赋：「**携带弹药类技能**的干员攻击力 +9%，对【拉特兰】干员的效果
+        # **翻倍**」（新约能天使「铳弹协约」）。按人筛（`ammo_skill_only`）＋
+        # 按势力翻倍（`nation_double`）——与上面两条都不重：那条按职业发、
+        # 那条按阵营名单翻倍，这条按"装备的是不是弹药技能"筛。
+        # `mult`（2.0）就是这个翻倍倍率。
+        covenant = find_ammo_covenant(op.talents)
+        if covenant is not None:
+            self.team_auras.append(TeamAura(
+                owner=op.name,
+                atk_pct=covenant.value("atk", 0.0),
+                def_pct=covenant.value("def", 0.0),
+                operator=op,
+                double_scale=covenant.value("mult", 2.0),
+                ammo_skill_only=True,
+                nation_double=LATERANO_NATION,
             ))
             self._refresh_auras()
         # 天赋：**常驻的伤害抵挡**（星熊「战术装甲」）。落到**独立字段**上——
@@ -3520,6 +3633,9 @@ class BattleSimulator:
             if op.skill_active and op.skill is not None \
                     and op.skill.duration_type == "AMMO" and op.ammo_left > 0:
                 op.ammo_left -= 1
+                # 「火力电台」挂在**弹药被消耗**这一刻（正文的条件就是它）。
+                # 耗了几发就传几发：prts 备注①「根据本轮消耗数量循环处理」。
+                self._bomb_radio_on_ammo(op, 1)
 
     def _enemy_target(self, e: EnemyUnit) -> "OperatorUnit | None":
         """敌人当前该打谁。
