@@ -1232,13 +1232,20 @@ class BattleSimulator:
                 # 与"这个技能本来就无晕"在输出上长得一模一样，只有守卫能发现。
                 # 取错时让它直接抛。
                 bb = sk.blackboard
-                # **两套键名**：提丰技2 写 `attack@prob` + `attack@stun`，
+                # **三套键名**：提丰技2 写 `attack@prob` + `attack@stun`，
                 # 焰狐龙梓兰技1「刚射」写**裸的** `stun_prob` + `stun`
-                # （「每支箭矢有 20% 概率使目标晕眩 2 秒」）。
+                # （「每支箭矢有 20% 概率使目标晕眩 2 秒」），泥岩技2「岩崩锤」
+                # 写**裸的** `buff_prob` + `stun`（「并有 30% 的几率晕眩其 1.2 秒」）。
                 # 不能合并成一个键名去认：`prob` 在同批干员里**同名反义**
                 # （赤刃技2 的 `prob` 是闪避率，不是控场概率）。
                 if "stun_prob" in bb:
                     p = float(bb.get("stun_prob") or 0.0)
+                    secs = float(bb.get("stun") or 0.0)
+                elif "buff_prob" in bb:
+                    # `buff_prob` 全库只有两处：泥岩技2（这条技能）与妖灵
+                    # 「精确打击」（「有 25% 的几率使其晕眩 2 秒」）——两处
+                    # 都是**概率晕眩**，没有同名反义，故可以安全并进这条通道。
+                    p = float(bb.get("buff_prob") or 0.0)
                     secs = float(bb.get("stun") or 0.0)
                 else:
                     p = float(bb.get("attack@prob") or 0.0)
@@ -1783,6 +1790,61 @@ class BattleSimulator:
         op.steal_amount = 0.0
         op.aspd_steal_bonus = 0.0
 
+    def _lock_tick(self, dt: float, t: float) -> None:
+        """泥岩技3「秽壤的血脉」前 10 秒的【闭锁】场。
+
+        三件事，都按 prts 该技能 `|备注=` 与正文分开落：
+
+        * **不能行动 + 不受到伤害**——那两个在别处：出手闸门在
+          `_operators_attack`、免伤在 `OperatorUnit.take`，这里只管计时；
+        * **周围敌人移动速度 −60%**（正文），prts 备注补了一句
+          「**减速效果可对飞行单位生效**」——所以这一路**不分**地面/飞行
+          （与醒来那一下的晕眩正相反，那个正文明写"地面"）；
+        * **醒来那一帧**（计时递减到 0）晕眩周围**地面**敌人 `stun` 秒。
+
+        「周围」取她的**技能范围**（`x-1`）：prts 备注只澄清了飞行那一条，
+        没写范围口径；按技能自身范围读与「攻击阻挡的所有敌人」同源，是这里
+        能给出的最有依据的一种读法，已连同另一种可能（八格）记进留档。
+
+        减速写进 `e.lock_slow`（**不是** `speed_multiplier`：那一个归积雪所有，
+        没有积雪场时整帧不重置，乘上去会逐帧连乘），本函数每帧先全场置 1.0
+        再刷，所以技能结束/走出范围都自动恢复。
+        """
+        for e in self.enemies:
+            e.lock_slow = 1.0
+        for op in self.operators:
+            if op.locked_timer <= 0.0:
+                continue
+            eff = op.effects
+            if eff is None or not op.alive:
+                # 技能被关掉/她倒下：闭锁立刻结束，不补"醒来"那一下
+                op.locked_timer = 0.0
+                continue
+            cells = self._range_of(op)
+            if eff.move_speed < 0.0:
+                for e in self.enemies:
+                    if e.hp <= 0 or e.leaked or e.off_map:
+                        continue
+                    if e.position in cells:
+                        e.lock_slow = min(e.lock_slow, 1.0 + eff.move_speed)
+            op.locked_timer = max(0.0, op.locked_timer - dt)
+            if op.locked_timer <= 0.0:
+                # 醒来那一下的时长从**黑板**上取（`stun` 挂在 `SkillLevel` 上，
+                # 不在 `SkillEffects` 上——取错对象会静默拿到 0，"不上晕"与
+                # "这技能本来就无晕"输出一模一样，只有守卫能发现）。
+                secs = float(op.skill.blackboard.get("stun") or 0.0)
+                n = 0
+                for e in self.enemies:
+                    if e.hp <= 0 or e.leaked or e.off_map or e.is_flying:
+                        continue          # 正文：「周围**地面**敌人」
+                    if e.position in cells:
+                        e.stun_timer = max(e.stun_timer, secs)
+                        n += 1
+                if self.verbose:
+                    self.result.log.append(
+                        f"{t:7.1f}s  {op.name} 闭锁结束 → 晕眩 {n} 名地面敌人 "
+                        f"{secs:g}s")
+
     def _hitrate_tick(self, dt: float) -> None:
         """「使范围内地面敌人**命中率 −X%**」的场（阿斯卡纶技3「残影」/ 艾拉技1）。
 
@@ -1999,6 +2061,10 @@ class BattleSimulator:
         else:
             op.skill_timer = _INFINITE if dur is None else float(dur)
         op.ammo_left = int(sk.effects.ammo or 0)
+        # 【闭锁】（泥岩技3）：开技先闭锁 `sleep` 秒——不能行动、不受伤、
+        # 周围敌人减速，醒来那一帧再由 `_lock_tick` 补上晕眩。
+        if sk.effects.lock_secs > 0.0:
+            op.locked_timer = max(op.locked_timer, sk.effects.lock_secs)
         # 「立即偷取攻击范围内 1 名友方干员 X 点攻击速度」（新约能天使技2）。
         # **在弹药初始化之后**：偷到了就由 `_steal_aspd` 给它添那 5 发。
         if sk.effects.steal_aspd > 0.0:
@@ -2306,6 +2372,9 @@ class BattleSimulator:
             # 4.95「命中率 −X%」的场（阿斯卡纶技3 / 艾拉技1）：它按**位置**刷，
             #      且要在本帧我方出手、敌方出手之前都是最新的，所以放在这里。
             self._hitrate_tick(dt)
+            # 4.96【闭锁】场（泥岩技3 的前 10 秒）：减速要排在 `_snow_tick`
+            #      之后（那个每帧把 `speed_multiplier` 重置为 1.0），否则会被抹掉。
+            self._lock_tick(dt, t)
             self._skill_tick(dt, t)
 
             # 5.4 全场光环（青色怒火）：数值随光环主人的技能状态变，所以必须排在
@@ -3156,6 +3225,10 @@ class BattleSimulator:
             # **不能拿 stun_timer 顶替**：晕眩还会中断阻挡，冻结不会——
             # 用晕眩顶替会让她在冻结那 4 秒里连阻挡一并丢掉，那是另一回事。
             if op.freeze_timer > 0:
+                continue
+            # 【闭锁】期间不能行动（泥岩技3 的前 10 秒）。同样**不拿晕眩顶替**：
+            # prts 备注写明那是「闭锁（非无法行动）」，而且是**反制**眩晕的。
+            if op.locked_timer > 0:
                 continue
             cells = self._range_of(op)
             op.attack_timer += dt

@@ -4427,6 +4427,170 @@ def check_enemy_hitrate(stage, lib, calc, book_t) -> None:
           f"{near.hitrate_phys} / {near.hitrate_arts}")
 
 
+def check_lock_awake(stage, lib, calc, book_t) -> None:
+    """[49] 泥岩技3「秽壤的血脉」的**两段式**（闭锁 10s → 醒来）与技2 的
+    `buff_prob` 概率晕眩。
+
+    技3 正文（M3）：「技能开启后无法行动且不受到伤害 10 秒并使周围敌人移动速度
+    −60%；该状态结束后晕眩周围**地面**敌人 5 秒，攻击间隔缩短，攻击力+140%，
+    防御力+80%，攻击阻挡的所有敌人」。
+
+    prts 该技能 `|备注=` 解开两处歧义：
+
+    * 「技能生效的**前10秒**，实际将会进入**闭锁**状态（**非**无法行动），
+      且持有**眩晕/冻结/沉默反制**」——所以那 10 秒不是晕眩，**不能复用**
+      `stun_timer`（晕眩会被后续控制续上，闭锁是反制）。
+    * 「**减速效果可对飞行单位生效**」——与醒来那一下形成对照：那一下正文明写
+      「周围**地面**敌人」，只打地面。
+
+    ⚠️ `awake`（20 秒）在本模型里**没有独立可观测量**：闭锁期间她既不能出手
+    （攻击/攻速增益测不出）、也不掉血（防御增益测不出），所以"三个增益放在
+    哪一段"在现模型里等价。它在这里的用途是**两段式的判据**与**时长自洽**
+    （10 + 20 = 技能总时长 30，守卫里钉住了），限制已记进 `docs/uncertainties.md`。
+
+    ⚠️「周围」取她的**技能范围**（`x-1`）：prts 备注只澄清了飞行那一条，没写
+    范围口径；按技能自身范围读与「攻击阻挡的所有敌人」同源，另一种可能（八格）
+    一并记进留档。
+
+    可观测量：她**打出去的血**（闭锁期间必须是 0）、她**挨掉的血**（闭锁期间必须
+    是 0）、敌人的**晕眩计时**（醒来那一下）、敌人的**移速系数**（减速）。
+    """
+    print("\n[49] 泥岩技3「秽壤的血脉」：闭锁 10 秒 → 醒来；技2 的 buff_prob")
+    from ak_tactic.operator.skill import _wants_lock_awake  # noqa: PLC0415
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    v = Verifier()
+    slots = {sk.slot: sk for sk in SkillBook().for_operator("char_311_mudrok")}
+    s2 = slots[2].level(7, 3)
+    s3 = slots[3].level(7, 3)
+    check("  解析（技3）：闭锁 10 秒、醒来窗 20 秒、减速 −60%",
+          (s3.effects.lock_secs, s3.effects.awake_secs, s3.effects.move_speed)
+          == (10.0, 20.0, -0.6),
+          f"{s3.effects.lock_secs}/{s3.effects.awake_secs}/"
+          f"{s3.effects.move_speed}")
+    check("  时长自洽：闭锁 + 醒来 = 技能总时长（10 + 20 = 30）"
+          "——这是 `awake` 在本模型里的用处之一",
+          abs(s3.effects.lock_secs + s3.effects.awake_secs - s3.duration) < 1e-9,
+          f"{s3.effects.lock_secs} + {s3.effects.awake_secs} vs {s3.duration}")
+    check("  反向：技2 不是两段式（它是「下次攻击」，没有闭锁段）",
+          s2.effects.lock_secs == 0.0 and s2.effects.awake_secs == 0.0,
+          f"{s2.effects.lock_secs}/{s2.effects.awake_secs}")
+
+    with sqlite3.connect(Path(__file__).resolve().parent.parent
+                         / "data" / "akdb.sqlite") as _c:
+        _c.row_factory = sqlite3.Row
+        _rows = [dict(r) for r in _c.execute(
+            "SELECT DISTINCT skill_id, description, blackboard FROM skill_level "
+            "WHERE level = 10")]
+    _mine = sorted(r["skill_id"] for r in _rows
+                   if _wants_lock_awake(r["description"],
+                                        json.loads(r["blackboard"] or "{}")))
+    _sleepers = sorted({r["skill_id"] for r in _rows
+                        if "sleep" in json.loads(r["blackboard"] or "{}")})
+    check("判据命中面：只有她技3；另外四条带 `sleep` 的技能（早露/深律/iris/titi）"
+          "是「让**敌人**沉睡」，语义相反，**一个都不许被认下**",
+          _mine == ["skchr_mudrok_3"]
+          and set(_sleepers) - {"skchr_mudrok_3"}
+          == {"skchr_erato_1", "skchr_grabds_2", "skchr_iris_2", "skchr_titi_3"},
+          f"认下 {_mine}；带 sleep 的 {_sleepers}")
+
+    def _setup():
+        sim = mechanism_sim(stage, lib)
+        u = v.unit({"char_id": "char_311_mudrok", "elite": 2, "level": 60,
+                    "trust": 100, "potential": 1})
+        u.position = (2, 3)
+        u.direction = "Right"
+        u.skill = s3
+        sim.operators.append(u)
+        near = _dummy(sim, stage, _enemy_ids(stage)[0], (3, 3))
+        near.blocked_by = u
+        far = _dummy(sim, stage, _enemy_ids(stage)[0], (8, 3))
+        return sim, u, near, far
+
+    print("     —— 闭锁：不能行动、不受伤、周围减速 ——")
+    sim, u, near, far = _setup()
+    u.sp = 25.0
+    sim._activate(u, 0.0)
+    check("  开技即闭锁 10 秒", abs(u.locked_timer - 10.0) < 1e-9,
+          f"{u.locked_timer:g}s")
+
+    near_hp0 = near.hp
+    for i in range(100):                      # 闭锁内的 5 秒
+        u.skill_timer = 1e9
+        sim._lock_tick(0.05, i * 0.05)
+        sim._operators_attack(0.05, i * 0.05)
+    check("  闭锁期间她**打不出伤害**（她正对着敌人，敌人却一点没掉）",
+          near.hp == near_hp0, f"敌人血量 {near.hp:.0f}（原 {near_hp0:.0f}）")
+
+    hp0 = u.hp
+    for i in range(100):                      # 让近处那只打她
+        sim._enemies_attack(0.05, i * 0.05)
+    check("  闭锁期间她**不受到伤害**", u.hp == hp0, f"生命 {u.hp:.0f}")
+
+    check("  减速：范围内 ×0.4、范围外不受影响",
+          abs(near.lock_slow - 0.4) < 1e-9 and abs(far.lock_slow - 1.0) < 1e-9,
+          f"近 {near.lock_slow:g}、远 {far.lock_slow:g}")
+    near.is_flying = True                     # prts 备注：减速对飞行单位也生效
+    sim._lock_tick(0.05, 5.05)
+    check("  prts 备注：减速**对飞行单位也生效**（与醒来那一下的「地面」相反）",
+          abs(near.lock_slow - 0.4) < 1e-9, f"飞行目标 {near.lock_slow:g}")
+    near.is_flying = False
+
+    print("     —— 醒来：晕眩周围**地面**敌人 ——")
+    u.locked_timer = 0.02                     # 推到醒来那一帧
+    near2 = _dummy(sim, stage, _enemy_ids(stage)[0], (3, 2))
+    near2.is_flying = True                    # 同一格上的飞行目标（不该被晕）
+    near2.position = near.position
+    sim._lock_tick(0.05, 10.04)
+    check("  醒来那一帧：地面敌人被晕 5 秒",
+          abs(near.stun_timer - 5.0) < 1e-9, f"晕眩 {near.stun_timer:g}s")
+    check("  同一格上的**飞行**单位不被晕（正文：「周围**地面**敌人」）",
+          near2.stun_timer == 0.0, f"飞行单位晕眩 {near2.stun_timer:g}s")
+    check("  范围外的敌人不被晕", far.stun_timer == 0.0,
+          f"{far.stun_timer:g}s")
+
+    print("     —— 闭锁是可逆的（技能停掉就恢复）——")
+    u.locked_timer = 5.0
+    sim._lock_tick(0.05, 20.0)
+    check("  重新闭锁时减速又在", abs(near.lock_slow - 0.4) < 1e-9,
+          f"{near.lock_slow:g}")
+    u.locked_timer = 0.0
+    sim._lock_tick(0.05, 20.05)
+    check("  闭锁结束后减速恢复 ×1、生命不再免疫",
+          abs(near.lock_slow - 1.0) < 1e-9 and u.take(100.0) == 100.0,
+          f"移速系数 {near.lock_slow:g}、挨 100 实扣 {u.take(100.0):g}")
+
+    print("     —— 技2「岩崩锤」：`buff_prob` 是**第三种**概率晕眩写法 ——")
+    _bb = {r["skill_id"]: json.loads(r["blackboard"] or "{}") for r in _rows}
+    check("  `buff_prob` 全表只有她技2（另一处是天赋「精确打击」，同为概率晕眩）",
+          [k for k, b in _bb.items() if "buff_prob" in b] == ["skchr_mudrok_2"],
+          f"{[k for k, b in _bb.items() if 'buff_prob' in b]}")
+    check("  值与通道：0.3 概率 × 1.2 秒 = 每次命中加 0.36 秒晕眩",
+          abs(float(_bb["skchr_mudrok_2"]["buff_prob"]) * 1.2 - 0.36) < 1e-9,
+          f"{_bb['skchr_mudrok_2']['buff_prob']} × "
+          f"{_bb['skchr_mudrok_2']['stun']}")
+
+    sim2, u2, tgt, _ = _setup()
+    u2.skill = s2
+    u2.sp = 4.0
+    sim2._activate(u2, 0.0)
+    seen_active = []
+    hit0 = u2.hits                            # 她**打出去**的次数（`e.hits` 是敌人出手）
+    for i in range(80):                       # 她攻击间隔 1.6s ⇒ 4 秒里有 2 次
+        u2.skill_timer = 1e9
+        sim2._skill_tick(0.05, i * 0.05)
+        sim2._operators_attack(0.05, i * 0.05)
+        seen_active.append(u2.skill_active)
+    hits = u2.hits - hit0
+    check("  她的技2 真的打到了（否则下面那条是空断言）", hits > 0,
+          f"命中 {hits} 次")
+    check("  每次命中给敌人加 `0.3 × 1.2 = 0.36` 秒晕眩（与提丰/焰狐龙梓兰"
+          "同一条期望通道）",
+          abs(tgt.stun_timer - 0.36 * hits) < 1e-6,
+          f"敌人晕眩 {tgt.stun_timer:.4f}s / 命中 {hits} 次 = "
+          f"{tgt.stun_timer / max(1, hits):.4f}s")
+
+
 def check_glider_mobility(stage, lib, calc, book_t) -> None:
     """[43] 焰狐龙梓兰天赋2「翔虫机动」——一个天赋横跨两个平面。
 
@@ -5235,6 +5399,7 @@ def main() -> int:
     check_hp_drain(stage, lib, calc, book_t)
     check_steal_aspd(stage, lib, calc, book_t)
     check_enemy_hitrate(stage, lib, calc, book_t)
+    check_lock_awake(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

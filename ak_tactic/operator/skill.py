@@ -337,6 +337,24 @@ def _hitrate_values(bb: dict[str, float]) -> tuple[float, float]:
     return phys, arts
 
 
+def _wants_lock_awake(description: str, bb: dict[str, float]) -> bool:
+    """是否「开技后先「闭锁」若干秒、醒来再打」的两段式技能（泥岩技3）。
+
+    判据两段：正文里有「无法行动」**且**黑板上有 `awake`。全表实测（全等级）：
+    `awake` 只出现在 `skchr_mudrok_3` 一条技能上，且它与 `sleep` 同时出现；
+    另外四条带 `sleep` 的技能（早露/深律/iris/titi）都是「让**敌人**沉睡」，
+    语义完全相反——所以**不能**按 `sleep` 单独认，必须由 `awake` 定性。
+
+    ⚠️ 这里也顺手修掉一个审计假账：`sleep` 本来被算作"有人在读"，那个读点是
+    `CONTROL_KEYS` 那张**键名词表**（`skill.py` 里列键名的地方），并不是消费点。
+    本函数落地之后 `sleep` 才真的有消费点。
+    """
+    text = _TAG.sub("", description or "")
+    if "无法行动" not in text:
+        return False
+    return float(bb.get("awake") or 0.0) > 0.0
+
+
 def _wants_enemy_hitrate(description: str, bb: dict[str, float]) -> bool:
     """是否「使（攻击范围内的）敌人物理与法术**命中率** −X%」。
 
@@ -911,6 +929,26 @@ class SkillEffects:
     #: 搜索与回归都不可复现。
     enemy_hitrate_phys: float = 0.0
     enemy_hitrate_arts: float = 0.0
+    #: 「开技后先闭锁 N 秒（不能行动、不受伤）、醒来再打」的两段式技能
+    #: ——泥岩技3「秽壤的血脉」：`sleep` 10 秒是**闭锁**段，`awake` 20 秒是
+    #: 醒来后的窗（10 + 20 = 技能总时长 30，两处都对得上）。
+    #:
+    #: prts 该技能 `|备注=` 写明：「技能生效的**前10秒**，实际将会进入
+    #: **闭锁**状态（**非**无法行动），且持有眩晕/冻结/沉默**反制**」——
+    #: 所以那 10 秒是"不能行动 + 不受伤 + 不被控"，不是晕眩。
+    #:
+    #: ⚠️ `awake_secs` 在本模型里**没有独立可观测量**：闭锁期间她既不能出手
+    #: （攻击/攻速增益测不出），也不掉血（防御增益测不出），所以"增益放在哪
+    #: 一段"在现模型里等价。它被用作**两段式的判据**与时长自洽（见守卫），
+    #: 这一限制如实记在 `docs/uncertainties.md`。
+    lock_secs: float = 0.0
+    awake_secs: float = 0.0
+    #: 「周围敌人移动速度 −X%」的 X（负数）。泥岩技3 写 `move_speed: -0.6`。
+    #:
+    #: ⚠️ `BUFF_KEYS` 里**早就**有 `"move_speed": ("move_speed", "pct")` 这一行，
+    #: 但 `SkillEffects` 上一直**没有同名字段**，于是解析结果被静默丢掉——
+    #: 落一个字段在这里，那一行才真的兑现（否则它在表里挂着，看着像"已支持"）。
+    move_speed: float = 0.0
     #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
     #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
     #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
@@ -1599,6 +1637,14 @@ class SkillBook:
         if _wants_enemy_hitrate(lv.description, bb):
             (lv.effects.enemy_hitrate_phys,
              lv.effects.enemy_hitrate_arts) = _hitrate_values(bb)
+        # 两段式（泥岩技3）：先闭锁 `sleep` 秒，`awake` 秒是醒来后的窗。
+        if _wants_lock_awake(lv.description, bb):
+            lv.effects.lock_secs = float(bb.get("sleep") or 0.0)
+            lv.effects.awake_secs = float(bb.get("awake") or 0.0)
+            # `move_speed` 从黑板上**显式**取：`BUFF_KEYS` 里那一行虽然写着
+            # `("move_speed", "pct")`，但落到效果上时并不兑现（实测她的技3
+            # 解析出来是 0.0，而黑板是 −0.6）。这一条是本节"减速"那半的来源。
+            lv.effects.move_speed = float(bb.get("move_speed") or 0.0)
         # 技能结束时的**自身**效果：晕眩与强制退场。两者的数值/语义都
         # 只在描述里，且都与"打在敌人身上"的那套（`control`）无关。
         lv.effects.self_stun = _wants_self_stun(lv.description, bb)
