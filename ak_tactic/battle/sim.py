@@ -63,6 +63,7 @@ from .talents import (CLASS_AURA_TALENTS, FACTION_AURA_NAME, STUDENT_TEAM,
 from .p3r import BreakState, TotalAttackDevice, affinity_multiplier, damage_slot
 from .summons import SummonDeployment, build_summon_unit
 from .hammer import HAMMER_HITS, HAMMER_INTERVAL, read_hammer
+from .talents import find_glider_mobility
 from .traits import cross_cells, splash_tiles
 from ..operator.summons import SummonBook
 from . import displace
@@ -570,6 +571,9 @@ class BattleSimulator:
         self._arrows: list[dict] = []
         #: 已开技但**还没出弹道**的（抬手＋蓄力要 3 秒上下，见 `_schedule_arrow`）。
         self._pending_arrows: list[dict] = []
+        #: 每位干员**上一次**部署的 (x, y, 朝向)——天赋「翔虫机动」要用它算
+        #: "上次部署位置周围"（离场留下的静止弹道就停在那一格）。
+        self._mobility_spot: dict[str, tuple[int, int, str]] = {}
         #: 剑气移动速度（格/秒）。原文只写了"向前/遇障碍右转/技能结束消失"，
         #: 没写速度，故显式做成参数而不是埋在常量里——这是未知量，不是设定值。
         #: 结论对它的敏感度必须扫描给出（`tools/run_srx8.py --qi-sweep` 那类跑法）。
@@ -899,6 +903,75 @@ class BattleSimulator:
         h = len(tiles)
         w = len(tiles[0]) if h else 0
         return -1.0 <= x <= w and -1.0 <= y <= h
+
+    # ------------------------------------------------- 天赋：翔虫机动（落位加成）
+
+    def _mobility_cells(self, op: OperatorUnit, prev: tuple[int, int],
+                        prev_dir: str, rng: str) -> set[tuple[int, int]]:
+        """「上次部署位置周围」的格集合：以 `prev` 为原点、范围代号 `rng`。
+
+        范围代号来自天赋黑板（`x-1`），走的是和技能改写范围同一条路
+        （`range_provider(..., range_id=…)`），所以**不另建一套几何**。
+        拿不到范围表时退化成"自身格 ＋ 朝向前方三格"，与 `_range_of` 一致。
+        """
+        if self.range_provider is not None:
+            try:
+                cells = self.range_provider(op.char_id, op.elite, prev_dir, prev,
+                                            range_id=rng)
+                if cells:
+                    return {(int(x), int(y)) for x, y in cells}
+            except Exception:
+                pass
+        fx, fy = {"Right": (1, 0), "Left": (-1, 0),
+                  "Up": (0, -1), "Down": (0, 1)}.get(prev_dir, (1, 0))
+        return {(prev[0], prev[1])} | {(prev[0] + fx * i, prev[1] + fy * i)
+                                       for i in (1, 2, 3)}
+
+    def _mobility_on_deploy(self, op: OperatorUnit, d, t: float) -> None:
+        """部署瞬间结算天赋「翔虫机动」（焰狐龙梓兰 天赋2）。
+
+        prts.wiki 该页 `|备注=` 原文：
+
+        > ※离场后将在原地留下一个静止[[弹道]]，弹道效果范围 `[范围:x-1]`，
+        > 持续存在直至下次焰狐龙梓兰部署
+        > ※**非首次部署时**……部署于该弹道范围后将获得攻击力加成效果
+
+        所以判据是两段：**她已经部署过一次**，且这次落点在**上次部署点**的
+        `x-1` 范围内 ⇒ 攻击力 +15%、持续 30 秒。首次部署没有弹道可落，不给。
+
+        上次的位置在**这次结算完之后**才更新——先算再写，顺序反了就变成
+        "拿自己跟自己比"，永远命中（那种 bug 不会报错，只会让加成一直亮着）。
+        """
+        prev = self._mobility_spot.get(op.char_id)
+        self._mobility_spot[op.char_id] = (int(d.position[0]),
+                                           int(d.position[1]), d.direction)
+        g = find_glider_mobility(op.talents)
+        if g is None or prev is None or not g.deploy_range:
+            return
+        cells = self._mobility_cells(op, (prev[0], prev[1]), prev[2],
+                                     g.deploy_range)
+        if (int(d.position[0]), int(d.position[1])) not in cells:
+            return
+        op.mobility_atk_pct = g.atk_bonus
+        op.mobility_atk_left = g.atk_duration
+        if self.verbose:
+            self.result.log.append(
+                f"{t:7.1f}s  {op.name} 落在上次部署位置周围（{g.deploy_range}）："
+                f"攻击力 +{g.atk_bonus:.0%}，持续 {g.atk_duration:g} 秒")
+
+    def _mobility_tick(self, dt: float) -> None:
+        """天赋「翔虫机动」的限时加成倒计时。
+
+        加成是**部署时的一次性授予**，所以这里只管到期收走；`mobility_atk_pct`
+        置 0 之后 `current_atk()` 自然回到原面板。
+        """
+        for op in self.operators:
+            if op.mobility_atk_left <= 0.0:
+                continue
+            op.mobility_atk_left -= dt
+            if op.mobility_atk_left <= 0.0:
+                op.mobility_atk_left = 0.0
+                op.mobility_atk_pct = 0.0
 
     def _arrow_probe(self, a: dict, t: float) -> None:
         """一次结算：半径内的每个敌人各吃物理＋法术两笔，推动带各自冷却。
@@ -2051,6 +2124,8 @@ class BattleSimulator:
             self._qi_tick(dt, t)
             # 贯穿弹道（焰狐龙梓兰 技3）：到点生成 + 按距离分段结算
             self._arrow_tick(dt, t)
+            # 天赋「翔虫机动」的限时攻击力加成到期收走
+            self._mobility_tick(dt)
             # 技能自打的伤害：五连锤击按时刻表兑现（不吃攻速）
             self._hammer_tick(t)
 
@@ -2358,6 +2433,7 @@ class BattleSimulator:
         op.talents = list(d.talents or [])
         self._attach_skill(op, d)
         self.operators.append(op)
+        self._mobility_on_deploy(op, d, t)
 
         # 部署瞬间的一次性环境伤害：`first_basic_damage + 实际 × first_damage_ratio`。
         # 它**额外于**每秒结算，不是它的第一次——原文两句分开写

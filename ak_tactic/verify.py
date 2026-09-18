@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .battle import BattleSimulator, Deployment, RangeProvider
-from .battle.talents import find_power_attack, squad_cost_bonus
+from .battle.talents import find_glider_mobility, find_power_attack, squad_cost_bonus
 from .battle.traits import (apply_splash_talent, read_combo_attack,
                             read_trait_splash)
 from .battle.unit import OperatorUnit
@@ -253,6 +253,12 @@ class Verifier:
             self.talents.for_operator(cid, elite=entry["elite"],
                                       level=entry["level"],
                                       potential=entry.get("potential", 1)))
+        # 天赋「翔虫机动」（焰狐龙梓兰 天赋2）：限时攻击力加成 + 落位放宽 +
+        # 离场不累加再部署惩罚。取数与键的归属见 `battle/talents.GliderMobility`。
+        glider = find_glider_mobility(
+            self.talents.for_operator(cid, elite=entry["elite"],
+                                      level=entry["level"],
+                                      potential=entry.get("potential", 1)))
         tal_text = " ".join(
             (cand.get("description") or "")
             for t_ in (c.get("talents") or [])
@@ -293,6 +299,13 @@ class Verifier:
             # 天赋「强击瓶专家」：0 = 没有这条。
             power_attack_count=pow_atk.count if pow_atk else 0,
             power_attack_scale=pow_atk.scale if pow_atk else 1.0,
+            # 天赋「翔虫机动」：没有就全 0 / 空，行为上等价于"没这天赋"。
+            mobility_atk_bonus=glider.atk_bonus if glider else 0.0,
+            mobility_atk_duration=glider.atk_duration if glider else 0.0,
+            mobility_melee_deploy=glider.ignore_build_type if glider else False,
+            mobility_deploy_range=glider.deploy_range if glider else "",
+            mobility_leftover=glider.projectile if glider else "",
+            no_respawn_cost_add=glider.no_respawn_cost_add if glider else False,
         )
         self._unit_cache[key] = kw
         return OperatorUnit(**kw)
@@ -334,10 +347,16 @@ class Verifier:
         #: 于是"付不起也落地"会被静默放过。这里如实记下来，交给归因去说。
         cost_notes: list[str] = []
         now = 0.0
+        #: 每位干员上一次落点——天赋「翔虫机动」（焰狐龙梓兰）要用它：非首次部署
+        #: 时，"上次部署位置周围"（离场留下的静止弹道范围 `x-1`）里的**近战位**
+        #: 也合法。这里按 `char_id` 记，与模拟器 `_mobility_spot` 同一口径。
+        prev_spot: dict[str, tuple[int, int]] = {}
         for d, entry, tal in squad:
             op = self.unit(entry)
             pos = (int(d.position[0]), int(d.position[1]))
-            self._check_terrain(stage, op, pos, d)
+            self._check_terrain(stage, op, pos, d,
+                                previous=prev_spot.get(op.char_id))
+            prev_spot[op.char_id] = pos
             if d.time is None:
                 need = max(0.0, op.deploy_cost - cost)
                 at = now + need * rate
@@ -408,22 +427,60 @@ class Verifier:
                 return cid
         return None
 
-    def _check_terrain(self, stage, op, pos, d) -> None:
+    def mobility_deploy_spots(self, op, stage, previous) -> set[tuple[int, int]]:
+        """天赋「翔虫机动」放宽出来、**本来不合法**的那些格（焰狐龙梓兰 天赋2）。
+
+        prts.wiki 该页 `|备注=`：
+
+        > ※非首次部署时，焰狐龙梓兰可以部署在远程位地块／**弹道范围内的近战位
+        > 地块**，以此部署的焰狐龙梓兰的部署类型将临时变为全部位
+
+        弹道停在**她上次部署的那一格**，范围代号取天赋黑板里的
+        `$ignore_build_type_target_range`（`x-1`）。这里只返回"近战位里落进该
+        范围的"，高台位不在放宽之列——她本来就能站高台。
+        """
+        rng = getattr(op, "mobility_deploy_range", "") or ""
+        if previous is None or not rng or not getattr(
+                op, "mobility_melee_deploy", False):
+            return set()
+        cells: set[tuple[int, int]] = set()
+        provider = self.range_provider(stage) if self.use_range_table else None
+        if provider is not None:
+            try:
+                cells = {(int(x), int(y))
+                         for x, y in provider(op.char_id, op.elite, "Right",
+                                              (int(previous[0]), int(previous[1])),
+                                              range_id=rng)}
+            except Exception:
+                cells = set()
+        if not cells:
+            # 没有范围表时的退化口径：自身格 ＋ 朝前（向右）三格。
+            cells = {(int(previous[0]) + i, int(previous[1])) for i in range(4)}
+        return cells & set(stage.map.melee_spots)
+
+    def _check_terrain(self, stage, op, pos, d, *, previous=None) -> None:
         """职业与地形必须相容。
 
         **模拟器不校验地形合法性**：落错了不会报错，只会安静地跑出一个
         "看起来对"的结果。2026-09-16 真踩过——把 MAA 字面量误翻一次，
         术师落到 `tile_end`、先锋落到 `tile_wall`，照样跑出「21 杀 0 漏」，
         只有耗时从 196.6s 变成 203.6s 露了马脚。
+
+        `previous` = 这位干员**上一次**的落点（没有就传 None）。它只为一条
+        天赋存在：焰狐龙梓兰的「翔虫机动」把"上次部署位置周围"的近战位也
+        变成合法格（`mobility_deploy_spots`）。
         """
         melee = self.is_melee(op.char_id)
         spots = stage.map.melee_spots if melee else stage.map.ranged_spots
-        if pos not in spots:
-            tile = stage.map.tile(*pos).key
-            raise PlanError(
-                f"落点非法：{d.operator} 落在 {pos}（{tile}），"
-                f"但它需要{'地面' if melee else '高台'}可部署格。"
-                f"坐标是 MAA 口径（原点左上、y 向下），不要再翻一次。")
+        if pos in spots:
+            return
+        if pos in self.mobility_deploy_spots(op, stage, previous):
+            return
+        tile = stage.map.tile(*pos).key
+        raise PlanError(
+            f"落点非法：{d.operator} 落在 {pos}（{tile}），"
+            f"但它需要{'地面' if melee else '高台'}可部署格。"
+            f"坐标是 MAA 口径（原点左上、y 向下），不要再翻一次。")
 
     def _verdict(self, plan, stage, sim, res, deployed, *, title="") -> Verdict:
         max_life = int(getattr(stage.options, "max_life_point", 1) or 1)
