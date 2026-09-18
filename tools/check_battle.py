@@ -5131,6 +5131,87 @@ def check_stand_state_machine(stage, lib, calc, book_t) -> None:
           f"duration={me4.stand_duration:g}、alive={me4.alive}")
 
 
+def check_species_resistance(stage, lib, calc, book_t) -> None:
+    """[59] 泥岩天赋「手足相惜」：受到来自【萨卡兹】敌人的伤害降低 30%。
+
+    这一条在审计里是**假通过**的典型：`damage_resistance` 的键名只出现在
+    `operator/skill.py` 的映射表里，战斗侧从来没人用它，而第二道筛子只问
+    "字面量里有没有人读"，于是它一直显示为已建模。
+
+    接法：**比例**在黑板（`damage_resistance`=0.3），**对谁**在正文方括号里
+    （「受到来自【萨卡兹】敌人的伤害」）——两个都要有才算建了。敌人的**种类**
+    不在 gamedata 里，它住在 enemydb 的 `enemy.category`（PRTS 敌人页的「种类」列：
+    萨卡兹 128 个、化物、感染生物、机械、海怪……），所以模拟器用一个
+    `species_provider` 钩子把它接进来；取不到就是空串、**不生效**（宁可不动，
+    不许把敌人一概当成萨卡兹）。
+
+    按 PRTS「伤判效果」页，这类"特定条件下伤害减少"归**伤害修改**，与护盾
+    （抵挡）不是一回事：它是**乘**在伤害上，不是把整笔挡掉。
+    """
+    print("\n[59] 泥岩「手足相惜」：按敌人种类减伤（审计第二道筛子的假通过项）")
+    from ak_tactic.battle.talents import find_species_resistance  # noqa: PLC0415
+    from ak_tactic.verify import Verifier                        # noqa: PLC0415
+
+    cid = "char_311_mudrok"
+    v = Verifier()
+    tals = list(book_t.for_operator(cid))
+    eff = next((t.effects for t in tals
+                if getattr(t.effects, "resistance_species", "")), None)
+    check("  解析：种类来自正文方括号（萨卡兹）、比例来自黑板（30%）",
+          eff is not None and eff.resistance_species == "萨卡兹"
+          and abs(eff.damage_resistance - 0.30) < 1e-9,
+          None if eff is None else
+          f"【{eff.resistance_species}】{eff.damage_resistance:.0%}")
+    check("  具名检测器认得出这条天赋（审计第三道筛子要的东西）",
+          find_species_resistance(tals) is not None
+          and find_species_resistance(
+              list(book_t.for_operator("char_103_angel"))) is None,
+          "泥岩有、能天使没有")
+
+    def build(species):
+        sim = mechanism_sim(
+            stage, lib,
+            species_provider=(lambda _eid: species) if species else None)
+        sim.cost = sim.max_cost = 999.0
+        op = v.unit({"char_id": cid, "elite": 2, "level": 60, "trust": 100,
+                     "potential": 1})
+        sim._do_deploy(Deployment(0.0, op, (2, 3), "Right", talents=tals), 0.0)
+        return sim, op
+
+    sim, op = build("萨卡兹")
+    e = sim.enemies[0] if sim.enemies else None
+    if e is None:
+        e = _dummy(sim, stage, _enemy_ids(stage)[0], (4, 3))
+    e.species = "萨卡兹"
+    folded = sim._species_resist(op, e, 1000.0)
+    e.species = "机械"
+    other = sim._species_resist(op, e, 1000.0)
+    e.species = ""
+    unknown = sim._species_resist(op, e, 1000.0)
+    check("  打【萨卡兹】敌人 → 伤害乘 70%",
+          abs(folded - 700.0) < 1e-9, f"{folded:g}（1000 → 期望 700）")
+    check("  反向：**别的种类**（机械）不打折", abs(other - 1000.0) < 1e-9,
+          f"{other:g}")
+    check("  反向：**种类取不到**（空串）时也不打折——不许把敌人一概当成萨卡兹",
+          abs(unknown - 1000.0) < 1e-9, f"{unknown:g}")
+
+    _s2, other_op = build("萨卡兹")
+    other_op.talents = []
+    e.species = "萨卡兹"
+    check("  反向：**没有这条天赋**的干员不吃折扣（不是人人都有）",
+          abs(_s2._species_resist(other_op, e, 1000.0) - 1000.0) < 1e-9,
+          "0 折扣")
+
+    # ⚠️ 本守卫**只到单元级**，没有端到端（真跑攻击循环）。
+    # 试过两种夹具都不成立：`_dummy` 那条 0 长度路线一推进就算走到终点漏出场
+    # （它自己的 docstring 就写着"不要跑 run()"）；自己造一只 (4,3)→(2,3) 的
+    # 走位敌人，`run(30)` 之后 `blocked_by` 仍是 None、两局血量一模一样——
+    # 也就是说**它根本没走进被挡下那一步**，这种守卫测不到东西，留着比没有更坏。
+    # 于是如实记在这里：减伤**已接在五处现场**（敌人普攻 4286、复燃 4304、
+    # 敌方技能物/法 4382/4390、附加伤害 4824），但"真打起来血量确实不同"这一条
+    # 尚未验证。要补得先做出一个稳定的"走进来—被挡下—出手"夹具。
+
+
 def check_closur_shield_cnt(stage, lib, calc, book_t) -> None:
     """[58] 可露希尔技1「递归策略」：给**援军**发护盾层（`shield_cnt`）。
 
@@ -6586,6 +6667,7 @@ def main() -> int:
     check_barrier_break_hook(stage, lib, calc, book_t)
     check_shield_layers(stage, lib, calc, book_t)
     check_closur_shield_cnt(stage, lib, calc, book_t)
+    check_species_resistance(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

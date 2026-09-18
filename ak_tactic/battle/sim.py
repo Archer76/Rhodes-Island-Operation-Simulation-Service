@@ -61,6 +61,7 @@ from .talents import (CLASS_AURA_TALENTS, FACTION_AURA_NAME, STUDENT_TEAM,
                       find_limit_dispatch,
                       find_regen,
                       find_snow, find_sp_on_action, find_summon_allowance,
+                      find_species_resistance,
                       find_team_aura,
                       squad_cost_bonus)
 from .p3r import BreakState, TotalAttackDevice, affinity_multiplier, damage_slot
@@ -314,6 +315,10 @@ class BattleSimulator:
         #: **投递坐标**的落点（新约能天使技3「使命必达！」用的那个格子）。
         #: 没有坐标时技3 只当普通的攻击强化技能——正文写的是"若存在投递坐标"。
         delivery_point: tuple[float, float] | None = None,
+        #: **敌人种类**取数钩子：`enemy_id -> 种类名`（"萨卡兹"…）。这个量不在
+        #: gamedata 里，它在 enemydb 的 `enemy.category`（PRTS 敌人页的「种类」列）。
+        #: 取不到就是空串——泥岩「手足相惜」按它判，宁可不动、不许乱动。
+        species_provider: Callable[[str], str] | None = None,
         skill_book=None,
         summon_book=None,
         fps: int = FPS,
@@ -394,6 +399,8 @@ class BattleSimulator:
         self.token_range_provider = token_range_provider
         #: 投递坐标（新约能天使技3）；`None` = 场上没有这个坐标。
         self.delivery_point = delivery_point
+        #: 敌人种类取数钩子（见 ctor 注释）。`None` = 没人接，种类一律空串。
+        self.species_provider = species_provider
         self.skill_book = skill_book
         #: 技能效果的来源策略。三者都建立在**黑板**之上，区别只在描述那一路
         #: 走多远：
@@ -1577,6 +1584,10 @@ class BattleSimulator:
         e = EnemyUnit(
             name=getattr(stats, "name", enemy_id) or enemy_id,
             enemy_id=enemy_id,
+            # 种类由外接的取数钩子给（enemydb 的 `enemy.category`）。没接就是空串：
+            # 泥岩「手足相惜」在这时会**不生效**，而不是把所有敌人都当成萨卡兹。
+            species=(self.species_provider(enemy_id)
+                     if self.species_provider else ""),
             level=level,
             max_hp=float(getattr(stats, "max_hp", 0) or 0),
             atk=float(getattr(stats, "atk", 0) or 0),
@@ -3193,6 +3204,30 @@ class BattleSimulator:
             op.shield_timer -= op.shield_interval
             self._grant_shield_layer(op, t)
 
+    def _species_resist(self, op: OperatorUnit, enemy: EnemyUnit,
+                        amount: float) -> float:
+        """「受到来自【某类】敌人的伤害降低 X%」——泥岩天赋「手足相惜」。
+
+        判据是**敌人的种类**（`EnemyUnit.species`，由 `species_provider` 从 enemydb
+        的 `enemy.category` 接进来），与天赋正文方括号里那个名字**逐字**比对；
+        比例取黑板 `damage_resistance`（她这里是 0.3）。两者缺一不生效。
+
+        按 PRTS「伤判效果」页，这类"特定条件下伤害减少"归**伤害修改**，与护盾
+        （抵挡）不是一回事：它是**乘**在伤害上，不是把整笔挡掉；且乘在
+        `resolve_damage(...).final` 之后（与「命中率 −X%」的折法一致——都在
+        防御/法抗算完之后折那一笔）。
+        """
+        if enemy is None or amount <= 0.0:
+            return amount
+        tal = find_species_resistance(op.talents)
+        if tal is None:
+            return amount
+        eff = tal.effects
+        if (not eff.resistance_species
+                or enemy.species != eff.resistance_species):
+            return amount
+        return amount * (1.0 - eff.damage_resistance)
+
     def _grant_closur_shield(self, owner: OperatorUnit, t: float,
                              cnt: int) -> None:
         """可露希尔技1「递归策略」：开技立即给**援军**发 `shield_cnt` 层护盾。
@@ -4248,14 +4283,14 @@ class BattleSimulator:
             # 逐段结算：两段的防御/法抗各减一次。把 atk 乘 2 再打一次会
             # 少减一次防御，对高防目标能差出成倍的伤害。
             for _seg in range(max(1, int(getattr(e, "attack_times", 1) or 1))):
-                dealt += op.take(resolve_damage(
+                dealt += op.take(self._species_resist(op, e, resolve_damage(
                     e.atk, damage_type=e.attack_type,
                     defense=op.current_defense(), res=op.current_res(),
                     # 闪避走期望值法：把最终伤害乘 `(1 − 闪避率)`，不掷骰。
                     # 掷骰会让同一份作业每次跑出不同结果，搜索与回归都不可复现。
                     dodge_phys=op.dodge_phys + op.talent_dodge_phys,
                 dodge_arts=op.dodge_arts + op.talent_dodge_arts,
-                ).final * hit_scale)
+                ).final * hit_scale))
                 if op.hp <= 0 or op.retreated:
                     break
             # 【怀黍离】重生后的普攻附加伤害（瘴 / 鄙瘴）：
@@ -4266,12 +4301,12 @@ class BattleSimulator:
             if e.reborn_charge and e.reborn_damage_magic:
                 bonus = e.atk * e.reborn_damage_magic * e.reborn_charge
                 if bonus > 0.0:
-                    dealt += op.take(resolve_damage(
+                    dealt += op.take(self._species_resist(op, e, resolve_damage(
                         bonus, damage_type=DamageType.MAGIC,
                         defense=0.0, res=op.current_res(),
                         dodge_phys=op.dodge_phys + op.talent_dodge_phys,
                 dodge_arts=op.dodge_arts + op.talent_dodge_arts,
-                    ).final * hit_scale)
+                    ).final * hit_scale))
             # 受击回复的技力
             if dealt > 0 and op.skill is not None and not op.skill.is_passive \
                     and not op.skill_active:
@@ -4344,20 +4379,20 @@ class BattleSimulator:
                 if op is None or op.hp <= 0 or op.retreated:
                     continue
                 # ① 基础物理：攻击力 × 100%（正文），逐目标减防
-                op.take(resolve_damage(
+                op.take(self._species_resist(op, e, resolve_damage(
                     e.atk * e.skill_atk_scale_phys, damage_type="PHYSICAL",
                     defense=op.current_defense(), res=op.current_res(),
                     dodge_phys=op.dodge_phys + op.talent_dodge_phys,
                 dodge_arts=op.dodge_arts + op.talent_dodge_arts,
-                ).final)
+                ).final))
                 # ② 附加法术（仅当它自己站在受污染的田地上），单独减一次法抗
                 if mag > 0.0:
-                    op.take(resolve_damage(
+                    op.take(self._species_resist(op, e, resolve_damage(
                         mag, damage_type=DamageType.MAGIC,
                         defense=0.0, res=op.current_res(),
                         dodge_phys=op.dodge_phys + op.talent_dodge_phys,
                 dodge_arts=op.dodge_arts + op.talent_dodge_arts,
-                    ).final)
+                    ).final))
                 if op.skill is not None and not op.skill.is_passive \
                         and not op.skill_active:
                     gain = op.skill.sp_per_hit()
@@ -4786,7 +4821,7 @@ class BattleSimulator:
             for op in alive:
                 # 「预计算无途径物理伤害」= 定额、不吃防御也不吃法抗，
                 # 故直接 `take` 而不是 `resolve_damage`。
-                op.take(e.attach_damage)
+                op.take(self._species_resist(op, e, e.attach_damage))
 
     def _enemy_mech_tick(self, dt: float, t: float) -> None:
         """敌人侧关卡机制（怀黍离）：加速计时、明识形态、被击倒后的效果。

@@ -902,6 +902,26 @@ def squad_cost_bonus(talents) -> float:
 _SUMMON_WORDS = ("召唤物", "棋子")
 
 
+def find_species_resistance(talents) -> Talent | None:
+    """泥岩天赋「手足相惜」：受到来自【某类】敌人的伤害降低 X%。
+
+    判据要**两条同时**成立：正文里有「受到来自【…】敌人的伤害」这个句式（种类
+    落在 `SkillEffects.resistance_species`），且黑板 `damage_resistance` > 0
+    （她这里是 0.3）。
+
+    只拿到比例、不知道对谁，等于没建模——审计第二道筛子对这个键本来就是**假
+    通过**：`damage_resistance` 的键名只在 `operator/skill.py` 的映射表里出现过，
+    战斗侧从来没人用它。这里把它接上（消费点见 `sim._species_resist`）。
+    """
+    for t in talents:
+        eff = getattr(t, "effects", None)
+        if eff is None:
+            continue
+        if getattr(eff, "resistance_species", "") and eff.damage_resistance > 0.0:
+            return t
+    return None
+
+
 def is_summon_limit_talent(t: Talent) -> bool:
     if not t.has("cnt") or t.value("cnt") <= 0:
         return False

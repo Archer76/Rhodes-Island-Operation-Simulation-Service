@@ -1151,6 +1151,12 @@ class SkillEffects:
     shield_break_heal_ratio: float = 0.0
     #: 破裂后给的技力（空弦「铁弦」的 `sp`=7）。
     shield_break_sp: float = 0.0
+    #: 「受到来自【某类】敌人的伤害降低 X%」（泥岩天赋「手足相惜」）。
+    #:
+    #: `damage_resistance` 是那个 X（她这里是 0.3），另有 `resistance_species`
+    #: 存方括号里的**敌人种类**（"萨卡兹"）——两者要一起看：只拿到比例、不知道
+    #: 对谁，等于没建模。判据锚正文的「受到来自【…】敌人的伤害」。
+    resistance_species: str = ""
     #: 开技时**发给友军**的护盾层数（可露希尔技1「递归策略」的 `shield_cnt`=1）。
     #:
     #: 正文「立即使自身的**援军**获得 1 层护盾（**不叠加**），技能持续时间内逐渐
@@ -2019,6 +2025,12 @@ def _range_override(raw: dict, bb: dict[str, float]) -> str | None:
     return str(v) if v else None
 
 
+#: 「受到来自【某类】敌人的伤害降低 X%」——泥岩天赋「手足相惜」。
+#: 方括号里是**敌人种类**（PRTS 敌人页那一列「种类」，落在 enemydb 的
+#: `enemy.category`：萨卡兹、化物、感染生物、机械、海怪……）。
+_SPECIES_RESIST_RE = re.compile(r"受到来自【([^】]+)】敌人的伤害")
+
+
 def parse_effects(bb: dict[str, float], duration_type: str = "NONE",
                   description: str = "") -> SkillEffects:
     """把一份黑板归类进四个箱子（+ 变体）。**技能与天赋共用这一个入口。**
@@ -2085,6 +2097,14 @@ def apply_text_rules(eff: SkillEffects, description: str,
     # 所以这一条不会把别人的护盾误读成"发盾"。
     if "层护盾" in description:
         eff.shield_grants = int(bb.get("shield_cnt") or 0)
+    # 「受到来自【某类】敌人的伤害降低 X%」（泥岩天赋「手足相惜」）。
+    # 只认这一句式：**比例**在黑板 `damage_resistance`，**对谁**在正文方括号里，
+    # 两个都要有才算建了——只取比例不知道对谁，等于没建模（那正是审计第二道
+    # 筛子的假通过：键名在映射表里出现过，但没人真的用它）。
+    m = _SPECIES_RESIST_RE.search(description or "")
+    if m:
+        eff.resistance_species = m.group(1)
+        eff.damage_resistance = float(bb.get("damage_resistance") or 0.0)
 
 
 def _parse_effects(bb: dict[str, float], duration_type: str) -> SkillEffects:
