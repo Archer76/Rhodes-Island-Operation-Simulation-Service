@@ -60,6 +60,9 @@ from dataclasses import dataclass, field
 from ..operator.talent import Talent
 
 __all__ = [
+    "DAMAGE_BLOCK_TALENTS",
+    "is_damage_block_talent",
+    "find_damage_block",
     "CLASS_AURA_TALENTS",
     "is_class_aura_talent",
     "find_class_aura",
@@ -136,6 +139,31 @@ SP_KEYS = ("amiya_t_1[atk].sp", "amiya_t_1[kill].sp")
 #:
 #: 判据用**名字**而不是黑板键：这条天赋的黑板只有一个 `def`，而 `def` 满天飞，
 #: 按键判会把一大票干员都算进来。名字是唯一能把"这句话"钉死的锚。
+#: 「战术装甲」：**获得 X% 的伤害抵挡**（星熊天赋1）。
+#:
+#: **判据用名字，不用键。** 它的黑板键是 `prob`——而 `prob` 在全库**同名反义**
+#: （本批十位干员里恰好三个概率键，其中就有同键不同义的），按键判会把它和
+#: "眩晕概率"混成一件事。名字是唯一能把这句话钉死的锚。
+#:
+#: **语义上的一点说明**：「伤害抵挡」按确定性减伤 25% 读、还是按"25% 概率
+#: 完全抵挡"读，**期望完全一样**（都是 ×0.75），所以这里可以直接借闪避那条
+#: 现成的**期望值**通道表达，不必新增一套机制。这与"闪避能线性折进伤害"是
+#: 同一条口径。**唯一不成立于真实伤害**：`resolve_damage` 里 dodge 只对
+#: 物理/法术生效，真伤不吃。若日后发现抵挡该减免真伤，改这一处。
+DAMAGE_BLOCK_TALENTS = frozenset({"战术装甲"})
+
+
+def is_damage_block_talent(t: Talent) -> bool:
+    return getattr(t, "name", "") in DAMAGE_BLOCK_TALENTS
+
+
+def find_damage_block(talents) -> Talent | None:
+    for t in talents or ():
+        if is_damage_block_talent(t):
+            return t
+    return None
+
+
 CLASS_AURA_TALENTS: dict[str, str] = {"特种作战策略": "TANK"}
 
 

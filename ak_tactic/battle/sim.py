@@ -53,7 +53,7 @@ from ..gamedata.enemy import PROSE_SUMMON_EDGES
 from .damage import DamageType, resolve_damage
 from .talents import (CLASS_AURA_TALENTS, FACTION_AURA_NAME, STUDENT_TEAM,
                       RegenAura, SnowField, TeamAura, find_blessing,
-                      find_class_aura, find_regen,
+                      find_class_aura, find_damage_block, find_regen,
                       find_snow, find_sp_on_action, find_summon_allowance,
                       find_team_aura,
                       squad_cost_bonus)
@@ -2178,6 +2178,14 @@ class BattleSimulator:
                 profession=CLASS_AURA_TALENTS[class_aura.name],
             ))
             self._refresh_auras()
+        # 天赋：**常驻的伤害抵挡**（星熊「战术装甲」）。落到**独立字段**上——
+        # 不能塞进 `op.dodge_phys`：那个由技能开关写，`_deactivate` 会清零，
+        # 于是星熊一开一关技能抵挡就没了，而且**不报错**。
+        block = find_damage_block(op.talents)
+        if block is not None:
+            d = block.value("prob", 0.0)
+            op.talent_dodge_phys = d
+            op.talent_dodge_arts = d
         if self.verbose:
             sk = f" 带技能「{op.skill.name}」" if op.skill is not None else ""
             tal = "、".join(f"「{x.name}」" for x in op.talents)
@@ -2578,7 +2586,8 @@ class BattleSimulator:
                     defense=op.current_defense(), res=op.current_res(),
                     # 闪避走期望值法：把最终伤害乘 `(1 − 闪避率)`，不掷骰。
                     # 掷骰会让同一份作业每次跑出不同结果，搜索与回归都不可复现。
-                    dodge_phys=op.dodge_phys, dodge_arts=op.dodge_arts,
+                    dodge_phys=op.dodge_phys + op.talent_dodge_phys,
+                dodge_arts=op.dodge_arts + op.talent_dodge_arts,
                 ).final)
                 if op.hp <= 0 or op.retreated:
                     break
@@ -2593,7 +2602,8 @@ class BattleSimulator:
                     dealt += op.take(resolve_damage(
                         bonus, damage_type=DamageType.MAGIC,
                         defense=0.0, res=op.current_res(),
-                        dodge_phys=op.dodge_phys, dodge_arts=op.dodge_arts,
+                        dodge_phys=op.dodge_phys + op.talent_dodge_phys,
+                dodge_arts=op.dodge_arts + op.talent_dodge_arts,
                     ).final)
             # 受击回复的技力
             if dealt > 0 and op.skill is not None and not op.skill.is_passive \
@@ -2670,14 +2680,16 @@ class BattleSimulator:
                 op.take(resolve_damage(
                     e.atk * e.skill_atk_scale_phys, damage_type="PHYSICAL",
                     defense=op.current_defense(), res=op.current_res(),
-                    dodge_phys=op.dodge_phys, dodge_arts=op.dodge_arts,
+                    dodge_phys=op.dodge_phys + op.talent_dodge_phys,
+                dodge_arts=op.dodge_arts + op.talent_dodge_arts,
                 ).final)
                 # ② 附加法术（仅当它自己站在受污染的田地上），单独减一次法抗
                 if mag > 0.0:
                     op.take(resolve_damage(
                         mag, damage_type=DamageType.MAGIC,
                         defense=0.0, res=op.current_res(),
-                        dodge_phys=op.dodge_phys, dodge_arts=op.dodge_arts,
+                        dodge_phys=op.dodge_phys + op.talent_dodge_phys,
+                dodge_arts=op.dodge_arts + op.talent_dodge_arts,
                     ).final)
                 if op.skill is not None and not op.skill.is_passive \
                         and not op.skill_active:
@@ -3053,7 +3065,8 @@ class BattleSimulator:
             dealt = target.take(resolve_damage(
                 e.atk, damage_type=e.attack_type,
                 defense=target.current_defense(), res=target.current_res(),
-                dodge_phys=target.dodge_phys, dodge_arts=target.dodge_arts,
+                dodge_phys=target.dodge_phys + target.talent_dodge_phys,
+            dodge_arts=target.dodge_arts + target.talent_dodge_arts,
             ).final)
             e.attacked_once = True
             e.self_destruct_at = t + self.enemy_windup

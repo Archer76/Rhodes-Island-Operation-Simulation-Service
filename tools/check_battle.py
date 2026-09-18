@@ -2373,6 +2373,107 @@ def check_second_use(stage, lib, calc, book_t) -> None:
           f"{first} -> {dict(other.effects.buffs)}")
 
 
+def check_damage_block(stage, lib, calc, book_t) -> None:
+    """[30] 「战术装甲」：**常驻**的伤害抵挡（星熊天赋1）。
+
+    描述：「获得 X% 的伤害抵挡」。这一条此前两份筛子都报 0 欠账——它的键是
+    `prob`，归得了类，于是第一道放过、第二道（只在第一道失败时跑）也看不见它。
+
+    两件必须钉住的事：
+
+    1. **E2 取到的是 25%，不是 12%。** 库里四个候选按**精英阶段**分两组
+       （精0/精1 是 12%/15%，精2 是 25%/28%）。只取"第一个候选"会拿到 12%
+       ——**错一半，且不报错**。
+    2. **它必须活过技能的开关。** 技能那套闪避由 `_activate` 置上、
+       `_deactivate` **清零**；天赋是常驻的。两者塞进同一个字段，星熊一开
+       一关技能抵挡就没了。所以走**独立字段**并在受伤结算处相加。
+
+    另钉一条**已知边界**：`resolve_damage` 里的抵挡只对物理/法术生效，
+    **真实伤害不吃**。这是借闪避通道表达带来的后果，写在这里免得日后当 bug 查。
+    """
+    print("\n[30] 「战术装甲」：常驻的伤害抵挡")
+    from ak_tactic.battle.damage import DamageType, resolve_damage  # noqa: PLC0415
+    from ak_tactic.battle.talents import (  # noqa: PLC0415
+        find_damage_block, is_damage_block_talent)
+
+    cid = "char_136_hsguma"
+    tal = book_t.for_operator(cid, elite=2, level=60, potential=1)
+    hit = find_damage_block(tal)
+    check("find_damage_block 认得星熊「战术装甲」",
+          hit is not None and hit.name == "战术装甲",
+          hit.name if hit else "None")
+    check("它是伤害抵挡那一族", hit is not None and is_damage_block_talent(hit))
+    check("**E2 取到 25%，不是精0/精1 档的 12%**",
+          hit is not None and abs(hit.value("prob", 0) - 0.25) < 1e-9,
+          f"prob={hit.value('prob') if hit else None}")
+    tal3 = find_damage_block(book_t.for_operator(cid, elite=2, level=60, potential=3))
+    check("潜能 3 档是 28%（`required_potential_rank=2`）",
+          tal3 is not None and abs(tal3.value("prob", 0) - 0.28) < 1e-9,
+          f"prob={tal3.value('prob') if tal3 else None}")
+    tal1 = find_damage_block(book_t.for_operator(cid, elite=1, level=70, potential=1))
+    check("精 1 档是 12%（阶别不同值不同，别只取第一个候选）",
+          tal1 is not None and abs(tal1.value("prob", 0) - 0.12) < 1e-9,
+          f"prob={tal1.value('prob') if tal1 else None}")
+    tal0 = find_damage_block(book_t.for_operator(cid, elite=0, level=50, potential=1))
+    check("精 0 **根本没有这条天赋**（精 1 才解锁，不是 0%）",
+          tal0 is None, f"取到 {tal0.name if tal0 else None}")
+
+    owner = make_unit(calc, cid, elite=2, level=60, potential=1)
+    owner.talents = tal
+    sim = mechanism_sim(stage, lib)
+    sim.operators.append(owner)
+    sim._do_deploy(Deployment(time=0.0, operator=owner, position=(2, 2),
+                              direction="Right", talents=tal), 0.0)
+    check("部署后抵挡落到**天赋**字段（不是技能那个字段）",
+          abs(owner.talent_dodge_phys - 0.25) < 1e-9
+          and abs(owner.talent_dodge_arts - 0.25) < 1e-9,
+          f"phys={owner.talent_dodge_phys} arts={owner.talent_dodge_arts}")
+    check("技能那个字段**保持为 0**（别把常驻值塞进去）",
+          owner.dodge_phys == 0.0 and owner.dodge_arts == 0.0,
+          f"dodge_phys={owner.dodge_phys}")
+
+    # ---- 关键反向守卫：开一次技能再关掉，抵挡必须还在 ----
+    # 这一条正是"分字段"的存在理由。合成一个字段时，下面这一条会红。
+    owner.dodge_phys = 0.6
+    owner.dodge_arts = 0.6
+    owner.dodge_phys = 0.0
+    owner.dodge_arts = 0.0
+    check("技能闪避被清零后，**天赋抵挡仍在**（反向守卫：分字段的理由）",
+          abs(owner.dodge_phys + owner.talent_dodge_phys - 0.25) < 1e-9,
+          f"实得 {owner.dodge_phys + owner.talent_dodge_phys}")
+
+    # ---- 真的减到伤害上了吗 ----
+    plain = resolve_damage(1000.0, damage_type=DamageType.PHYSICAL,
+                           defense=0.0, dodge_phys=0.0)
+    cut = resolve_damage(1000.0, damage_type=DamageType.PHYSICAL,
+                         defense=0.0, dodge_phys=owner.talent_dodge_phys)
+    check("物理伤害按 25% 折（1000 → 750）", abs(cut.final - 750.0) < 1e-6,
+          f"实得 {cut.final}")
+    cut_m = resolve_damage(1000.0, damage_type=DamageType.MAGIC,
+                           res=0.0, dodge_arts=owner.talent_dodge_arts)
+    check("法术伤害同样折（「伤害抵挡」不分伤害类型）",
+          abs(cut_m.final - 750.0) < 1e-6, f"实得 {cut_m.final}")
+    check("描述里没写限物理，所以物理与法术**同值**",
+          abs(owner.talent_dodge_phys - owner.talent_dodge_arts) < 1e-12)
+
+    # ---- 已知边界：真伤不吃 ----
+    cut_t = resolve_damage(1000.0, damage_type=DamageType.TRUE, defense=0.0,
+                           dodge_phys=owner.talent_dodge_phys)
+    check("**已知边界**：真实伤害不吃抵挡（借闪避通道的后果，见 docstring）",
+          abs(cut_t.final - 1000.0) < 1e-6, f"实得 {cut_t.final}")
+    check("对照：不带抵挡的物理确实是原值（证明上面那条不是没接上）",
+          abs(plain.final - 1000.0) < 1e-6, f"实得 {plain.final}")
+
+    # ---- 别人不该白拿 ----
+    other = make_unit(calc, "char_103_angel", elite=2, level=60, potential=1)
+    sim2 = mechanism_sim(stage, lib)
+    sim2.operators.append(other)
+    sim2._do_deploy(Deployment(time=0.0, operator=other, position=(2, 2),
+                               direction="Right"), 0.0)
+    check("没有这条天赋的干员，天赋抵挡是 0",
+          other.talent_dodge_phys == 0.0 and other.talent_dodge_arts == 0.0)
+
+
 def check_push(stage, lib, calc, book_t) -> None:
     """[26] 位移接线：推击把敌人推离路线，且推完能走回来。
 
@@ -2574,6 +2675,7 @@ def main() -> int:
     check_barrier_scope(stage, lib, calc, book_t)
     check_faction_aura(stage, lib, calc, book_t)
     check_class_aura(stage, lib, calc, book_t)
+    check_damage_block(stage, lib, calc, book_t)
     check_second_use(stage, lib, calc, book_t)
     check_push(stage, lib, calc, book_t)
 

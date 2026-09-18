@@ -235,6 +235,12 @@ class OperatorUnit(Combatant):
     #: 只能由描述驱动（`skill._wants_dodge`），不能按键名认。
     dodge_phys: float = 0.0
     dodge_arts: float = 0.0
+    #: **天赋**给的伤害抵挡（星熊「战术装甲」）。与上面两个字段**必须分开**：
+    #: 那两个由技能开关写（`_activate` 置上、`_deactivate` **清零**），天赋是
+    #: 常驻的——塞进同一个字段，星熊一开一关技能就会被清零，而且**不报错**。
+    #: 受伤结算时两者**相加**后再折（见 `sim` 里的 `resolve_damage` 调用点）。
+    talent_dodge_phys: float = 0.0
+    talent_dodge_arts: float = 0.0
     #: 当前屏障剩余量。**先于生命值被消耗**——`take()` 里屏障扛完才动血条。
     #: 由技能授予（`SkillEffects.barrier_pct` × 当前生命上限），**技能结束时清零**；
     #: 召唤物没有自己的技能槽，所以它的屏障是主人开技能时**发下来**的
