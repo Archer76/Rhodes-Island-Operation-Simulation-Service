@@ -244,6 +244,11 @@ type operator struct {
 	leftAt      float64
 	deathTime   float64
 	damageTaken float64
+	//: 造它的那个模拟器。与敌人同款的反向指针：受伤入账要写一条"阵亡"留痕
+	//: （时刻＋累计承伤），而 `take()` 有五个调用点——给它加参数就迟早会漏一个。
+	sim *simCtx
+	//: 阵亡痕迹是否已经写过（`take` 与机制的直伤两条路都要过 `hurt`）。
+	deathLogged bool
 	slot        int //: 列表下标 = 部署顺序（敌人挑"最后部署的"要看它）
 	//: **这一次部署**的身份号（每次部署递增）。原版每次落地都是新的
 	//: `OperatorUnit` 对象，明识形态的"标记退场"记的是对象身份；Go 侧一名
@@ -337,6 +342,12 @@ func runSim(spec *Spec) (*Verdict, error) {
 	// （帧内顺序的权威只有一处）。空机制时这一层不产生任何行为——`Empty()` 直接跳。
 	ctx := &simCtx{spec: spec, objs: &objs, enemies: &enemies, mechanisms: mechanisms,
 		time: &t, frame: &frameNo, verdict: verdict}
+	// 干员在这里才拿得到 ctx（对象数组比 ctx 先建），所以回填一次。
+	for _, o := range objs {
+		if o != nil {
+			o.sim = ctx
+		}
+	}
 	if err := mechanisms.Start(ctx); err != nil {
 		return nil, err
 	}
@@ -778,11 +789,7 @@ func (c *simCtx) DamageOperator(index int, raw float64, trueDamage bool) {
 	if !trueDamage {
 		dealt = math.Max(raw-op.spec.DEF, raw*0.05)
 	}
-	op.hp -= dealt
-	op.damageTaken += dealt
-	if op.hp < 0 {
-		op.hp = 0
-	}
+	op.hurt(dealt)
 }
 
 // HealOperator 施加机制请求的回血。
@@ -1832,9 +1839,30 @@ func (c *simCtx) polluteFromEnemy(e *enemy, amount float64, radius float64) floa
 
 func (o *operator) take(amount float64) float64 {
 	dealt := math.Min(o.hp, math.Max(0, amount))
-	o.hp -= dealt
-	o.damageTaken += dealt
+	o.hurt(dealt)
 	return dealt
+}
+
+// hurt 是干员**受击入账的唯一入口**：扣血、累计承伤、阵亡留痕，一次做完。
+//
+// 为什么必须收成一个口子：`take()`（敌方普攻/技能打的）与 `DamageOperator()`
+// （机制直伤，怀黍离的田地病害走这条）是两条互不相干的路。早先只有前者留痕，
+// 于是"被机制打倒"的干员在判决里只剩一个数量、没有时刻——而**时刻**才是对拍
+// 要看的量：HS-EX-8 第 2 手原版机械师 56.3s 倒、怒潮凛冬 70.3s 倒，Go 只报
+// "阵亡 2"，看不出是谁先塌的，也就找不到那 21% 的输出缺口。
+func (o *operator) hurt(dealt float64) {
+	if dealt <= 0 {
+		return
+	}
+	o.hp = math.Max(0, o.hp-dealt)
+	o.damageTaken += dealt
+	if o.hp <= 0 && !o.deathLogged && o.sim != nil {
+		o.deathLogged = true
+		// 措辞照原版日志那一行：`阵亡（承受 N 伤害）`。
+		o.sim.verdict.Events = append(o.sim.verdict.Events, Event{
+			T: *o.sim.time, Kind: "death",
+			Who: fmt.Sprintf("%s（承受 %.0f 伤害）", o.spec.Name, o.damageTaken)})
+	}
 }
 
 // resolveDamage 伤害结算（`battle/damage.py:resolve_damage` 的最小子集）。
