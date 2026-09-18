@@ -69,6 +69,10 @@ __all__ = [
     "ANGEL_BLESSING_TALENTS",
     "is_angel_blessing",
     "find_angel_blessing",
+    "RHODES_NATION",
+    "LIMIT_DISPATCH_TALENTS",
+    "is_limit_dispatch",
+    "find_limit_dispatch",
     "CLASS_AURA_TALENTS",
     "is_class_aura_talent",
     "find_class_aura",
@@ -198,6 +202,28 @@ def find_damage_block(talents) -> Talent | None:
 
 
 CLASS_AURA_TALENTS: dict[str, str] = {"特种作战策略": "TANK"}
+
+#: 【罗德岛】——`operator.nation_id` 的取值。**不是 `team_id`**：那列是**小队**
+#: （`student`/`rainbow`…），且能天使的 `team_id` 是 None 却属**龙门**。
+RHODES_NATION = "rhodes"
+
+#: 「极限调度」（可露希尔天赋2）：「携带可露希尔时，**部署费用下限降低 3**，
+#: 【罗德岛】干员攻击力 +4%」——`{atk: 0.04, cost: -3.0}`。
+#:
+#: **只做攻击力那半。**`cost: -3` 是"部署费用下限"，属**名册/费用规则**侧的量，
+#: 不在 `battle/`——所以这条天赋**同样只算做了一半**，别当成已收口。
+LIMIT_DISPATCH_TALENTS = frozenset({"极限调度"})
+
+
+def is_limit_dispatch(t: Talent) -> bool:
+    return getattr(t, "name", "") in LIMIT_DISPATCH_TALENTS
+
+
+def find_limit_dispatch(talents) -> Talent | None:
+    for t in talents or ():
+        if is_limit_dispatch(t):
+            return t
+    return None
 
 
 #: 「天使的祝福」（能天使天赋1）：「攻击力+6%，生命上限+10%。置入战场后这个
@@ -364,6 +390,10 @@ class TeamAura:
     #: 判等用**同一对象**（`target is self.operator`），**不按 char_id**——
     #: 同一关里可以有同名干员，按 char_id 会把别人的那份也发出去。
     self_only: bool = False
+    #: **只发给某个势力的人**（`nation_id`，如 `rhodes` = 【罗德岛】）。
+    #: 与 `faction`（阵营**翻倍**）是两种语义：那个是"该阵营 ×2、别人 ×1"，
+    #: 这个是"只有该势力拿、别人 0"——**筛选**，不是倍率。
+    faction_only: str | None = None
 
     def current(self, target=None) -> tuple[float, float]:
         """当前对 `target` 生效的 `(攻击力比例, 防御力比例)`。
@@ -374,6 +404,11 @@ class TeamAura:
         if self.self_only and target is not self.operator:
             # 只给自己：**不按 char_id 比**（同名干员会串），按对象同一性。
             return 0.0, 0.0
+        if self.faction_only is not None:
+            # 按势力**发**：不匹配的一律 0（这是筛选，不是翻倍）。
+            if getattr(target, "nation_id", "") != self.faction_only:
+                return 0.0, 0.0
+            return self.atk_pct, self.def_pct
         if self.profession is not None:
             # 按职业发：**不吃倍率**，也不看主人开不开技能（星熊那条是常驻的）。
             # 空职业（手工搭的试验体）不匹配任何职业光环。
