@@ -472,13 +472,19 @@ def _highland_cells(sim) -> list[list[int]]:
     """
     m = sim.stage.map
     out: list[list[int]] = []
-    for x in range(int(getattr(m, "width", 0))):
-        for y in range(int(getattr(m, "height", 0))):
-            try:
-                if m.inside(x, y) and m.tile(x, y).is_highland:
-                    out.append([x, y])
-            except Exception:  # 地形取不到就当不是高台，不猜
-                continue
+    # ⚠ 遍历 `tiles` 表本身，**不要**按 `range(width) × range(height)` 取：
+    # 地图的行列长度与这两个数并不总是一致，`tile()` 越界会抛 IndexError，
+    # 而"取不到就当不是高台"的兜底会把**真的高台格静默吃掉**。
+    # 实测后果：怒潮凛冬单手一份作业的伤害从 23260 掉到 22656（少一格高台
+    # 就少几次 0.27 倍溅射），判决跟着从"守住"变成"漏怪"。
+    try:
+        tiles = m.tiles
+    except Exception:
+        tiles = []
+    for y, row in enumerate(tiles):
+        for x, tile in enumerate(row):
+            if getattr(tile, "is_highland", False):
+                out.append([x, y])
     return out
 
 
