@@ -1237,6 +1237,28 @@ def check_stage_categories() -> None:
               camp[0]["levels"] == sum(p["levels"] for p in parts),
               f"{camp[0]['levels']} vs {sum(p['levels'] for p in parts)}")
 
+    # BRANCHLINE（插曲·别传）那 20 个 zone 是 `permanent_sub_N_zoneM`——永久开放
+    # 入口，分部名与活动本体一一对应（格兰法洛 / 失落旗舰 / 阵中往事…）。关卡索引
+    # 把那些关挂在**活动**那一侧的 zone 上，所以这 20 个 zone 自己一条关卡都没有。
+    # 内容没丢：它们在活动名（愚人号、遗尘漫步、生于黑夜…）底下照常进菜单。
+    # 守的是「那 20 个分部名在菜单里都找得到」——哪天对不上了，就是真丢了内容。
+    conn = connect()
+    try:
+        bl = [r[0] for r in conn.execute(
+            "SELECT name_second FROM zone WHERE type = 'BRANCHLINE' "
+            "AND name_second <> ''")]
+        bl_stages = conn.execute(
+            "SELECT COUNT(*) FROM stage WHERE zone_id IN "
+            "(SELECT zone_id FROM zone WHERE type = 'BRANCHLINE')").fetchone()[0]
+    finally:
+        conn.close()
+    titles = {p["title"] for e in ch for p in e["parts"]}
+    missing = [n for n in bl if n not in titles]
+    check("BRANCHLINE 那 20 个 zone 自己不挂关卡（关卡在活动那一侧）",
+          bl_stages == 0, f"{bl_stages} 关")
+    check("但它们的分部名在菜单里都找得到（内容没丢，只是走活动那条门）",
+          bool(bl) and not missing, f"缺 {missing[:3]}" if missing else f"{len(bl)} 个分部")
+
 
 def check_completion() -> None:
     """[11] Guides 目录输入框的 Tab 补全（需求第 3 条）。"""
