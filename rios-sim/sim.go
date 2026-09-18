@@ -113,6 +113,11 @@ type enemy struct {
 	//: 高台溅射都给 0.5 秒停顿——漏掉这一路，敌人每次多吃一发就多走 0.2 格，
 	//: 累积到判决层面就是"漏怪"。
 	sluggishTimer float64
+	//: 冻结剩余秒数（原版 `freeze_timer` / `frozen`，unit.py:1015-1023）。
+	//: 冻结与停顿**不是**一回事：停顿只是走得慢，冻结是**这一帧既不走也不出手**
+	//: （`advance` 与 `_enemies_attack` 两处都拦）。目前唯一的来源是圣聆初雪的
+	//: 「圣山的祝福」免死那一下——她攻击范围内的敌人被冻 `c2e_freeze` 秒。
+	freezeTimer float64
 
 	//: 造它的那个模拟器——挨打效果（蜕皮加病害）要问机制层，机制层挂在
 	//: 模拟器上。之所以用反向指针而不是给 `take()` 加参数：`take()` 有多个
@@ -257,6 +262,10 @@ type operator struct {
 	//: 「圣山的祝福」的免死**这一局用过没有**（原版 `blessing_used`，
 	//: unit.py:492：一次部署只免一回）。
 	blessingUsed bool
+	//: 欠下的那次"攻击范围内全体敌人冻结"的秒数（原版 `blessing_freeze`，
+	//: unit.py:495）。免死发生在掉血那一刻，而那里够不着地图，所以先记在这里、
+	//: 由下一帧的 `blessingTick` 兑现——差一帧，与原版同。
+	blessingFreeze float64
 
 	// ---- 技能状态（`skill.go`；没有技能槽时这几个字段一直不动）
 	//:
@@ -480,7 +489,7 @@ func runSim(spec *Spec) (*Verdict, error) {
 				e.attackPause = math.Max(0.0, e.attackPause-dt)
 			}
 			if e.alive() && !e.leaked && !e.offMap && e.blockedBy == nil &&
-				e.attackPause <= 0 && e.sluggishTimer <= 0 {
+				e.attackPause <= 0 && e.sluggishTimer <= 0 && e.freezeTimer <= 0 {
 				// 关卡特有机制可以改这一只的推进速度乘区（如田地/阻流阀）；
 				// 没挂机制时 `speedFor` 恒为 1.0，与最小版本逐位相同。
 				advance(e, dt, spec.SpeedScale*ctx.speedFor(e.index))
@@ -491,6 +500,9 @@ func runSim(spec *Spec) (*Verdict, error) {
 		for _, e := range enemies {
 			if e.sluggishTimer > 0 {
 				e.sluggishTimer = math.Max(0.0, e.sluggishTimer-dt)
+			}
+			if e.freezeTimer > 0 {
+				e.freezeTimer = math.Max(0.0, e.freezeTimer-dt)
 			}
 		}
 
@@ -589,6 +601,11 @@ func runSim(spec *Spec) (*Verdict, error) {
 		// 干员打退场"与"这一帧的环境伤害"的先后关系反过来——每一秒都差一次。
 		//
 		// 空机制整段跳过，通用关卡一帧都不多花。
+		//
+		// `blessingTick` 排在这里是照原版 3.5（`sim.py:2775`，紧跟 `_snow_tick`
+		// 之后、`_qi_tick` 之前）：免死欠下的那次范围冻结要在**本帧出手之前**兑现，
+		// 否则被冻的敌人还会多打一帧。
+		blessingTick(ops, enemies, t, verdict)
 		if !mechanisms.Empty() {
 			mechanisms.EnvTick(ctx, dt)
 			// ---- 3.9 天桩链（原版 3884，紧跟 `_device_tick` 之后）
@@ -1542,6 +1559,11 @@ func enemiesAttack(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec,
 		if e.spec.SkillAtkNoNormal {
 			continue
 		}
+		// 冻结：**既不走也不出手**（原版 `_enemies_attack` 的 `e.frozen` 闸门）。
+		// 与「停顿」不是一回事——停顿只是移速降 80%，照样打人。
+		if e.freezeTimer > 0 {
+			continue
+		}
 		op := enemyTarget(e, ops, spec.RangedEnemies)
 		if op == nil || !op.alive() {
 			continue
@@ -1914,19 +1936,22 @@ func (o *operator) hurt(dealt float64) {
 	// 漏一处，而漏掉的那一处会让这个"免死一次"在某个伤害来源下悄悄失效——
 	// 这一句是原版注释里的原话，也是它把判据放在掉血唯一入口的理由）。
 	//
-	// ⚠ 本条**只兑现了"免死 + 满血复活"**。同一天赋的另外两半都未移植：
-	// Go 侧既没有敌人冻结状态（`c2e_freeze`：触发时冻结攻击范围内全体敌人），
-	// 也没有干员冻结状态（`freeze`：触发时自身冻结 N 秒）。所以这里**故意
-	// 不写**"记一个自冻结计时器"——没有消费点的字段就是假完成，它会让人以为
-	// 这条天赋已经接完了。规格仍然把两个数送过来（`wire.OperatorSpec`），
-	// 那是给"哪天补上冻结"留的接口，不是"已经生效"的证据。
+	// ⚠ 本条兑现的是"免死 + 满血复活 + 攻击范围内全体敌人冻结"。同一天赋里
+	// **自身**冻结 N 秒（黑板 `freeze`）那半**未移植**——Go 侧还没有干员冻结/
+	// 晕眩状态。所以这里**故意不写**自冻结计时器：没有消费点的字段就是假完成，
+	// 它会让人以为这条天赋已经接完了。规格照送 `blessing_self_freeze`，那是
+	// 给"哪天补上"留的接口，不是"已经生效"的证据。
 	if o.hp <= 0 && !o.blessingUsed && o.spec.BlessingSave > 0 {
 		o.blessingUsed = true
 		o.hp = o.maxHP()
+		// 空间查询留到**下一帧**兑现：掉血那一刻够不着地图（原版同理由，
+		// sim.py:1065-1071：把空间查询塞进 `take()` 会让纯数值函数反向依赖
+		// 整张地图）。差一帧，与原版同。
+		o.blessingFreeze = o.spec.BlessingSave
 		if traceOn && o.sim != nil {
-			trace("BLESSING t=%.4f op=%s 免死→满血 %.1f（自冻结 %.2f、敌冻结 %.2f 均未移植）",
-				*o.sim.time, o.spec.Name, o.hp,
-				o.spec.BlessingSelfFreeze, o.spec.BlessingSave)
+			trace("BLESSING t=%.4f op=%s 免死→满血 %.1f（待冻结攻击范围内敌人 %.2fs；自冻结 %.2fs 未移植）",
+				*o.sim.time, o.spec.Name, o.hp, o.spec.BlessingSave,
+				o.spec.BlessingSelfFreeze)
 		}
 	}
 	if o.hp <= 0 && !o.deathLogged && o.sim != nil {
@@ -1935,6 +1960,48 @@ func (o *operator) hurt(dealt float64) {
 		o.sim.verdict.Events = append(o.sim.verdict.Events, Event{
 			T: *o.sim.time, Kind: "death",
 			Who: fmt.Sprintf("%s（承受 %.0f 伤害）", o.spec.Name, o.damageTaken)})
+	}
+}
+
+// blessingTick 兑现「圣山的祝福」欠下的那次"攻击范围内全体敌人冻结"
+// （原版 `_blessing_tick`，sim.py:1065-1094）。
+//
+// 为什么欠一帧：免死发生在掉血那一刻（`hurt`），而那里够不着地图——原版的
+// 理由一样（把空间查询塞进 `take()` 会让纯数值函数反向依赖整张地图）。
+//
+// 范围用的是**规格里那份归一化后的绝对格集合**（`spec.Range`，Python 侧
+// `_range_of(op)` 同一来源），不是自己按射程重算一遍——重算就是第二套口径。
+func blessingTick(ops []*operator, enemies []*enemy, t float64, verdict *Verdict) {
+	for _, op := range ops {
+		if op == nil || op.blessingFreeze <= 0 || !op.alive() {
+			continue
+		}
+		secs := op.blessingFreeze
+		op.blessingFreeze = 0
+		cells := make(map[[2]int]bool, len(op.spec.Range))
+		for _, c := range op.spec.Range {
+			cells[[2]int{c[0], c[1]}] = true
+		}
+		hit := 0
+		for _, e := range enemies {
+			if !e.alive() || e.leaked || e.offMap {
+				continue
+			}
+			cx, cy := e.cell()
+			if !cells[[2]int{cx, cy}] {
+				continue
+			}
+			// **取更大值**而不是覆盖：她已经冻着的敌人不该因为这次触发被缩短
+			// （原版注释原话，与 `sluggish_timer` 的写法一致）。
+			e.freezeTimer = math.Max(e.freezeTimer, secs)
+			hit++
+		}
+		verdict.Events = append(verdict.Events, Event{T: t, Kind: "mech",
+			Who: fmt.Sprintf("%s 圣山的祝福触发：生命值回满，攻击范围内 %d 名敌人冻结 %gs",
+				op.spec.Name, hit, secs)})
+		if traceOn {
+			trace("BLESSING-TICK t=%.4f op=%s secs=%.2f hit=%d", t, op.spec.Name, secs, hit)
+		}
 	}
 }
 
