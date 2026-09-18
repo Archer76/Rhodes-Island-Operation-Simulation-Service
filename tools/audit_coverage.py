@@ -126,6 +126,17 @@ def keys_of(cid: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     return sk_keys, t_keys
 
 
+#: 这些黑板键有**通用消费链路**：不靠天赋名，只按键名统一读走。
+#:
+#: `attack_speed` —— `ak_tactic/operator/attack_speed.py` 会把天赋黑板里的它读
+#: 出来加到攻速上。实测能天使「快速弹匣」：`sources=('天赋「快速弹匣」+12',)`，
+#: 潜 5 自动变 +15。所以这个天赋**看着没有具名检测器，机制却是好的**。
+#:
+#: 第三道筛子据此豁免：**一个天赋的全部键都落在这张表里**才豁免；只要还有别的
+#: 键（如「天使的祝福」的 `atk` / `max_hp`），照报不误。
+GENERIC_TALENT_KEYS = frozenset({"attack_speed"})
+
+
 def talent_names_of(cid: str) -> list[str]:
     """该干员的天赋名（去重保序）。
 
@@ -195,8 +206,21 @@ def main() -> int:
         bad = [(src, k) for src, k in allk if _classify(k) is None]
         # 第二道：源码里没人读过 = 真的没建模
         dead = [(src, k) for src, k in bad if not is_read(k, lits)]
-        # 第三道：**天赋整个没有检测器**（见 `talent_names_of` 的说明）
-        no_det = [n for n in talent_names_of(cid) if n not in det]
+        # 第三道：**天赋整个没有检测器**（见 `talent_names_of` 的说明）。
+        # 但要豁免"键有通用消费链路"的那些——它们的机制是好的（见
+        # `GENERIC_TALENT_KEYS`）。豁免条件是"全部键都落在通用表里"，
+        # 空键表不算（空集对任何集合都是子集，会把没键的天赋全放过）。
+        keys_by_name: defaultdict[str, list[str]] = defaultdict(list)
+        for _src, k in t_keys:
+            keys_by_name[_src].append(k)
+        no_det = []
+        for n in talent_names_of(cid):
+            if n in det:
+                continue
+            own = set(keys_by_name.get(n, ()))
+            if own and own <= GENERIC_TALENT_KEYS:
+                continue
+            no_det.append(n)
         for _src, k in bad:
             unclass_global[k] += 1
             unclass_who[k].append(name)
