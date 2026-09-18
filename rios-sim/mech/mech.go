@@ -291,9 +291,17 @@ type EnemyView struct {
 	Index    int //: 出怪顺序（与 `Spec.Spawns` 同序）
 	Name     string
 	Position [2]float64
-	HP       float64
-	Alive    bool
-	Blocked  bool
+	//: 所在格——**由模拟器按与原版同一个口径算好递进来**
+	//: （原版 `EnemyUnit.cell()` = `int(round(x))`，半数进到偶数）。
+	//:
+	//: ⚠ 机制层**不要**自己 `int(Position[0])`：那是**截断**，站在 9.7 格上
+	//: 会得到 9 而原版得到 10。这个差别在"按格查表"的地方会静默换一个答案
+	//: （怀黍离「污」的"自己是否站在受污染田地"就是栽在这里的：Go 少算/多算
+	//: 一整段法术伤害，40 秒后才显形）。
+	Cell    [2]int
+	HP      float64
+	Alive   bool
+	Blocked bool
 	//: 这一只**已经漏掉**（走到终点扣命）——被击倒类效果不许作用在它身上。
 	Leaked bool
 	//: 这一只已经离场（原版 `off_map`）。

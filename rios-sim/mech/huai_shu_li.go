@@ -1303,7 +1303,7 @@ func (m *farmlandMech) AttackTick(ctx Ctx, dt float64) {
 		if e.SkillAtkCross <= 0 {
 			cells = [][2]int{{cx, cy}}
 		}
-		polluted := m.field.ActualAt(int(e.Position[0]), int(e.Position[1])) > 0
+		polluted := m.field.ActualAt(e.Cell[0], e.Cell[1]) > 0
 		mag := 0.0
 		if polluted {
 			mag = e.ATK * e.SkillAtkScaleMagic
@@ -1456,7 +1456,7 @@ func (m *farmlandMech) PostAttack(ctx Ctx, dt float64) {
 		if e.PollutOnDeath <= 0 {
 			continue
 		}
-		cx, cy := int(e.Position[0]), int(e.Position[1])
+		cx, cy := e.Cell[0], e.Cell[1]
 		if e.HasBlocker {
 			cx, cy = e.BlockerCell[0], e.BlockerCell[1]
 		}

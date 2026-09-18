@@ -744,9 +744,11 @@ func (c *simCtx) Operators() []mech.OpView {
 func (c *simCtx) Enemies() []mech.EnemyView {
 	out := make([]mech.EnemyView, 0, len(*c.enemies))
 	for _, e := range *c.enemies {
+		ex, ey := e.cell()
 		v := mech.EnemyView{
 			Index: e.index, Name: e.spec.Name, Position: e.position,
-			HP: e.hp, Alive: e.alive(), Blocked: e.blockedBy != nil,
+			Cell: [2]int{ex, ey},
+			HP:   e.hp, Alive: e.alive(), Blocked: e.blockedBy != nil,
 			Leaked: e.leaked, OffMap: e.offMap,
 			PollutOnDeath: e.spec.PassivePollut, PollutRadius: e.spec.PassiveRadius,
 			ATK: e.spec.ATK, AttackInterval: e.spec.Interval,
