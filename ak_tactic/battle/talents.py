@@ -913,6 +913,16 @@ def is_summon_limit_talent(t: Talent) -> bool:
 _SIMULTANEOUS_RE = re.compile(r"最多同时部署\s*(\d+)\s*[个枚]")
 #: 「最多拥有 N 枚」——望用的是这个措辞（棋子是"摆下去"，不叫部署）。
 _OWNED_RE = re.compile(r"最多拥有\s*(\d+)\s*[枚个]")
+#: 战术点：可露希尔「精准投放」的原文是
+#: 「可以**在战术点召唤**指挥中心协助作战，其被击败后会在15秒后自动刷新；
+#: 战术点效果范围随携带技能变化，效果范围内的友方单位视为自身的援军」。
+#:
+#: ⚠️ 判据必须用**游戏内正文**的措辞。PRTS 的模板提示词是「可部署战术点」，
+#: 拿它当正则的第一次写法人人认不出来——天赋原文里根本没有"可部署"三个字
+#: （2026-09-19 实测，被守卫 [54] 当场抓住）。她这条天赋**有 `cnt`=1**，但
+#: `_SUMMON_WORDS` 里没有"战术点"，`"可以使用"` 也不在她的正文里，所以
+#: 下面那套召唤物判据认不出，必须单列一支。
+_TOKEN_DEPLOY_RE = re.compile(r"可以在战术点召唤")
 
 
 @dataclass(frozen=True)
@@ -948,6 +958,13 @@ def find_summon_allowance(talents) -> SummonAllowance | None:
     2026-09-18 全表核验的对照表见 `docs/uncertainties.md` 的待裁定条目。
     """
     for t in talents or ():
+        # **战术点**（可露希尔「精准投放」=「可以在战术点召唤指挥中心」）：
+        # 她这条天赋**有 `cnt`=1**，但召唤物那套判据要正文里出现「可以使用」
+        # 加「召唤物/棋子」，她两句都不占，所以认不出。战术点确实是玩家可部署
+        # 单位，而且只有 1 个。没有这一支，可露希尔技2 的返费在实跑里永远够
+        # 不着（战术点落不了场）。
+        if _TOKEN_DEPLOY_RE.search(t.description or ""):
+            return SummonAllowance(1, 1, "战术点召唤", t)
         if not is_summon_limit_talent(t):
             continue
         pool = int(t.value("cnt"))

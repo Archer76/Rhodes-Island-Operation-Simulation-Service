@@ -57,3 +57,6 @@ rios-sim/*.test.exe
 # 两份分工是「公开的历史」与「当下的实况」。
 # 它含本机绝对路径与工作节奏，**不要 git add -f 强加**。
 docs/handoff-internal.md
+
+# 全库简报（内嵌 PRTS 备注原文＝第三方内容，只在本机用）
+data/op-briefs.txt

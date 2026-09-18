@@ -1113,6 +1113,15 @@ class SkillEffects:
     #: 0.46）。它的作用对象是「持有【对地规避】的友方」——也就是"起飞"的那一族，
     #: 见 `docs/uncertainties.md`。
     block_radius_scale: float = 0.0
+    #: 「返还部署费用」的比例（可露希尔技2「模型扩展」= 0.4）。
+    #:
+    #: prts 备注把**基数**钉死了：「下一帧立刻回复干员**当前部署费用属性**的 40%
+    #: （向上取整）」，并特意补一句「由新约能天使投递干员时（或类似情况下），即使
+    #: 玩家没有实际消耗费用，干员仍可能拥有非 0 的部署费用属性。本技能仍然可以
+    #: 就这一情况进行回费」——所以基数取该干员自己的 `deploy_cost`，**不是**这次
+    #: 实际扣掉多少费。触发条件是「在**战术点效果范围**内部署干员」（见
+    #: `sim._refund_on_deploy`）。
+    cost_return: float = 0.0
     #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
     #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
     #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
@@ -1864,6 +1873,10 @@ class SkillBook:
         if "阻挡范围扩大" in lv.description:
             lv.effects.block_radius_scale = float(
                 bb.get("attack@block_radius_scale") or 0.0)
+        # 「返还部署费用」（可露希尔技2「模型扩展」）：正文那一句 + 黑板
+        # `cost_return`。消费点在 `sim._refund_on_deploy`（部署当帧结算）。
+        if "返还部署费用" in lv.description:
+            lv.effects.cost_return = float(bb.get("cost_return") or 0.0)
         # 技能结束时的**自身**效果：晕眩与强制退场。两者的数值/语义都
         # 只在描述里，且都与"打在敌人身上"的那套（`control`）无关。
         lv.effects.self_stun = _wants_self_stun(lv.description, bb)
