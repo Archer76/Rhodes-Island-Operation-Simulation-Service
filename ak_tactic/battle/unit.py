@@ -545,6 +545,20 @@ class EnemyUnit(Combatant):
     #: 但仍然可以攻击——这与眩晕/冻结不同，别混。
     #: 标本：凯尔希·思衡托「保护性拒止」`sluggish 5.0`。
     sluggish_timer: float = 0.0
+    #: 天赋「死亡拘审」（阿斯卡纶）叠上来的**持续法术伤害**。
+    #: `dot_stacks` 是层数（正文「效果最多叠加三层」），`dot_timer` 是剩余秒数，
+    #: `dot_per_sec` 是**每层每秒**的伤害，`dot_accum` 是 1 秒一跳的累加器。
+    #:
+    #: 三个字段缺一不可：只存"总伤害"就没法在续层时正确地重置时长与叠加；
+    #: 只存层数则每秒伤害算不出来。**`dot_accum` 不能省**——用 `dot_timer`
+    #: 取模去推"该跳了没"在帧长不整除 1 秒时**会漏跳或多跳**，而且不报错。
+    dot_stacks: int = 0
+    dot_timer: float = 0.0
+    dot_per_sec: float = 0.0
+    dot_accum: float = 0.0
+    #: 跳伤间隔（秒）。来自天赋黑板的 `interval`，**不要硬编码 1.0**——
+    #: 那样即使数据改成别的值，行为也不会变，而且不报错。
+    dot_interval: float = 1.0
 
     #: 剩余【待机】秒数。待机 = **不能移动也不能攻击**。
     #: 标本：BOSS `Skill_Revelation` 的 `idle_duration 5`。

@@ -53,7 +53,8 @@ from ..gamedata.enemy import PROSE_SUMMON_EDGES
 from .damage import DamageType, resolve_damage
 from .talents import (CLASS_AURA_TALENTS, FACTION_AURA_NAME, STUDENT_TEAM,
                       RegenAura, SnowField, TeamAura, find_blessing,
-                      find_class_aura, find_damage_block, find_regen,
+                      find_class_aura, find_damage_block, find_dot_on_hit,
+                      find_regen,
                       find_snow, find_sp_on_action, find_summon_allowance,
                       find_team_aura,
                       squad_cost_bonus)
@@ -1755,6 +1756,22 @@ class BattleSimulator:
                     e.disarm_timer = max(0.0, e.disarm_timer - dt)
                 if e.stun_timer > 0:
                     e.stun_timer = max(0.0, e.stun_timer - dt)
+                # 天赋「死亡拘审」的持续伤害：每 `dot_interval` 秒跳一次，
+                # 单跳量 = 层数 × 每层每秒。**走累加器，不要用 `dot_timer`
+                # 取模**——帧长不整除间隔时会漏跳或多跳，且不报错。
+                if e.dot_timer > 0:
+                    e.dot_timer = max(0.0, e.dot_timer - dt)
+                    e.dot_accum += dt
+                    while e.dot_accum >= e.dot_interval and e.dot_stacks > 0:
+                        e.dot_accum -= e.dot_interval
+                        self._damage_enemy(e, e.dot_stacks * e.dot_per_sec,
+                                           t, DamageType.MAGIC)
+                    if e.dot_timer <= 0.0:
+                        # 时长走完就整体清掉，连层数一起——否则下次挂上时
+                        # 会带着上一次的层数，白拿两层。
+                        e.dot_stacks = 0
+                        e.dot_accum = 0.0
+                        e.dot_per_sec = 0.0
                 # 【冻结】与【寒冷】也是时限状态，一起在这里减。
                 # **必须在这里减而不是在 `advance()` 里**：冻结/停顿的敌人
                 # 在 `advance()` 开头就直接返回了，写进去永远减不动。
@@ -2371,6 +2388,27 @@ class BattleSimulator:
                 best = (val, dt, d)
         return best[1], best[2]
 
+    def _apply_dot(self, target: EnemyUnit, op: OperatorUnit, tal) -> None:
+        """给目标续一层天赋「死亡拘审」。
+
+        **续层，不是重挂**——三件事都要做，缺一条就不是「效果叠加三层」：
+        层数 +1 并封顶、剩余秒数重置为满、每秒伤害按**本次出手**的攻击力
+        快照刷新。
+
+        **`dot_accum` 故意不重置**：它是"离下一跳还差多少"的累加器，不是
+        状态时长。攻击频率一旦快过 1 秒，每挂一层就清空累加器的话，
+        **一跳都不会发生**——而且不报错，只是伤害静静地少掉。
+        """
+        ratio = tal.value("atk_ratio", 0.0)
+        if ratio <= 0:
+            return
+        top = int(tal.value("max_stack_cnt", 1.0) or 1)
+        target.dot_stacks = min(target.dot_stacks + 1, max(top, 1))
+        target.dot_timer = tal.value("debuff_duration", 0.0)
+        target.dot_per_sec = op.current_atk() * ratio
+        step = tal.value("interval", 1.0)
+        target.dot_interval = step if step and step > 0 else 1.0
+
     def _operators_attack(self, dt: float, t: float) -> None:
         for op in self.operators:
             if not op.alive:
@@ -2466,6 +2504,13 @@ class BattleSimulator:
                     if eff is not None and eff.control.get("sluggish"):
                         target.sluggish_timer = max(
                             target.sluggish_timer, eff.control["sluggish"])
+                    # 天赋「死亡拘审」（阿斯卡纶）：**每次攻击**给目标续一层
+                    # 持续法术伤害。与技能无关，所以不看 `eff`。
+                    # `op.talents` 至多三个，逐次扫的开销可以忽略；换来的是
+                    # 快照取的是**这一次出手**的攻击力。
+                    dot_tal = find_dot_on_hit(op.talents)
+                    if dot_tal is not None:
+                        self._apply_dot(target, op, dot_tal)
                     if not target.alive:
                         # 击杀叠层（阿米娅技2 影霄·绝影）：技能期间每击败一个
                         # 敌人 +1 层，上限 `kill_max_stack`，**只在技能期间**叠。

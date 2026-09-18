@@ -63,6 +63,9 @@ __all__ = [
     "DAMAGE_BLOCK_TALENTS",
     "is_damage_block_talent",
     "find_damage_block",
+    "DOT_ON_HIT_TALENTS",
+    "is_dot_on_hit_talent",
+    "find_dot_on_hit",
     "CLASS_AURA_TALENTS",
     "is_class_aura_talent",
     "find_class_aura",
@@ -151,6 +154,33 @@ SP_KEYS = ("amiya_t_1[atk].sp", "amiya_t_1[kill].sp")
 #: 同一条口径。**唯一不成立于真实伤害**：`resolve_damage` 里 dodge 只对
 #: 物理/法术生效，真伤不吃。若日后发现抵挡该减免真伤，改这一处。
 DAMAGE_BLOCK_TALENTS = frozenset({"战术装甲"})
+
+
+#: 「死亡拘审」（阿斯卡纶天赋1）：**攻击给敌人挂一个持续伤害**。
+#: 「移动速度降低 12%，每秒受到 6% 阿斯卡纶当前攻击力的法术伤害，持续 18 秒，
+#: 效果最多叠加三层」——`{atk_ratio: 0.06, debuff_duration: 18, interval: 1,
+#: max_stack_cnt: 3, move_speed: -0.12}`。
+#:
+#: 判据仍用**名字**：`atk_ratio` 这个键名本身并不说明"这是持续伤害"，
+#: 全库同名反义的老问题在这里同样成立。
+#:
+#: **一处留档的读法选择**：正文写「**当前**攻击力」，而持续伤害在游戏里通常
+#: 按**施加瞬间**快照。这里取**快照**（`dot_per_sec` 在挂上那一刻算定），
+#: 理由是若能逐帧变值，同一层数会因阿斯卡纶中途开技能而改变每秒伤害，
+#: 「最多叠加三层」就不再是一个稳定的量。若日后实机证明是逐帧取值，
+#: 改 `_apply_dot` 一处即可。
+DOT_ON_HIT_TALENTS = frozenset({"死亡拘审"})
+
+
+def is_dot_on_hit_talent(t: Talent) -> bool:
+    return getattr(t, "name", "") in DOT_ON_HIT_TALENTS
+
+
+def find_dot_on_hit(talents) -> Talent | None:
+    for t in talents or ():
+        if is_dot_on_hit_talent(t):
+            return t
+    return None
 
 
 def is_damage_block_talent(t: Talent) -> bool:
