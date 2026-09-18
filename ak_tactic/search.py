@@ -316,6 +316,14 @@ class Searcher:
             self.verifier, stage_id, roster, operators, index=index,
             cells=cells, per_op=per_op, skill_of=skill_of)
         if not cands:
+            # **空名单与"剪枝剪没了"是两回事**，别把原因指错方向：名单为空时
+            # `candidates_for` 一个人都不遍历，跟坐标口径、跟攻击范围都无关。
+            # （TUI 的 `[2a]` 默认那条路曾经正是空名单，结果屏却报"几何剪枝"。）
+            if not list(operators):
+                return SearchResult(
+                    note="候选名单是空的：搜索只在给定的名单里挑人，空名单搜不出"
+                         "任何东西。勾几个干员，或改用「允许程序补充」让程序按"
+                         "名册补人。")
             return SearchResult(
                 note="几何剪枝后一个候选都不剩——所有干员的攻击范围都罩不到"
                      "敌人的行进路线。先核对落位坐标口径（MAA，原点左上）")

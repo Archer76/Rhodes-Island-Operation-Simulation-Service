@@ -32,6 +32,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -1475,6 +1476,90 @@ def check_esc_steps() -> None:
               str(got2.get("after_cancel")))
 
 
+def check_solve_pool() -> None:
+    """[3] 解算的**人选池**：勾的人 + （auto 时）名册按练度补的人。
+
+    这一节的存在理由是一条真 bug：`[2a]` 那一屏的默认项是「不用，让程序自己挑」，
+    它把 `st.squad` 留成空表，而解算屏又把这张空表**原样**交给搜索——
+    `candidates_for` 是按名单遍历的，空名单一个候选都不产生。于是默认这条路
+    对任何关卡都当场返回「没有结果」，界面上还把原因写成"几何剪枝"。
+    """
+    from ak_tactic.plan import Roster as PlanRoster
+    from ak_tactic.tui import app as A
+    from ak_tactic.tui import data as D
+
+    tui = D.load_roster()
+    # **直接从夹具名册造一份 `plan.Roster`**，不去读文件：夹具的 `path` 是句
+    # 说明（"自检夹具，不是真名册"），`PlanRoster.from_json` 会当场 FileNotFound。
+    roster = PlanRoster({op.name: {"char_id": op.char_id, "elite": op.elite,
+                                   "level": op.level, "potential": op.potential,
+                                   "module": op.module,
+                                   "module_level": op.module_level}
+                         for op in tui.operators})
+    top = [o.name for o in tui.top() if roster.get(o.name)]
+
+    def pool_of(squad: list[str], mode: str) -> tuple[list[str], str]:
+        st = SimpleNamespace(squad=squad, mode=mode, roster=tui)
+        cls = type("FakeSolve", (A.SolveScreen,),
+                   {"app": SimpleNamespace(state=st)})
+        return cls()._pool(roster)
+
+    check("解算屏真的有 _pool（人选池不再等于 st.squad）",
+          callable(getattr(A.SolveScreen, "_pool", None)))
+
+    pool, note = pool_of([], "auto")
+    check("**不勾人也要有池子**（[2a] 默认那条路）", len(pool) > 0, note)
+    check("不勾人时池子 = 名册按练度前 AUTO_POOL 人或全部",
+          pool == top[:A.AUTO_POOL], f"{len(pool)} 人 / 名册 {len(top)} 人")
+    check("池子说明写清「补了多少人」（界面上要看得见）",
+          "名册按练度补" in note, note)
+
+    picked = top[:3]
+    pool, note = pool_of(picked, "auto")
+    check("auto 模式：勾的人**排在池子最前**（先按你选的试）",
+          pool[:len(picked)] == picked, str(pool[:5]))
+    check("auto 模式池子上限是 AUTO_POOL（不是把 211 人全丢进去）",
+          len(pool) == min(A.AUTO_POOL, len(top)), f"{len(pool)} 人")
+
+    pool, note = pool_of(picked, "only")
+    check("only 模式：池子**正好**是勾的那些人", pool == picked, str(pool))
+    check("only 模式的说明只提勾的人", "只用勾的" in note, note)
+
+    pool, note = pool_of([], "only")
+    check("only 模式一个都没勾：池子为空", pool == [], str(pool))
+    check("**并如实说「池子是空的」**，不再甩一句「几何剪枝」",
+          "池子是空的" in note and "几何剪枝" not in note, note)
+    check("空池子时告诉人怎么补救（回去勾人 / 按 M 换模式）",
+          "勾人" in note and "M" in note, note)
+
+    pool, note = pool_of([top[0], "名册里没有的人"], "only")
+    check("名册里没有的人被剔掉，并在说明里点名",
+          pool == [top[0]] and "名册里没有" in note, f"{pool} / {note}")
+
+    # 搜索侧：空名单的措辞必须与"剪枝剪没了"分开——两者补救办法完全不同。
+    from ak_tactic.search import Searcher
+    row = next((r for r in D.stage_rows(limit=5) if r["level_id"]), None)
+    if row is None:
+        check("空名单的措辞（需要关卡表，跳过）", False, "关卡表是空的")
+    else:
+        r = Searcher(verbose=False).search(row["level_id"], roster, [])
+        check("搜索：空名单 → 说「候选名单是空的」，不赖坐标口径",
+              "名单是空的" in r.note and "几何剪枝" not in r.note, r.note)
+        check("搜索：空名单不产生任何评估（当场返回）",
+              r.evaluated == 0 and r.plan is None,
+              f"evaluated={r.evaluated}")
+
+    # 接线：解算屏交给搜索的必须是**池子**，不是 st.squad
+    src = Path(A.__file__).read_text(encoding="utf-8")
+    i = src.index("class SolveScreen")
+    seg = src[i:src.index("\nclass ", i + 10)]
+    check("解算屏把 _pool 的结果交给搜索（不是 st.squad）",
+          "searcher.search(st.stage[\"level_id\"], roster, pool)" in seg
+          and "self._pool(roster)" in seg, "_pool(roster) → search(..., pool)")
+    check("解算屏把池子规模显示出来（st.pool_note）",
+          "pool_note" in seg and "人选池" in seg, "pool_note")
+
+
 def check_login_wizard() -> None:
     """[16] 初次干净启动的登录向导 / 本次或以后不登录 / 退出账号 / 切账号。
 
@@ -2042,6 +2127,7 @@ def main() -> int:
         check_key_cases()
         check_login_screen()
         check_esc_steps()
+        check_solve_pool()
     finally:
         restore_roster(old_loader)
     # [16] 要真的读本机凭据与名册文件（只是换到临时目录），必须用真函数
