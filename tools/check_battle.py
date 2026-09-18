@@ -2660,6 +2660,67 @@ def check_high_ground_aspd(stage, lib, calc, book_t) -> None:
           f"high={other.aspd_high_ground} flat={other.attack_speed}")
 
 
+def check_angel_blessing(stage, lib, calc, book_t) -> None:
+    """[33] 「天使的祝福」的**自身那半**（能天使天赋1）。
+
+    正文：「攻击力+6%，生命上限+10%。置入战场后这个效果会**同样赋予给一名
+    随机友方单位**」。
+
+    **本节只覆盖前半句。**「随机友方」那半需要一个口径（最先部署的友方？
+    期望摊给全队？），**没有裁定就不动手**，见 `docs/uncertainties.md`。
+    所以这条天赋**只算做了一半**——审计里它仍是待办，别当成已收口。
+
+    自身那半借光环通道表达，新增 `TeamAura.self_only`。**判等必须按对象
+    同一性**（`target is self.operator`）而不是 `char_id`——同一关里可以有
+    同名干员，按 char_id 会把别人的那份也发出去。
+
+    关键断言是**反向**那条：友方拿不到这 6%。
+    """
+    print("\n[33] 「天使的祝福」的自身那半（随机友方那半未做）")
+    from ak_tactic.battle.talents import find_angel_blessing  # noqa: PLC0415
+
+    cid = "char_103_angel"
+    tal = book_t.for_operator(cid, elite=2, level=60, potential=1)
+    hit = find_angel_blessing(tal)
+    check("find_angel_blessing 认得能天使「天使的祝福」",
+          hit is not None and hit.name == "天使的祝福",
+          hit.name if hit else "None")
+    check("E2 潜 1 读数是 +6% 攻击 / +10% 生命上限",
+          hit is not None and abs(hit.value("atk") - 0.06) < 1e-9
+          and abs(hit.value("max_hp") - 0.10) < 1e-9,
+          f"atk={hit.value('atk') if hit else None} "
+          f"max_hp={hit.value('max_hp') if hit else None}")
+    tal3 = find_angel_blessing(book_t.for_operator(cid, elite=2, level=60,
+                                                   potential=6))
+    check("反向：潜能 6 档才是 +8% / +13%（潜 1~5 都是 6/10）",
+          tal3 is not None and abs(tal3.value("atk") - 0.08) < 1e-9
+          and abs(tal3.value("max_hp") - 0.13) < 1e-9,
+          f"atk={tal3.value('atk') if tal3 else None}")
+    check("反向：星熊的天赋里没有这一条",
+          find_angel_blessing(book_t.for_operator("char_136_hsguma", elite=2,
+                                                  level=60, potential=1)) is None)
+
+    owner = make_unit(calc, cid, elite=2, level=60, potential=1)
+    hp_before = owner.max_hp
+    ally = make_unit(calc, "char_4132_ascln", elite=2, level=60, potential=1)
+    ally_hp_before = ally.max_hp
+    sim = mechanism_sim(stage, lib)
+    sim.operators.extend([owner, ally])
+    sim._do_deploy(Deployment(0.0, owner, (2, 3), "Right", talents=tal), 0.0)
+    sim._do_deploy(Deployment(0.0, ally, (3, 3), "Right", talents=[]), 0.0)
+
+    check("自己吃到 +6% 攻击", abs(owner.aura_atk_pct - 0.06) < 1e-9,
+          f"实得 {owner.aura_atk_pct}")
+    check("自己吃到 +10% 生命上限",
+          abs(owner.max_hp - hp_before * 1.10) < 1e-6,
+          f"实得 {owner.max_hp}，应为 {hp_before * 1.10}")
+    check("**反向：友方一点都拿不到**（self_only 只发主人自己）",
+          abs(ally.aura_atk_pct) < 1e-12, f"实得 {ally.aura_atk_pct}")
+    check("反向：友方的生命上限也没被加",
+          abs(ally.max_hp - ally_hp_before) < 1e-6,
+          f"实得 {ally.max_hp}，原 {ally_hp_before}")
+
+
 def check_push(stage, lib, calc, book_t) -> None:
     """[26] 位移接线：推击把敌人推离路线，且推完能走回来。
 
@@ -2864,6 +2925,7 @@ def main() -> int:
     check_damage_block(stage, lib, calc, book_t)
     check_dot_on_hit(stage, lib, calc, book_t)
     check_high_ground_aspd(stage, lib, calc, book_t)
+    check_angel_blessing(stage, lib, calc, book_t)
     check_second_use(stage, lib, calc, book_t)
     check_push(stage, lib, calc, book_t)
 
