@@ -232,7 +232,7 @@ def check_stars() -> None:
 # ---------------------------------------------------------------- 5 回归
 
 def check_baselines() -> None:
-    print("\n[5] 三关基线回归（与既有脚本逐字对齐）")
+    print("\n[5] 基线回归（1-7 两条路 / 怀黍离普通 01 与 05）")
 
     # —— 1-7。**两条路都要锚** ——
     real = Verifier().run(plan_17())
@@ -255,52 +255,41 @@ def check_baselines() -> None:
           and deg.elapsed > real.elapsed,
           f"{deg.kills}/{real.kills} 杀，{deg.elapsed:.1f} vs {real.elapsed:.1f}s")
 
-    # —— SR-6 ——
-    box = Roster.from_json(BOX) if BOX.exists() else Roster.empty()
-    if not BOX.exists():
-        check("SR-6 / SR-EX-8 回归（需要 OperBox，跳过）", False, str(BOX))
-        return
-    sr6 = Plan(stage="act54side_06", deploys=[
-        DeployOrder("圣聆初雪", (5, 4), "Right", skill=2, mastery=3),
-        DeployOrder("德克萨斯", (6, 3), "Right", skill=1, mastery=0)])
-    r6 = Verifier().run(sr6, roster=box)
-    check("SR-6：196.6s / 21 杀 / 0 漏 / 617000",
-          close(r6.elapsed, 196.6, 0.2) and r6.kills == 21 and r6.leaks == 0
-          and close(r6.damage, 617000, 1),
-          f"{r6.elapsed:.1f}s {r6.kills}杀 {r6.leaks}漏 {r6.damage:,.0f}")
-    check("SR-6：三星", r6.stars == 3)
+    # —— 怀黍离（act31side）普通关两条 ——
+    #
+    # **2026-09-18 换基线**：原先是月行水上（act54side）的 SR-6 与 SR-EX-8 四人
+    # 剑气作业。换掉的理由不是它们"过期"，而是**它们失去了真值来源**：
+    # 该活动在真实游戏里已经结束，博士没法再实机复核；而那两条数字又只在
+    # 「技能倍率乘两次」的旧口径下成立——裁定改口径后实测，SR-EX-8 从
+    # `38 杀 / 1 漏 / 剩 2 命` 掉到 `10 杀 / 3 漏 / 命 0`（伤害 1,510,762 →
+    # 475,444），SR-6 的耗时从 196.6s 走到 271.1s（击杀/漏怪/总伤害不变）。
+    # 详见 `docs/uncertainties.md` §二十一「裁定与后果」。
+    #
+    # 新基线取怀黍离普通第一关与第五关，**练度写死在用例里**（不读名册、不读
+    # 账号导出）：坐标自洽、谁都能复跑。两条各锚一条不同的通道——
+    # 01 关是「技能 + 积雪」的常规路径，05 关单干员走**技3（五锤）**那条通道。
+    hs1 = Verifier().run(Plan(stage="act31side_01", deploys=[
+        DeployOrder("圣聆初雪", (4, 4), "Right", skill=2, mastery=3,
+                    elite=2, level=90),
+        DeployOrder("怒潮凛冬", (2, 5), "Right", skill=2, mastery=3,
+                    elite=2, level=60)]))
+    check("怀黍离 01「赴大荒」两人：128.7s / 50 杀 / 0 漏 / 3 命",
+          close(hs1.elapsed, 128.7, 0.2) and hs1.kills == 50 and hs1.leaks == 0
+          and hs1.life == 3,
+          f"{hs1.elapsed:.1f}s {hs1.kills}杀 {hs1.leaks}漏 命{hs1.life}")
+    check("怀黍离 01：三星", hs1.stars == 3, f"{hs1.stars} 星")
 
-    # —— SR-EX-8（带未知量开关）——
-    try:
-        from squad import Roster as SquadRoster
-    except ImportError:
-        check("SR-EX-8 回归（tools/squad.py 不可用，跳过）", False)
-        return
-    sq = SquadRoster()
-    deploys = []
-    for name, pos, d, slot in (("赤刃明霄陈", (4, 2), "Left", 3),
-                               ("予愿安洁莉娜", (1, 4), "Right", 3),
-                               ("凯尔希·思衡托", (8, 3), "Right", 2),
-                               ("圣聆初雪", (10, 4), "Right", 2)):
-        rr = sq.get(name)
-        deploys.append(DeployOrder(
-            name, pos, d, skill=slot, mastery=sq.mastery(name, slot),
-            elite=rr["elite"], level=rr["level"], potential=rr["potential"],
-            trust=rr["trust"], module=rr.get("module"),
-            module_level=rr.get("module_level")))
-    ex = Verifier().run(Plan(stage="act54side_ex08", deploys=deploys),
-                        boss_mode_switch="knock", affinity_blocks_damage=True)
-    check("SR-EX-8 四人剑气：219.8s / 38 杀 / 1 漏 / 剩 2 命"
-          "（剑气速度按录像实测 1.2；旧默认 4.0 时才是 39 杀 0 漏）",
-          close(ex.elapsed, 219.8, 0.2) and ex.kills == 38 and ex.leaks == 1
-          and ex.life == 2,
-          f"{ex.elapsed:.1f}s {ex.kills}杀 {ex.leaks}漏 命{ex.life}")
-    # 漏的是首波压防线那批的最后一只（85.3s 蹒跚羽兽）。仍是胜利，但**不是三星**——
-    # 这条断言如实钉住现状：要三星得改方案，不能把期望值改回三星了事。
-    check("SR-EX-8：二星（漏 1 只）", ex.stars == 2, f"{ex.stars} 星")
-    check("漏怪明细：漏掉的那只被如实记下", len(ex.leak_events) == 1,
-          str(ex.leak_events))
-    check("装置触发情况被读出来", "触发次数" in ex.device, str(ex.device))
+    hs5 = Verifier().run(Plan(stage="act31side_05", deploys=[
+        DeployOrder("怒潮凛冬", (9, 4), "Up", skill=3, mastery=3,
+                    elite=2, level=60)]))
+    check("怀黍离 05「纺绫罗」单干员（怒潮凛冬技3）：201.4s / 46 杀 / 0 漏 / 3 命",
+          close(hs5.elapsed, 201.4, 0.2) and hs5.kills == 46 and hs5.leaks == 0
+          and hs5.life == 3,
+          f"{hs5.elapsed:.1f}s {hs5.kills}杀 {hs5.leaks}漏 命{hs5.life}")
+    check("怀黍离 05：三星", hs5.stars == 3, f"{hs5.stars} 星")
+    check("  技3 真的开出来了（否则这条基线覆盖不到五锤那条通道）",
+          getattr(hs5.result, "skill_activations", 0) > 0,
+          f"开技 {getattr(hs5.result, 'skill_activations', '?')} 次")
 
     # 漏怪明细要有内容——换一份必定漏怪的极端阵容来验
     weak = Verifier().run(Plan(stage="main_01-07", deploys=[
