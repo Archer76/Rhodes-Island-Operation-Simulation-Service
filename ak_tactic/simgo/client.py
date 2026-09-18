@@ -107,6 +107,14 @@ class Simgo:
                 f"调用方认 {PROTOCOL_VERSION}——重新 go build 一次")
         return pong
 
+    def mechanisms(self) -> list[str]:
+        """本二进制里编译进来的**关卡特有机制**名（`mech.Available()`）。
+
+        Python 侧据此判断"这一关的机制能不能交给 Go 跑"，不各自维护名单
+        （博士 2026-09-18：机制单独成层、每个活动分开、按需取用）。
+        """
+        return list(self.ping().get("mechanisms") or [])
+
     def sim(self, spec: dict) -> dict:
         """跑一场。返回判决；不支持时 raise（**绝不返回残缺判决**）。"""
         resp = self._call("sim", spec)

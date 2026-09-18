@@ -40,7 +40,10 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"sort"
 	"time"
+
+	"rios-sim/mech"
 )
 
 // : 协议版本。Python 侧连上来先 `ping` 一次核对它——二进制与调用方版本不一致时，
@@ -68,6 +71,9 @@ type pong struct {
 	Arch     string `json:"arch"`
 	Started  string `json:"started"`
 	SpecDone bool   `json:"spec_done"` //: `sim` 是否已经实现（最小版本落地后为 true）
+	//: 本二进制里**编译进来**的关卡特有机制名（`mech.Available()`）。
+	//: Python 侧据此判断"这一关的机制能不能交给 Go 跑"，不各自维护名单。
+	Mechanisms []string `json:"mechanisms"`
 }
 
 func main() {
@@ -109,10 +115,16 @@ func main() {
 func handle(req *request, started string) response {
 	switch req.Cmd {
 	case "ping":
+		ids := mech.Available()
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		names := make([]string, 0, len(ids))
+		for _, id := range ids {
+			names = append(names, string(id))
+		}
 		return response{ID: req.ID, OK: true, Pong: &pong{
 			Version: protocolVersion, Go: runtime.Version(),
 			OS: runtime.GOOS, Arch: runtime.GOARCH, Started: started,
-			SpecDone: true,
+			SpecDone: true, Mechanisms: names,
 		}}
 	case "sim":
 		if len(req.Spec) == 0 {
