@@ -95,6 +95,10 @@ type OperatorSpec struct {
 
 	//: 攻击范围（**绝对格**，已按落点与朝向展开；技能改范围在最小版本里不支持）
 	Range [][2]int `json:"range"`
+	//: 医疗：这个人的**平A 是治疗**（原版 `OperatorUnit.heals`）。
+	//: 但技能可以把这一击改成伤害（凯尔希·思衡托技2「攻击变为射出医疗单元」）——
+	//: 判据是技能自己有没有写攻击倍率，见 `operatorsAttack`。
+	Heals bool `json:"heals,omitempty"`
 	//: 职业特性溅射（撼地者那四位共用的一条特性；判据是特性黑板上同时有
 	//: `attack@ability_range_radius` 与 `attack@atk_scale_2`，已由 Python 解好）。
 	//:
