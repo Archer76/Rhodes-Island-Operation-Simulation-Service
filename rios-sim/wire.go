@@ -252,6 +252,28 @@ type SpawnSpec struct {
 	PassivePollut float64 `json:"passive_pollut,omitempty"`
 	PassiveRadius float64 `json:"passive_radius,omitempty"`
 
+	//: 重生（原版 `Reborn.*`，怀黍离的 `Reborning.*` 共用这一套状态；见
+	//: `sim.go` 帧序 3.4）：`RebornLeft` = 还能重生几次，`RebornDelay` =
+	//: 倒下到归来之间的秒数，`RebornHPRatio` = 归来时的生命比例。
+	//:
+	//: ⚠ BOSS 的"多一条命"在数据里与普通敌人没有任何区别——只有把这条算上，
+	//: "打完了没有"才是可信的。它曾经整条没进规格：Go 那边**静默**少算一条命，
+	//: 只有恰好因此改变判决的关卡才会露馅，而那正是对拍台最难抓到的一类。
+	RebornLeft    int     `json:"reborn_left,omitempty"`
+	RebornDelay   float64 `json:"reborn_delay,omitempty"`
+	RebornHPRatio float64 `json:"reborn_hp_ratio,omitempty"`
+
+	//: 重生期**充能**（怀黍离「瘴 / 鄙瘴」）：窗口内每 `RebornInterval` 秒，
+	//: 若自身所在**整数格**的病害值 > 0，则扣掉 `RebornPollut` 点并获得 1 层；
+	//: 归来时防御力 +(RebornDefAdd × 层数)%，普攻**附加**
+	//: (RebornDamageMagic × 层数)% 攻击力的无途径法术伤害。
+	//:
+	//: 充能只在重生窗口里增长（原文「重生期间每0.5s」），重生完成即定住。
+	RebornInterval    float64 `json:"reborn_interval,omitempty"`
+	RebornPollut      float64 `json:"reborn_pollut,omitempty"`
+	RebornDefAdd      float64 `json:"reborn_def_add,omitempty"`
+	RebornDamageMagic float64 `json:"reborn_damage_magic,omitempty"`
+
 	//: 敌方**技能出手**（怀黍离「玷 / 勿玷」技能「污」，原版
 	//: `sim.py:3468` 的 `_skill_attack_tick`）。全 0 = 这一只没有这个技能。
 	//:

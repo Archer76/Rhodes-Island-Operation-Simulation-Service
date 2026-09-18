@@ -65,6 +65,18 @@ CASES = [
     # 都对上了——那一笔曾经是 1.2，根因是"乙贴住目标后旧路线还挂着、下一帧
     # 又往前挪了一格"，于是它在自毁前多挨了一下（见 `sim.go::SetEnemyRoute`）。
     dict(stage="HS-S-1", chars=["char_002_amiya", "char_123_fang"]),
+    # ---- 重生（`Reborn.*` / 怀黍离「瘴 / 鄙瘴」的 `Reborning.*`）
+    #
+    # 这一族关卡原先整批被"重生吸病害值"挡在闸门外，现在闸门放行了。但**放行不等于
+    # 验过**——本工具试过的编队（阿米娅/芬/克洛丝，精2 lv80）在任何落位下都打不死
+    # 「瘴 / 鄙瘴」，所以"重生那一段"在这些用例里**一次都没跑到**：HS-7 之所以算数，
+    # 靠的是**环境层**咬到了判决（开/关环境 2杀/75.433s → 6杀/97.9s）。
+    #
+    # ⚠ 因此这一条是**在视野里**，不是**已证过**：重生那条分支要有"咬得到重生"的
+    # 用例才算数（`pick_biting_cells` 的第三层就是为此加的，它现在报的是"三层都不咬
+    # 重生"）。下一步要么换一支打得死它的编队，要么给它单独搭一个能走到那条分支的
+    # 用例——在那之前，别把这一族的绿灯读成"重生已经对齐"。
+    dict(stage="HS-7", chars=["char_002_amiya", "char_123_fang"]),
 ]
 
 #: **只验"闸门放行 + 判决逐项一致"**的关（不做"田地咬到人"的对照）。
@@ -77,6 +89,10 @@ CASES = [
 SPEC_ONLY = [
     dict(stage="HS-EX-4", chars=["char_002_amiya", "char_124_kroos"]),
     dict(stage="HS-5", chars=["char_002_amiya", "char_123_fang"]),
+    # HS-EX-5（「鄙瘴」那一支）：闸门已经放行，但三名干员在 12 个落位下都打不死它，
+    # 于是**三层对照一个都不咬**——那不是我漏了哪一层，是这一场压根走不到那些代码。
+    # 留在这里只证明"Go 能诚实跑完、判决与原版逐项一致"，别读成"重生验过了"。
+    dict(stage="HS-EX-5", chars=["char_002_amiya", "char_123_fang"]),
 ]
 
 STATS_KW = dict(elite=2, level=80, trust=100, potential=6)
@@ -151,7 +167,7 @@ def negative_controls(go, spec: dict, verdict: dict, *, layer: str = "") -> list
 
     has_skill_atk = any(s.get("skill_atk_scale_phys") or s.get("skill_atk_scale_magic")
                         for s in spec.get("spawns", []))
-    if has_skill_atk and layer != "pile":
+    if has_skill_atk and layer in ("", "environment"):
         mutant = json.loads(json.dumps(spec))
         for s in mutant["spawns"]:
             for key in ("skill_atk_scale_phys", "skill_atk_scale_magic",
@@ -161,7 +177,7 @@ def negative_controls(go, spec: dict, verdict: dict, *, layer: str = "") -> list
             problems.append("把敌方技能出手整组清零，判决一字不变"
                             "（这一趟它没落地，用例证明不了它被用上了）")
     has_pollut = any(s.get("passive_pollut") for s in spec.get("spawns", []))
-    if has_pollut and layer != "pile":
+    if has_pollut and layer in ("", "environment"):
         mutant = json.loads(json.dumps(spec))
         for s in mutant["spawns"]:
             s.pop("passive_pollut", None)
@@ -179,7 +195,20 @@ def negative_controls(go, spec: dict, verdict: dict, *, layer: str = "") -> list
         if not differs(mutant):
             problems.append("把天桩链的召唤模板整组摘掉，判决一字不变"
                             "（这一趟链条没落地，用例证明不了它被用上了）")
-    if spec.get("mechanisms") and layer != "pile":
+    # 重生的反证：把重生整组摘掉（还能重生几次 = 0），判决必须跟着变。
+    # 这一层要证的是"多一条命"与"重生期充能"都被用上了——两者都住在
+    # `_reborn_tick` 那一段里，所以一处摘干净就覆盖整族。
+    has_reborn = any(s.get("reborn_left") for s in spec.get("spawns", []))
+    if has_reborn and layer in ("", "reborn"):
+        mutant = json.loads(json.dumps(spec))
+        for s in mutant["spawns"]:
+            for key in ("reborn_left", "reborn_interval", "reborn_pollut",
+                        "reborn_def_add", "reborn_damage_magic"):
+                s.pop(key, None)
+        if not differs(mutant):
+            problems.append("把重生整组摘掉（还能重生几次 = 0），判决一字不变"
+                            "（这一趟重生没落地，用例证明不了它被用上了）")
+    if spec.get("mechanisms") and layer in ("", "environment"):
         mutant = json.loads(json.dumps(spec))
         mutant["mechanisms"] = []
         mutant.pop("mech_config", None)
@@ -226,7 +255,8 @@ def plan_for(sim, stage, squad, calc, cells: list[tuple[int, int]] | None = None
 
 
 def run_py(stage, squad, calc, *, environment: str = "auto", spec_out: bool = False,
-           drop_device_runtime: bool = False, drop_pile_runtime: bool = False, cells=None):
+           drop_device_runtime: bool = False, drop_pile_runtime: bool = False,
+           drop_reborn: bool = False, cells=None):
     """跑一次原版。
 
     ⚠ `spec_out=True` 时规格取的是**跑之前**的那个状态（`build_spec` 是纯读，
@@ -246,6 +276,10 @@ def run_py(stage, squad, calc, *, environment: str = "auto", spec_out: bool = Fa
     还原照旧。**天桩链的对照必须用它，不能拿"开/关环境"顶替**：HS-S-1 的胜负
     压在链条上，而病害值开关对它一字不变——拿环境当对照就会把这一关报成
     "咬不到机制"（⊘），那是**对照问错了问题**，不是"这一关没有内容"。
+
+    `drop_reborn=True` 关的是**重生**那一段（`_reborn_tick`）：BOSS 的"多一条命"
+    与「瘴 / 鄙瘴」的重生期充能都住在那儿。同一课又上了一遍——HS-EX-5 的胜负
+    压在这一层上，开/关环境与开/关天桩链都一字不变，于是它被报成 ⊘。
     """
     sim = BattleSimulator(stage, enemy_at=lib_get(stage), environment=environment)
     if drop_device_runtime:
@@ -253,6 +287,11 @@ def run_py(stage, squad, calc, *, environment: str = "auto", spec_out: bool = Fa
         sim._pile_tick = lambda dt, t: None
     if drop_pile_runtime:
         sim._pile_tick = lambda dt, t: None
+    if drop_reborn:
+        # ⚠ 只关这一帧的结算：重生期充能与"多一条命"都住在这里，所以
+        # `reborn_charge` 会一直是 0，普攻附加伤害（在敌方出手里）也跟着没了——
+        # 一处关掉就覆盖了整族，不必再去动 `_enemies_attack`。
+        sim._reborn_tick = lambda t: None
     for d in plan_for(sim, stage, squad, calc, cells):
         sim.plan(d)
     spec = build_spec(sim, allow_devices=True) if spec_out else None
@@ -293,13 +332,18 @@ def pick_biting_cells(stage, squad, calc, go=None, *, tries: int = 12):
         _, res_on = run_py(stage, squad, CALC, cells=pick)
         _, res_off = run_py(stage, squad, CALC, environment="off", cells=pick)
         _, res_nopile = run_py(stage, squad, CALC, drop_pile_runtime=True, cells=pick)
-        # 两层分别报"有没有影响"：**两层都可能有**（HS-S-1 就是），而一个用例
-        # 只证得动一件事——所以下面按层各试一次反证，谁过就算谁咬到了。
+        _, res_noreborn = run_py(stage, squad, CALC, drop_reborn=True, cells=pick)
+        # 三层分别报"有没有影响"：**三层都可能咬**（HS-S-1 咬链条、HS-EX-5 咬
+        # 重生），而一个用例只证得动一件事——所以下面按层各试一次反证，
+        # 谁过就算谁咬到了。每多一层就多一次原版实跑，所以顺序按"最常咬到的"
+        # 排在前面（先环境、再链条、最后重生）。
         layers = []
         if core(res_on) != core(res_off):
             layers.append("environment")
         if core(res_on) != core(res_nopile):
             layers.append("pile")
+        if core(res_on) != core(res_noreborn):
+            layers.append("reborn")
         if not layers:
             continue
         for layer in layers:
@@ -451,7 +495,7 @@ def main() -> int:
             cells, res_on_probe, layer = pick_biting_cells(stage, squad, CALC, go)
             if cells is None:
                 why = "；".join(_LAST_CONTROL_PROBLEMS) or (
-                    "试遍了可部署格：开/关环境判决相同，且开/关天桩链判决也相同")
+                    "试遍了可部署格：三层对照（环境 / 天桩链 / 重生）判决都一字不变")
                 print(f"⊘ {label}：{why}——不计入通过数")
                 weak += 1
                 continue
