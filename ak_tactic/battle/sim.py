@@ -1721,6 +1721,29 @@ class BattleSimulator:
                         self.result.effect_conflicts.append(
                             f"{op.char_id} {op.skill.name} {d.line()}")
 
+    def _trait_tick(self, dt: float) -> None:
+        """每帧的**特性**结算（与技能状态无关的那一类）。
+
+        现在只有一条：怪杰特性「**自身生命会不断流失**」——每秒流失**生命上限**
+        的 `hp_drain_per_sec`（三位怪杰都是 0.01，判据见 `traits.read_hp_drain`）。
+
+        它**不能塞进 `_skill_tick`**：那个函数在没有技能的干员上会 `continue`
+        （见它自己那句 `if op.skill is None`），而这条特性与有没有技能毫无关系。
+        单独一个钩子也说得清"这一帧掉的血从哪来"。
+
+        「流失到 0 会怎样」：照 `alive`（`hp > 0`）的既有口径处理——她会当场
+        失去战斗能力，后续的选敌/阻挡/结算都会把她排除在外。prts.wiki
+        「新约能天使」页的 `|备注=` **没有提这条特性**，所以"能不能流失致死"
+        与"治疗能不能抵消"两点无从查证，这里按最直白的读法落（见
+        `docs/uncertainties.md`）。
+        """
+        for op in self.operators:
+            if op.hp_drain_per_sec <= 0.0 or not op.alive:
+                continue
+            # 封底到 0：生命不会为负（与敌人那边同一口径）。扣到 0 之后
+            # `alive` 就是 False，后面几段都会跳过她，不必在这里做撤退。
+            op.hp = max(0.0, op.hp - op.max_hp * op.hp_drain_per_sec * dt)
+
     def _skill_tick(self, dt: float, t: float) -> None:
         """每帧的技能结算：回技力、够不够开、持续到点了没有。"""
         res = self.result
@@ -2158,6 +2181,9 @@ class BattleSimulator:
             self._update_blocking()
 
             # 5. 技能（要排在我方出手之前：刚攒满技力的那一帧得算数）
+            # 4.9 特性（怪杰的生命流失）：与技能无关，所以排在技能之前、
+            #     但同在"我方出手之前"这一簇里——本帧掉的血本帧就见效。
+            self._trait_tick(dt)
             self._skill_tick(dt, t)
 
             # 5.4 全场光环（青色怒火）：数值随光环主人的技能状态变，所以必须排在

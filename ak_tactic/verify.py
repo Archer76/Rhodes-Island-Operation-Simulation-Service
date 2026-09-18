@@ -19,7 +19,7 @@ from typing import Any
 from .battle import BattleSimulator, Deployment, RangeProvider
 from .battle.talents import find_glider_mobility, find_power_attack, squad_cost_bonus
 from .battle.traits import (apply_splash_talent, read_combo_attack,
-                            read_trait_splash)
+                            read_hp_drain, read_trait_splash)
 from .battle.unit import OperatorUnit
 from .gamedata import EnemyLibrary, GameDataSource, RangeTable, load_stage
 from .operator import OperatorCalculator, SkillBook, TalentBook
@@ -292,6 +292,9 @@ class Verifier:
             splash_damage_scale=splash.damage_scale if splash else 1.0,
             highland_splash_scale=splash.highland_scale if splash else 0.0,
             highland_splash_sluggish=splash.highland_sluggish if splash else 0.0,
+            # 怪杰特性「自身生命会不断流失」：每秒流失生命上限的这个比例。
+            # 0 = 没有这条特性，模拟器整段跳过。判据见 `traits.read_hp_drain`。
+            hp_drain_per_sec=read_hp_drain(c),
             # 普攻连击（焰狐龙梓兰）：1 = 没有这条。
             combo_hits=combo.hits if combo else 1,
             combo_hit_scale=combo.hit_scale if combo else 1.0,

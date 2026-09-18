@@ -4081,6 +4081,80 @@ def check_target_growth(stage, lib, calc, book_t) -> None:
           all(n <= 3 for n, _g in picks), f"上限取值 {sorted({n for n, _g in picks})}")
 
 
+def check_hp_drain(stage, lib, calc, book_t) -> None:
+    """[46] 怪杰特性「**自身生命会不断流失**」：每秒流失生命上限的 1%。
+
+    这是第三批里第一条**子职业特性**（不是某个干员的天赋/技能）：三位怪杰
+    ——新约能天使、阿、空构——都吃它，所以判据锚在"特性正文 + 特性黑板"上，
+    不锚干员名。出处：prts.wiki 「新约能天使」页 `|备注=` **没有提这条特性**
+    （它讲的全是天坠/弹药那套），速率只能取黑板那个 0.01。
+
+    ⚠️ 判据**必须两段**：只按黑板键 `hp_ratio` 会多认一个工匠的
+    `token_10027_ironmn_pile3`——它的 `hp_ratio` 也是 0.01，但意思是
+    「可被我方干员攻击但不受伤害，受到工匠干员攻击时回复生命」，与流失无关。
+
+    可观测量取的是**生命值本身**（掉了多少血），不是 `hp_drain_per_sec` 那个
+    自己写进去的字段。
+    """
+    print("\n[46] 怪杰特性：自身生命会不断流失")
+    from ak_tactic.battle.traits import read_hp_drain  # noqa: PLC0415
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+    v = Verifier()
+
+    _ids: list[str] = []
+    with sqlite3.connect(Path(__file__).resolve().parent.parent
+                         / "data" / "akdb.sqlite") as _c:
+        _ids = [r[0] for r in _c.execute(
+            "SELECT char_id FROM operator ORDER BY char_id")]
+    _rates: dict[str, float] = {}
+    for _cid in _ids:
+        try:
+            _rates[_cid] = read_hp_drain(calc.character(_cid))
+        except Exception:                     # noqa: BLE001 - 取不到就当没有
+            _rates[_cid] = 0.0
+    _geek = sorted(c for c, r in _rates.items() if r > 0.0)
+    check("判据命中面：全库只有三位怪杰（新约能天使 / 阿 / 空构），都 1%/秒",
+          _geek == ["char_1041_angel2", "char_225_haak", "char_4015_spuria"]
+          and {_rates[c] for c in _geek} == {0.01},
+          f"{len(_geek)} 位：{_geek}，速率 {sorted({_rates[c] for c in _geek})}")
+
+    print("     —— 逐帧真的在掉血（可观测量：生命值本身）——")
+    sim3 = mechanism_sim(stage, lib)
+    u3 = v.unit({"char_id": "char_1041_angel2", "elite": 2, "level": 60,
+                 "trust": 100, "potential": 1})
+    u3.position = (2, 3)
+    u3.direction = "Right"
+    sim3.operators.append(u3)
+    hp0 = u3.hp
+    for _ in range(200):                      # 200 × 0.05s = 10 秒
+        sim3._trait_tick(0.05)
+    drop = hp0 - u3.hp
+    expect = u3.max_hp * 0.01 * 10.0
+    check("  10 秒掉掉**生命上限**的 10%（1%/秒，跌的是上限不是当前值）",
+          abs(drop - expect) < 1e-6,
+          f"实掉 {drop:.2f}，应掉 {expect:.2f}（生命上限 {u3.max_hp:.0f}）")
+    # 反向：没有这条特性的干员在同一批 tick 下一点不掉。
+    u4 = v.unit({"char_id": "char_103_angel", "elite": 2, "level": 60,
+                 "trust": 100, "potential": 1})
+    u4.position = (3, 3)
+    u4.direction = "Right"
+    sim3.operators.append(u4)
+    hp4 = u4.hp
+    for _ in range(200):
+        sim3._trait_tick(0.05)
+    check("  反向：没有这条特性的干员一点不掉（能天使）",
+          abs(u4.hp - hp4) < 1e-9, f"实掉 {hp4 - u4.hp:.4f}")
+    # 致死：1%/秒 × 100 秒就走满生命上限。
+    for _ in range(2000):
+        sim3._trait_tick(0.05)
+    check("  流失会致死：按 1%/秒走满 100 秒后她不再 `alive`"
+          "（prts 备注没写这条，按最直白的读法落，见留档）",
+          not u3.alive, f"生命 {u3.hp:.2f}（上限 {u3.max_hp:.0f}）")
+    check("  反向：上一条成立时，没特性的那位还活着（否则是 tick 坏了）",
+          u4.alive and abs(u4.hp - hp4) < 1e-9,
+          f"生命 {u4.hp:.1f} / {u4.max_hp:.0f}")
+
+
 def check_glider_mobility(stage, lib, calc, book_t) -> None:
     """[43] 焰狐龙梓兰天赋2「翔虫机动」——一个天赋横跨两个平面。
 
@@ -4886,6 +4960,7 @@ def main() -> int:
     check_glider_mobility(stage, lib, calc, book_t)
     check_stackable_slow(stage, lib, calc, book_t)
     check_target_growth(stage, lib, calc, book_t)
+    check_hp_drain(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

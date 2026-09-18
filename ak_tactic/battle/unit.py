@@ -429,6 +429,12 @@ class OperatorUnit(Combatant):
     #: 这个每次开技清零（清零在 `sim._activate`），每出手一次 +1（在选完目标
     #: **之后**自增，所以第 9 次打的还是旧个数——正文写的是「每攻击 9 次**后**」）。
     trigger_hits: int = 0
+    #: 怪杰特性「**自身生命会不断流失**」：每秒流失**生命上限**的这个比例
+    #: （三位怪杰都是 0.01）。0 = 没有这条特性。
+    #:
+    #: 判据在 `traits.read_hp_drain`（特性正文 + 特性黑板 `hp_ratio` 两段）。
+    #: prts.wiki 该页备注没有提这条特性，速率只能取黑板那个 0.01。
+    hp_drain_per_sec: float = 0.0
 
     @property
     def is_summon(self) -> bool:
