@@ -367,6 +367,11 @@ type SpawnSpec struct {
 	SkillAtkCross      int     `json:"skill_atk_cross,omitempty"`
 	SkillAtkPollut     float64 `json:"skill_atk_pollut,omitempty"`
 	SkillAtkGroundOnly bool    `json:"skill_atk_ground_only,omitempty"`
+	//: 天赋「不进行远程普通攻击」：**关掉普攻那整条路**（原版
+	//: `sim.py::_enemies_attack` 的 `if e.skill_atk_no_normal: continue`）。
+	//: 它不是数值而是一道闸门——当成"没用的标记"删掉，这只敌人就会技能与
+	//: 普攻双份出手（HS-EX-8 第 2 手就是这么多出两笔 192 的）。
+	SkillAtkNoNormal bool `json:"skill_atk_no_normal,omitempty"`
 
 	Legs []LegSpec `json:"legs"`
 

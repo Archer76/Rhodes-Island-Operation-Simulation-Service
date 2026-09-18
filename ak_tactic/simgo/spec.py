@@ -436,6 +436,13 @@ def _unit_spec(sim, e, *, time: float = 0.0) -> dict[str, Any]:
         "skill_atk_cross": int(getattr(e, "skill_atk_cross", 0) or 0),
         "skill_atk_pollut": float(getattr(e, "skill_atk_pollut", 0.0) or 0.0),
         "skill_atk_ground_only": bool(getattr(e, "skill_atk_ground_only", False)),
+        #: 天赋「不进行远程普通攻击」（prts：玷 / 勿玷）。**这是闸门不是数值**：
+        #: 它关掉的是普攻那整条路（原版 `sim.py::_enemies_attack` 里
+        #: `if e.skill_atk_no_normal: continue`）。漏送它，Go 就会让这只敌人
+        #: 既走技能又走普攻——HS-EX-8 第 2 手多出的两笔 192（勿玷攻击力 600
+        #: 打在怒潮凛冬身上）就是这么来的。原版字段在 `unit.py:1326`，值来自
+        #: `gamedata/enemy.py:262` 的 `no_normal_ranged`。
+        "skill_atk_no_normal": bool(getattr(e, "skill_atk_no_normal", False)),
         # ---- 重生（`Reborn.*`，怀黍离「瘴 / 鄙瘴」的 `Reborning.*` 共用这套状态）
         #
         # 这一段曾经**整条没送**：Go 那边因此静默少算 BOSS 的一条命，只有恰好
