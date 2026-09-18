@@ -497,9 +497,13 @@ func runSim(spec *Spec) (*Verdict, error) {
 			// 逐帧坐标（按名字门控，见 `tracePosName`）。`blocked/sluggish/freeze`
 			// 一起记：坐标不动有三种截然不同的原因，不写清楚就得分不出来。
 			if traceOn && tracePosName != "" && e.spec.Name == tracePosName {
-				trace("POS t=%.4f idx=%d name=%s x=%.4f y=%.4f hp=%.1f blocked=%t pause=%.2f sluggish=%.2f freeze=%.2f",
+				// ⚠ `x`/`legu` 打到 **7 位**：一帧的滴漏量是 3e-5 量级（帧长
+				// 0.0333 与 1/30 之差），4 位精度下前半程完全看不出来，
+				// 要等几百帧累积到 1e-4 才显形——那就成了"突然差一格"。
+				trace("POS t=%.4f idx=%d name=%s x=%.7f y=%.7f hp=%.1f blocked=%t pause=%.2f sluggish=%.2f freeze=%.2f leg=%d legu=%.7f",
 					*ctx.time, e.index, e.spec.Name, e.position[0], e.position[1], e.hp,
-					e.blockedBy != nil, e.attackPause, e.sluggishTimer, e.freezeTimer)
+					e.blockedBy != nil, e.attackPause, e.sluggishTimer, e.freezeTimer,
+					e.legIndex, e.legU)
 			}
 		}
 		// 停顿按原版在**推进之后**递减（`sim.py:2721-2722` 在 push 那一步里）：
