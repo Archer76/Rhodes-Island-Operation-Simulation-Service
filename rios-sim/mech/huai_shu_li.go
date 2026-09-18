@@ -670,6 +670,8 @@ type farmlandMech struct {
 	//: "≥1 秒就清零"：掉帧时 dt 会一次跨过不止一秒，只结一次等于把伤害漏掉，
 	//: 而 `fps=1` 的粗扫正是搜索里用得最多的档（原版 1344-1351 写的就是这个）。
 	envTimer float64
+	//: 已经结算过"被击倒"效果的那几只（原版每只敌人身上的 `death_done`）。
+	dead map[int]bool
 }
 
 func newFarmlandMech(cfg json.RawMessage) (Mechanism, error) {
@@ -690,16 +692,12 @@ func newFarmlandMech(cfg json.RawMessage) (Mechanism, error) {
 		switch d.Kind {
 		case "pump":
 			m.pumps = append(m.pumps, d)
-		case "valve":
-			// 阻流阀在**规格生成时**就已经把田地断开了（`sever`），运行期它只需要
-			// 站着；"被拆掉之后还原"归装置层，本机制不管（Python 侧会按这一关
-			// 实际用没用到它来判要不要放行）。
 		default:
-			// 天桩那类：本机制不碰，也不许装作碰了。
-			if d.Kind != "" {
-				return nil, fmt.Errorf("田地规格里有本机制不处理的装置 %q（%s @%v）",
-					d.Kind, d.Key, d.Cell)
-			}
+			// 阻流阀与天桩**不该出现在规格里**：阻流阀开场那一次断田已经算进几何，
+			// 它俩的运行期行为都住在装置层（Python 侧 `farmland_spec` 只送泵站）。
+			// 收到了就拒跑——"本机制不处理的装置"与"这一关没有装置"在判决上分不开。
+			return nil, fmt.Errorf("田地规格里有本机制不处理的装置 %q（%s @%v）",
+				d.Kind, d.Key, d.Cell)
 		}
 	}
 	return m, nil
@@ -760,3 +758,97 @@ func (m *farmlandMech) EnvTick(ctx Ctx, dt float64) {
 }
 
 func init() { RegisterFactory(FarmlandID, newFarmlandMech) }
+
+// State 把田地状态交给判决（对拍用，见 `Snapshotter`）。
+//
+// 形态刻意与 Python 侧的规格**同形**（`groups: [{cells: [[x,y]…], maximum, cache}]`
+// + `actual: [[x,y,值]…]`，两边都排序）：对拍台于是能拿它和 `farmland_spec()` 直接
+// 逐项比，不必各写一套解析。**不要**用 `Snapshot()` 里那个数字编码当身份——
+// 19 格的十进制拼接会超出 float64 的有效位，那是"看起来唯一、实际会撞"的坑。
+func (m *farmlandMech) State() any {
+	groups := make([]any, 0, len(m.field.fields))
+	for _, f := range m.field.fields {
+		cells := make([][2]int, 0, len(f.Cells))
+		for c := range f.Cells {
+			cells = append(cells, [2]int{c[0], c[1]})
+		}
+		sort.Slice(cells, func(i, j int) bool {
+			if cells[i][0] != cells[j][0] {
+				return cells[i][0] < cells[j][0]
+			}
+			return cells[i][1] < cells[j][1]
+		})
+		groups = append(groups, map[string]any{
+			"cells": cells, "maximum": f.Maximum, "cache": f.Cache,
+		})
+	}
+	// 片的顺序不保证（Go 的 map 遍历随机、Python 的分组顺序也不保证），
+	// 所以按**格集合的字符串**排一次，让两边的数组可以按下标逐项比。
+	sort.Slice(groups, func(i, j int) bool {
+		return cellKey(groups[i]) < cellKey(groups[j])
+	})
+	actual := make([][3]float64, 0, len(m.field.actual))
+	for c, v := range m.field.actual {
+		actual = append(actual, [3]float64{float64(c[0]), float64(c[1]), v})
+	}
+	sort.Slice(actual, func(i, j int) bool {
+		if actual[i][0] != actual[j][0] {
+			return actual[i][0] < actual[j][0]
+		}
+		return actual[i][1] < actual[j][1]
+	})
+	return map[string]any{"groups": groups, "actual": actual}
+}
+
+// cellKey 把一片的格集合变成可排序的字符串（只用于排序，不参与比较）。
+func cellKey(g any) string {
+	m, ok := g.(map[string]any)
+	if !ok {
+		return ""
+	}
+	cells, _ := m["cells"].([][2]int)
+	var b []byte
+	for _, c := range cells {
+		b = append(b, fmt.Sprintf("%d,%d;", c[0], c[1])...)
+	}
+	return string(b)
+}
+
+// PostAttack 对应原版 `sim.py:3891-3905` 的 `_on_enemy_death`：**被击倒之后**
+// 给圆心周围的田地加病害（记入【缓存】）。
+//
+// 三件事必须与原版逐字一致，否则病害值的量对不上：
+//
+//  1. **圆心**：被阻挡时是**挡它的那个干员**脚下那一格，否则是敌人自己那一格
+//     （`_pollute_around` 1280-1298）。不是"敌人自己那一格"——这是最容易想当然
+//     写错的一处：一只被挡在干员身前的敌人倒下时，污染落在**干员**脚下。
+//  2. **去重**：原版靠 `e.death_done` 标记，一只敌人只结算一次。这里用出怪顺序
+//     下标记，等价（那个标记在整份 `sim.py` 里只有这一处读）。
+//  3. **漏掉的不算**：`not e.leaked and not e.off_map`——走到终点扣了命的那一只
+//     不是"被击倒"，它不该污染田地。
+func (m *farmlandMech) PostAttack(ctx Ctx, dt float64) {
+	if m.dead == nil {
+		m.dead = map[int]bool{}
+	}
+	for _, e := range ctx.Enemies() {
+		if e.Alive || e.Leaked || e.OffMap || m.dead[e.Index] {
+			continue
+		}
+		m.dead[e.Index] = true
+		if e.PollutOnDeath <= 0 {
+			continue
+		}
+		cx, cy := int(e.Position[0]), int(e.Position[1])
+		if e.HasBlocker {
+			cx, cy = e.BlockerCell[0], e.BlockerCell[1]
+		}
+		radius := e.PollutRadius
+		if radius <= 0 {
+			radius = 1.0
+		}
+		got := m.field.PolluteArea(cx, cy, radius, e.PollutOnDeath)
+		if got > 0 {
+			ctx.Log("%s 被击倒 → 田地病害 +%g 记入缓存", e.Name, got)
+		}
+	}
+}

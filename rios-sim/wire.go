@@ -228,6 +228,15 @@ type SpawnSpec struct {
 	KillCost    int  `json:"kill_cost"`
 	CannotClear bool `json:"cannot_clear"`
 
+	//: 被击倒时给"圆心周围田地"加多少病害（原版 `passive_pollut`），
+	//: 以及半径（原版 `passive_radius`，0 表示按 1.0 算）。
+	//:
+	//: 这两项是**每一只敌人自己的**黑板数值，所以住在敌人的规格里；但只有机制层
+	//: 会读它们（怀黍离的田地被击倒污染）。圆心**不是**这一只脚下那一格——
+	//: 被阻挡时取挡它的那个干员脚下那一格（原版 `_pollute_around` 1280-1298）。
+	PassivePollut float64 `json:"passive_pollut,omitempty"`
+	PassiveRadius float64 `json:"passive_radius,omitempty"`
+
 	Legs []LegSpec `json:"legs"`
 }
 
@@ -255,6 +264,13 @@ type Verdict struct {
 	//: 时间线（时刻, 事件, 名字）——对拍"哪一帧开始不一样"就靠它。
 	//: 只记四类：部署 / 出现 / 击杀 / 漏怪。
 	Events []Event `json:"events"`
+
+	//: 各机制的**状态快照**（键 = 机制名，见 `mech.Snapshotter`）。
+	//:
+	//: **判决本身不依赖它**，它是给对拍台用的：判决是粗指标，机制状态累积得不一样
+	//: 却恰好没影响胜负时，只有逐项比这块才看得出来。
+	MechState map[string]any `json:"mech_state,omitempty"`
+
 	//: 这一场跑了多少毫秒（性能对照用）
 	SimMS float64 `json:"sim_ms"`
 }

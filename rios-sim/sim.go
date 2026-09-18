@@ -297,6 +297,15 @@ func runSim(spec *Spec) (*Verdict, error) {
 		// ---- 7. 敌方出手（1873 → 2882）
 		enemiesAttack(ops, enemies, dt, t, spec, verdict)
 
+		// ---- 7.5 关卡特有机制：**两次出手之后、结算之前**（原版 2221）
+		//
+		// 这一处专门处理"这一帧谁把谁打倒了"之后的一次性效果（怀黍离：被击倒的
+		// 敌人给田地加病害 → 记入【缓存】）。排在这里而不是帧末，理由写在原版
+		// 那一行上：出手之后才看得见"谁倒下了"，结算之前才不会漏掉这一次效果。
+		if !mechanisms.Empty() {
+			mechanisms.PostAttack(ctx, dt)
+		}
+
 		// ---- 8. 结算（1886 → 3720）
 		resolve(enemies, &cost, &life, t, verdict)
 		// 离场时刻（1743-1750）：阵亡统一在这里记一次，再部署冷却靠它
@@ -348,6 +357,8 @@ func runSim(spec *Spec) (*Verdict, error) {
 		}
 	}
 	verdict.SimMS = float64(time.Since(start).Microseconds()) / 1000.0
+	// 机制状态进判决，供对拍逐项比（判决本身不读它，见 `mech.Snapshotter`）。
+	verdict.MechState = mechanisms.States()
 	return verdict, nil
 }
 
@@ -410,10 +421,20 @@ func (c *simCtx) Operators() []mech.OpView {
 func (c *simCtx) Enemies() []mech.EnemyView {
 	out := make([]mech.EnemyView, 0, len(*c.enemies))
 	for _, e := range *c.enemies {
-		out = append(out, mech.EnemyView{
+		v := mech.EnemyView{
 			Index: e.index, Name: e.spec.Name, Position: e.position,
 			HP: e.hp, Alive: e.alive(), Blocked: e.blockedBy != nil,
-		})
+			Leaked: e.leaked, OffMap: e.offMap,
+			PollutOnDeath: e.spec.PassivePollut, PollutRadius: e.spec.PassiveRadius,
+		}
+		// 原版 `_pollute_around` 读的是 `e.blocked_by is not None and
+		// e.blocked_by.alive`——**活着**的阻挡者才算数（挡它的那位这一帧刚倒，
+		// 圆心就该落回敌人自己那一格）。
+		if b := e.blockedBy; b != nil && b.alive() {
+			v.HasBlocker = true
+			v.BlockerCell = [2]int{int(b.cell[0]), int(b.cell[1])}
+		}
+		out = append(out, v)
 	}
 	return out
 }
