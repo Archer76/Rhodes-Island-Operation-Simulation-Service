@@ -352,6 +352,18 @@ class OperatorUnit(Combatant):
     #: 技能结束时清零；这个是**自己按秒掉**的，与技能何时结束无关，重复获得时
     #: 重置（`sim._grant_decay_barrier`）。为 0 = 没有这种屏障在衰减。
     barrier_decay_per_sec: float = 0.0
+    #: 「屏障/护盾**破裂**」的次数与回调。
+    #:
+    #: 全库有两位干员的天赋是**破裂时**触发的：泥岩「沃土予身」（每层破裂恢复
+    #: 自身 20% 最大生命）与空弦「铁弦」（破裂后获得 7 点技力）。在这之前
+    #: `take()` 只是把 `barrier` 扣到 0，**没有任何地方知道"它刚刚破了"**，
+    #: 所以这类机制根本无从挂起。这里把"这一下从 >0 掉到 ≤0"记成一次破裂，
+    #: 回调由模拟器挂（机制自己不认识别的模块）。
+    #:
+    #: ⚠️ 只算**被打破**。按秒衰减到 0（`barrier_decay_per_sec`）不算破裂——
+    #: 那是另一条独立的量（见 `docs/uncertainties.md` 里屏障衰减那条）。
+    barrier_breaks: int = 0
+    barrier_break_hooks: list = field(default_factory=list)
 
     # ---------------------------------------------------------- 〈替身〉状态机
     # 结城理的**傀儡师**特性：受到致命伤时不撤退，改成〈替身〉形态接着打。
@@ -566,6 +578,13 @@ class OperatorUnit(Combatant):
             self.barrier -= absorbed
             self.barrier_absorbed += absorbed
             amount -= absorbed
+            if self.barrier <= 0.0:
+                # **破裂**：这一下把它从 >0 打到 ≤0。泥岩「沃土予身」与空弦
+                # 「铁弦」都挂在这个时刻上。计数与回调分开——计数是判据，
+                # 回调是消费点（由 `sim._on_barrier_break` 挂）。
+                self.barrier_breaks += 1
+                for _hook in list(self.barrier_break_hooks):
+                    _hook(self)
         dealt = super().take(amount)
         # 「圣山的祝福」：**仅一次**，受到致命伤害时立刻回复所有生命值、
         # 自身冻结、攻击范围内全体敌人冻结。
