@@ -316,6 +316,25 @@ def _charge_volley(description: str, bb: dict[str, float]):
     return int(m.group(1)), int(shot.group(1)), scale
 
 
+def _wants_steal_aspd(description: str, bb: dict[str, float]) -> bool:
+    """是否「**立即偷取**攻击范围内 1 名**友方干员** X 点攻击速度」。
+
+    新约能天使技2「开火成瘾症」——这是**一次性**的偷取：开技瞬间挑一名友方，
+    从那一位身上**拿走** 70 点攻速给自己，持续到技能结束或她离场。
+
+    ⚠️ 与另外三位**同族但不同机制**的技能要分开（伊内丝技2、薇薇安娜技2、
+    寻澜技2）：他们写的是「每次攻击…偷取**目标**（敌人）X 点攻击速度」，
+    黑板键是 `attack@steal_atk_speed` + `attack@steal_atk_speed_max`（带
+    `attack@` 前缀、逐次叠层、偷敌人）；她的是**裸键** `steal` / `steal_max`、
+    一次、偷友方。所以判据按**裸键**认，前缀那一家一概不认。
+
+    全表实测：带裸键 `steal` 的技能只有她这一条。
+    """
+    text = _TAG.sub("", description or "")
+    return ("偷取" in text and "攻击速度" in text
+            and float(bb.get("steal") or 0.0) > 0.0)
+
+
 def _wants_target_growth(description: str, bb: dict[str, float]) -> bool:
     """是否「每攻击 N 次后**攻击目标数 +1**（最多触发 M 次）」。
 
@@ -835,6 +854,19 @@ class SkillEffects:
     #: 这个是"打了几次之后能多打一个"，静态字段表达不了。
     target_step: int = 0
     target_cap: int = 0
+    #: **一次性偷取友方攻速**——新约能天使技2「开火成瘾症」的「立即偷取攻击
+    #: 范围内 1 名友方干员 70 点攻击速度（持续至技能结束或新约能天使离场）」。
+    #: 判据见 `_wants_steal_aspd`（**裸键** `steal`，与伊内丝那族带 `attack@`
+    #: 前缀的"每次攻击偷敌人"严格分开）。
+    #:
+    #: * `steal_aspd`——一次拿走多少点（她这里 70）；
+    #: * `steal_aspd_max`——累计上限（她这里 999，一次拿 70 够不到，等于没有）。
+    steal_aspd: float = 0.0
+    steal_aspd_max: float = 0.0
+    #: 偷取**成功**时额外获得的弹药数（`addtional_ammo_each`，5）。
+    #: 「如果成功偷取攻击速度则额外获得 5 发弹药」——**只有真的偷到了**才加，
+    #: 范围内没有友方就不加（这是它的判据，守卫里两头都钉了）。
+    steal_bonus_ammo: int = 0
     #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
     #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
     #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
@@ -1511,6 +1543,14 @@ class SkillBook:
         if _wants_target_growth(lv.description, bb):
             lv.effects.target_step = int(bb.get("attack_trigger_cnt") or 0)
             lv.effects.target_cap = int(bb.get("max_trigger_cnt") or 0)
+        # 一次性偷取友方攻速（技2「开火成瘾症」）。
+        if _wants_steal_aspd(lv.description, bb):
+            lv.effects.steal_aspd = float(bb.get("steal") or 0.0)
+            lv.effects.steal_aspd_max = float(bb.get("steal_max") or 0.0)
+            # 「如果成功偷取攻击速度则额外获得 5 发弹药」——弹药数写死在正文里，
+            # 但键是 `addtional_ammo_each`（5，全表只有她）。正文那句是**条件**
+            # （成功才给），不是无条件，所以判据要留给模拟器，不能在这里加。
+            lv.effects.steal_bonus_ammo = int(bb.get("addtional_ammo_each") or 0)
         # 技能结束时的**自身**效果：晕眩与强制退场。两者的数值/语义都
         # 只在描述里，且都与"打在敌人身上"的那套（`control`）无关。
         lv.effects.self_stun = _wants_self_stun(lv.description, bb)

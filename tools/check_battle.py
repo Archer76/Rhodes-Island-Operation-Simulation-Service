@@ -4155,6 +4155,133 @@ def check_hp_drain(stage, lib, calc, book_t) -> None:
           f"生命 {u4.hp:.1f} / {u4.max_hp:.0f}")
 
 
+def check_steal_aspd(stage, lib, calc, book_t) -> None:
+    """[47] 新约能天使技2「开火成瘾症」：**立即偷取**友方 70 点攻击速度。
+
+    正文（M3）：「立即偷取攻击范围内 1 名友方干员 70 点攻击速度（持续至技能
+    结束或新约能天使离场）……如果**成功**偷取攻击速度则额外获得 5 发弹药」。
+
+    ⚠️ **与同族三条技能严格分开**：伊内丝技2 / 薇薇安娜技2 / 寻澜技2 写的是
+    「每次攻击…偷取**目标**（敌人）X 点攻击速度」，键是带前缀的
+    `attack@steal_atk_speed` + `attack@steal_atk_speed_max`（逐次叠层、偷敌人）；
+    她的是**裸键** `steal` / `steal_max`、一次、偷友方。判据按裸键认，
+    前缀那一家一概不认——守卫里两头都钉了。
+
+    ⚠️ 挑谁偷：prts.wiki 该技能 `|备注=` 写「选择的友方干员为攻击范围内
+    **仇恨值最高**的我方干员」。本仓库没有仇恨值模型（唯一的仇恨口径是
+    "敌人打**最后部署**者"），所以按同一口径取范围内最后部署的那一位——
+    这条近似写进了 `docs/uncertainties.md`。
+
+    可观测量取的是**攻击间隔**（她变短、被偷的那位变长），不是
+    `aspd_steal_bonus` / `aspd_loss` 那两个自己写进去的字段。
+    """
+    print("\n[47] 新约能天使技2：立即偷取友方 70 点攻击速度")
+    from ak_tactic.operator.skill import _wants_steal_aspd  # noqa: PLC0415
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    v = Verifier()
+    slots = {sk.slot: sk for sk in SkillBook().for_operator("char_1041_angel2")}
+    s2 = slots[2].level(7, 3)
+    s3 = slots[3].level(7, 3)
+    check("  解析（技2）：偷 70 点、累计上限 999、偷到才给 5 发弹药、弹药 35 发",
+          (s2.effects.steal_aspd, s2.effects.steal_aspd_max,
+           s2.effects.steal_bonus_ammo, s2.effects.ammo) == (70.0, 999.0, 5, 35),
+          f"{s2.effects.steal_aspd}/{s2.effects.steal_aspd_max}/"
+          f"{s2.effects.steal_bonus_ammo}/ammo={s2.effects.ammo}")
+    check("  反向：技3 不带这条（她的技3 是弹药倾泻那套，不偷攻速）",
+          s3.effects.steal_aspd == 0.0 and s3.effects.steal_bonus_ammo == 0,
+          f"steal={s3.effects.steal_aspd} bonus={s3.effects.steal_bonus_ammo}")
+
+    with sqlite3.connect(Path(__file__).resolve().parent.parent
+                         / "data" / "akdb.sqlite") as _c:
+        _rows = _c.execute(
+            "SELECT DISTINCT skill_id, description, blackboard FROM skill_level "
+            "WHERE level = 10").fetchall()
+    _mine = sorted(sid for sid, d, b in _rows
+                   if _wants_steal_aspd(d, json.loads(b or "{}")))
+    _prefixed = sorted({sid for sid, _d, b in _rows
+                        if any("steal_atk_speed" in k
+                               for k in json.loads(b or "{}"))})
+    check("判据命中面：裸键 `steal` 的只有她技2；带前缀那两条（伊内丝/"
+          "薇薇安娜，偷敌人的）**不被判据认**",
+          _mine == ["skchr_angel2_2"]
+          and _prefixed == ["skchr_ines_2", "skchr_vvana_2"],
+          f"认下 {_mine}，前缀族 {_prefixed}")
+    # 第三位同族是寻澜技2，它偷的是**防御力**（`def_steal` / `def_steal_max`），
+    # 连"攻速"都不沾——记一笔是为了别把它也算进这条通道。
+    check("  另：寻澜那支偷的是防御力（`def_steal`），不在这条通道里",
+          any("def_steal" in json.loads(b or "{}") for _s, _d, b in _rows),
+          "已核实 def_steal 存在")
+
+    print("     —— 真的偷到了（可观测量：双方攻击间隔）——")
+    def _deploy(sim, cid, cell, direction="Right"):
+        u = v.unit({"char_id": cid, "elite": 2, "level": 60, "trust": 100,
+                    "potential": 1})
+        u.position = cell
+        u.direction = direction
+        sim.operators.append(u)
+        return u
+
+    sim = mechanism_sim(stage, lib)
+    her = _deploy(sim, "char_1041_angel2", (2, 3))
+    mate = _deploy(sim, "char_103_angel", (3, 3))
+    her.skill = s2
+    her_spd0 = her.current_attack_speed()
+    mate_spd0 = mate.current_attack_speed()
+    her_iv0, mate_iv0 = her.current_interval(), mate.current_interval()
+    her.sp = 30.0
+    sim._activate(her, 0.0)
+    her_iv1, mate_iv1 = her.current_interval(), mate.current_interval()
+    # 她的**攻击间隔**不能直接拿来算偷取：这条技能自己还写了
+    # `base_attack_time = -0.7`（攻击间隔降低），两个效果叠在同一个量上，
+    # 混在一起量不出偷了多少。所以她的那一半看**攻速**（+70，一眼可算），
+    # 间隔只验方向；被偷的那位只有这一个效果，间隔比值是干净的观测量。
+    check("  她自己的攻速 +70（100 → 170）",
+          abs(her.current_attack_speed() - (her_spd0 + 70.0)) < 1e-9,
+          f"{her_spd0:.0f} → {her.current_attack_speed():.0f}")
+    check("  她的攻击间隔也**变短**了（这一条只验方向，因为技能自己也在改间隔）",
+          her_iv1 < her_iv0,
+          f"{her_iv0:.4f} → {her_iv1:.4f}（含技能自带的 -0.7）")
+    check("  被偷的那位攻速 −70，且**攻击间隔的比值**正好等于新老攻速之比",
+          abs(mate.current_attack_speed() - (mate_spd0 - 70.0)) < 1e-9
+          and abs(mate_iv1 / mate_iv0 - mate_spd0 / (mate_spd0 - 70.0)) < 1e-6,
+          f"攻速 {mate_spd0:.0f} → {mate.current_attack_speed():.0f}，"
+          f"间隔 {mate_iv0:.4f} → {mate_iv1:.4f}")
+    check("  偷到之后**弹药多 5 发**（35 → 40）",
+          her.ammo_left == 40, f"弹药 {her.ammo_left}")
+
+    print("     —— 还回去（技能结束 / 她离场，两条路）——")
+    sim._deactivate(her, 1.0)
+    check("  技能结束：双方都回到原值",
+          abs(her.current_interval() - her_iv0) < 1e-9
+          and abs(mate.current_interval() - mate_iv0) < 1e-9,
+          f"她 {her.current_interval():.4f}、队友 {mate.current_interval():.4f}")
+    sim._activate(her, 2.0)
+    check("  再来一次仍然偷到（不是一次性的全局锁）",
+          abs(mate.current_interval() / mate_iv0
+              - mate_spd0 / (mate_spd0 - 70.0)) < 1e-6,
+          f"队友间隔 {mate.current_interval():.4f}")
+    her.hp = 0.0                      # 她在技能**中途**倒下
+    sim._skill_tick(0.05, 2.05)
+    check("  她离场：队友的攻速**照样还回来**（这条路不走 `_deactivate`）",
+          abs(mate.current_interval() - mate_iv0) < 1e-9,
+          f"队友间隔 {mate.current_interval():.4f}")
+
+    print("     —— 反向：范围内没有友方可偷 ——")
+    her.hp = her.max_hp
+    sim2 = mechanism_sim(stage, lib)
+    her2 = _deploy(sim2, "char_1041_angel2", (2, 3))
+    her2.skill = s2
+    her2.sp = 30.0
+    sim2._activate(her2, 0.0)
+    check("  偷不到就不给那 5 发弹药（弹药仍是 35）",
+          her2.ammo_left == 35 and her2.aspd_steal_bonus == 0.0,
+          f"弹药 {her2.ammo_left}、偷到 {her2.aspd_steal_bonus}")
+    check("  而且她自己的攻速也没涨",
+          abs(her2.current_attack_speed() - her2.attack_speed) < 1e-9,
+          f"攻速 {her2.current_attack_speed()}")
+
+
 def check_glider_mobility(stage, lib, calc, book_t) -> None:
     """[43] 焰狐龙梓兰天赋2「翔虫机动」——一个天赋横跨两个平面。
 
@@ -4961,6 +5088,7 @@ def main() -> int:
     check_stackable_slow(stage, lib, calc, book_t)
     check_target_growth(stage, lib, calc, book_t)
     check_hp_drain(stage, lib, calc, book_t)
+    check_steal_aspd(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:
