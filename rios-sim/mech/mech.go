@@ -148,6 +148,19 @@ type PollutionDrainer interface {
 	DrainPollution(cell [2]int, want float64) float64
 }
 
+// PollutionAdder 是 `PollutionDrainer` 的反面：**模拟器**请机制在某一格周围
+// 给田地**加**病害（怀黍离「祟」的蜕皮被动：每次挨打在圆心半径 1.0 内加）。
+//
+// 为什么也由模拟器发起：那是敌人侧的行为（原版写在 `_enemy_on_hit` 里），
+// 而"哪几格是田地、加的是缓存还是实际"是田地这一层的事。机制只回答
+// "加到了多少"。
+//
+// 返回**实际记入缓存的总量**（范围内每格各加 `amount`，所以通常是若干倍；
+// 一格都没命中就返回 0）。调用方只把它写进日志——它不影响判决。
+type PollutionAdder interface {
+	PolluteAround(cell [2]int, amount float64, radius float64) float64
+}
+
 // Framer 在**每一帧的末尾**被调用（`t += dt` 之前，即这一帧的伤害、击杀、
 // 漏怪都已经结算完）。
 //
@@ -361,6 +374,7 @@ type Set struct {
 	attacks  []hookAttack
 	posts    []hookPost
 	drains   []hookDrain
+	adds     []hookAdd
 	framers  []hookFramer
 	all      []Mechanism
 }
@@ -388,6 +402,11 @@ type hookPost struct {
 type hookDrain struct {
 	id ID
 	m  PollutionDrainer
+}
+
+type hookAdd struct {
+	id ID
+	m  PollutionAdder
 }
 
 type hookAttack struct {
@@ -443,6 +462,9 @@ func Load(cfg map[string]json.RawMessage, ids ...string) (*Set, error) {
 		}
 		if d, ok := m.(PollutionDrainer); ok {
 			set.drains = append(set.drains, hookDrain{id, d})
+		}
+		if a, ok := m.(PollutionAdder); ok {
+			set.adds = append(set.adds, hookAdd{id, a})
 		}
 		if a, ok := m.(AttackTicker); ok {
 			set.attacks = append(set.attacks, hookAttack{id, a})
@@ -529,6 +551,23 @@ func (s *Set) DrainPollution(cell [2]int, want float64) float64 {
 	for _, h := range s.drains {
 		if moved := h.m.DrainPollution(cell, want); moved > 0 {
 			return moved
+		}
+	}
+	return 0.0
+}
+
+// PolluteAround 依次问各机制"往这一格周围加这么多病害，能加多少"，取**第一个
+// 有回答的**（与 `DrainPollution` 同一套：同一格不该有两个机制都认领）。
+//
+// 一个机制都没挂时返回 0——通用关卡里敌人就算带 `phit_pollut` 也没有田地被加，
+// 这正是原版的行为（`self.farmland is None` 时 `_pollute_around` 直接返回 0）。
+func (s *Set) PolluteAround(cell [2]int, amount float64, radius float64) float64 {
+	if s == nil || amount <= 0 {
+		return 0.0
+	}
+	for _, h := range s.adds {
+		if got := h.m.PolluteAround(cell, amount, radius); got > 0 {
+			return got
 		}
 	}
 	return 0.0
