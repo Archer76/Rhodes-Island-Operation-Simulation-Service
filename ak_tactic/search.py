@@ -241,6 +241,20 @@ class Searcher:
         return Plan(stage=stage_id, deploys=deploys,
                     title=title or f"{len(state)} 人")
 
+    def deploy_limit(self, stage_id: str) -> int:
+        """这一关**可部署人数**（gamedata `options.characterLimit`）；0 = 拿不到。
+
+        博士 2026-09-18 要求把它接进来：搜索的深度上限应当是"这一关能站几个人"，
+        而不是一个写死的 4。注意它与**编队 12 人上限**不冲突——他的原话：可以撤下
+        不使用的干员换上其他人，所以真正的闸门是可部署人数，12 只是封顶。
+
+        直接读 `Verifier.stage()` 已经加载的那份关卡（同一个实例里是内存命中，
+        搜索本来就要先加载它，所以这一步不额外联网）。读不到就**照实抛**，
+        由调用方决定退回什么——不要让一个取不到的字段静悄悄地变成 0 或 12。
+        """
+        stage = self.verifier.stage(stage_id)
+        return int(getattr(stage.options, "character_limit", 0) or 0)
+
     def _eval(self, stage_id: str, state: Sequence[Candidate],
               roster: Roster) -> tuple[tuple, tuple, Plan, Verdict] | None:
         plan = self._plan(stage_id, state, roster=roster)

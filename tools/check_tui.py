@@ -2064,8 +2064,11 @@ def check_solve_pool() -> None:
     check("**不勾人也要有池子**（[2a] 默认那条路）", len(pool) > 0, note)
     check("不勾人时池子 = 名册按练度前 AUTO_POOL 人或全部",
           pool == top[:A.AUTO_POOL], f"{len(pool)} 人 / 名册 {len(top)} 人")
-    check("池子说明写清「补了多少人」（界面上要看得见）",
+    check("池子说明写清「补了多少人」（给日志与排障用，不进界面）",
           "名册按练度补" in note, note)
+    check("日志里那句候选池**点明它不是出战人数**（免得又变成"
+          "「要带 24 个人上场」的误会）",
+          "不是出战人数" in Path(A.__file__).read_text(encoding="utf-8"))
 
     picked = top[:3]
     pool, note = pool_of(picked, "auto")
@@ -2107,10 +2110,106 @@ def check_solve_pool() -> None:
     i = src.index("class SolveScreen")
     seg = src[i:src.index("\nclass ", i + 10)]
     check("解算屏把 _pool 的结果交给搜索（不是 st.squad）",
-          "searcher.search(st.stage[\"level_id\"], roster, pool)" in seg
+          "searcher.search(level_id, roster, pool, max_ops=depth)" in seg
           and "self._pool(roster)" in seg, "_pool(roster) → search(..., pool)")
-    check("解算屏把池子规模显示出来（st.pool_note）",
-          "pool_note" in seg and "人选池" in seg, "pool_note")
+    # 这一屏**印出来的字**才是判据（不查源码里有没有那个词——注释里出现一次
+    # 就把判据带偏过一回）。把搜索换成空实现，只量 `_tick` 写出来的那几行。
+    from textual.widgets import Static as _S
+
+    from ak_tactic.tui import app as A2
+
+    async def shot() -> str:
+        app = A2.RiosApp()
+        orig = A2.SolveScreen._run
+        A2.SolveScreen._run = lambda self: None            # 别真跑搜索
+        try:
+            async with app.run_test(size=(110, 34)) as pilot:
+                st = app.state
+                st.stage = {"code": "HS-EX-4", "level_id": "act31side_ex04"}
+                st.squad = ["能天使"]
+                st.mode = "auto"
+                st.pool_note = "勾的 1 人 + 名册按练度补 23 人（共 24 人）"
+                app.push_screen(A2.SolveScreen())
+                await pilot.pause()
+                # 深度与上限要在**挂载之后**设：`on_mount` 会把它们复位成
+                # 「从 4 人起」（那正是自动加深的起点），提前设会被它覆盖掉。
+                st.depth = 8
+                st.deploy_limit = 8
+                app.screen._tick()
+                await pilot.pause()
+                return str(app.screen.query_one("#solve-head", _S).render())
+        finally:
+            A2.SolveScreen._run = orig
+
+    head = asyncio.run(shot())
+    check("解算屏印的是「本轮最多 8 人」与「本关最多可部署 8 人」",
+          "本轮最多 8 人" in head and "本关最多可部署 8 人" in head, head[:80])
+    check("**界面上不再写池子多大**（博士 2026-09-18：编队人数部分只写"
+          "使用了几人编队；候选池与出战人数是两件事）",
+          "人选池" not in head and "24" not in head, head[:80])
+    check("解算屏写的是**本轮最多几人**与**本关可部署几人**",
+          "本轮最多" in seg and "本关最多可部署" in seg)
+    check("编队那一屏的模式说明也不再写 AUTO_POOL 这个数",
+          "AUTO_POOL" not in src[src.index("class SquadPickScreen"):
+                                  src.index("class SolveScreen")])
+
+
+def check_deploy_limit() -> None:
+    """关卡**可部署人数**接进解算：默认 4 人起，找不到就自动加深。
+
+    博士 2026-09-18 的原话：「关卡可部署人数要接进来默认还是 4 人，找不到的情况
+    就做自动加深，但编队 12 人上限和可部署人数不冲突——是可以撤下不使用的干员
+    换上其他人的」。所以这里量三件事：
+
+    ① 阶梯本身（起点 4、按 +2 加深、末端落在这一关的可部署人数上、12 封顶）；
+    ② 可部署人数确实取自关卡的 `options.characterLimit`，不是写死的；
+    ③ 解算屏真的按阶梯一轮轮跑（`max_ops=depth`），而不是一次 4 人就收工。
+    """
+    from types import SimpleNamespace
+
+    from ak_tactic.search import Searcher
+    from ak_tactic.tui import app as A
+
+    check("阶梯起点是 4 人（博士：「默认还是 4 人」）",
+          A.DEPTH_START == 4 and A.depth_ladder(8)[0] == 4,
+          str(A.depth_ladder(8)))
+    check("阶梯按 +2 加深，末端落在**这一关的可部署人数**上",
+          A.depth_ladder(8) == [4, 6, 8] and A.depth_ladder(7) == [4, 6, 7]
+          and A.depth_ladder(10) == [4, 6, 8, 10],
+          f"8:{A.depth_ladder(8)} 7:{A.depth_ladder(7)}")
+    check("可部署人数 ≤ 4 的关只跑一轮（不硬凑到 4 人）",
+          A.depth_ladder(2) == [2] and A.depth_ladder(4) == [4],
+          f"2:{A.depth_ladder(2)} 4:{A.depth_ladder(4)}")
+    check("取不到可部署人数时按编队上限 12 人封顶（并在日志里说明）",
+          A.depth_ladder(0)[-1] == A.SQUAD_CAP == 12, str(A.depth_ladder(0)))
+    check("再大的可部署人数也不超过编队 12 人",
+          A.depth_ladder(99)[-1] == 12, str(A.depth_ladder(99)))
+
+    # 可部署人数**必须来自关卡数据**（`options.characterLimit`），不是常量
+    fake_stage = SimpleNamespace(options=SimpleNamespace(character_limit=7))
+    stub = SimpleNamespace(stage=lambda _sid: fake_stage)
+    s = Searcher.__new__(Searcher)
+    s.verifier = stub
+    check("deploy_limit 读的是关卡的 options.characterLimit",
+          Searcher.deploy_limit(s, "any") == 7,
+          str(Searcher.deploy_limit(s, "any")))
+    fake_stage.options.character_limit = 0
+    check("关卡说 0（没写）时如实返回 0，不偷偷改成 12",
+          Searcher.deploy_limit(s, "any") == 0)
+
+    # 解算屏真的按阶梯一轮轮跑
+    src = Path(A.__file__).read_text(encoding="utf-8")
+    i = src.index("class SolveScreen")
+    seg = src[i:src.index("\nclass ", i + 10)]
+    check("解算屏按阶梯循环（for ... in ladder），每轮传 max_ops=depth",
+          "for i, depth in enumerate(ladder)" in seg
+          and "max_ops=depth" in seg)
+    check("只有**没找到三星**才加深（三星就 break，不白跑）",
+          "stars == 3" in seg and "break" in seg)
+    check("每一轮都往日志里写一行（让人看得见它在加深，不是卡住）",
+          "轮：最多" in seg and "再试一轮" in seg)
+    check("可部署人数取不到时，日志里把原因与「按 12 封顶」都写出来",
+          "取不到本关的可部署人数" in seg and "封顶" in seg)
 
 
 def check_login_wizard() -> None:
@@ -2706,6 +2805,7 @@ def main() -> int:
         check_login_screen()
         check_esc_steps()
         check_solve_pool()
+        check_deploy_limit()
     finally:
         restore_roster(old_loader)
     # [16] 要真的读本机凭据与名册文件（只是换到临时目录），必须用真函数
