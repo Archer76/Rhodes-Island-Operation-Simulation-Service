@@ -3806,6 +3806,170 @@ def check_batch3_sample(stage, lib, calc, book_t) -> None:
           f"物理口径 {resolve_damage(want5, damage_type=DamageType.PHYSICAL, defense=5000.0).final:,.1f}")
 
 
+def check_power_attack(stage, lib, calc, book_t) -> None:
+    """[41] 焰狐龙梓兰：天赋「强击瓶专家」＋技1 的「刚连射」。
+
+    两条都是**博士 2026-09-18 的裁定**，出处是 prts.wiki 的 `|备注=`（见
+    `docs/uncertainties.md` §十三之三），所以这里测的就是裁定的那两句话：
+
+    * 天赋：「部署后首次开启技能时，接下来 **50 次攻击**的攻击力提升至 115%」
+      ——数的是**攻击动作**（一轮），不是箭矢。她一轮普攻是三连击，所以
+      一轮扣**一层**、三笔都吃加成（备注：「于弹道脱手前对当次连击的所有
+      弹道生效」）。
+    * 技1：「若还有充能则额外消耗 1 层施展刚连射：发射 5 支攻击力 200% 的箭矢」
+      ——**已有 2 次充能所需技力时**，一次技能吃掉两层、打 4×160% ＋ 5×200%
+      ＝ 9 笔（备注：「会消耗 2 次充能所需的技力来释放技能」）。
+
+    两条都有反向：天赋只在**首次**开技时装满、用完就没了；技力只有一层时
+    只打 4 笔、也只扣一层。
+    """
+    print("\n[41] 焰狐龙梓兰：天赋强击瓶专家（按轮扣层）＋技1 刚连射（吃两层）")
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    v = Verifier()
+    eid = _enemy_ids(stage)[0]
+    slots = {s.slot: s for s in SkillBook().for_operator("char_1048_orchd2")}
+    s1 = slots[1].level(7, 3)
+
+    def build(*, sp: float | None = None, slot=None, defense: float = 200.0):
+        s = mechanism_sim(stage, lib)
+        u = v.unit({"char_id": "char_1048_orchd2", "elite": 2, "level": 60,
+                    "trust": 100, "potential": 1})
+        if slot is not None:
+            u.skill = slot
+        u.position = (2, 3)
+        u.direction = "Right"
+        s.operators.append(u)
+        target = _dummy(s, stage, eid, (3, 3))
+        target.defense = defense
+        if sp is not None:
+            u.sp = sp
+        seen: list[float] = []
+        orig = s._damage_enemy
+
+        def spy(*args, **kw):
+            seen.append(args[1])
+            return orig(*args, **kw)
+
+        s._damage_enemy = spy
+        return s, u, target, seen
+
+    def swing(s, u, seen):
+        seen.clear()
+        s._operators_attack(u.current_interval() + 1e-6, 0.0)
+        return seen
+
+    u0 = v.unit({"char_id": "char_1048_orchd2", "elite": 2, "level": 60,
+                 "trust": 100, "potential": 1})
+    check("天赋读进来了：50 次攻击 × 115%（精2 潜1 那一档）",
+          u0.power_attack_count == 50 and close(u0.power_attack_scale, 1.15, 1e-9),
+          f"{u0.power_attack_count} 次 × {u0.power_attack_scale}")
+    check("  部署后还没开技时一次都用不上（层数 0）", u0.power_attack_left == 0,
+          f"实得 {u0.power_attack_left}")
+
+    # ---- 首次开技装满，之后一轮只扣一层（三连击也只扣一层）----
+    s, u, tgt, seen = build(sp=4.0, slot=None)
+    base = swing(s, u, seen)
+    want_base = (u.atk - tgt.defense) * 0.333
+    check("  没开技时普攻不带天赋加成（3 笔 × (面板 − 防御) × 33.3%）",
+          len(base) == 3 and all(close(h, want_base, 1e-6) for h in base),
+          f"实得 {[round(h, 1) for h in base]}，应为 {want_base:,.1f}")
+
+    s, u, tgt, seen = build(sp=4.0, slot=s1)
+    s._activate(u, 0.0)
+    check("  首次开技后装满 50 层", u.power_attack_left == 50,
+          f"实得 {u.power_attack_left}")
+    # 把技能关掉再出手 —— 这样这一轮就是**普攻**（`op.effects` 在技能没开时
+    # 返回 None），量的才是天赋本身，而不是"技能攻击吃不吃天赋"。
+    u.skill_active = False
+    hits = swing(s, u, seen)
+    want_pow = u.atk * 1.15
+    want_hit = (want_pow - tgt.defense) * 0.333
+    check("  一轮三连击**三笔都吃**加成（= (面板 × 115% − 防御) × 33.3%）",
+          len(hits) == 3 and all(close(h, want_hit, 1e-6) for h in hits),
+          f"实得 {[round(h, 1) for h in hits]}，应为 {want_hit:,.1f}")
+    check("  而一层只扣**一次**（按轮不按箭矢，博士裁定）",
+          u.power_attack_left == 49, f"实得 {u.power_attack_left}")
+
+    # ---- 反向一：只有首次开技装满 ----
+    before = u.power_attack_left
+    u.sp = 20.0
+    s._activate(u, 0.0)
+    check("  反向：**第二次**开技不会把层数装满（只有首次开技才启动）",
+          u.power_attack_left == before, f"实得 {u.power_attack_left}（前 {before}）")
+
+    # ---- 反向二：用完就没了 ----
+    u.skill_active = False        # 回到普攻，否则量的是技能那 4 支
+    u.power_attack_left = 1
+    swing(s, u, seen)
+    left_after = swing(s, u, seen)
+    want_plain = (u.atk - tgt.defense) * 0.333
+    check("  反向：第 51 轮起回到无加成",
+          u.power_attack_left == 0
+          and all(close(h, want_plain, 1e-6) for h in left_after),
+          f"层数 {u.power_attack_left}，实得 {[round(h, 1) for h in left_after]}，"
+          f"应为 {want_plain:,.1f}")
+
+    # ---- 技1 刚连射：充能够就吃两层 ----
+    check("  技1 的刚连射读出来是「额外 1 层 / 5 支 / 2.0 倍」",
+          s1.effects.charge_layers == 1 and s1.effects.charge_arrows == 5
+          and close(s1.effects.charge_scale, 2.0, 1e-9),
+          f"{s1.effects.charge_layers} / {s1.effects.charge_arrows} / "
+          f"{s1.effects.charge_scale}")
+    s, u, tgt, seen = build(sp=8.0, slot=s1)
+    s._activate(u, 0.0)
+    check("  技力够两层（8 = 2 × 4）时一次吃掉两层", close(u.sp, 0.0, 1e-9),
+          f"实得剩 {u.sp}")
+    hits = swing(s, u, seen)
+    # 同一手也吃天赋（首次开技两者同时启动）：期望值把 1.15 写进去，
+    # 这条顺带验了两个机制的**合成**。
+    base_atk = u.atk * 1.15
+    want_a = base_atk * 1.6 - tgt.defense
+    want_b = base_atk * 2.0 - tgt.defense
+    check("  一次出手 9 笔：前 4 笔 160%、后 5 笔 200%（刚连射是**另一段**）",
+          len(hits) == 9
+          and all(close(h, want_a, 1e-6) for h in hits[:4])
+          and all(close(h, want_b, 1e-6) for h in hits[4:]),
+          f"实得 {len(hits)} 笔：{[round(h, 1) for h in hits]}，"
+          f"应为 4 × {want_a:,.1f} + 5 × {want_b:,.1f}")
+    check("  这一手扣**两层**（基础一轮 ＋ 刚连射那一段各一层）",
+          u.power_attack_left == 48, f"实得剩 {u.power_attack_left}")
+
+    # ---- 反向三：只有一层时只打 4 笔、只扣一层 ----
+    s, u, tgt, seen = build(sp=4.0, slot=s1)
+    s._activate(u, 0.0)
+    hits = swing(s, u, seen)
+    check("  反向：技力只够一层时打 4 笔 160%（没有刚连射），也只扣一层",
+          len(hits) == 4 and close(u.sp, 0.0, 1e-9)
+          and all(close(h, u.atk * 1.15 * 1.6 - tgt.defense, 1e-6) for h in hits),
+          f"实得 {len(hits)} 笔、剩 {u.sp} 技力")
+    check("  该手只扣一层（没有刚连射那一段）", u.power_attack_left == 49,
+          f"实得剩 {u.power_attack_left}")
+
+    # ---- 技2 一次技能 = 三轮齐射 ＋ 落地点射 = **四轮** ⇒ 扣四层 ----
+    s2 = slots[2].level(7, 3)
+    s, u, tgt, seen = build(sp=20.0, slot=s2)
+    s._activate(u, 0.0)
+    swing(s, u, seen)
+    check("  技2 一次技能扣**四层**（三轮齐射 ＋ 落地点射，备注逐段点名）",
+          u.power_attack_left == 46, f"实得剩 {u.power_attack_left}")
+
+    # 全表命中面：「额外消耗 N 层…发射 M 支」这个形状只该命中她技1。
+    import sqlite3  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from ak_tactic.operator.skill import _charge_volley  # noqa: PLC0415
+    with sqlite3.connect(Path(__file__).resolve().parent.parent
+                         / "data" / "akdb.sqlite") as con:
+        rows = con.execute(
+            "SELECT skill_id, description, blackboard FROM skill_level"
+            " WHERE level=10").fetchall()
+    face = sorted(sid for sid, desc, bb in rows
+                  if _charge_volley(desc or "", json.loads(bb or "{}")))
+    check("  判据的全表命中面：只有 her 技1（且只认带「额外消耗 N 层」这条）",
+          face == ["skchr_orchd2_1"], f"命中 {face}")
+
+
 def check_combo_attack(stage, lib, calc, book_t) -> None:
     """[40] 焰狐龙梓兰的**隐藏天赋**：普攻三连击、每击 100%、**结算后** ×33.3%。
 
@@ -3845,6 +4009,11 @@ def check_combo_attack(stage, lib, calc, book_t) -> None:
         s = mechanism_sim(stage, lib)
         u = v.unit({"char_id": cid, "elite": 2, "level": 60,
                     "trust": 100, "potential": 1})
+        # 本节量的是**特性**（连击 + 结算后缩放），所以把天赋「强击瓶专家」关掉：
+        # 它同样在**首次开技**时启动，不隔离就会给下面每一笔再乘 1.15，
+        # 让"缩放乘在结算哪一侧"这类判据读到两个机制叠在一起的结果。
+        # 天赋那半边在 `[41]` 单独量（那里也验两者同时生效时的合成）。
+        u.power_attack_count = 0
         if slot is not None:
             u.skill = slot
         u.position = (2, 3)
@@ -3975,10 +4144,16 @@ def check_orchd2(stage, lib, calc, book_t) -> None:
           f"{volley_hits} / {shot_hits}")
 
     def fire(cid: str, slot, *, cell=(3, 3)):
-        """让这位干员开一次技能并出手一下，返回 (干员, 逐笔伤害, 靶子)。"""
+        """让这位干员开一次技能并出手一下，返回 (干员, 逐笔伤害, 靶子)。
+
+        本节量的是**技2 的连射结构**，所以把天赋「强击瓶专家」关掉：它在
+        **首次开技**时启动、给每一笔再乘 1.15，不隔离会让"12 笔 180% ＋ 1 笔
+        300%"这些期望值整体偏 15%。天赋与刚连射在 `[41]` 单独量。
+        """
         s = mechanism_sim(stage, lib)
         op = v.unit({"char_id": cid, "elite": 2, "level": 60,
                      "trust": 100, "potential": 1})
+        op.power_attack_count = 0
         op.skill = slot
         op.position = (2, 3)
         op.direction = "Right"
@@ -4076,6 +4251,7 @@ def main() -> int:
     check_batch3_sample(stage, lib, calc, book_t)
     check_orchd2(stage, lib, calc, book_t)
     check_combo_attack(stage, lib, calc, book_t)
+    check_power_attack(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

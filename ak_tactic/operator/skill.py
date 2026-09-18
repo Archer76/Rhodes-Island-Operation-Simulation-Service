@@ -283,6 +283,39 @@ def _volley_arrows(description: str) -> tuple[int, ...]:
     return (int(m.group(1)),) if m else ()
 
 
+def _charge_volley(description: str, bb: dict[str, float]):
+    """「额外消耗 N 层施展 X：发射 M 支攻击力 P% 的箭矢」——取不到返回 None。
+
+    返回 `(额外层数, M, P)`：她是 `(1, 5, 2.0)`。
+
+    **为什么单独一段**：这 M 支不是"末击"、也不是"每轮"，而是**另一次出手**
+    （多花一层充能换来的），所以既不能并进 `hit_count`（有没有那一层要看开技时
+    的 `op.sp`），也不能塞进 `final_hit_scale`（它只管最后一笔）。模拟器里由
+    `op.charge_extra_ready` + 逐笔倍率接力，见 `sim._activate` 与出手循环。
+
+    `P` 取自 `atk_scale_2`（她 200%）——**这里可以按这个键名取**，因为判据先
+    要求"描述里写了额外消耗 N 层"这个形状，键名只是取值用；单看键名会误中
+    空弦/雪猎/丰川祥子等人（那个键有六种含义）。
+
+    全表实测（986 条 M3）：这个措辞只出现在焰狐龙梓兰技1 上。
+    """
+    text = _TAG.sub("", description or "")
+    if "额外消耗" not in text:
+        return None
+    m = re.search(r"额外消耗(\d+)层", text)
+    if not m:
+        return None
+    tail = text[m.end():]
+    shot = _ARROW_SHOT.search(tail)
+    # 键名两种写法都要收：技1 的黑板是**裸的** `atk_scale_2`（1.6/2.0/晕眩都在
+    # 裸键上），技2 那批才带 `attack@` 前缀。只看一种会把 2.0 读成 0
+    # ⇒ 整段返回 None，**静默失效**——所以判据写宽、命中面靠描述那句兜住。
+    scale = float(bb.get("atk_scale_2") or bb.get("attack@atk_scale_2") or 0.0)
+    if not shot or scale <= 0.0:
+        return None
+    return int(m.group(1)), int(shot.group(1)), scale
+
+
 def _wants_landing_hit(description: str, bb: dict[str, float]) -> bool:
     """是否「之后降落并对…造成攻击力 X%」——落地那一击算**独立的一次出手**。
 
@@ -684,6 +717,15 @@ class SkillEffects:
     #: 总数进 `hit_count`；轮次结构留给守卫与文档，模拟器按"一次技能 N 段
     #: 独立命中"结算（与能天使 5 连发同一口径）。
     volley_arrows: tuple[int, ...] = ()
+    #: 「若还有充能则额外消耗 N 层施展…：发射 M 支攻击力 P 倍的箭矢」那一组。
+    #: 三个数一起用：`charge_layers` 是**额外**层数（她 1 = 一共吃 2 层）、
+    #: `charge_arrows` 是那一段的箭数（5）、`charge_scale` 是它的倍率（2.0）。
+    #: **不进 `hit_count`**：打不打要看开技时的充能，模拟器在出手时接力
+    #: （`op.charge_extra_ready`，见 `sim._activate`）。判据见 `_charge_volley`。
+    #: 标本：焰狐龙梓兰技1「刚射」。
+    charge_layers: int = 0
+    charge_arrows: int = 0
+    charge_scale: float = 0.0
     #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
     #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
     #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
@@ -1327,6 +1369,12 @@ class SkillBook:
         # 落地的倍率**借末击那条路**（`final_hit_scale`）：它确实排在最后，
         # 但出处与语义是另一回事，所以 `landing_scale` 另存一份。
         lv.effects.volley_arrows = _volley_arrows(lv.description)
+        # 「刚连射」那一组（技1）：额外层数 / 箭数 / 倍率。是否真的打，看开技
+        # 时的充能，所以这里只落参数。
+        charge = _charge_volley(lv.description, bb)
+        if charge is not None:
+            lv.effects.charge_layers, lv.effects.charge_arrows, \
+                lv.effects.charge_scale = charge
         if _wants_landing_hit(lv.description, bb):
             lv.effects.landing_scale = lv.effects.damage.get("atk_scale_end")
             lv.effects.final_hit_scale = lv.effects.landing_scale
