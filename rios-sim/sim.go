@@ -253,6 +253,14 @@ type operator struct {
 
 func (o *operator) alive() bool { return o.hp > 0 && !o.retreated }
 
+// heal 是原版 `Combatant.heal`：回复**夹在生命上限**，返回**实际回复量**
+// （不是治疗量）。返回值要拿去记日志与累计，所以不能只改 hp 就完事。
+func (o *operator) heal(amount float64) float64 {
+	before := o.hp
+	o.hp = math.Min(o.spec.MaxHP, o.hp+math.Max(0, amount))
+	return o.hp - before
+}
+
 // canBlock 对应 `OperatorUnit.can_block`：飞行单位挡不住，阻挡位满也挡不住。
 func (o *operator) canBlock(e *enemy) bool {
 	if e.spec.IsFlying {
@@ -1069,20 +1077,51 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 			continue
 		}
 		targets := pickTargets(op, enemies, op.maxTarget())
-		if traceOn {
-			trace("%8.4f %s 技=%v 间隔=%.4f 计时=%.4f 挡=%v 选=%v 范围里=%v",
-				t, op.spec.Name, op.skillActive, op.interval(), op.attackTimer,
-				names(op.blocking), names(targets), names(inRangeOf(op, enemies)))
+		// ---- 医疗：平A 是**治疗**，不是伤害（原版 3994-4019）
+		//
+		// 判据两段：① 这个人是医疗（`op.heals`）；② 这一击**没被技能改成伤害**
+		// ——技能自己写了攻击倍率就是改成伤害了（凯尔希·思衡托技2「攻击变为射出
+		// 医疗单元」）。只写 `op.heals` 不看技能，会让她的技2 变成"边打边治"。
+		//
+		// ⚠ 这一段的判据必须在**选完伤害目标之后、判有没有目标之前**：医疗通常
+		// 范围里没有敌人，而"没有伤害目标"在原版那里就等于"没得治"——
+		// 把顺序写反会让医疗一次都不出手。
+		scaleNow := op.atkScale()
+		deals := !op.spec.Heals || math.Abs(scaleNow-1.0) > 1e-9
+		var heals []*operator
+		if !deals {
+			targets = nil
+			heals = pickHeals(op, ops, 1)
 		}
-		if len(targets) == 0 {
+		if traceOn {
+			trace("%8.4f %s 技=%v 间隔=%.4f 计时=%.4f 挡=%v 选=%v 范围里=%v 治=%v",
+				t, op.spec.Name, op.skillActive, op.interval(), op.attackTimer,
+				names(op.blocking), names(targets), names(inRangeOf(op, enemies)),
+				namesOp(heals))
+		}
+		if len(targets) == 0 && len(heals) == 0 {
 			continue
 		}
 		op.attackTimer = 0
-		scale := op.atkScale()
+		scale := scaleNow
 		hits := op.hitCount()
 		finalScale, hasFinal := op.finalHitScale()
 		power := op.atk()
 		dmgType := op.damageType()
+		if !deals {
+			// 治疗量 = 当前攻击力 × 治疗倍率（医疗干员平A 的倍率是 1）。
+			// `heal` 自己夹在生命上限，返回**实际回复量**。
+			for _, ally := range heals {
+				got := ally.heal(power)
+				if traceOn && got > 0 {
+					trace("%8.4f %s 治疗 %s +%.0f（%.0f/%.0f）",
+						t, op.spec.Name, ally.spec.Name, got, ally.hp, ally.spec.MaxHP)
+				}
+			}
+			// 出手回报照算（原版把这一句放在出手之后、与打伤害同路）。
+			spOnAttack(op)
+			continue
+		}
 		for _, target := range targets {
 			for i := 0; i < hits; i++ {
 				if !target.alive() {
@@ -1249,6 +1288,45 @@ func hasCell(cells [][2]int, x, y int) bool {
 	return false
 }
 
+// pickHeals 治疗目标：攻击范围内**血量比例最低**、且没满血的友方
+// （原版 `_pick_heals`，sim.py 3683）。
+//
+// ⚠ 排序键是 **(血量比例, 血量)** 两条：比例相同时血少的先治。只比比例会让
+// 同比例的两个人在排序里保持原顺序，治错人——而且这种错在计数上看不出来。
+//
+// 范围用**四舍五入后的格**（与索敌同一口径），不是连续坐标。
+func pickHeals(op *operator, ops []*operator, n int) []*operator {
+	type cand struct {
+		o   *operator
+		rat float64
+	}
+	var pool []cand
+	for _, o := range ops {
+		if o == op || !o.alive() || o.hp >= o.spec.MaxHP {
+			continue
+		}
+		cell := [2]int{int(math.Round(o.cell[0])), int(math.Round(o.cell[1]))}
+		if !inCells(op.spec.Range, cell) {
+			continue
+		}
+		pool = append(pool, cand{o: o, rat: o.hp / o.spec.MaxHP})
+	}
+	sort.SliceStable(pool, func(i, j int) bool {
+		if pool[i].rat != pool[j].rat {
+			return pool[i].rat < pool[j].rat
+		}
+		return pool[i].o.hp < pool[j].o.hp
+	})
+	out := make([]*operator, 0, n)
+	for _, c := range pool {
+		if len(out) >= n {
+			break
+		}
+		out = append(out, c.o)
+	}
+	return out
+}
+
 // pickTargets 目标选择（`_pick_targets`，sim.py 2343）。
 //
 // 先打**自己挡住的**，再打范围里"离防守点最近"的——用 `progress` 当"离防守点
@@ -1295,6 +1373,14 @@ func names(list []*enemy) []string {
 	out := make([]string, 0, len(list))
 	for _, e := range list {
 		out = append(out, fmt.Sprintf("%s(%.0f)", e.spec.Name, e.hp))
+	}
+	return out
+}
+
+func namesOp(list []*operator) []string {
+	out := make([]string, 0, len(list))
+	for _, o := range list {
+		out = append(out, fmt.Sprintf("%s(%.0f)", o.spec.Name, o.hp))
 	}
 	return out
 }

@@ -128,16 +128,17 @@ def unsupported_reasons(sim, *, allow_devices: bool = False,
                           ("effects_override", "技能效果覆盖"),
                           ("power_attack_count", "天赋「强击瓶专家」"),
                           ("sp_per_attack_talent", "天赋回技力（出手）"),
-                          ("sp_per_kill_talent", "天赋回技力（击杀）"),
-                          # 特性溅射的两半里，**伤害**那两半已经接线（Go 的
-                          # `traitSplash`：半径圆 + 高台再打一次地面敌人），
-                          # 所以 `splash_radius` / `highland_splash_scale` 不再挡。
-                          # 但高台溅射还附带【停顿】，Go 侧连"停顿"这个状态都
-                          # 没有——这一半仍然挡，免得静默少算一层控场。
-                          ("highland_splash_sluggish", "高台溅射附带停顿")):
+                          ("sp_per_kill_talent", "天赋回技力（击杀）")):
             val = getattr(op, attr, 0)
             if val:
                 bad.append(f"{why}：{op.name or op.char_id}")
+        # ⚠ 特性溅射附带的【停顿】（`highland_splash_sluggish`）**故意不挡**：
+        # 原版自己也没有消费它——全仓 `sluggish_timer` 只有两处，一是置位
+        # （`_highland_splash` / `eff.control["sluggish"]`）、二是每帧倒计时，
+        # **没有任何地方读它来降移速**。那是"两边都没有这条"，不是"Go 少了一条"，
+        # 挡着它就等于让 HS-EX-8 永远验不了。
+        # 哪天原版真把这一支接上（`advance()` 里按 `sluggish_timer` 折速），
+        # 这条闸门必须一起回来——判据是再扫一遍 `sluggish_timer` 的消费点。
         # 「每次有高台触发第一天赋的效果时，获得 N 点技力」住在**技能黑板**里
         # （原版 `_highland_sp` 读 `sp_per_highland`），Go 侧没有这条。
         _sk = getattr(op, "skill", None)
@@ -155,8 +156,15 @@ def unsupported_reasons(sim, *, allow_devices: bool = False,
             val = getattr(op, attr, 0)
             if val:
                 bad.append(f"{why}：{op.name or op.char_id}")
-        if getattr(op, "heals", False):
-            bad.append(f"医疗（平A 是治疗）：{op.name or op.char_id}")
+        # 医疗的平A（`heals`）已经接线（Go 的 `operatorsAttack`：判"这一击有没有
+        # 被技能改成伤害"、按 (血量比例, 血量) 选最低的治疗、回复量夹生命上限）。
+        # **没接的是技能自己写 `heal_scale` 的那一族**——Go 只做"平A 倍率 1.0"
+        # 这一种，所以只挡那一种。
+        _heal_sk = getattr(op, "skill", None)
+        _heal_eff = getattr(_heal_sk, "effects", None) if _heal_sk is not None else None
+        if getattr(op, "heals", False) and float(
+                getattr(_heal_eff, "heal_scale", 0.0) or 0.0):
+            bad.append(f"技能治疗倍率（heal_scale）：{op.name or op.char_id}")
         # 天赋里那两条**会改数值但不落在干员字段上**的：回技力与「翔虫机动」。
         # 它们只在跑起来之后才写进 `op`，所以只能按天赋本身判。
         if _talent_reason(op, "find_sp_on_action"):
@@ -308,6 +316,10 @@ def _operator_spec(sim, d) -> dict[str, Any]:
         "redeploy_time": float(getattr(op, "redeploy_time", 70.0) or 70.0),
         "range": sorted([int(x), int(y)] for x, y in cells),
     }
+    # 医疗的平A 是**治疗**。Go 侧原来连这个字段都没有，于是"人被打死"与
+    # "人被奶住"在那边长得一模一样——满练度作业的偏差就是这么来的。
+    if getattr(op, "heals", False):
+        out["heals"] = True
     talent_phys, talent_arts = _talent_dodge(op, d)
     if talent_phys or talent_arts:
         out["talent_dodge_phys"] = talent_phys
