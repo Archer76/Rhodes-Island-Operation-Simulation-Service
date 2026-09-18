@@ -82,10 +82,14 @@ __all__ = [
     "SPLASH_SCALE_KEY",
     "SPLASH_TALENT_KEYS",
     "SPLASH_TALENTS",
+    "COMBO_ATTACK_KEYS",
+    "COMBO_HITS",
     "TraitSplash",
+    "ComboAttack",
     "read_trait_splash",
     "apply_splash_talent",
     "is_splash_talent",
+    "read_combo_attack",
     "splash_tiles",
     "cross_cells",
 ]
@@ -103,6 +107,24 @@ SPLASH_TALENT_KEYS = ("damage_scale", "attack@splash_atk_scale")
 #: 具名检测器。审计的第三道筛子按**天赋名字**判有没有人读它，
 #: 所以名字必须作为字面量留在源码里；但**判据仍然是键**（见上）。
 SPLASH_TALENTS = frozenset({"汹涌怒火"})
+
+#: 「普攻连击 + 结算后缩放」的指纹：`attack@atk_scale` 与 `attack@damage_scale`
+#: **同时**出现在同一条**隐藏天赋**（`name` 为 null）的黑板里。
+COMBO_ATTACK_KEYS = ("attack@atk_scale", "attack@damage_scale")
+
+#: 焰狐龙梓兰一次普攻打几击。
+#:
+#: **黑板里没有这个 3**——它硬编码在攻击预制体里，黑板只给了每击倍率
+#: （`attack@atk_scale` = 1.0）与结算后的缩放（`attack@damage_scale` = 0.333）。
+#: 出处是 prts.wiki「焰狐龙梓兰」页的 `|特性备注=` 原文：
+#:
+#: > 焰狐龙梓兰的普通攻击为**三连击**，每击造成攻击力 100% 的物理伤害。
+#: > 在每次输出伤害时会对其进行检测，若为普通攻击的伤害，则使该伤害降低至
+#: > 33.3%（也即计算防御/法抗后，伤害 ×33.3%，因此焰狐龙梓兰每轮普通攻击
+#: > 会少造成 0.1% 的伤害）
+#:
+#: 最后那句同时是**交叉验证**：3 × 0.333 = 0.999，恰好少 0.1% ✓。
+COMBO_HITS = 3
 
 
 def _pairs_to_dict(pairs: Any) -> dict[str, float]:
@@ -138,6 +160,43 @@ def read_trait_splash(char: dict) -> TraitSplash | None:
         if SPLASH_RADIUS_KEY in bb and SPLASH_SCALE_KEY in bb:
             return TraitSplash(radius=bb[SPLASH_RADIUS_KEY],
                                scale=bb[SPLASH_SCALE_KEY])
+    return None
+
+
+def read_combo_attack(char: dict) -> ComboAttack | None:
+    """读出「普攻连击 + 结算后缩放」。没有这个形状就返回 None。
+
+    判据：**某一条隐藏天赋**（`name` 为 null）的黑板里**同时**有
+    `attack@atk_scale` 与 `attack@damage_scale`。
+
+    为什么按"隐藏天赋 + 键的组合"认，而不按干员名或子职业：
+
+    * 焰狐龙梓兰的 `character_table.trait` 是**空的**、`operator_trait` 表也**没有行**
+      （她的特性文字就是猎手共同的「高精度的近距离射击」）。这条机制住在
+      **隐藏天赋**里（`is_hide_talent=1`、`name`/`description` 都是 null），
+      所以审计的两道筛子都照不到它，第三道（按天赋名）更看不见——
+      **PRTS 的 `|特性备注=` 才是它的出处**。
+    * `attack@damage_scale` 这个键名**同名反义**（撼地者「汹涌怒火」的
+      `damage_scale` 是"溅射伤害 +24%"），单看键名会误中。同时要求
+      `attack@atk_scale` 在场，且 `damage_scale < 1`（这里是"降低至"），才是这条。
+
+    每击倍率取自 `attack@atk_scale`（1.0），**击数取 `COMBO_HITS`**（黑板里没有，
+    出处见该常量的文档）。
+    """
+    for tal in (char or {}).get("talents") or ():
+        for cand in tal.get("candidates") or ():
+            if not isinstance(cand, dict) or cand.get("name"):
+                continue
+            bb = _pairs_to_dict(cand.get("blackboard"))
+            if not all(k in bb for k in COMBO_ATTACK_KEYS):
+                continue
+            scale = float(bb["attack@damage_scale"])
+            if not 0.0 < scale < 1.0:
+                # 「提升至」式的大于 1 是别的东西（溅射增伤那一族），不认。
+                continue
+            return ComboAttack(hits=COMBO_HITS,
+                               hit_scale=float(bb["attack@atk_scale"]),
+                               damage_scale=scale)
     return None
 
 
@@ -194,6 +253,19 @@ class TraitSplash:
     def effective_scale(self) -> float:
         """特性溅射真正用的倍率：`scale × damage_scale`（0.5 × 1.24 = 0.62）。"""
         return self.scale * self.damage_scale
+
+
+@dataclass(frozen=True)
+class ComboAttack:
+    """一次普通攻击的**连击结构**（纯数据）。焰狐龙梓兰：3 击 × 100%，结算后 ×33.3%。
+
+    `damage_scale` 的性质与溅射那条相反：它乘在**主目标**上，而且是在
+    **计算防御/法抗之后**（`resolve_damage` 的输出上），不是倍率菜单里的一项。
+    """
+
+    hits: int
+    hit_scale: float
+    damage_scale: float
 
 
 def splash_tiles(center: tuple[float, float], radius: float) -> set[tuple[int, int]]:
