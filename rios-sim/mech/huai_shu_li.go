@@ -1234,6 +1234,13 @@ func (m *farmlandMech) EnvTick(ctx Ctx, dt float64) {
 		// 环境伤害走 `Combatant.take`（`unit.py:104`）：**只过屏障，不减防御与法抗**，
 		// 所以这里按真伤报。
 		if dmg := m.field.DamagePerSecond(cell[0], cell[1]); dmg > 0 {
+			// 环境伤害也留**逐笔**痕迹，且单独一个前缀：`OPDMG` 只知道"谁掉了
+			// 多少血"，看不出是哪一路——HS-EX-8 上两边总量相同而阵亡时刻差 7 秒，
+			// 正是"哪一路快了"看不出来才查不下去。`op_cell` 与 `ticks` 一起记，
+			// 是为了区分"病害值高"和"这一秒多结算了一次"。
+			ctx.Trace("ENV t=%.4f idx=%d cell=%d,%d dmg=%.3f ticks=%d actual=%.4f",
+				ctx.Now(), o.Index, cell[0], cell[1], dmg*float64(ticks), ticks,
+				m.field.ActualAt(cell[0], cell[1]))
 			ctx.DamageOperator(o.Index, dmg*float64(ticks), true)
 			continue
 		}
