@@ -4918,6 +4918,219 @@ def _non_ammo_unit(v):
     return u
 
 
+def _trait_at(char_id: str) -> dict:
+    """子职业特性黑板（`operator_trait`）——战斗层用的 provider。
+
+    **战斗层不连数据库**，所以由检查侧把这张表包成 provider 递进去（与
+    `enemy_at` / `range_provider` 同一个手法）。取**精2 那一档**：这是"已经
+    咬过两次"的那条铁律（表按 `char_id` + `unlock_phase` 存，不能只取一行）。
+    """
+    with sqlite3.connect(Path(__file__).resolve().parent.parent
+                         / "data" / "akdb.sqlite") as c:
+        c.row_factory = sqlite3.Row
+        rows = [json.loads(r["blackboard"] or "{}") for r in c.execute(
+            "SELECT blackboard FROM operator_trait WHERE char_id=? "
+            "ORDER BY unlock_phase DESC", (char_id,))]
+    return rows[0] if rows else {}
+
+
+def _stand_duo(v, stage, lib, slots, tals, slot: int, *, trait: bool = True):
+    """搭一个结城理（走**真部署路径**，特性黑板由 provider 递进去）。"""
+    sim = mechanism_sim(stage, lib)
+    sim.trait_at = _trait_at if trait else (lambda cid: {})
+    sim.dp = 999.0
+    me = v.unit({"char_id": "char_4217_makoto", "elite": 2, "level": 60,
+                 "trust": 100, "potential": 1})
+    sim._do_deploy(Deployment(0.0, me, (2, 3), "Right",
+                              skill=slots[slot].level(7, 3),
+                              talents=list(tals)), 0.0)
+    if me not in sim.operators:
+        raise AssertionError("部署没成功")
+    return sim, me
+
+
+def check_stand_state_machine(stage, lib, calc, book_t) -> None:
+    """[52] 结城理（`char_4217_makoto`）：**〈替身〉状态机**。
+
+    这是第三批里唯一一台**状态机**，他六条欠账全住在里面：
+    `max_hp_t1`（替身形态生命上限）、`attack@kill_atk_scale` / `attack@kill_damage`
+    （塔纳托斯的斩杀光环）、`attack@max_target_heal`（俄耳甫斯·改的治疗目标数）、
+    `multi_attack_total_cnt` / `final_damage_different_ratio`（总攻击的两个乘子）。
+
+    权威出处是 prts 干员页的 `|备注=`，它补了正文**没有**的四条：
+
+    * 「切换期间额外持有【静默】【无法行动】免疫」；
+    * 「**仅有**从〈本体〉形态切换为任意〈替身〉形态时才会触发停顿效果」；
+    * 「〈替身〉结束后会先切换为〈总攻击〉形态发起总攻击（**不享受**替身形态的
+      天赋/技能加成），随后再切换回〈本体〉形态」；
+    * 「因切换〈替身〉会终止技能，故技能开启后会**立刻在同一帧内结束**」——
+      所以形态参数必须在切换那一刻**快照**，这条不钉住就会静默失效。
+    """
+    print("\n[52] 结城理：〈替身〉状态机（特性 duration / 不羁之力 / 总攻击）")
+    from ak_tactic.battle.talents import (find_persona_power,  # noqa: PLC0415
+                                          find_sees_leader)
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    v = Verifier()
+    slots = {sk.slot: sk for sk in SkillBook().for_operator("char_4217_makoto")}
+    forms = [slots[s].level(7, 3).effects.stand_form for s in (1, 2, 3)]
+    check("  解析：三条技能的〈替身〉形态分别是 俄耳甫斯 / 塔纳托斯 / 塔纳托斯·改",
+          forms == ["orpheus", "thanatos", "thanatos_kai"], f"{forms}")
+    e2 = slots[2].level(7, 3).effects
+    e3 = slots[3].level(7, 3).effects
+    check("  解析：斩杀阈值/斩杀伤害（技2）与治疗目标数（技3）",
+          (e2.stand_kill_scale, e2.stand_kill_damage, e3.stand_heal_targets)
+          == (2.8, 9999999.0, 4),
+          f"{e2.stand_kill_scale}/{e2.stand_kill_damage:.0f}、"
+          f"{e3.stand_heal_targets}")
+    check("  反向：**渲染后的正文把术语标记剥掉了**（「切换为〈替身〉状态作战」→"
+          "「切换为状态作战」）——照原文写判据会一条都不中，这里钉住它仍然命中",
+          "切换为状态作战" in slots[1].level(7, 3).description
+          and "<替身>" not in slots[1].level(7, 3).description,
+          "判据用的是剥掉标记后的那一句")
+
+    tals = list(book_t.for_operator("char_4217_makoto"))
+    power, leader = find_persona_power(tals), find_sees_leader(tals)
+    check("  天赋两个检测器都命中（天赋名 + 键名双锚定）",
+          power is not None and leader is not None,
+          f"不羁之力={power is not None}、S.E.E.S.队长={leader is not None}")
+
+    print("     —— 致命伤不撤退：换成〈替身〉接着打 ——")
+    sim, me = _stand_duo(v, stage, lib, slots, tals, 2)
+    atk0, hp0, iv0 = me.current_atk(), me.max_hp, me.current_interval()
+    check("  部署时特性黑板进了战斗层（`duration` = 20）",
+          abs(me.stand_duration - 20.0) < 1e-9, f"{me.stand_duration:g}")
+    e = _dummy(sim, stage, _enemy_ids(stage)[0], (3, 3))
+    me.take(me.hp * 3.0)                        # 一次**致命**伤
+    check("  受到致命伤**不撤退**，改为进入〈替身〉（20 秒、满血、阻挡归零）",
+          me.alive and me.in_stand and me.stand_form == "thanatos"
+          and abs(me.stand_timer - 20.0) < 1e-9 and me.block_cnt == 0
+          and abs(me.hp - me.max_hp) < 1e-6,
+          f"alive={me.alive}、形态={me.stand_form}、{me.stand_timer:g}s、"
+          f"阻挡={me.block_cnt}")
+    check("  替身形态的面板：生命上限 ×1.35（`max_hp_t1`）、攻击力 ×1.8"
+          "（`atk`）、攻击间隔 +0.4 秒（`base_attack_time`）",
+          abs(me.max_hp - hp0 * 1.35) < 1e-6
+          and abs(me.current_atk() - atk0 * 1.8) < 1e-6
+          and abs(me.current_interval() - (iv0 + 0.4)) < 1e-6,
+          f"{atk0:.0f}/{hp0:.0f}/{iv0:.3f}s → {me.current_atk():.0f}/"
+          f"{me.max_hp:.0f}/{me.current_interval():.3f}s")
+    check("  反向：这些面板增益**只在替身形态里**算——本体那份面板不变",
+          abs(me.atk - atk0) < 1e-9 and me.current_atk() > me.atk + 1e-9,
+          f"本体面板 {me.atk:.0f}、替身面板 {me.current_atk():.0f}")
+    check("  替身形态造成**法术**伤害、目标数取技能的 4",
+          me.active_attack_type() == "MAGIC" and me.current_max_target() == 4,
+          f"{me.active_attack_type()}、{me.current_max_target()} 个")
+
+    print("     —— 切换停顿：只有本体 → 替身才触发 ——")
+    e.sluggish_timer = 0.0
+    sim._stand_tick(0.05, 0.05)                 # 待兑现的停顿在这一帧落地
+    check("  从〈本体〉切进来时，范围内敌人被停顿 8 秒（`sluggish`）",
+          e.sluggish_timer >= 7.9, f"{e.sluggish_timer:g}s")
+    me.stand_sluggish_pending = 0.0
+    me.stand_from_skill()                       # 替身 → 替身
+    check("  反向：〈替身〉形态之间互切**不触发**停顿（prts 备注原话）",
+          me.stand_sluggish_pending == 0.0, f"pending={me.stand_sluggish_pending:g}")
+
+    print("     —— 塔纳托斯的斩杀光环：每 0.1 秒一检、每目标每次只斩一次 ——")
+    lo = _dummy(sim, stage, _enemy_ids(stage)[0], (3, 3))
+    lo.hp = me.current_atk() * 2.8 * 0.9        # 低于阈值
+    hi = _dummy(sim, stage, _enemy_ids(stage)[0], (3, 4))
+    hi.hp = 10 ** 9                             # 远高于阈值
+    sim._stand_kill_sweep(me, 1.0)
+    check("  生命值低于攻击力 280% 的被斩（9999999 真实伤害），高于的不动",
+          lo.hp <= 0.0 and hi.hp == 10 ** 9,
+          f"低血 {lo.hp:.0f}、高血 {hi.hp:.0f}（阈值 {me.current_atk() * 2.8:.0f}）")
+    lo.hp = me.current_atk() * 2.8 * 0.5        # 再塞回一个"该斩"的血量
+    sim._stand_kill_sweep(me, 1.1)
+    check("  反向：同一个目标这次替身里**不再斩第二次**（prts 备注）",
+          lo.hp > 0.0, f"第二次检测后 hp={lo.hp:.0f}")
+
+    print("     —— 20 秒后退场：先总攻击（真伤），再回本体 ——")
+    sim2, me2 = _stand_duo(v, stage, lib, slots, tals, 2)
+    tgt = _dummy(sim2, stage, _enemy_ids(stage)[0], (3, 3))
+    tgt.hp = 10 ** 9
+    hp2_0 = me2.max_hp
+    me2.take(me2.hp * 3.0)
+    before = tgt.hp
+    sim2._stand_tick(0.05, 20.0)
+    for i in range(500):
+        sim2._stand_tick(0.05, 20.05 + i * 0.05)
+    check("  时间到就回〈本体〉：形态清空、上限与阻挡还原、满血",
+          me2.stand_form == "" and me2.stand_timer == 0.0
+          and abs(me2.max_hp - hp2_0) < 1e-6 and me2.block_cnt == 2,
+          f"上限 {me2.max_hp:.0f}（本体 {hp2_0:.0f}）、阻挡 {me2.block_cnt}")
+    check("  总攻击 = **当前攻击力** × `atk_scale`(4.3) × `multi_attack_total_cnt`"
+          " × `final_damage_different_ratio`，且是**真实**伤害（不过防御）",
+          abs((before - tgt.hp) - me2.current_atk() * 4.3) < 1.0,
+          f"打出 {before - tgt.hp:.0f}，期望 {me2.current_atk() * 4.3:.0f}"
+          f"（本体面板 {me2.current_atk():.0f}——不含替身那 +80%）")
+
+    print("     —— 俄耳甫斯：平A 改成治疗的那道门 ——")
+    sim3, me3 = _stand_duo(v, stage, lib, slots, tals, 1)
+    mate = v.unit({"char_id": "char_103_angel", "elite": 2, "level": 60,
+                   "trust": 100, "potential": 1})
+    other = {sk.slot: sk for sk in SkillBook().for_operator("char_103_angel")}
+    sim3._do_deploy(Deployment(0.0, mate, (3, 3), "Right",
+                               skill=other[1].level(7, 3), talents=[]), 0.0)
+    foe = _dummy(sim3, stage, _enemy_ids(stage)[0], (3, 4))
+    me3.take(me3.hp * 3.0)
+    mate.hp = mate.max_hp * 0.4                 # ≤50%：该治
+    hp0b, foe0 = mate.hp, foe.hp
+    tt = 0.0
+    for _ in range(80):
+        tt += 0.05
+        me3.attack_timer = 1e9
+        sim3._operators_attack(0.05, tt)
+    check("  范围内有 ≤50% 的友方时，平A 改为**治疗**他（而不是打敌人）",
+          mate.hp > hp0b and abs(foe.hp - foe0) < 1e-9,
+          f"友方 {hp0b:.0f}→{mate.hp:.0f}、敌人没掉血={abs(foe.hp - foe0) < 1e-9}")
+    mate.hp = mate.max_hp                       # 满血：该打人
+    # 把**敌军挪进她的射程、友军挪出去**再打一遍：她的射程只有身前那一格
+    # （(3,3)），(3,4) 本来就在外面——不挪一下，这条"照常打敌人"会因为
+    # "根本没有目标"而假通过。
+    foe.position = (3, 3)
+    mate.position = (6, 6)
+    foe0 = foe.hp
+    for _ in range(80):
+        tt += 0.05
+        me3.attack_timer = 1e9
+        sim3._operators_attack(0.05, tt)
+    check("  反向：没有受伤的友方时，照常打敌人",
+          foe.hp < foe0, f"敌人 hp {foe0:.0f}→{foe.hp:.0f}")
+
+    print("     —— 技3：〈塔纳托斯·改〉→〈俄耳甫斯·改〉（备注里「再点一次」） ——")
+    sim3b, me3b = _stand_duo(v, stage, lib, slots, tals, 3)
+    mate2 = v.unit({"char_id": "char_103_angel", "elite": 2, "level": 60,
+                    "trust": 100, "potential": 1})
+    sim3b._do_deploy(Deployment(0.0, mate2, (3, 3), "Right",
+                                skill=other[1].level(7, 3), talents=[]), 0.0)
+    me3b.take(me3b.hp * 3.0)
+    check("  技3 进的是〈塔纳托斯·改〉（`attack@max_target_heal` 是它的专属键）",
+          me3b.stand_form == "thanatos_kai" and me3b.stand_heal_targets == 4,
+          f"{me3b.stand_form}、治疗目标数 {me3b.stand_heal_targets}")
+    mate2.hp = mate2.max_hp * 0.5
+    tk = 0.0
+    for _ in range(40):                         # 2 秒
+        tk += 0.05
+        sim3b._stand_tick(0.05, tk)
+    check("  下一帧按「最快合法时机」切到〈俄耳甫斯·改〉：**不刷新**那 20 秒、"
+          "阻挡恢复 2（「阻挡不再归零」）",
+          me3b.stand_form == "orpheus_kai" and me3b.block_cnt == 2
+          and me3b.stand_timer < 20.0,
+          f"{me3b.stand_form}、剩 {me3b.stand_timer:.1f}s、阻挡 {me3b.block_cnt}")
+    check("  〈俄耳甫斯·改〉的**延迟治疗**落地（0.5 秒后结算、每次至多 4 名）",
+          mate2.hp > mate2.max_hp * 0.5 + 1e-6,
+          f"友方 {mate2.max_hp * 0.5:.0f}→{mate2.hp:.0f}")
+
+    sim4, me4 = _stand_duo(v, stage, lib, slots, tals, 2, trait=False)
+    check("  反向（整台机器）：**不接特性黑板**时他照常会阵亡"
+          "——状态机不会凭空启动",
+          me4.stand_duration == 0.0 and (me4.take(me4.hp * 3.0) or True)
+          and not me4.alive,
+          f"duration={me4.stand_duration:g}、alive={me4.alive}")
+
+
 def check_glider_mobility(stage, lib, calc, book_t) -> None:
     """[43] 焰狐龙梓兰天赋2「翔虫机动」——一个天赋横跨两个平面。
 
@@ -5729,6 +5942,7 @@ def main() -> int:
     check_lock_awake(stage, lib, calc, book_t)
     check_cost_skills(stage, lib, calc, book_t)
     check_decay_barrier_and_radio(stage, lib, calc, book_t)
+    check_stand_state_machine(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

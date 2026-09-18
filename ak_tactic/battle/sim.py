@@ -54,6 +54,7 @@ from .damage import DamageType, resolve_damage
 from .talents import (CLASS_AURA_TALENTS, FACTION_AURA_NAME, STUDENT_TEAM,
                       RegenAura, SnowField, TeamAura, find_blessing,
     find_ammo_covenant, find_bomb_radio, LATERANO_NATION,
+    find_persona_power, find_sees_leader,
                       RHODES_NATION, find_angel_blessing, find_class_aura, find_damage_block,
                       find_dot_on_hit,
                       find_limit_dispatch,
@@ -2099,6 +2100,224 @@ class BattleSimulator:
                 op.barrier = 0.0
                 op.barrier_decay_per_sec = 0.0
 
+    # -------------------------------------------- 〈替身〉状态机（结城理）
+    def _stand_setup(self, op: OperatorUnit) -> None:
+        """把〈替身〉状态机的参数装到单位上（部署时一次）。
+
+        三处来源，缺一不动：
+
+        * **特性黑板** `duration`（20 秒）——没有它，这台状态机不启动；
+        * 天赋「**不羁之力**」——替身形态的面板改写（`atk` / `max_hp_t1` /
+          `base_attack_time`）与换形态时的停顿秒数（`sluggish`）；
+        * 天赋「**S.E.E.S.队长**」——替身**结束那一刻**的总攻击
+          （`atk_scale` / `multi_attack_total_cnt` /
+          `final_damage_different_ratio`）。
+
+        没有「不羁之力」就整台不启动：那意味着替身形态没有面板口径。与其拿本体
+        的面板硬撑，不如不动——**少算**好过**错算**。
+        """
+        dur = float((op.trait_blackboard or {}).get("duration") or 0.0)
+        power = find_persona_power(op.talents)
+        if dur <= 0.0 or power is None:
+            return
+        op.stand_duration = dur
+        op.stand_atk_pct = float(power.value("atk", 0.0) or 0.0)
+        op.stand_hp_pct = float(power.value("max_hp_t1", 0.0) or 0.0)
+        op.stand_interval_add = float(power.value("base_attack_time", 0.0) or 0.0)
+        op.stand_sluggish = float(power.value("sluggish", 0.0) or 0.0)
+        leader = find_sees_leader(op.talents)
+        if leader is not None:
+            op.stand_ta_scale = float(leader.value("atk_scale", 0.0) or 0.0)
+            op.stand_ta_count = float(
+                leader.value("multi_attack_total_cnt", 1.0) or 1.0)
+            op.stand_ta_ratio = float(
+                leader.value("final_damage_different_ratio", 1.0) or 1.0)
+
+    def _stand_release_blocking(self, op: OperatorUnit) -> None:
+        """〈替身〉阻挡数为 0 —— 把挡住的敌人放开。
+
+        阻挡在这个仓库里是**双写**的（`op.blocking` 与 `e.blocked_by`，
+        见 `battle/unit.py` 的注释）。只清一边，敌人会以为自己还被挡着，
+        表现为"它从此原地不动"，而且**不报错**。
+        """
+        for e in list(op.blocking):
+            if e.blocked_by is op:
+                e.blocked_by = None
+        op.blocking.clear()
+
+    def _stand_tick(self, dt: float, t: float) -> None:
+        """〈替身〉状态机逐帧走。
+
+        五件事：**切换停顿**兑现 → 倒计时 → **斩杀光环** → **延迟治疗** →
+        时间到就**退场**（先总攻击，再回本体）。
+
+        「切换期间额外持有【静默】【无法行动】免疫」这一条在 prts 备注里，
+        本仓库没有静默/无法行动这两个异常状态，所以自然满足——**不是漏了**。
+        """
+        for op in self.operators:
+            if op.stand_sluggish_pending > 0.0:
+                secs = op.stand_sluggish_pending
+                op.stand_sluggish_pending = 0.0
+                cells = self._range_of(op)
+                hit = 0
+                for e in self.enemies:
+                    if e.hp <= 0 or e.leaked:
+                        continue
+                    cell = (int(round(e.position[0])), int(round(e.position[1])))
+                    if cell in cells:
+                        e.sluggish_timer = max(e.sluggish_timer, secs)
+                        hit += 1
+                if self.verbose and hit:
+                    self.result.log.append(
+                        f"{t:7.1f}s  {op.name} 切〈替身〉：停顿范围内 {hit} 名敌人 "
+                        f"{secs:g}s")
+            if op.stand_timer <= 0.0:
+                continue
+            op.stand_timer = max(0.0, op.stand_timer - dt)
+            # 技3 进的是〈塔纳托斯·改〉，而**治疗那一半属于〈俄耳甫斯·改〉**
+            # ——prts 备注：「在〈塔纳托斯·改〉切换完毕后，可**再次点按开启技能键**
+            # 主动切换至〈俄耳甫斯·改〉」。模拟器没有"玩家按键"这个输入通道，
+            # 所以按「**最快合法时机切换**」建模：切完的下一帧就换过去。
+            # 这是一条**假设**（记在 uncertainties），它同时意味着〈塔纳托斯·改〉
+            # 的可对空与弱点伤害在本模型里只存在一帧。
+            if op.stand_form == "thanatos_kai" and op.stand_heal_targets > 0:
+                left = op.stand_timer       # 形态互切**不刷新**那 20 秒
+                op.stand_keep_block = True  # 「阻挡不再归零，恢复正常 2 阻挡」
+                op.enter_stand("orpheus_kai")
+                op.stand_timer = left
+            # 斩杀光环（塔纳托斯）：**每 0.1 秒**检测一次。
+            if op.stand_kill_scale > 0.0 and op.stand_kill_damage > 0.0:
+                op.stand_kill_timer += dt
+                while op.stand_kill_timer >= 0.1:
+                    op.stand_kill_timer -= 0.1
+                    self._stand_kill_sweep(op, t)
+            # 俄耳甫斯·改：切换完毕的瞬间与**后续每隔 1 秒**各排一次延迟治疗。
+            if op.stand_heal_targets > 0:
+                op.stand_heal_timer += dt
+                if op.stand_heal_timer >= 1.0:
+                    op.stand_heal_timer -= 1.0
+                    self._stand_queue_heal(op)
+            for item in list(op.stand_heal_queue):
+                left, ally, amount = item
+                left -= dt
+                if left <= 0.0:
+                    op.stand_heal_queue.remove(item)
+                    if ally.alive:
+                        ally.heal(amount)
+                else:
+                    op.stand_heal_queue[op.stand_heal_queue.index(item)] = (
+                        left, ally, amount)
+            if op.stand_timer <= 0.0:
+                self._stand_exit(op, t)
+
+    def _stand_kill_sweep(self, op: OperatorUnit, t: float) -> None:
+        """塔纳托斯的**恐惧斩杀**光环。
+
+        prts 备注：「位于〈塔纳托斯〉攻击范围内的敌人将被施加恐惧斩杀效果
+        （**光环效果，可对空**）：每 0.1 秒检测一次，符合条件时对其造成
+        9999999 **无来源真实**斩杀伤害（无法因闪避取消、无法因格挡取消、
+        无法因未命中取消）」；「**每个目标每次进入攻击范围最多执行 1 次**
+        斩杀行为，不会确保目标死亡，且若目标被斩杀后未死亡则不再尝试」。
+
+        所以三件事都照做：阈值 = 当前攻击力 × `attack@kill_atk_scale`；
+        伤害直接给 `attack@kill_damage`（**不过防御/法抗/闪避/格挡**——
+        走 `_damage_enemy` 但类型是 TRUE）；一个目标本次替身只斩一次。
+        """
+        if op.stand_kill_damage <= 0.0:
+            return
+        cells = self._range_of(op)
+        threshold = op.current_atk() * op.stand_kill_scale
+        for e in self.enemies:
+            if e.hp <= 0 or e.leaked or id(e) in op.stand_killed:
+                continue
+            cell = (int(round(e.position[0])), int(round(e.position[1])))
+            if cell not in cells or e.hp >= threshold:
+                continue
+            op.stand_killed.add(id(e))
+            self._damage_enemy(e, op.stand_kill_damage, t, "TRUE")
+
+    def _stand_queue_heal(self, op: OperatorUnit) -> None:
+        """俄耳甫斯·改的延迟治疗：**0.5 秒后**结算，每次至多
+        `attack@max_target_heal` 名生命值不满的友方。
+
+        正文写「对攻击范围内生命值不满的若干友方单位施加延迟治疗效果」，
+        目标数就在 `attack@max_target_heal`（4）里。
+        """
+        cells = self._range_of(op)
+        pool = [o for o in self.operators
+                if o.alive and o.hp < o.max_hp and o is not op
+                and (int(round(o.position[0])), int(round(o.position[1])))
+                in cells]
+        pool.sort(key=lambda o: o.hp / max(1.0, o.max_hp))
+        amount = op.current_atk() * op.stand_heal_scale
+        for ally in pool[:max(1, op.stand_heal_targets)]:
+            op.stand_heal_queue.append((0.5, ally, amount))
+
+    def _stand_exit(self, op: OperatorUnit, t: float) -> None:
+        """〈替身〉时间到：先切〈总攻击〉打一发，再回〈本体〉。
+
+        prts 备注：「结城理在〈替身〉持续时间结束后会先切换为〈总攻击〉形态发起
+        总攻击（**不享受〈替身〉形态的天赋/技能加成**），随后再切换回〈本体〉
+        形态」；「未解锁天赋情况下，结城理会直接切换回〈本体〉形态」；
+        「〈总攻击〉期间持有【无敌】【静默】」。
+
+        「不享受替身形态的加成」这条落地的样子是：总攻击的伤害按**此刻的
+        `current_atk()`** 算，而替身的面板加成是 `stand_atk_pct`——所以下面
+        先把形态退掉再算，读到的就是本体面板。
+        另：「〈总攻击〉期间无敌」在本仓库是**瞬时**结算（一帧内出伤），
+        没有持续时间可挂，这一条记进 uncertainties。
+        """
+        had = op.stand_ta_scale > 0.0
+        op.leave_stand()
+        self._stand_release_blocking(op)
+        if had:
+            self._total_attack(op, t)
+
+    def _total_attack(self, op: OperatorUnit, t: float) -> None:
+        """天赋「S.E.E.S.队长」的总攻击：对范围内所有敌人一次**真实**伤害。
+
+        三个键都在天赋黑板上，各自一个乘子：
+
+        * `atk_scale`（180…450%）——倍率本身；
+        * `multi_attack_total_cnt`（1.0）——「（可叠加）」的次数；
+        * `final_damage_different_ratio`（1.0）——「伤害类型不同时」的最终倍率。
+
+        后两个在结城理身上**恒为 1.0**，照接是因为它们一旦非 1 就会静默失效
+        （同 `cost_attack_add` 那次的口径）。
+
+        ⚠️ 两处如实的近似（都记进 uncertainties）：
+
+        1. 备注写「对**小队队员**周围一定范围内的所有敌人」，本仓库没有队伍
+           名册层的成员表，所以只按**结城理自己**的位置算一遍；
+        2. 伤害范围取备注里的 `x-1`（由 `range_provider` 给）；取不到就退回
+           他自己的攻击范围，**不猜**。
+        """
+        enemies = self._total_attack_cells(op)
+        dmg = op.current_atk() * op.stand_ta_scale * op.stand_ta_count \
+            * op.stand_ta_ratio
+        hit = 0
+        for e in self.enemies:
+            if e.hp <= 0 or e.leaked:
+                continue
+            cell = (int(round(e.position[0])), int(round(e.position[1])))
+            if cell in enemies:
+                self._damage_enemy(e, dmg, t, "TRUE", source=op)
+                hit += 1
+        if self.verbose:
+            self.result.log.append(
+                f"{t:7.1f}s  {op.name} 总攻击：{hit} 名敌人各 {dmg:.0f} 真实伤害")
+
+    def _total_attack_cells(self, op: OperatorUnit) -> set[tuple[int, int]]:
+        """总攻击的伤害格：优先按备注的 `x-1` 取，取不到退回自己的范围。"""
+        provider = self.range_provider
+        if provider is not None:
+            try:
+                return set(provider(op.char_id, op.elite, op.direction,
+                                    op.position, range_id="x-1"))
+            except Exception:
+                pass
+        return self._range_of(op)
+
     def _bomb_radio_on_ammo(self, consumer: OperatorUnit, rounds: int) -> None:
         """天赋「火力电台」：**友方干员消耗弹药**时触发的自愈与轰炸。
 
@@ -2153,6 +2372,16 @@ class BattleSimulator:
     def _activate(self, op: OperatorUnit, t: float, *, passive: bool = False) -> None:
         sk = op.skill
         if sk is None:
+            return
+        # 结城理的三条技能：**开技即切〈替身〉**，而技能**在同一帧就结束**
+        # （prts 备注：「因切换〈替身〉会终止技能，故技能开启后会立刻在同一帧内
+        # 结束，可以触发『技能结束』事件以及该事件相关的效果」）。
+        # 先切形态、再走正常的"结束"路径——**不能在这里直接 return**：那会让
+        # "技能结束"这条事件线断掉，还攻速/清屏障/关面板全挂在 `_deactivate` 上。
+        if sk.effects.stand_form and op.stand_duration > 0.0:
+            op.stand_from_skill()
+            self._stand_release_blocking(op)
+            self._deactivate(op, t)
             return
         # 「刚连射」：技1 开技时若已有 **2 次充能**所需的技力，则**一次吃掉两层**、
         # 多打那 5 支 200%（PRTS `|备注=` 原文：「技能达到 4 级后，若在已有 2 次
@@ -2547,6 +2776,9 @@ class BattleSimulator:
             # 4.98 会**持续衰减**的屏障按秒掉（新约能天使技2 的 250% / 30 秒）。
             #      与技能结束时清零的那条屏障分开：它自己掉，不看技能死活。
             self._barrier_decay_tick(dt, t)
+            # 4.99 〈替身〉状态机（结城理）：停顿兑现 / 倒计时 / 斩杀光环 /
+            #      延迟治疗 / 退场总攻击，都在这一处逐帧走。
+            self._stand_tick(dt, t)
             self._skill_tick(dt, t)
 
             # 5.4 全场光环（青色怒火）：数值随光环主人的技能状态变，所以必须排在
@@ -2825,6 +3057,13 @@ class BattleSimulator:
         op.direction = d.direction
         op.auto_skill = d.auto_skill
         op.talents = list(d.talents or [])
+        # 子职业特性黑板（`operator_trait` 表）：与天赋装在**同一处**。
+        # **战斗层不连数据库**，所以走 provider（与 `enemy_at` / `range_provider`
+        # 同一手法）：不接就是空字典，等于"这个人没有这条特性"，**不会误触发**。
+        _trait_at = getattr(self, "trait_at", None)
+        op.trait_blackboard = (_trait_at(op.char_id)
+                               if _trait_at is not None else {})
+        self._stand_setup(op)
         self._attach_skill(op, d)
         self.operators.append(op)
         self._mobility_on_deploy(op, d, t)
@@ -3436,6 +3675,23 @@ class BattleSimulator:
             if heal_scale is None and op.heals and not deals:
                 heal_scale = 1.0
 
+            # 〈替身·俄耳甫斯〉把平A**改成治疗**的那道门（prts 备注）：「当攻击
+            # 范围内存在生命比例 ≤50% 的可治疗我方单位（不止干员）时，普通攻击
+            # 改为对攻击范围内**生命比例最低**的单位进行治疗」。`_pick_heals` 的
+            # 排序就是"生命比例最低"，所以这里只补那道 ≤50% 的门。
+            if (op.stand_timer > 0.0 and op.stand_form == "orpheus"
+                    and op.stand_heal_scale > 0.0):
+                hurt = self._pick_heals(op, cells, [])
+                if hurt and hurt[0].hp <= 0.5 * hurt[0].max_hp:
+                    op.attack_timer = 0.0
+                    op.hits += 1
+                    op.trigger_hits += 1
+                    healed = hurt[0].heal(op.current_atk() * op.stand_heal_scale)
+                    if self.verbose:
+                        self.result.log.append(
+                            f"{t:7.1f}s  {op.name}〈替身·俄耳甫斯〉治疗 "
+                            f"{hurt[0].name} {healed:.0f}")
+                    continue
             targets = self._pick_targets(op, cells, op.current_max_target()) if deals else []
             heal_targets = self._pick_heals(op, cells, targets) if heal_scale else []
             if not targets and not heal_targets:

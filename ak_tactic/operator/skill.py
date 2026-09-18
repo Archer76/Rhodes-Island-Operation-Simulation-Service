@@ -448,6 +448,27 @@ def _wants_enemy_hitrate(description: str, bb: dict[str, float]) -> bool:
     return phys < 0.0 or arts < 0.0
 
 
+def _stand_form_of(description: str, bb: dict[str, float]) -> str:
+    """结城理技1/2/3 各自进入哪个〈替身〉形态——判据是"召唤谁"。
+
+    * **技1** → `orpheus`（〈替身·俄耳甫斯〉：治疗优先、不可对空）；
+    * **技2** → `thanatos`（〈替身·塔纳托斯〉：斩杀光环、不可对空）；
+    * **技3** → `thanatos_kai`（〈替身·塔纳托斯·改〉：**可对空**、弱点伤害默认
+      法术；切换完毕后还能再点一次技能键换成〈俄耳甫斯·改〉——**那一次手动
+      切换没有建模**，见 `docs/uncertainties.md`）。
+
+    技3 与技2 的正文都写「塔纳托斯」，分不开，所以用**形态专属键**分开：只有技3
+    带 `attack@max_target_heal`（俄耳甫斯·改的每次治疗目标数）。
+    """
+    if "塔纳托斯" in description:
+        if float(bb.get("attack@max_target_heal") or 0.0) > 0.0:
+            return "thanatos_kai"
+        return "thanatos"
+    if "俄耳甫斯" in description:
+        return "orpheus"
+    return ""
+
+
 def _wants_steal_aspd(description: str, bb: dict[str, float]) -> bool:
     """是否「**立即偷取**攻击范围内 1 名**友方干员** X 点攻击速度」。
 
@@ -1065,6 +1086,25 @@ class SkillEffects:
     #: 属性同名反义——按键名认会把上限当成授予量。
     barrier_decay_pct: float = 0.0
     barrier_decay_secs: float = 0.0
+    #: 结城理那三条技能：**切换〈替身〉形态**（傀儡师特性）。
+    #: 取值 `orpheus` / `thanatos` / `thanatos_kai` / `orpheus_kai`；空 = 不是这种技能。
+    #:
+    #: ⚠️ 他的技能**在同一帧就结束**（prts 备注：「因切换〈替身〉会终止技能，
+    #: 故技能开启后会立刻在同一帧内结束，可以触发『技能结束』事件」），
+    #: 所以形态参数必须在**切换那一刻快照**到单位上——下一帧 `effects` 已经没了，
+    #: 从 effects 现读会读到空（那是一处**静默**失效）。
+    stand_form: str = ""
+    #: 形态专属参数，随 `stand_form` 一起快照。
+    #: * `stand_heal_scale`——俄耳甫斯的治疗倍率（`attack@heal_scale` 0.6）；
+    #: * `stand_kill_scale` / `stand_kill_damage`——塔纳托斯的**斩杀光环**
+    #:   （`attack@kill_atk_scale` 2.8 是"生命值低于攻击力 280%"这个阈值，
+    #:   `attack@kill_damage` 9999999 是斩杀伤害本身）；
+    #: * `stand_heal_targets`——俄耳甫斯·改每次治疗的目标数
+    #:   （`attack@max_target_heal` 4）。
+    stand_heal_scale: float = 0.0
+    stand_kill_scale: float = 0.0
+    stand_kill_damage: float = 0.0
+    stand_heal_targets: int = 0
     #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
     #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
     #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
@@ -1792,6 +1832,24 @@ class SkillBook:
             lv.effects.barrier_decay_pct = float(bb["shield_max_hp_ratio"])
             lv.effects.barrier_decay_secs = float(
                 bb.get("shield_max_duration") or 0.0)
+        # 结城理那三条技能：**切换〈替身〉形态**。
+        #
+        # ⚠️ 判据是渲染后的正文——`SkillLevel.description` 已经把术语标记
+        # **剥掉**了：原文「立即切换为〈替身〉状态作战」在这里是
+        # 「立即切换为**状态作战**」（那对尖括号和里面的"替身"一起没了）。
+        # 照原文写 `"切换为<替身>状态作战" in desc` 会**一条都不中**，
+        # 而且是静默的。这是"描述是渲染后的"这一类坑的第四次现身，
+        # 形态名（俄耳甫斯/塔纳托斯）倒是留着的，所以按它们分形态。
+        if "切换为状态作战" in lv.description:
+            lv.effects.stand_form = _stand_form_of(lv.description, bb)
+            lv.effects.stand_heal_scale = float(
+                bb.get("attack@heal_scale") or 0.0)
+            lv.effects.stand_kill_scale = float(
+                bb.get("attack@kill_atk_scale") or 0.0)
+            lv.effects.stand_kill_damage = float(
+                bb.get("attack@kill_damage") or 0.0)
+            lv.effects.stand_heal_targets = int(
+                bb.get("attack@max_target_heal") or 0)
         # 技能结束时的**自身**效果：晕眩与强制退场。两者的数值/语义都
         # 只在描述里，且都与"打在敌人身上"的那套（`control`）无关。
         lv.effects.self_stun = _wants_self_stun(lv.description, bb)
