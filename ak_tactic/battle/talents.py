@@ -561,6 +561,48 @@ def find_ammo_covenant(talents) -> Talent | None:
     return None
 
 
+#: 结城理天赋1「不羁之力」——「〈替身〉状态下结城理召唤人格面具作战，**攻击间隔
+#: 增大**，攻击力 +40/60/80%，生命值 +35%，作战能力随技能选择而改变」。
+#:
+#: 判据用**天赋名 + `max_hp_t1`** 双锚定：这个键全表只在他身上出现。
+#: 同黑板的 `atk` 是替身形态的攻击力增益、`base_attack_time` 是攻击间隔增加量
+#: （0.4 秒）、`sluggish` 是「切换为〈替身〉时停顿周围敌人的秒数」（精1 起 5、
+#: 精2 为 8）。prts 特性备注补了一句正文没有的：**只有从〈本体〉切进〈替身〉
+#: 才触发停顿**，〈替身〉形态之间互切不触发；停顿范围等于〈替身〉的攻击范围。
+PERSONA_POWER_NAME = "不羁之力"
+
+#: 结城理天赋2「S.E.E.S.队长」——「〈替身〉状态**结束后**，带领 S.E.E.S. 小队发动
+#: 总攻击，对小队队员周围一定范围内的所有敌人造成相当于结城理攻击力 180…450%
+#: 的**真实**伤害（可叠加）」。
+#:
+#: 三条黑板键都在这条天赋上：`atk_scale`（倍率）、`multi_attack_total_cnt`（叠加
+#: 次数，1.0）、`final_damage_different_ratio`（伤害类型不同时的最终倍率，1.0）。
+#: 后两个在她身上是**恒等值**，但通道照样接——见 `docs/uncertainties.md`。
+SEES_LEADER_NAME = "S.E.E.S.队长"
+
+
+def is_persona_power_talent(t: Talent) -> bool:
+    return t.name == PERSONA_POWER_NAME and t.has("max_hp_t1")
+
+
+def find_persona_power(talents) -> Talent | None:
+    for t in talents or ():
+        if is_persona_power_talent(t):
+            return t
+    return None
+
+
+def is_sees_leader_talent(t: Talent) -> bool:
+    return t.name == SEES_LEADER_NAME and t.has("atk_scale")
+
+
+def find_sees_leader(talents) -> Talent | None:
+    for t in talents or ():
+        if is_sees_leader_talent(t):
+            return t
+    return None
+
+
 @dataclass
 class TeamAura:
     """一个干员发给**全场友方**的攻击力/防御力光环。

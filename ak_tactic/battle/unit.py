@@ -352,6 +352,68 @@ class OperatorUnit(Combatant):
     #: 技能结束时清零；这个是**自己按秒掉**的，与技能何时结束无关，重复获得时
     #: 重置（`sim._grant_decay_barrier`）。为 0 = 没有这种屏障在衰减。
     barrier_decay_per_sec: float = 0.0
+
+    # ---------------------------------------------------------- 〈替身〉状态机
+    # 结城理的**傀儡师**特性：受到致命伤时不撤退，改成〈替身〉形态接着打。
+    # 这是一台状态机，不是一条 buff——他这一批的**全部**机制都住在里面：
+    # 三条技能是"进入哪个替身形态"的开关，天赋「不羁之力」是替身形态的面板
+    # 改写，天赋「S.E.E.S.队长」是**替身结束那一刻**的总攻击。
+    #
+    # 权威出处是 prts 干员页的 `|备注=`（技能与特性各一条），它补了正文没有的：
+    # 「切换期间额外持有【静默】【无法行动】免疫」「仅有从〈本体〉形态切换为
+    # 任意〈替身〉形态时才会触发停顿」「〈替身〉结束后先切〈总攻击〉（不享受
+    # 替身形态的天赋/技能加成）再切回〈本体〉」。
+    #: 子职业特性黑板（`operator_trait` 表的 `blackboard`）。由模拟器在**部署时**
+    #: 从 provider 装进来（战斗层不连数据库）；没接 provider 就是空字典，
+    #: 等于"这个人没有这条特性"，**不会误触发**。〈替身〉的 `duration` 住在这里。
+    trait_blackboard: dict = field(default_factory=dict)
+    #: 特性黑板 `duration`（20）：替身形态持续多少秒。**为 0 = 这个人没有这条
+    #: 特性**，整台状态机就不会动（守卫里靠这个装出"没有特性"的反例）。
+    stand_duration: float = 0.0
+    #: 剩余替身秒数。> 0 即在替身形态。
+    stand_timer: float = 0.0
+    #: 当前形态：`orpheus` / `thanatos` / `thanatos_kai` / `orpheus_kai`。
+    stand_form: str = ""
+    #: 替身形态的面板改写（都来自天赋「不羁之力」，部署时填）。
+    stand_atk_pct: float = 0.0          # 黑板 `atk`
+    stand_hp_pct: float = 0.0           # 黑板 `max_hp_t1`（+35%）
+    stand_interval_add: float = 0.0     # 黑板 `base_attack_time`（+0.4 秒）
+    stand_sluggish: float = 0.0         # 黑板 `sluggish`（换形态时停顿敌人几秒）
+    #: 待结算的"切换停顿"秒数：`enter_stand` 置上，模拟器结算后清零。放在字段里
+    #: 是因为换形态那一刻碰不到场上别的单位（与「圣山的祝福」的 `blessing_freeze`
+    #: 同一手法）。
+    stand_sluggish_pending: float = 0.0
+    #: 形态专属参数——**切换时从技能快照过来**，因为技能会在同一帧结束、
+    #: `effects` 随之失效（见 `SkillEffects.stand_form` 上的注释）。
+    stand_max_target: int = 0
+    stand_heal_scale: float = 0.0
+    stand_kill_scale: float = 0.0
+    stand_kill_damage: float = 0.0
+    stand_heal_targets: int = 0
+    #: 斩杀光环（塔纳托斯）：每 0.1 秒检测一次，符合条件就斩。
+    #: `stand_killed` 记"这一轮里已经被斩过的目标"——prts 备注：
+    #: 「每个目标每次进入攻击范围最多执行 1 次斩杀行为，不会确保目标死亡，
+    #: 且若目标被斩杀后未死亡则不再尝试对其斩杀」。
+    stand_kill_timer: float = 0.0
+    stand_killed: set = field(default_factory=set)
+    #: 俄耳甫斯·改的延迟治疗队列：`(剩余秒数, 治疗量)`。prts 备注：
+    #: 「切换完毕的瞬间及后续每隔 1 秒对攻击范围内生命值不满的若干友方单位
+    #: 施加延迟治疗效果：**0.5 秒后**对其治疗」。
+    stand_heal_timer: float = 0.0
+    stand_heal_queue: list = field(default_factory=list)
+    #: 天赋「S.E.E.S.队长」的三件套（部署时填）：总攻击的真伤倍率、叠加次数
+    #: （`multi_attack_total_cnt`）与"伤害类型不同时"的最终倍率
+    #: （`final_damage_different_ratio`）。后两个在结城理身上都是 **1.0**，
+    #: 走同一条路是为了将来真出现非 1.0 时不静默失效。
+    stand_ta_scale: float = 0.0
+    stand_ta_count: float = 1.0
+    stand_ta_ratio: float = 1.0
+    #: 替身形态的一些开关：可对空（塔纳托斯·改）、阻挡不再归零（俄耳甫斯·改）。
+    stand_can_hit_air: bool = False
+    stand_keep_block: bool = False
+    #: 进替身前的生命上限与阻挡数，退出时还原（`_base_max_hp` 同款手法）。
+    _stand_base_max_hp: float = field(default=0.0, repr=False)
+    _stand_base_block: int = field(default=-1, repr=False)
     #: 累计被屏障吸收掉的伤害，便于对账——它**不算**进 `damage_taken`，
     #: 因为 `damage_taken` 记的是真实掉掉的血。
     barrier_absorbed: float = 0.0
@@ -374,6 +436,86 @@ class OperatorUnit(Combatant):
     #: 与敌方那种"站在满层积雪上"的冻结分开——那是每帧按位置重算的，走开了
     #: 就没了；这是有剩余时长的。
     freeze_timer: float = 0.0
+
+    @property
+    def in_stand(self) -> bool:
+        """是否在〈替身〉形态。"""
+        return self.stand_timer > 0.0
+
+    def enter_stand(self, form: str) -> None:
+        """进入〈替身〉形态。
+
+        四件事，件件都有出处：
+
+        1. **满血入场**——替身是一只新实体（`max_hp` 按 `max_hp_t1` 抬高后直接
+           回满）。prts 备注没写这一条，是**假设**，已记进 uncertainties；
+        2. **阻挡归零**（特性正文「替身阻挡数为 0」）。俄耳甫斯·改 是例外
+           （备注「阻挡不再归零（即恢复正常的 2 阻挡数）」）；
+        3. **停顿待结算**——只有**从本体切进来**才触发（备注：「仅有从〈本体〉
+           形态切换为任意〈替身〉形态时才会触发停顿效果，由〈替身〉形态切换为
+           另一〈替身〉形态时不会触发」），范围等于替身自己的攻击范围；
+        4. 清空斩杀/治疗计时器与"已斩过"名单——换形态等于换了一轮。
+        """
+        was_body = not self.in_stand
+        if self._stand_base_max_hp <= 0.0:
+            self._stand_base_max_hp = self.max_hp
+        if self._stand_base_block < 0:
+            self._stand_base_block = self.block_cnt
+        self.stand_timer = self.stand_duration
+        self.stand_form = form
+        self.max_hp = self._stand_base_max_hp * (1.0 + self.stand_hp_pct)
+        self.hp = self.max_hp
+        if self.stand_keep_block:
+            # 俄耳甫斯·改：「阻挡**不再归零**，即**恢复**正常的 2 阻挡数」——
+            # 是"还回来"，不是"保持不动"：进这一形态时阻挡往往已经是 0 了
+            # （上一个形态把它清掉的），只写成"不清零"等于什么都没做。
+            self.block_cnt = max(self.block_cnt, max(0, self._stand_base_block))
+        else:
+            self.block_cnt = 0
+        self.stand_kill_timer = 0.0
+        self.stand_killed.clear()
+        self.stand_heal_timer = 0.0
+        self.stand_heal_queue.clear()
+        if was_body and self.stand_sluggish > 0.0:
+            self.stand_sluggish_pending = self.stand_sluggish
+
+    def leave_stand(self) -> None:
+        """退出〈替身〉形态回到本体：面板还原、**满血**。
+
+        「本体回满血」同样是 prts 备注没写的一条**假设**（本体当初是被打到 0 血
+        才换的形态，不给血，一退出就死），已记进 uncertainties。
+        """
+        self.stand_timer = 0.0
+        self.stand_form = ""
+        if self._stand_base_max_hp > 0.0:
+            self.max_hp = self._stand_base_max_hp
+        if self._stand_base_block >= 0:
+            self.block_cnt = self._stand_base_block
+        self.hp = self.max_hp
+        self._stand_base_max_hp = 0.0
+        self._stand_base_block = -1
+
+    def stand_from_skill(self) -> bool:
+        """按**当前装备的技能**进入〈替身〉形态——特性触发与主动开技共用这一处。
+
+        返回是否真的切了。参数全部在这里**快照**到单位上：他的技能在同一帧就
+        结束，下一帧 `effects` 已经是空的（从 effects 现读会读到 0，是**静默**
+        失效）。形态决定两个开关：塔纳托斯·改**可对空**、俄耳甫斯·改
+        **阻挡不再归零**（都是 prts 备注里的原话）。
+        """
+        eff = getattr(self.skill, "effects", None)
+        form = getattr(eff, "stand_form", "") if eff is not None else ""
+        if not form:
+            return False
+        self.stand_max_target = int(getattr(eff, "max_target", 0) or 0)
+        self.stand_heal_scale = float(eff.stand_heal_scale)
+        self.stand_kill_scale = float(eff.stand_kill_scale)
+        self.stand_kill_damage = float(eff.stand_kill_damage)
+        self.stand_heal_targets = int(eff.stand_heal_targets)
+        self.stand_can_hit_air = form == "thanatos_kai"
+        self.stand_keep_block = form == "orpheus_kai"
+        self.enter_stand(form)
+        return True
 
     def take(self, amount: float) -> float:
         """挨打。**屏障先扛**，扛完剩下的才动血条；致死时天赋再兜一次底。
@@ -412,6 +554,17 @@ class OperatorUnit(Combatant):
             self.hp = self.max_hp
             self.freeze_timer = max(self.freeze_timer, self.blessing_self_freeze)
             self.blessing_freeze = self.blessing_save
+        # 傀儡师特性（结城理）：**受到致命伤时不撤退**，改切〈替身〉继续打。
+        # prts 特性备注：「受到致命伤时不撤退，切换成〈替身〉作战（替身阻挡数
+        # 为 0），持续 20 秒后自身再次替换〈替身〉」；切换期间额外持有
+        # 【静默】【无法行动】**免疫**——所以这里只看"血归零"与"替身槽可用"。
+        #
+        # 与上面「圣山的祝福」在**同一处**但语义不同：那个是"免死一次"（用掉
+        # 记号就不再触发），这个是"换个形态接着打"，每次致命伤都会再来一次。
+        # 两件事都写在 `take()` 里，因为它是干员掉血的**唯一入口**。
+        if (self.hp <= 0.0 and self.stand_duration > 0.0
+                and self.stand_timer <= 0.0):
+            self.stand_from_skill()
         return dealt
 
     def grant_barrier(self, pct: float) -> None:
@@ -546,8 +699,12 @@ class OperatorUnit(Combatant):
         # 天赋「翔虫机动」的限时加成**开不开技能都在**（它挂在部署那一刻，
         # 不是技能 buff），所以两个分支都要加——与全场光环同理。
         mob = self.mobility_atk_pct
+        # 〈替身〉形态的面板增益**只在替身形态里**算：它是形态自己的攻击力改写，
+        # 不是常驻天赋。不设这道门，本体也会吃到 +80%（症状是本体凭空变强，
+        # 而替身看起来"没有加成"——因为两边算出来一样）。
+        stand = self.stand_atk_pct if self.stand_timer > 0.0 else 0.0
         if e is None:
-            return self.atk * (1.0 + self.aura_atk_pct + mob)
+            return self.atk * (1.0 + self.aura_atk_pct + mob + stand)
         # 击杀叠层的加成与普通攻击力增益**同层相加**（都进 `(1 + 攻击力增益)`
         # 这个括号），不乘在外面——三层的 +40% 是 +120%，不是 1.4³。
         pct = 0.0
@@ -555,7 +712,11 @@ class OperatorUnit(Combatant):
             v = e.variants.get("kill") or {}
             pct = float(v.get("atk", 0.0)) * self.kill_stacks
         # 全场光环（青色怒火）同样是**同层相加**的百分比加成。
-        return self.atk * (1.0 + e.atk_pct + pct + self.aura_atk_pct + mob)
+        # `stand_atk_pct`（〈替身〉形态的攻击力 +40/60/80%）也进这个括号：
+        # 它是**形态自己的面板增益**，与开不开技能无关——事实上他进替身时技能
+        # 已经结束了（`effects is None` 那条分支同样要加）。
+        return self.atk * (1.0 + e.atk_pct + pct + self.aura_atk_pct + mob
+                           + stand)
 
     def current_res(self) -> float:
         """当前法术抗性——含技能增益与**击杀叠层**的固定值加成。
@@ -608,10 +769,15 @@ class OperatorUnit(Combatant):
         100 时两种写法等价，所以这个缺口一直没露出来。
         """
         spd = self.current_attack_speed()
+        # 〈替身〉形态的"**攻击间隔增大**"（天赋「不羁之力」的 `base_attack_time`
+        # +0.4 秒）。它是**加在基础间隔上**的，不是攻速修正——两者不可互换：
+        # 加 0.4 秒间隔与"减若干攻速"在非线性处结果并不相同，而正文写的是前者。
+        base_iv = self.attack_interval + (self.stand_interval_add
+                                          if self.stand_timer > 0.0 else 0.0)
         e = self.effects
         if e is None:
-            return max(MIN_INTERVAL, self.attack_interval * 100.0 / max(ASPD_MIN, spd))
-        return e.attack_interval(self.attack_interval, spd)
+            return max(MIN_INTERVAL, base_iv * 100.0 / max(ASPD_MIN, spd))
+        return e.attack_interval(base_iv, spd)
 
     def current_max_target(self) -> int:
         """这一击最多打几个目标。
@@ -629,6 +795,10 @@ class OperatorUnit(Combatant):
         递增的那一段只在技能期内兑现。
         """
         e = self.effects
+        # 〈替身〉形态的目标数是**快照**下来的（技能在同一帧就结束了，`effects`
+        # 已经是空的）：技2 塔纳托斯与技3 塔纳托斯·改都是 `attack@max_target 4`。
+        if self.stand_timer > 0.0 and self.stand_max_target > 1:
+            return self.stand_max_target
         if e is None:
             return 1
         base = e.max_target
@@ -647,7 +817,12 @@ class OperatorUnit(Combatant):
         return None
 
     def active_attack_type(self) -> str:
-        """当前伤害类型——技能期间可能被强制改写。"""
+        """当前伤害类型——技能期间可能被强制改写，〈替身〉形态另有口径。"""
+        if self.stand_timer > 0.0:
+            # 〈替身〉形态的普通攻击**都是法术**：俄耳甫斯/塔纳托斯/塔纳托斯·改
+            # 三个形态的 prts 备注逐条写明"普通攻击造成法术普通伤害"，技3 的
+            # 弱点伤害也是"默认伤害类型为法术伤害"。
+            return "MAGIC"
         if self.skill_active and self.skill_attack_type:
             return self.skill_attack_type
         return self.attack_type
