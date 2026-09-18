@@ -5131,6 +5131,108 @@ def check_stand_state_machine(stage, lib, calc, book_t) -> None:
           f"duration={me4.stand_duration:g}、alive={me4.alive}")
 
 
+def check_closur_shield_cnt(stage, lib, calc, book_t) -> None:
+    """[58] 可露希尔技1「递归策略」：给**援军**发护盾层（`shield_cnt`）。
+
+    正文「立即使自身的**援军**获得 1 层护盾（**不叠加**），技能持续时间内逐渐
+    获得 3 点部署费用……」；黑板 `shield_cnt` = 1。
+
+    这一键一度被判成"无数据可读"——当时按"护盾值"的思路去找，当然找不到。
+    博士指了 PRTS「伤判效果」页之后才看清：**护盾是次数制抵挡，`shield_cnt`
+    就是层数**（见 `docs/uncertainties.md` 二十九）。所以它不但可读，而且正好
+    接在守卫 `[57]` 那套层数机制上——发出去的层真能在 `take()` 里挡下一次伤害。
+    """
+    print("\n[58] 可露希尔技1「递归策略」：给援军发护盾层（`shield_cnt`）")
+    import sqlite3                                               # noqa: PLC0415
+    from pathlib import Path                                     # noqa: PLC0415
+    from ak_tactic.battle.summons import SummonDeployment        # noqa: PLC0415
+    from ak_tactic.verify import Verifier                        # noqa: PLC0415
+
+    cid = "char_4228_closur"
+    tok = "token_10066_closur_ourbase"
+    v = Verifier()
+    slots = {sk.slot: sk for sk in SkillBook().for_operator(cid)}
+    check("  技1 解析出 `shield_grants` = 1（就是 `shield_cnt`）",
+          slots[1].level(7, 3).effects.shield_grants == 1,
+          f"{slots[1].level(7, 3).effects.shield_grants}")
+    check("  技2/技3 不发盾（空面：不是每个技能都发）",
+          slots[2].level(7, 3).effects.shield_grants == 0
+          and slots[3].level(7, 3).effects.shield_grants == 0, "技2/技3 都是 0")
+    check("  反向：泥岩/空弦正文里也含「层护盾」，但她们黑板没有 `shield_cnt`，"
+          "不会被误读成「发盾」",
+          all(getattr(t.effects, "shield_grants", 0) == 0
+              for c in ("char_311_mudrok", "char_332_archet")
+              for t in book_t.for_operator(c)), "两位都是 0")
+
+    db = sqlite3.connect(str(Path(__file__).resolve().parent.parent
+                             / "data" / "akdb.sqlite"))
+
+    def token_range(token_key: str, slot: int):
+        row = db.execute(
+            "SELECT l.range_id FROM operator_skill s "
+            "JOIN skill_level l ON l.skill_id = s.skill_id "
+            "WHERE s.char_id=? AND s.slot=? AND l.level=1",
+            (token_key, slot)).fetchone()
+        return row[0] if row else None
+
+    rp = v.range_provider(stage)
+    tals = list(book_t.for_operator(cid))
+
+    def build(*, with_token: bool = True):
+        sim = mechanism_sim(stage, lib, range_provider=rp,
+                            token_range_provider=token_range,
+                            skill_book=SkillBook())
+        sim.cost = sim.max_cost = 999.0
+        me = v.unit({"char_id": cid, "elite": 2, "level": 60, "trust": 100,
+                     "potential": 1})
+        sim._do_deploy(Deployment(0.0, me, (2, 3), "Right", skill=1,
+                                  talents=tals), 0.0)
+        token_cells = set()
+        if with_token:
+            sim.plan_summon(SummonDeployment(0.0, tok, (4, 3), "Right",
+                                             owner=cid))
+            sim._do_deploy_summon(sim.summon_deployments.pop(0), 0.0)
+            tk = next((u for u in sim.operators if u.char_id == tok), None)
+            if tk is not None:
+                token_cells = sim._token_cells(tk, 1)
+        return sim, me, token_cells
+
+    sim, me, cells = build()
+    check("  战术点落场后算出了技1 的效果范围（`x-5` 在点位上展开）",
+          len(cells) > 0, f"{len(cells)} 格")
+
+    inside = sorted(cells)[0]
+    outside = next(c for c in ((9, 6), (0, 7), (11, 1), (2, 0))
+                   if c not in cells)
+    near = v.unit({"char_id": "char_103_angel", "elite": 2, "level": 60,
+                   "trust": 100, "potential": 1})
+    far = v.unit({"char_id": "char_136_hsguma", "elite": 2, "level": 60,
+                  "trust": 100, "potential": 1})
+    sim._do_deploy(Deployment(0.0, near, inside, "Right"), 0.0)
+    sim._do_deploy(Deployment(0.0, far, outside, "Right"), 0.0)
+    sim._activate(me, 0.0)
+    check("  开技立即给**范围内**的援军发 1 层护盾",
+          near.shield_layers == 1, f"范围内 {near.shield_layers} 层")
+    check("  反向：**范围外**的人不发（援军不是全体友军）",
+          far.shield_layers == 0, f"范围外 {far.shield_layers} 层")
+
+    near.shield_layers = 2
+    sim._activate(me, 10.0)
+    check("  「不叠加」：已经有层的人**不再加**、也不被重置",
+          near.shield_layers == 2, f"仍是 {near.shield_layers} 层")
+
+    near.shield_layers = 1
+    hp = near.hp
+    dealt = near.take(9999.0)
+    check("  发出去的层真的能挡：下一次伤害被**整层挡下**、层被消耗",
+          dealt == 0.0 and near.shield_layers == 0 and near.hp == hp,
+          f"扣血 {dealt:g}、剩 {near.shield_layers} 层")
+
+    _s2, _m2, cells2 = build(with_token=False)
+    check("  反向：**没有战术点**时范围为空，谁都不发",
+          not cells2, f"{len(cells2)} 格")
+
+
 def check_shield_layers(stage, lib, calc, book_t) -> None:
     """[57] 「层数护盾」：泥岩「沃土予身」与空弦「铁弦」。
 
@@ -6483,6 +6585,7 @@ def main() -> int:
     check_angel2_delivery_cannon(stage, lib, calc, book_t)
     check_barrier_break_hook(stage, lib, calc, book_t)
     check_shield_layers(stage, lib, calc, book_t)
+    check_closur_shield_cnt(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:
