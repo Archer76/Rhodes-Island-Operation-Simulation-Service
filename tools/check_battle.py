@@ -2474,6 +2474,111 @@ def check_damage_block(stage, lib, calc, book_t) -> None:
           other.talent_dodge_phys == 0.0 and other.talent_dodge_arts == 0.0)
 
 
+def check_dot_on_hit(stage, lib, calc, book_t) -> None:
+    """[31] 「死亡拘审」：攻击挂上去的持续法术伤害（阿斯卡纶天赋1）。
+
+    正文：「攻击对敌人施加效果：移动速度降低 12%，**每秒受到 6% 阿斯卡纶
+    当前攻击力的法术伤害**，持续 18 秒，效果最多叠加三层」。
+
+    与 `[30]` 同源的坑：它的键是 `atk_ratio`，**归得了类**，所以第一道筛子
+    放过、第二道（只在第一道失败时跑）也看不见——两道键级筛子都报 0 欠账。
+
+    本节钉四件事：
+
+    1. **续层不是重挂**：层数 +1 封顶、剩余秒数重置、每秒伤害按本次出手快照。
+    2. **`dot_accum` 不能被续层清掉**——它是"离下一跳还差多少"的累加器。
+       攻击快过 1 秒时，每挂一层清一次的话**一跳都不会发生**，且不报错。
+    3. **跳一次要真的打到敌人身上**，走法术那一路（不是物理）。
+    4. **不带这条天赋的人一跳都不该有**（反向对照，防"接上了但没接对人"）。
+    """
+    print("\n[31] 「死亡拘审」：攻击挂上去的持续法术伤害")
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from ak_tactic.battle.damage import DamageType  # noqa: PLC0415
+    from ak_tactic.battle.talents import find_dot_on_hit  # noqa: PLC0415
+
+    cid = "char_4132_ascln"
+    tal = book_t.for_operator(cid, elite=2, level=60, potential=1)
+    hit = find_dot_on_hit(tal)
+    check("find_dot_on_hit 认得阿斯卡纶「死亡拘审」",
+          hit is not None and hit.name == "死亡拘审",
+          hit.name if hit else "None")
+    check("**E2 档读到的是 10% / 25 秒**（不是精0 那档的 6% / 18 秒）",
+          hit is not None and abs(hit.value("atk_ratio") - 0.10) < 1e-9
+          and abs(hit.value("debuff_duration") - 25.0) < 1e-9
+          and abs(hit.value("interval") - 1.0) < 1e-9
+          and abs(hit.value("max_stack_cnt") - 3.0) < 1e-9,
+          f"ratio={hit.value('atk_ratio') if hit else None} "
+          f"dur={hit.value('debuff_duration') if hit else None}")
+    # 三条候选**按精英阶段**各是各的，只取第一个候选会整场少算四成。
+    e0 = [x for x in book_t.for_operator(cid, elite=0, level=1, potential=1)
+          if x.name == "死亡拘审"]
+    e1 = [x for x in book_t.for_operator(cid, elite=1, level=70, potential=1)
+          if x.name == "死亡拘审"]
+    check("反向：精 0 档是 6% / 18 秒", bool(e0)
+          and abs(e0[0].value("atk_ratio") - 0.06) < 1e-9
+          and abs(e0[0].value("debuff_duration") - 18.0) < 1e-9,
+          f"ratio={e0[0].value('atk_ratio') if e0 else None}")
+    check("反向：精 1 档是 8% / 18 秒（三档各不同）", bool(e1)
+          and abs(e1[0].value("atk_ratio") - 0.08) < 1e-9
+          and abs(e1[0].value("debuff_duration") - 18.0) < 1e-9,
+          f"ratio={e1[0].value('atk_ratio') if e1 else None}")
+    other = book_t.for_operator("char_1048_orchd2", elite=2, level=60,
+                                potential=1)
+    check("反向：焰狐龙梓兰的天赋里没有这一条（不是谁都能挂）",
+          find_dot_on_hit(other) is None)
+
+    # ---- 续层语义：用替身目标直测 `_apply_dot` ----
+    sim0 = mechanism_sim(stage, lib)
+    owner = make_unit(calc, cid, elite=2, level=60, potential=1)
+    proxy = SimpleNamespace(dot_stacks=0, dot_timer=0.0, dot_per_sec=0.0,
+                            dot_accum=0.0, dot_interval=1.0)
+    for _ in range(5):
+        sim0._apply_dot(proxy, owner, hit)
+    check("叠 5 次封顶在 3 层（不是 5 层）", proxy.dot_stacks == 3,
+          f"实得 {proxy.dot_stacks}")
+    check("每次续层把剩余秒数重置为满 25 秒（E2 档的时长）",
+          abs(proxy.dot_timer - 25.0) < 1e-9, f"实得 {proxy.dot_timer}")
+    want = owner.current_atk() * hit.value("atk_ratio")
+    check("每秒伤害 = 本次出手攻击力 × 10%（快照）",
+          abs(proxy.dot_per_sec - want) < 1e-6,
+          f"实得 {proxy.dot_per_sec}，应为 {want}")
+    proxy.dot_accum = 0.9
+    sim0._apply_dot(proxy, owner, hit)
+    check("**续层不清累加器**（反向守卫：清了就一跳都不会发生）",
+          abs(proxy.dot_accum - 0.9) < 1e-9, f"实得 {proxy.dot_accum}")
+
+    # ---- 端到端 + 反向对照：法术跳伤只能来自这条天赋 ----
+    def magic_hits(talents):
+        s = mechanism_sim(stage, lib)
+        o = make_unit(calc, cid, elite=2, level=60, potential=1)
+        s.operators.append(o)
+        s._do_deploy(Deployment(0.0, o, (2, 3), "Right", talents=talents), 0.0)
+        seen: list[float] = []
+        real = s._damage_enemy
+
+        def spy(target, final, t, *a, **kw):
+            if a and a[0] == DamageType.MAGIC:
+                seen.append(round(final, 6))
+            return real(target, final, t, *a, **kw)
+
+        s._damage_enemy = spy
+        s.run()
+        return seen
+
+    with_tal = magic_hits(tal)
+    without = magic_hits([])
+    check("端到端：带天赋的一局里，敌人身上**真的跳过**法术伤害",
+          len(with_tal) > 0, f"跳到 {len(with_tal)} 次")
+    check("**反向对照**：同一套部署、不带这条天赋，一跳都没有",
+          len(without) == 0, f"不带时跳到 {len(without)} 次")
+    want_tick = owner.current_atk() * hit.value("atk_ratio")
+    check("跳伤量级 ≈ 层数 × 每层每秒（单跳不超过 3 层）",
+          all(v <= want_tick * 3 + 1e-6 for v in with_tal),
+          f"最大一跳 {max(with_tal) if with_tal else 0:.3f}，"
+          f"上限 {want_tick * 3:.3f}")
+
+
 def check_push(stage, lib, calc, book_t) -> None:
     """[26] 位移接线：推击把敌人推离路线，且推完能走回来。
 
@@ -2676,6 +2781,7 @@ def main() -> int:
     check_faction_aura(stage, lib, calc, book_t)
     check_class_aura(stage, lib, calc, book_t)
     check_damage_block(stage, lib, calc, book_t)
+    check_dot_on_hit(stage, lib, calc, book_t)
     check_second_use(stage, lib, calc, book_t)
     check_push(stage, lib, calc, book_t)
 
