@@ -323,8 +323,19 @@ def _spawn_spec(sim, t: float, sp) -> dict[str, Any]:
     关卡乘区、难度档位这些不必再实现第二遍。它只建对象、不改模拟器状态。
     """
     e = sim._spawn(sp.enemy_id, sp.level, sp.route_index, float(t))
+    return _unit_spec(sim, e, time=float(t))
+
+
+def _unit_spec(sim, e, *, time: float = 0.0) -> dict[str, Any]:
+    """**一名已经建好的敌人** → 规格。
+
+    与 `_spawn_spec` 是同一个口径（后者只是先 `_spawn` 再调这里）。分开的理由是
+    天桩链那三跳：甲／乙／天标都**不在出怪表里**，它们是装置或上级单位造出来的
+    （原版 `_build_enemy(key, level, pts, [], t, 0.0)`），手上只有对象、没有"出怪行"。
+    一个口径只留一处，免得"出怪表里的甲"和"装置召唤的甲"算成两个人。
+    """
     return {
-        "time": float(t),
+        "time": float(time),
         "name": e.name,
         "enemy_id": e.enemy_id,
         "level": int(e.level),

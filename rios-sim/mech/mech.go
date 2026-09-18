@@ -113,6 +113,26 @@ type PostAttacker interface {
 	PostAttack(ctx Ctx, dt float64)
 }
 
+// PileTicker 是天桩链那一层（怀黍离装置「天桩」：装置 → 甲 → 乙 → 天标）。
+//
+// 排在 `EnvTick` **之后**：原版是 3.7 `_environment_tick` → 3.8 `_device_tick`
+// → 3.9 `_pile_tick`，而甲监测的是"**这一帧已经被环境算过**的病害值"。
+type PileTicker interface {
+	PileTick(ctx Ctx, dt float64)
+}
+
+// Summoner 让机制在运行期**造出敌人**（装置造甲、甲造乙、乙造天标）。
+//
+// 模板是机制从自己那份规格里拿到的**一段 JSON**（"我能造谁"写在造它的人的
+// 规格里），模拟器只负责把它变成场上的一个对象：`mech` 包不认 `SpawnSpec`，
+// 也不该认——它只递一段规格过去。
+//
+// 返回的下标与 `Enemies()` 同源且**终身有效**：模拟器只追加、不删除，
+// 机制可以拿它记账（谁造的、造出来那个现在是死是活）。
+type Summoner interface {
+	Summon(template json.RawMessage, cell [2]float64) int
+}
+
 // Framer 在**每一帧的末尾**被调用（`t += dt` 之前，即这一帧的伤害、击杀、
 // 漏怪都已经结算完）。
 //
@@ -174,6 +194,35 @@ type Ctx interface {
 	EnemyWindup() float64
 	//: 按**出怪顺序下标**改这一只敌人的推进速度乘区（1.0 = 不变）。
 	ScaleEnemySpeed(index int, scale float64)
+	//: 按**出怪顺序下标**读/写一只敌人的血量（天桩链用：甲监测时把生命
+	//: 重设成所在地块病害值、激活后每秒自伤、乙到时自毁——全是**直接写血**，
+	//: 不是"受到伤害"：原版那三处都是 `e.hp = ...`，既不算我方战果、
+	//: 也不该触发受击类效果）。
+	EnemyHP(index int) float64
+	EnemyMaxHP(index int) float64
+	SetEnemyHP(index int, hp float64)
+	//: 甲/乙/天标的站位。乙"扑向干员"在原版走的是**普通推进**（把路线换成
+	//: `[自己, 目标]` 交给主循环），所以真正该用的是 `SetEnemyRoute`；
+	//: 这个 setter 只用于"贴到目标"那一步的钉住。
+	EnemyPosition(index int) [2]float64
+	SetEnemyPosition(index int, position [2]float64)
+	//: 这一只**这一刻**的推进速度（已含关卡乘区与机制请求的乘区），
+	//: 与主循环 `advance` 用的是同一个数。
+	EnemyMoveSpeed(index int) float64
+	//: 给这一只**换一条走位路线**（`points` 是折线，至少两点）。
+	//:
+	//: ⚠ 乙的追击必须走这里，不能让机制自己一步步挪位置——原版是
+	//: `e.route = [自己, 目标]` 之后交给普通推进，**走完即算漏怪、要扣生命**。
+	//: 自己挪位置就漏掉了"走完算漏怪"这一步。实测 HS-S-1 的胜负正压在这上面：
+	//: 原版有 4 个乙自己走到路线尽头 → 漏怪 4 次 → 扣 4 点生命 → 52.5s 就结束，
+	//: 而 Go 侧那 4 个乙停在原地、一命没扣，于是拖到 85s（判决全错）。
+	SetEnemyRoute(index int, points [][2]float64)
+	//: 甲监测状态的无敌。**挨打掉 0 血但照旧会被索敌**——这正是它在场上
+	//: 白吃输出的原因（原版 `always_invincible`，激活时关掉）。
+	SetEnemyInvincible(index int, on bool)
+	//: 在 `cell` 造一个敌人，`template` 是**造它的人**规格里那段 JSON
+	//: （见 `Summoner`：甲/乙/天标三跳都走这里）。返回的下标终身有效。
+	Summon(template json.RawMessage, cell [2]float64) int
 	//: 写一行日志（进判决的 `events`，对拍时能看出机制什么时候动的手）。
 	Log(format string, args ...any)
 }
@@ -293,10 +342,16 @@ type Set struct {
 	ids      []ID
 	starters []hookStarter
 	envs     []hookEnv
+	piles    []hookPile
 	attacks  []hookAttack
 	posts    []hookPost
 	framers  []hookFramer
 	all      []Mechanism
+}
+
+type hookPile struct {
+	id ID
+	m  PileTicker
 }
 
 type hookStarter struct {
@@ -358,6 +413,9 @@ func Load(cfg map[string]json.RawMessage, ids ...string) (*Set, error) {
 		}
 		if e, ok := m.(EnvTicker); ok {
 			set.envs = append(set.envs, hookEnv{id, e})
+		}
+		if p, ok := m.(PileTicker); ok {
+			set.piles = append(set.piles, hookPile{id, p})
 		}
 		if p, ok := m.(PostAttacker); ok {
 			set.posts = append(set.posts, hookPost{id, p})
@@ -422,6 +480,16 @@ func (s *Set) EnvTick(ctx Ctx, dt float64) {
 	}
 	for _, h := range s.envs {
 		h.m.EnvTick(ctx, dt)
+	}
+}
+
+// PileTick 依次调用各机制的 PileTick（位置见 `PileTicker` 的注释：紧跟 EnvTick）。
+func (s *Set) PileTick(ctx Ctx, dt float64) {
+	if s == nil {
+		return
+	}
+	for _, h := range s.piles {
+		h.m.PileTick(ctx, dt)
 	}
 }
 

@@ -138,6 +138,375 @@ type SpecDevice struct {
 	Key       string `json:"key"`
 	Cell      [2]int `json:"cell"`
 	Direction string `json:"direction"`
+	//: 天桩那一条召唤链的**模板**（甲，甲身上再挂着乙、乙身上挂着天标）。
+	//: 保留成原始 JSON 再交给 `Ctx.Summon`：谁造谁是装置配置的一部分，
+	//: 什么时候造是机制的事。
+	Child json.RawMessage `json:"child,omitempty"`
+}
+
+// pileUnit 是机制**自己**对一名召唤物的记账（原版把这些存在单位对象上：
+// `monitor` / `awake_timer` / `awake_lost` / `attacked_once` / `attached`…）。
+//
+// 为什么不放回 `enemy` 结构里：那些字段没有一个是"敌人是什么"，全是**这一条链
+// 才知道的状态**。放在机制里，通用关卡一帧都不多花，也不会把怀黍离的概念漏进核心。
+type pileUnit struct {
+	enemy  int //: 敌人下标（终身有效）
+	device int //: 造它的装置下标（甲用；乙/天标是 -1）
+	//: 它**自己**的规格（原始 JSON）：血、攻、攻击类型、唤醒阈值、召唤比例……
+	//: 一个字段都不必再抄进这个结构里，也不必在 Go 里重写一遍取数口径。
+	raw json.RawMessage
+	//: "我能造谁"的模板（甲 → 乙，乙 → 天标）。
+	tmpl json.RawMessage
+	//: 出手用的两个数（只有乙用得上），建的时候顺手从自己的规格里取出来。
+	atk        float64
+	damageType string
+
+	isParent bool
+	isDiver  bool
+	isMark   bool
+
+	// ---- 甲 ----
+	monitor    bool
+	awakeTimer float64
+	lost       float64   //: 累计损失的生命比例
+	batches    int       //: 已经排过队的批数
+	pending    []float64 //: 到点召唤的时刻
+	gone       bool      //: 已经不在场（退场/被击倒）
+
+	// ---- 乙 ----
+	idleTimer      float64
+	attacked       bool
+	selfDestructAt float64 //: <0 = 还没安排
+
+	// ---- 天标 ----
+	attached    []int //: 干员下标（登场那一刻的快照）
+	attachTimer float64
+}
+
+// pileTick 是天桩链（原版 `_pile_tick` 3884-4125）。四跳的顺序照原文：
+//
+//	① 装置召唤甲（跑起来后的第一帧，每装置一名）
+//	② 三型各自的状态机（甲监测/激活、乙扑咬、天标每秒伤害）
+//	③ 甲退场 → 它那根天桩装置死亡
+func (m *farmlandMech) PileTick(ctx Ctx, dt float64) {
+	t := ctx.Time()
+	if len(m.piles) == 0 && len(m.devices) > 0 {
+		m.summonParents(ctx, t)
+	}
+	for i := 0; i < len(m.piles); i++ {
+		u := m.piles[i]
+		switch {
+		case u.isMark:
+			m.markTick(ctx, u, dt, t)
+		case u.isDiver:
+			m.diverTick(ctx, u, dt, t)
+		case u.isParent:
+			m.parentTick(ctx, u, dt, t)
+		}
+	}
+	m.deviceDeath(ctx, t)
+}
+
+// summonParents 是第①跳：每个天桩装置在**自己那一格**召唤一名甲。
+//
+// 甲「自缚」（原版天赋第一句），关卡给它指派的那条 `extraRoutes` 路径**不执行**，
+// 只作留档——全活动 32 个天桩逐关核过，每个装置格都等于那条路径的起点格。
+func (m *farmlandMech) summonParents(ctx Ctx, t float64) {
+	for i := range m.devices {
+		d := &m.devices[i]
+		if d.Kind != "pile" || len(d.Child) == 0 {
+			continue
+		}
+		var child struct {
+			Static       bool            `json:"static"`
+			Invincible   bool            `json:"invincible"`
+			AwakeValue   float64         `json:"awake_value"`
+			AwakeHPRatio float64         `json:"awake_hp_ratio"`
+			SummonRatio  float64         `json:"awake_summon_ratio"`
+			SummonCnt    int             `json:"awake_summon_cnt"`
+			SummonDelay  float64         `json:"summon_delay"`
+			PollutFull   float64         `json:"pollut_full"`
+			Summon       json.RawMessage `json:"summon"`
+			Name         string          `json:"name"`
+		}
+		if err := json.Unmarshal(d.Child, &child); err != nil {
+			ctx.Log("天桩 %v 的召唤模板解不开：%v", d.Cell, err)
+			continue
+		}
+		cell := [2]float64{float64(d.Cell[0]), float64(d.Cell[1])}
+		idx := ctx.Summon(d.Child, cell)
+		ctx.SetEnemyInvincible(idx, child.Invincible)
+		m.piles = append(m.piles, &pileUnit{
+			enemy:          idx,
+			device:         i,
+			raw:            d.Child,
+			tmpl:           child.Summon,
+			isParent:       true,
+			monitor:        child.AwakeValue > 0 && child.Invincible,
+			selfDestructAt: -1,
+		})
+		ctx.Log("%s 召唤 %s 于 %v；监测状态：生命百分比 = 所在地块病害值",
+			d.Key, child.Name, d.Cell)
+	}
+}
+
+// parentTick 是甲的状态机（原版 `_pile_parent_tick` 3982-4019）。
+//
+// ⚠ 两处顺序是照原文的，不是随手写：
+//   - **监测态里重设生命用的是"下限 1 点"**（`max(1, 最大生命 × 病害值/100)`）：
+//     原文「不会因此死亡」，所以病害值为 0 时它也是 1 点血、不是 0。
+//   - **激活那一帧直接 `return`**：不再往下走自伤那一段。少了这个 return，
+//     激活的那一秒会白送一次自伤，每次激活都差 1%。
+func (m *farmlandMech) parentTick(ctx Ctx, u *pileUnit, dt, t float64) {
+	var child struct {
+		AwakeValue   float64 `json:"awake_value"`
+		AwakeHPRatio float64 `json:"awake_hp_ratio"`
+		SummonRatio  float64 `json:"awake_summon_ratio"`
+		SummonCnt    int     `json:"awake_summon_cnt"`
+		SummonDelay  float64 `json:"summon_delay"`
+		PollutFull   float64 `json:"pollut_full"`
+	}
+	if len(u.raw) == 0 {
+		return
+	}
+	if err := json.Unmarshal(u.raw, &child); err != nil {
+		return
+	}
+	full := child.PollutFull
+	if full <= 0 {
+		full = 100
+	}
+	pos := ctx.EnemyPosition(u.enemy)
+	cell := Cell{int(math.Round(pos[0])), int(math.Round(pos[1]))}
+	if u.monitor {
+		pollution := m.field.ActualAt(cell[0], cell[1])
+		maxHP := ctx.EnemyMaxHP(u.enemy)
+		hp := maxHP * math.Min(1, pollution/full)
+		if hp < 1 {
+			hp = 1
+		}
+		ctx.SetEnemyHP(u.enemy, hp)
+		if child.AwakeValue > 0 && pollution >= child.AwakeValue {
+			u.monitor = false
+			u.awakeTimer = 0
+			ctx.SetEnemyInvincible(u.enemy, false)
+			ctx.Log("天桩-甲 激活（所在地块病害值 %g ≥ %g）→ 开始每秒自伤",
+				pollution, child.AwakeValue)
+		}
+		return
+	}
+	if child.AwakeHPRatio <= 0 || child.SummonRatio <= 0 {
+		return
+	}
+	u.awakeTimer += dt
+	for u.awakeTimer >= 1.0 {
+		u.awakeTimer -= 1.0
+		maxHP := ctx.EnemyMaxHP(u.enemy)
+		hp := ctx.EnemyHP(u.enemy) - maxHP*child.AwakeHPRatio
+		if hp < 0 {
+			hp = 0
+		}
+		ctx.SetEnemyHP(u.enemy, hp)
+		u.lost += child.AwakeHPRatio
+		for float64(u.batches+1)*child.SummonRatio <= u.lost+1e-9 {
+			u.batches++
+			u.pending = append(u.pending, t+child.SummonDelay)
+		}
+	}
+	due := u.pending[:0]
+	for _, at := range u.pending {
+		if at <= t {
+			m.summonDivers(ctx, u, child.SummonCnt, cell, t)
+			continue
+		}
+		due = append(due, at)
+	}
+	u.pending = due
+}
+
+// summonDivers 是甲在**脚下那一格**召唤 `cnt` 名乙（原版 `_pile_summon` 4021）。
+func (m *farmlandMech) summonDivers(ctx Ctx, u *pileUnit, cnt int, cell Cell, t float64) {
+	if len(u.tmpl) == 0 || cnt <= 0 {
+		return
+	}
+	var diver struct {
+		SelfBind   float64         `json:"self_bind"`
+		HitRadius  float64         `json:"hit_radius"`
+		Mark       json.RawMessage `json:"mark"`
+		Name       string          `json:"name"`
+		ATK        float64         `json:"atk"`
+		DamageType string          `json:"damage_type"`
+	}
+	if err := json.Unmarshal(u.tmpl, &diver); err != nil {
+		ctx.Log("天桩-甲的召唤模板解不开：%v", err)
+		return
+	}
+	pos := [2]float64{float64(cell[0]), float64(cell[1])}
+	for k := 0; k < cnt; k++ {
+		idx := ctx.Summon(u.tmpl, pos)
+		m.piles = append(m.piles, &pileUnit{
+			enemy:          idx,
+			device:         -1,
+			raw:            u.tmpl,
+			tmpl:           diver.Mark,
+			atk:            diver.ATK,
+			damageType:     diver.DamageType,
+			isDiver:        true,
+			idleTimer:      diver.SelfBind,
+			selfDestructAt: -1,
+		})
+	}
+	ctx.Log("天桩-甲 在 %v 召唤 %d 个%s", cell, cnt, diver.Name)
+}
+
+// diverTick 是乙（原版 `_pile_diver_tick` 4039-4090）：自缚 1 秒 → 扑向最近的
+// 存活干员 → 贴到（≤0.5）咬一口、挂天标、`enemy_windup` 秒后自毁。
+//
+// 「范围内第一个我方单位」在数据里是空的（`rangeRadius = −1`），项目取
+// 「最近的存活干员、不设距离上限」——两种读法登记在 `docs/verdicts-pending.md`。
+func (m *farmlandMech) diverTick(ctx Ctx, u *pileUnit, dt, t float64) {
+	if u.selfDestructAt >= 0 && t >= u.selfDestructAt {
+		ctx.SetEnemyHP(u.enemy, 0)
+		return
+	}
+	if u.idleTimer > 0 {
+		u.idleTimer -= dt
+		return
+	}
+	if u.attacked {
+		return
+	}
+	var cfg struct {
+		HitRadius float64         `json:"hit_radius"`
+		Mark      json.RawMessage `json:"mark"`
+	}
+	_ = json.Unmarshal(u.raw, &cfg)
+	if cfg.HitRadius <= 0 {
+		cfg.HitRadius = 0.5
+	}
+	pos := ctx.EnemyPosition(u.enemy)
+	ops := ctx.Operators()
+	target := -1
+	best := math.Inf(1)
+	var targetPos [2]float64
+	for _, op := range ops {
+		if !op.Alive || op.HP <= 0 {
+			continue
+		}
+		p := [2]float64{float64(op.Cell[0]), float64(op.Cell[1])}
+		d := math.Hypot(p[0]-pos[0], p[1]-pos[1])
+		if d < best {
+			best, target, targetPos = d, op.Index, p
+		}
+	}
+	if target < 0 {
+		return
+	}
+	if best <= cfg.HitRadius {
+		ctx.SetEnemyPosition(u.enemy, targetPos)
+		ctx.HitOperator(target, u.atk, u.damageType)
+		u.attacked = true
+		u.selfDestructAt = t + ctx.EnemyWindup()
+		m.attachMark(ctx, u, u.tmpl, target, targetPos, t)
+		return
+	}
+	// 还没到 → 朝目标扑：**换成一条 `[自己, 目标]` 的路线，交给主循环**（原版
+	// 4086-4090 就是这两行）。位移、速度乘区、以及"走完算漏怪要扣命"全部走
+	// 通用那一套——自己一步步挪位置会漏掉最后那一步，实测 HS-S-1 就栽在这。
+	ctx.SetEnemyRoute(u.enemy, [][2]float64{pos, targetPos})
+}
+
+// attachMark 是乙砸下的天标（原版 `_pile_attach_mark` 4092）：
+// 在目标所在地块中心造一个，并**当场快照**附着对象（半径 0.3 从格心量出去
+// 够不到别格，所以快照就是这一格的人）。
+func (m *farmlandMech) attachMark(ctx Ctx, diver *pileUnit, tmpl json.RawMessage,
+	target int, cell [2]float64, t float64) {
+	if len(tmpl) == 0 {
+		return
+	}
+	var cfg struct {
+		AttachRadius float64 `json:"attach_radius"`
+		Name         string  `json:"name"`
+	}
+	_ = json.Unmarshal(tmpl, &cfg)
+	radius := cfg.AttachRadius
+	if radius <= 0 {
+		radius = 0.3
+	}
+	idx := ctx.Summon(tmpl, cell)
+	attached := []int{}
+	for _, op := range ctx.Operators() {
+		if !op.Alive || op.HP <= 0 {
+			continue
+		}
+		p := [2]float64{float64(op.Cell[0]), float64(op.Cell[1])}
+		if math.Hypot(p[0]-cell[0], p[1]-cell[1]) <= radius {
+			attached = append(attached, op.Index)
+		}
+	}
+	m.piles = append(m.piles, &pileUnit{
+		enemy:          idx,
+		device:         -1,
+		raw:            tmpl,
+		isMark:         true,
+		attached:       attached,
+		selfDestructAt: -1,
+	})
+	ctx.Log("%s 在 %v 挂上 %s（附着 %d 人）", "天桩-乙", cell, cfg.Name, len(attached))
+}
+
+// markTick 是身上的天标（原版 `_pile_mark_tick` 4114）：附着对象全没了就自毁，
+// 否则每秒对每个人结算一次定额伤害。
+//
+// ⚠ 那是「预计算**无途径**物理伤害」——定额、不吃防御也不吃法抗，所以走的是
+// **真伤通道**（原版直接 `op.take(e.attach_damage)`，没走 `resolve_damage`）。
+func (m *farmlandMech) markTick(ctx Ctx, u *pileUnit, dt, t float64) {
+	ops := ctx.Operators()
+	alive := make([]int, 0, len(u.attached))
+	for _, i := range u.attached {
+		for _, op := range ops {
+			if op.Index == i && op.Alive && op.HP > 0 {
+				alive = append(alive, i)
+			}
+		}
+	}
+	if len(alive) == 0 {
+		ctx.SetEnemyHP(u.enemy, 0)
+		return
+	}
+	var dmg float64
+	if len(u.raw) > 0 {
+		var cfg struct {
+			AttachDamage float64 `json:"attach_damage"`
+		}
+		_ = json.Unmarshal(u.raw, &cfg)
+		dmg = cfg.AttachDamage
+	}
+	u.attachTimer += dt
+	for u.attachTimer >= 1.0 {
+		u.attachTimer -= 1.0
+		for _, i := range alive {
+			ctx.DamageOperator(i, dmg, true)
+		}
+	}
+}
+
+// deviceDeath 是第③跳：甲的召唤物全没了 → 那根天桩装置死亡
+// （原版 3966-3980）。天桩不改写地块，所以它的死亡不改几何。
+func (m *farmlandMech) deviceDeath(ctx Ctx, t float64) {
+	for i := range m.piles {
+		u := m.piles[i]
+		if !u.isParent || u.gone {
+			continue
+		}
+		if ctx.EnemyHP(u.enemy) > 0 {
+			continue
+		}
+		u.gone = true
+		if u.device >= 0 && u.device < len(m.devices) {
+			ctx.Log("%s 随甲退场而死亡", m.devices[u.device].Key)
+		}
+	}
 }
 
 // Field 是一群连片田地共享的【最大】与【缓存】（对应 Python 的 `Field`）。
@@ -666,6 +1035,11 @@ func (fs *Farmland) Snapshot() Snapshot {
 type farmlandMech struct {
 	field *Farmland
 	pumps []SpecDevice
+	//: 全部装置（含天桩）。天桩链要读它们的格子与"我能造谁"的模板，
+	//: 所以整份留着；泵站另有 `pumps` 那一份给 `EnvTick` 用。
+	devices []SpecDevice
+	//: 天桩链的记账（甲/乙/天标三种，按造出来的先后）。
+	piles []*pileUnit
 	//: 环境伤害的**整秒累加器**（原版 `self._env_timer`）。用整数计数而不是
 	//: "≥1 秒就清零"：掉帧时 dt 会一次跨过不止一秒，只结一次等于把伤害漏掉，
 	//: 而 `fps=1` 的粗扫正是搜索里用得最多的档（原版 1344-1351 写的就是这个）。
@@ -694,13 +1068,22 @@ func newFarmlandMech(cfg json.RawMessage) (Mechanism, error) {
 		switch d.Kind {
 		case "pump":
 			m.pumps = append(m.pumps, d)
+		case "pile":
+			// 天桩：整条召唤链（装置 → 甲 → 乙 → 天标）。模板住在它的 `child`
+			// 里，时间由 `PileTick` 跑。**没有模板就拒跑**——一只不会召唤的
+			// 天桩与"这一关没有天桩"在判决上分不开。
+			if len(d.Child) == 0 {
+				return nil, fmt.Errorf("天桩 %q @%v 没带召唤模板（甲）", d.Key, d.Cell)
+			}
 		default:
-			// 阻流阀与天桩**不该出现在规格里**：阻流阀开场那一次断田已经算进几何，
-			// 它俩的运行期行为都住在装置层（Python 侧 `farmland_spec` 只送泵站）。
-			// 收到了就拒跑——"本机制不处理的装置"与"这一关没有装置"在判决上分不开。
+			// 阻流阀**不该出现在规格里**：开场那一次断田已经算进几何，它仅剩的
+			// "运行期被拆掉 → 地形还原"住在装置层、本机制不碰（Python 侧
+			// `farmland_spec` 不送它）。收到了就拒跑——"本机制不处理的装置"与
+			// "这一关没有装置"在判决上分不开。
 			return nil, fmt.Errorf("田地规格里有本机制不处理的装置 %q（%s @%v）",
 				d.Kind, d.Key, d.Cell)
 		}
+		m.devices = append(m.devices, d)
 	}
 	return m, nil
 }
