@@ -1,0 +1,223 @@
+# -*- coding: utf-8 -*-
+"""把怀黍离的田地/病害系统抽成一份**自足的规格**，交给 Go 侧跑。
+
+## 为什么是"规格"而不是"逐帧数据"
+
+田地这一层的状态（【缓存】/【最大】/【实际】三个量、连片分组、泵站每秒的动作）
+**只能在战斗中演进**：污染从哪来取决于敌人什么时候死、谁被阻挡、谁蜕皮，
+事前算不出来。所以分工跟技能那一层一样：
+
+* **Python 送几何与参数**：哪些格是田地、分成哪几片、每片当前的【最大】与【缓存】、
+  每格的【实际】、场上装置（阻风阀/泵站）的格子与朝向；
+* **Go 跑时间**：0.2s 释缓存 → 【最大】、1s 靠拢 → 【实际】、每秒的环境伤害/回复、
+  泵站每秒的增减，以及所有"令田地地块病害值 +N"的调用点。
+
+这份规格必须**足以重建原系统**——这一点不靠断言，靠
+`_proto/mech_sufficiency.py` 实测：拿规格重建一个 Python 的 `FarmlandSystem`，
+与原系统喂同一串事件，逐帧比对三个量。**规格不够，端口就会漂**，
+而漂的是"病害值涨得快一点"这种没人看得见的东西。
+
+## 三个容易写错的地方（都在本文件里显式处理）
+
+1. **格子的键**：JSON 的键只能是字符串，而坐标是二元组。用 `[[x, y, 值], …]`
+   而不是 ``"x,y"`` 拼串——拼串要定分隔符与顺序，是白送的一处漂移点。
+2. **分组要连 `maximum` 与 `cache` 一起送**：只送格子集合的话，
+   "开局播种把某片【最大】抬到 100"这条信息就丢了；而 `sever` 重划时的规矩是
+   「各组各自取当前最高的【实际】作为新的【最大】」，它需要旧的【最大】做合并上限。
+3. **装置要送"它是什么"而不是"它现在在做什么"**：泵站是**每秒**动作的，
+   送一个"已泵过"的结果没有意义。送 `kind`（valve/pump/pile）+ 格子 + 朝向，
+   由 Go 在每一秒自己结算。
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ..battle import environment as env
+from ..battle.devices import BLOCKER_KEY, PILE_KEY, PUMP_KEY
+
+__all__ = [
+    "KINDS", "kind_of", "farmland_spec", "from_spec", "spec_summary",
+    "spec_farmland_cells",
+]
+
+#: 装置 key → 规格里的 `kind`。**用 key 判，不用名字**（名字是中文、会随版本改）。
+KINDS: dict[str, str] = {
+    BLOCKER_KEY: "valve",       # 阻流阀：断田/还原
+    PUMP_KEY: "pump",           # 泵站：每秒泵水
+    PILE_KEY: "pile",           # 天桩：召唤物，不入本层
+}
+
+
+def kind_of(key: str | None) -> str | None:
+    return KINDS.get(key or "")
+
+
+def _cells_pairs(cells: Any) -> list[list[int]]:
+    return [[int(x), int(y)] for x, y in sorted(cells)]
+
+
+def farmland_spec(sim: Any) -> dict[str, Any] | None:
+    """从**当前**模拟器状态抽一份田地规格；这一关没有环境系统则返回 None。
+
+    取的是"此刻"的状态，所以调用时机是**开局初始化之后**（预置的阻流阀
+    已经在 `BattleSimulator.__init__` 里断过田了）。若在别处调用，
+    拿到的是那一刻的分组，这一点写在返回值里（`groups` 是当前分组）。
+    """
+    fs = getattr(sim, "farmland", None)
+    if fs is None:
+        return None
+    p = fs.params
+    groups = []
+    for f in fs.fields:
+        if not f.cells:
+            continue
+        groups.append({
+            "cells": _cells_pairs(f.cells),
+            "maximum": float(f.maximum),
+            "cache": float(f.cache),
+        })
+    devices = []
+    for d in getattr(sim, "_devices", None) or []:
+        kind = kind_of(getattr(d, "key", None))
+        if kind is None:
+            continue          # 本层不认识的装置不写进规格（由别的层管或拒跑）
+        devices.append({
+            "kind": kind,
+            "key": str(getattr(d, "key", "")),
+            "cell": [int(d.cell[0]), int(d.cell[1])],
+            "direction": str(getattr(d, "direction", "") or "").upper(),
+        })
+    return {
+        "kind": "farmland",
+        "width": int(fs.map.width),
+        "height": int(fs.map.height),
+        "difficulty": str(p.difficulty),
+        "params": {
+            "basic_damage": float(p.basic_damage),
+            "damage_ratio": float(p.damage_ratio),
+            "first_basic_damage": float(p.first_basic_damage),
+            "first_damage_ratio": float(p.first_damage_ratio),
+            "hp_recovery_per_sec": float(p.hp_recovery_per_sec),
+        },
+        #: 每 0.2s 释 1 点缓存、每 1s 靠拢一次——**写成规格而不是 Go 里的常量**：
+        #: 它们是"原文里的数字"，将来原文改了口径，改的是这一处。
+        "cache_interval": env.CACHE_INTERVAL,
+        "cache_per_tick": env.CACHE_PER_TICK,
+        "actual_interval": env.ACTUAL_INTERVAL,
+        "actual_per_divisor": env.ACTUAL_PER_DIVISOR,
+        "actual_base_step": env.ACTUAL_BASE_STEP,
+        "pollut_min": env.POLLUT_MIN,
+        "pollut_max": env.POLLUT_MAX,
+        "pump_rate": env.PUMP_RATE,
+        "pump_range": env.PUMP_RANGE,
+        "pump_range_bonus": env.PUMP_RANGE_BONUS,
+        "groups": groups,
+        #: ⚠ **不要把值为 0 的条目滤掉**：`actual` 里"存在一个 0"与"没有这一格"
+        #: 在状态上是两回事（实测 HS-EX-4 的播种就是 `(1,7): 0.0`）。
+        #: 滤掉它不会让伤害算错（`actual_at` 缺格也返回 0），但会让规格重建出的
+        #: 状态与原系统不等——那正是"规格够不够"要抓的东西。
+        "actual": [[int(x), int(y), float(v)]
+                   for (x, y), v in sorted(fs.actual.items())],
+        "severed": _cells_pairs(getattr(fs, "_severed", ()) or ()),
+        "devices": devices,
+    }
+
+
+class _StubTile:
+    """给重建用的假地块：只回答"是不是低地"与 `tileKey`。"""
+
+    __slots__ = ("is_lowland", "key")
+
+    def __init__(self, lowland: bool) -> None:
+        self.is_lowland = lowland
+        self.key = "tile_ground"
+
+
+class _StubMap:
+    """一棵足以让 `farmland_groups` 还原出同一分组的假地图。
+
+    重建走的是**原版自己的分组函数**（`env.farmland_groups`），不是另写一份
+    连通域算法——两份实现必然有一天不一致，而"分组不一样"表现为
+    "病害值涨得不一样"，很难查。
+    """
+
+    def __init__(self, width: int, height: int,
+                 cells: set[tuple[int, int]]) -> None:
+        self.width = width
+        self.height = height
+        self.tiles = [[_StubTile((x, y) in cells) for x in range(width)]
+                      for y in range(height)]
+
+
+def spec_farmland_cells(spec: dict[str, Any]) -> set[tuple[int, int]]:
+    out: set[tuple[int, int]] = set()
+    for g in spec.get("groups") or ():
+        for x, y in g["cells"]:
+            out.add((int(x), int(y)))
+    for x, y in spec.get("severed") or ():
+        out.add((int(x), int(y)))
+    return out
+
+
+def from_spec(spec: dict[str, Any]) -> Any:
+    """用规格重建一个 `FarmlandSystem`（供探针/自检与 Go 侧对照）。
+
+    重建出来的对象与 `farmland_spec` 抽的那个**必须逐帧等价**——
+    这就是"规格够不够"的判据本身。
+    """
+    width = int(spec["width"])
+    height = int(spec["height"])
+    groups = list(spec.get("groups") or [])
+    farmland: set[tuple[int, int]] = set()
+    for g in groups:
+        for x, y in g["cells"]:
+            farmland.add((int(x), int(y)))
+    severed = {(int(x), int(y)) for x, y in spec.get("severed") or ()}
+
+    params = env.PolluteParams(**{
+        k: spec["params"][k] for k in
+        ("basic_damage", "damage_ratio", "first_basic_damage",
+         "first_damage_ratio", "hp_recovery_per_sec")},
+        difficulty=str(spec.get("difficulty", "NORMAL")),
+    )
+    stub = _StubMap(width, height, farmland | severed)
+    fs = env.FarmlandSystem(_Stage(stub), params)
+    # 用规格里的分组**覆盖**重建出来的分组：分组必须来自规格，
+    # 假地图只负责让构造过程不炸。两者不一致时下面的断言会立刻抓住。
+    rebuilt = env.farmland_groups(stub, farmland)
+    if {frozenset(g) for g in rebuilt} != {frozenset(
+            (int(x), int(y)) for x, y in g["cells"]) for g in groups}:
+        raise ValueError("规格里的分组与按格子重算的分组不一致——规格自相矛盾")
+    fs.fields = [env.Field(cells={(int(x), int(y)) for x, y in g["cells"]},
+                           maximum=float(g.get("maximum", 0.0)),
+                           cache=float(g.get("cache", 0.0))) for g in groups]
+    fs.actual = {(int(x), int(y)): float(v) for x, y, v in spec.get("actual") or []}
+    fs._severed = severed
+    fs._all_cells = frozenset(farmland | severed)
+    fs._rebuild_index()
+    for f in fs.fields:
+        f.clamp()
+    return fs
+
+
+class _Stage:
+    """`FarmlandSystem.__init__` 只读 `stage.map`，所以壳子给这一项就够了。"""
+
+    def __init__(self, stage_map: Any) -> None:
+        self.map = stage_map
+
+
+def spec_summary(spec: dict[str, Any] | None) -> str:
+    if not spec:
+        return "（这一关没有田地系统）"
+    cells = spec_farmland_cells(spec)
+    dirty = [g for g in spec["groups"] if float(g.get("maximum", 0)) > 0
+             or float(g.get("cache", 0)) > 0]
+    kinds: dict[str, int] = {}
+    for d in spec["devices"]:
+        kinds[d["kind"]] = kinds.get(d["kind"], 0) + 1
+    dev = "、".join(f"{k}×{v}" for k, v in sorted(kinds.items())) or "无"
+    return (f"田地 {len(cells)} 格 / {len(spec['groups'])} 片"
+            f"（有病害 {len(dirty)} 片），播种 {len(spec['actual'])} 格，"
+            f"断田 {len(spec['severed'])} 格，装置 {dev}")
