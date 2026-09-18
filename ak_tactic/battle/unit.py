@@ -966,6 +966,11 @@ class EnemyUnit(Combatant):
     """场上的敌人——沿折线推进。"""
 
     enemy_id: str = ""
+    #: 敌人的**种类**（PRTS 敌人页那一列「种类」：萨卡兹、化物、感染生物、机械、
+    #: 海怪……）。它不在 gamedata 里，要由 `species_provider` 从 enemydb 的
+    #: `enemy.category` 接进来——泥岩天赋「手足相惜」按它判"来自哪类敌人的伤害"。
+    #: 取不到就是空串，那时任何按种类判的机制都不生效（宁可不动，不许乱动）。
+    species: str = ""
     level: int = 0
     weight: float = 0.0
     move_speed: float = 1.0
