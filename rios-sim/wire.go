@@ -221,6 +221,10 @@ type RebornSummonSpec struct {
 	Interval float64    `json:"interval"`
 	Count    int        `json:"count"`
 	Template *SpawnSpec `json:"template,omitempty"`
+	//: 召唤物从**哪一格**出发时走哪条路：键是 `"x,y"`（原版 `e.cell()` 的口径，
+	//: 四舍五入到整数格），值是那串路点。地图上每一格都算了一遍——包括召唤者
+	//: 被推挤/被阻挡而停在半路的情况，免得"只在常规路线上才找得到"。
+	Paths map[string][][2]float64 `json:"paths,omitempty"`
 }
 
 // SpawnSpec 是一个**已经建好**的敌人实例（数值、路线、机制标记都在这里）。
@@ -306,7 +310,27 @@ type SpawnSpec struct {
 	//:
 	//: ⚠ 它不是"一共召唤 Count 个"：`Count` 是**每一拍**几个，拍数由窗口长度
 	//: 决定（窗口 = `RebornDelay` 秒）。窗口一结束就停（原版 4214 行把它清空）。
+	//:
+	//: 召唤物要**走到最近的保护目标**，所以得有一条真路线；而路线只取决于
+	//: "倒下那一刻站在哪一格"，那一格在出规格时还不知道。做法：Python 把地图上
+	//: 每一格的路线都算好随规格发来（`Paths`），Go 按召唤那一刻的格子查表；
+	//: 查不到就**当场拒跑**，绝不"随便给条路"——那会让判决悄悄偏。
 	RebornSummons []RebornSummonSpec `json:"reborn_summons,omitempty"`
+
+	//: 明识形态（原版 `PassiveM2.*`，「祟」重生归来后的第二形态）：归来那一刻
+	//: 改一次属性，并给一段无敌。
+	//:
+	//: `Pm2Clean*` 是"清水"（站在病害值 0 的田地、或在清澈泵站范围内）时**叠在
+	//: 上面**的可开关项：防御按 `基准 × (1 + pm2_def + clean_def)` **重算**，
+	//: 移速加成被清零。重算而不是加减——清水进出能来回切，累乘会指数漂。
+	Pm2Atk        float64 `json:"pm2_atk,omitempty"`
+	Pm2Def        float64 `json:"pm2_def,omitempty"`
+	Pm2Res        float64 `json:"pm2_res,omitempty"`
+	Pm2Move       float64 `json:"pm2_move,omitempty"`
+	Pm2CleanDef   float64 `json:"pm2_clean_def,omitempty"`
+	Pm2CleanMove  float64 `json:"pm2_clean_move,omitempty"`
+	Pm2MarkPollut float64 `json:"pm2_mark_pollut,omitempty"`
+	Pm2Invincible float64 `json:"pm2_invincible,omitempty"`
 
 	//: 敌方**技能出手**（怀黍离「玷 / 勿玷」技能「污」，原版
 	//: `sim.py:3468` 的 `_skill_attack_tick`）。全 0 = 这一只没有这个技能。

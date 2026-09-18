@@ -527,6 +527,50 @@ func (f *Field) clamp(max, min float64) {
 	}
 }
 
+// IsClear 回答"这一格算不算清水"（原版 `_pm2_tick` 里那一支 + `_in_clear_pump`）。
+//
+// 两支的先后是**先看自己这一格**再去看泵站：
+//  1. 这一格本身是田地且【实际】病害值 ≤ 0 —— 自己就是清水；
+//  2. 否则看每一个**泵站**：它的**身后那一格**必须是清水田地（水源地），
+//     然后这一格要落在它**前方** `生效范围` 格的射线上（水源地上站着我方单位
+//     时再 +`生效范围加成`）。
+//
+// ⚠ 泵站的朝向是"向前泵"，所以水源地在**身后**（`src = cell − dir`），
+// 与 `Pump` 用的是同一套几何——两边不一致的话"泵得动"与"算清水"会各说各话。
+func (m *farmlandMech) IsClear(cell [2]int, allies [][2]int) bool {
+	fs := m.field
+	if fs == nil {
+		return false
+	}
+	if fs.IsFarmland(cell[0], cell[1]) && fs.ActualAt(cell[0], cell[1]) <= 0 {
+		return true
+	}
+	ally := make(map[Cell]bool, len(allies))
+	for _, a := range allies {
+		ally[Cell{a[0], a[1]}] = true
+	}
+	for _, d := range m.pumps {
+		dir, ok := directions[d.Direction]
+		if !ok {
+			continue
+		}
+		src := Cell{d.Cell[0] - dir[0], d.Cell[1] - dir[1]}
+		if !fs.IsFarmland(src[0], src[1]) || fs.ActualAt(src[0], src[1]) > 0 {
+			continue
+		}
+		span := fs.spec.PumpRange
+		if ally[src] {
+			span += fs.spec.PumpRangeBonus
+		}
+		for k := 1; k <= span; k++ {
+			if d.Cell[0]+dir[0]*k == cell[0] && d.Cell[1]+dir[1]*k == cell[1] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Farmland 是运行态的田地系统。
 type Farmland struct {
 	spec     *FarmlandSpec

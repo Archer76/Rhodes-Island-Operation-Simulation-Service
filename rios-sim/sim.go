@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"time"
 
 	"rios-sim/mech"
@@ -89,6 +90,18 @@ type enemy struct {
 	phitHits int
 	//: 已经叠到的层数（上限 `PhitMaxStack`，到顶后整段不再发生）
 	phitStacks int
+
+	// ---- 明识形态（原版 `PassiveM2.*`，「祟」重生归来后的第二形态）
+	pm2Active  bool
+	pm2Applied bool //: 属性改写只做一次（反复乘会让攻击力指数衰减）
+	pm2Clean   bool //: 当前是否处于"清水"
+	//: 无敌到什么时候（原版 `invincible_until`；`take` 里读它）
+	invincibleUntil float64
+	//: 被这一只**标记**过的我方单位（原版 `marked_ops`，存的是身份不是下标）
+	marked map[int]bool
+	//: 移速乘区（原版 `haste_multiplier`）。明识形态会把"清水"状态折进它；
+	//: 推进时乘上去（`advance` 与 `EnemyMoveSpeed` 两处必须同源）。
+	haste float64
 
 	//: 造它的那个模拟器——挨打效果（蜕皮加病害）要问机制层，机制层挂在
 	//: 模拟器上。之所以用反向指针而不是给 `take()` 加参数：`take()` 有多个
@@ -175,10 +188,12 @@ func newEnemy(spec SpawnSpec, index int, position [2]float64, c *simCtx) *enemy 
 		// 重生：窗口从 -1 起步（不在窗口里）；防御力基准按原版在
 		// `_build_enemy` 里取一次（`sim.py:1663`）——充能的防御加成按它重算，
 		// 二次重生时不会把上次的加成再乘一遍。
-		rebornLeft:     spec.RebornLeft,
-		rebornAt:       -1.0,
-		rebornChargeAt: -1.0,
-		rebornDefBase:  spec.DEF,
+		rebornLeft:      spec.RebornLeft,
+		rebornAt:        -1.0,
+		rebornChargeAt:  -1.0,
+		rebornDefBase:   spec.DEF,
+		invincibleUntil: -1.0,
+		haste:           1.0,
 	}
 	if n := len(spec.RebornSummons); n > 0 {
 		// 原版 `_build_enemy` 就给每只排好这一列（-1 = 不在窗口里，不排拍）
@@ -194,6 +209,18 @@ func (e *enemy) reachedEnd() bool {
 	return e.legIndex >= len(e.spec.Legs)
 }
 
+// legLength 是一条走段的总长（原版 `stage.map.path_length(path)`：逐段直线
+// 距离之和）。召唤物要靠它把"还剩几格"换算成时间。
+func legLength(pts [][2]float64) float64 {
+	total := 0.0
+	for i := 1; i < len(pts); i++ {
+		dx := pts[i][0] - pts[i-1][0]
+		dy := pts[i][1] - pts[i-1][1]
+		total += math.Sqrt(dx*dx + dy*dy)
+	}
+	return total
+}
+
 type operator struct {
 	spec OperatorSpec
 
@@ -206,6 +233,10 @@ type operator struct {
 	deathTime   float64
 	damageTaken float64
 	slot        int //: 列表下标 = 部署顺序（敌人挑"最后部署的"要看它）
+	//: **这一次部署**的身份号（每次部署递增）。原版每次落地都是新的
+	//: `OperatorUnit` 对象，明识形态的"标记退场"记的是对象身份；Go 侧一名
+	//: 干员复用同一个结构体，用这个号代替——"撤了再下同一个人"因此不算同一个。
+	deploySeq int
 
 	// ---- 技能状态（`skill.go`；没有技能槽时这几个字段一直不动）
 	//:
@@ -332,6 +363,11 @@ func runSim(spec *Spec) (*Verdict, error) {
 			op.damageTaken = 0
 			op.retreated = false
 			op.leftAt = -1
+			// 这一次部署的**身份号**：原版每次部署都是全新的 OperatorUnit 对象，
+			// 明识形态的"标记"记的是对象身份；Go 侧一名干员复用同一个结构体，
+			// 于是用这个号代替对象身份——否则"撤了再下同一个人"会被误认成同一次
+			// 部署，标记退场给的病害就永远算不对。
+			op.deploySeq = ctx.nextDeploySeq()
 			// 技能状态从零起（等价于原版"每次部署一个全新的 OperatorUnit"）：
 			// 技力回到 `init_sp`，开启次数归零，上一局的持续/弹药不带到这一局。
 			op.autoSkill = d.AutoSkill
@@ -407,6 +443,21 @@ func runSim(spec *Spec) (*Verdict, error) {
 				continue
 			}
 			if e.pendingReborn() {
+				// 重生期召唤：窗口内每 `Interval` 秒在**自己脚下**召唤 `Count` 个。
+				// 排在充能之前（原版 4176-4184 在 4188 那段之前），
+				// 所以同一帧既召唤又充能是可能的。
+				for i := range e.rebornSummonAt {
+					for e.rebornSummonAt[i] >= 0 && t >= e.rebornSummonAt[i] {
+						// 间隔非正就是"没有这一拍"，先退出——否则 while 不收敛
+						if e.spec.RebornSummons[i].Interval <= 0 {
+							e.rebornSummonAt[i] = -1.0
+							break
+						}
+						e.rebornSummonAt[i] += e.spec.RebornSummons[i].Interval
+						ctx.summonReborn(e, i, t, verdict)
+					}
+				}
+
 				// 充能：窗口内按 interval 逐个结算。用 while 而不是 if——
 				// fps 高时不会漏，fps=1 的粗扫时又会一次补上欠下的所有拍。
 				for e.rebornChargeAt >= 0 && t >= e.rebornChargeAt {
@@ -432,6 +483,10 @@ func runSim(spec *Spec) (*Verdict, error) {
 				if t >= e.rebornAt {
 					e.rebornAt = -1.0
 					e.rebornChargeAt = -1.0
+					// 召唤的排期随窗口一起清掉（原版 4214）
+					for i := range e.rebornSummonAt {
+						e.rebornSummonAt[i] = -1.0
+					}
 					e.hp = e.spec.HP * e.spec.RebornHPRatio
 					// 重生后：防御力 +(def_add × 层数)%。从**基准**重算，
 					// 免得二次重生时把上一次的加成再乘一遍。
@@ -441,6 +496,8 @@ func runSim(spec *Spec) (*Verdict, error) {
 					}
 					e.blockedBy = nil
 					e.deathTime = -1.0
+					// 归来即入明识形态（原版 4122 `_enter_pm2`）
+					ctx.enterPm2(e, t)
 					verdict.Events = append(verdict.Events,
 						Event{T: t, Kind: "reborn", Who: e.spec.Name})
 				}
@@ -452,6 +509,12 @@ func runSim(spec *Spec) (*Verdict, error) {
 					e.rebornChargeAt = t + e.spec.RebornInterval
 				} else {
 					e.rebornChargeAt = -1.0
+				}
+				// 召唤窗口同样与重生窗口同长：进来给每一"拍"排上第一拍
+				for i := range e.rebornSummonAt {
+					if e.spec.RebornSummons[i].Interval > 0 {
+						e.rebornSummonAt[i] = t + e.spec.RebornSummons[i].Interval
+					}
 				}
 			}
 		}
@@ -504,6 +567,13 @@ func runSim(spec *Spec) (*Verdict, error) {
 		if !mechanisms.Empty() {
 			mechanisms.PostAttack(ctx, dt)
 		}
+
+		// ---- 7.6 明识形态（原版 `_enemy_mech_tick` 里紧跟机制之后那一段，4008）
+		//
+		// 「祟」归来的第二形态逐帧要判两件事：**清水**（站在病害值 0 的田地、
+		// 或在清澈泵站范围内 → 防御与移速都要改）与**标记退场**（被它标记过的
+		// 干员离场时给脚下加病害）。放在 7.5 之后、结算之前，与原版同序。
+		ctx.pm2Tick(ctx, t, ops)
 
 		// ---- 8. 结算（1886 → 3720）
 		resolve(enemies, &cost, &life, t, verdict)
@@ -578,6 +648,8 @@ type simCtx struct {
 	time       *float64
 	frame      *int
 	verdict    *Verdict
+	//: 部署身份号的发号器（见 `operator.deploySeq`）
+	deploySeq int
 
 	//: 本场被请求的推进速度乘区（**出怪顺序下标** → 乘区）。机制只提请求，
 	//: 主循环在推进那一步施加。没被请求过的敌人乘区是 1.0。
@@ -814,10 +886,11 @@ func (c *simCtx) SetEnemyRoute(index int, points [][2]float64) {
 }
 
 // EnemyMoveSpeed 是这一只**这一刻**的推进速度：与主循环 `advance` 用的是同一个
-// 算式（`spec.MoveSpeed × 关卡乘区 × 机制请求的乘区`），免得机制自己抄一份。
+// 算式（`spec.MoveSpeed × 自身乘区 × 关卡乘区 × 机制请求的乘区`），免得机制自己
+// 抄一份。`自身乘区`就是原版 `haste_multiplier`（明识形态的清水会改它）。
 func (c *simCtx) EnemyMoveSpeed(index int) float64 {
 	if e := c.enemyAt(index); e != nil {
-		return e.spec.MoveSpeed * c.spec.SpeedScale * c.speedFor(index)
+		return e.spec.MoveSpeed * e.haste * c.spec.SpeedScale * c.speedFor(index)
 	}
 	return 0
 }
@@ -845,7 +918,10 @@ func (c *simCtx) Log(format string, args ...any) {
 // 整个循环**以时间为预算**——按格数当预算的话，等待段会被移速缩放，
 // 3 秒的待命会被拉成好几分钟。
 func advance(e *enemy, dt, speedScale float64) {
-	speed := e.spec.MoveSpeed * speedScale
+	// `e.haste` 是原版 `haste_multiplier`（明识形态的清水会改它），与
+	// `EnemyMoveSpeed` 必须乘同一串量——两边不一致的话，"机制看到的移速"
+	// 与"实际推进的移速"会各说各话。
+	speed := e.spec.MoveSpeed * e.haste * speedScale
 	if speed <= 0 {
 		return
 	}
@@ -1022,7 +1098,7 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 				// 而是"与原版同值、并且有名字"。
 				dmg := resolveDamage(power, dmgType, hitScale,
 					target.spec.DEF, target.spec.RES, target.dodgeVs(dmgType))
-				dealt := target.take(dmg)
+				dealt := target.take(dmg, op)
 				trace("        打 %s 攻=%.1f 类型=%s 倍率=%.3f 防=%.1f 抗=%.1f 伤害=%.3f 实扣=%.3f 剩=%.3f",
 					target.spec.Name, power, dmgType, hitScale, target.spec.DEF,
 					target.spec.RES, dmg, dealt, target.hp)
@@ -1237,10 +1313,15 @@ func anyActive(enemies []*enemy) bool {
 	return false
 }
 
-func (e *enemy) take(amount float64) float64 {
+func (e *enemy) take(amount float64, src *operator) float64 {
 	if e.invincible {
 		// 监测态的甲：**挨打掉 0 血**，但目标选择照旧把它算进去（原版
 		// `_damage_enemy` 里 `always_invincible` 就是返回 0）。
+		return 0
+	}
+	// 明识形态的限时无敌窗口（原版 `_damage_enemy` 里那一支
+	// `now < target.invincible_until`）。`src` 只用于记名，与伤害无关。
+	if e.sim != nil && *e.sim.time < e.invincibleUntil {
 		return 0
 	}
 	dealt := math.Min(e.hp, math.Max(0, amount))
@@ -1249,18 +1330,35 @@ func (e *enemy) take(amount float64) float64 {
 		// 挨打的附加效果（原版 `_enemy_on_hit`）。放在 `take` 里而不是放在
 		// 各个调用点上：普攻、技能、机制伤害都会走到这里，漏一个就是
 		// "某一族效果静默不生效"。
-		e.sim.onEnemyHit(e)
+		e.sim.onEnemyHit(e, src)
 	}
 	return dealt
+}
+
+// nextDeploySeq 发一个"这一次部署"的身份号（见 `operator.deploySeq`）。
+func (c *simCtx) nextDeploySeq() int {
+	c.deploySeq++
+	return c.deploySeq
 }
 
 // onEnemyHit 是一只敌人**挨了一次伤害**之后要发生的事（原版 `_enemy_on_hit`
 // 里与蜕皮有关的那一段，`sim.py:1248-1265`）。
 //
-// 目前只有蜕皮（`Passive_Hit.*`）；速度提升（`SpeedUp.*`）与明识形态记名
-// （`PassiveM2.*`）还没接，接的时候**加在这里**，不要另开调用点。
-func (c *simCtx) onEnemyHit(e *enemy) {
+// 目前只有蜕皮（`Passive_Hit.*`）与明识形态的**记名**（`PassiveM2.*`）；
+// 速度提升（`SpeedUp.*`）还没接，接的时候**加在这里**，不要另开调用点。
+func (c *simCtx) onEnemyHit(e *enemy, src *operator) {
 	sp := &e.spec
+	// 明识形态记名：形态里**被我方打中**就把那位记下来（原版
+	// `marked_ops.add(id(source))`）。机制造成的伤害没有来源，不记。
+	//
+	// ⚠ 这一条排在"蜕皮层满就整段 return"**之前**：两者是并列的两件事，
+	// 蜕皮的层满了不该连带把记名也吞掉。
+	if e.pm2Active && src != nil {
+		if e.marked == nil {
+			e.marked = map[int]bool{}
+		}
+		e.marked[src.deploySeq] = true
+	}
 	// ⚠ 整个判据只有一层：层满了就连病害都不再加（原版把加病害写在同一个
 	// `if` 里，不是并列的两件事）。
 	if sp.PhitCnt <= 0 || e.phitStacks >= sp.PhitMaxStack {
@@ -1291,11 +1389,138 @@ func (c *simCtx) onEnemyHit(e *enemy) {
 	c.polluteFromEnemy(e, amount, 1.0)
 }
 
+// enterPm2 是"归来即入明识形态"（原版 `_enter_pm2`，`sim.py:4122-4151`）。
+//
+// 三条容易抄错的地方：
+//
+//  1. **触发条件是"有没有那三个量"**，不是"有没有重生"——`pm2_atk / pm2_move /
+//     pm2_invincible` 全 0 就不进形态（原版 4229）。
+//  2. 面板只改**一次**（`pm2_applied`）：反复乘会让攻击力指数衰减。攻击力用
+//     乘法、抗性用加法、防御也走乘法——逐个照原文，别"统一"。
+//  3. `attack_times = 2` 与 `apply_way = "RANGED"` 都**只在射程大于 0 时**才改
+//     出手方式：近战那只连击两次仍然按近战结算。
+func (c *simCtx) enterPm2(e *enemy, t float64) {
+	sp := &e.spec
+	if sp.Pm2Atk == 0 && sp.Pm2Move == 0 && sp.Pm2Invincible == 0 {
+		return
+	}
+	e.pm2Active = true
+	if !e.pm2Applied {
+		e.pm2Applied = true
+		sp.ATK *= 1.0 + sp.Pm2Atk
+		sp.DEF *= 1.0 + sp.Pm2Def
+		sp.RES += sp.Pm2Res
+		e.haste = 1.0 + sp.Pm2Move
+		sp.AttackTimes = 2
+		if sp.AttackRange > 0 {
+			sp.ApplyWay = "RANGED"
+		}
+	}
+	if sp.Pm2Invincible > 0 {
+		e.invincibleUntil = t + sp.Pm2Invincible
+	}
+}
+
+// pm2Tick 是明识形态的逐帧部分（原版 `_pm2_tick`，`sim.py:4044-4088`）。
+//
+// 两件事：**清水**开关（重新算防御与移速乘区）与**标记退场**（被记名的干员
+// 离场时给脚下加病害）。
+func (c *simCtx) pm2Tick(ctx mech.Ctx, t float64, ops []*operator) {
+	// 场上所有活着的我方单位脚下的格子：泵站"水源地上有人"那一支要用它。
+	// 每次投票现攒，不缓存——它是逐帧量（有人刚落地/刚倒下都会变）。
+	allies := make([][2]int, 0, len(ops))
+	for _, op := range ops {
+		if op.alive() {
+			allies = append(allies, [2]int{int(op.cell[0]), int(op.cell[1])})
+		}
+	}
+	for _, e := range *c.enemies {
+		if !e.pm2Active || e.hp <= 0 {
+			continue
+		}
+		cx, cy := e.cell()
+		// ---- 清水：站在病害值 0 的田地上，或在清澈泵站的射程里
+		clean := false
+		if ctx != nil {
+			clean = c.mechanisms.IsClear(ctx, [2]int{cx, cy}, allies)
+		}
+		if clean != e.pm2Clean || !e.pm2Clean {
+			e.pm2Clean = clean
+			// 防御**从基准重算**，不是加减：清水能来回切，累乘会指数漂。
+			e.spec.DEF = e.rebornDefBase *
+				(1.0 + e.spec.Pm2Def + boolToFloat(clean, e.spec.Pm2CleanDef))
+			// 移速乘区：清水时不加成（原版 4070）
+			e.haste = 1.0 + boolToFloat(!clean, e.spec.Pm2Move)
+		}
+		// ---- 标记退场：被它打过的干员里，已经不在场上的那些
+		if len(e.marked) == 0 || e.spec.Pm2MarkPollut <= 0 {
+			continue
+		}
+		stillHere := map[int]bool{}
+		for _, op := range ops {
+			if op.alive() {
+				stillHere[op.deploySeq] = true
+			}
+		}
+		for seq := range e.marked {
+			if stillHere[seq] {
+				continue
+			}
+			delete(e.marked, seq)
+			// 只在**没被阻挡**时加（原版 4085 那一支）
+			if e.blockedBy == nil {
+				c.polluteFromEnemy(e, e.spec.Pm2MarkPollut, 1.0)
+			}
+		}
+	}
+}
+
+func boolToFloat(b bool, v float64) float64 {
+	if b {
+		return v
+	}
+	return 0
+}
+
+// summonReborn 是重生期召唤的一"拍"（原版 `_summon_at`，`sim.py:4176-4184` 调用）。
+//
+// 召唤位置是**自己脚下那一格**（原文写的"1.0 边长正方形范围内随机位置"正好覆盖
+// 脚下那格，本项目按可复现收口，不做随机）。
+//
+// ⚠ 路线按"哪一格出发"查表：召唤那一刻站在哪一格只有跑到才知道，Python 把
+// 地图每一格的路线都算好随规格发来了。查不到就**当场拒跑**——绝不"随便给条
+// 路"，那会让漏怪判定悄悄偏。
+func (c *simCtx) summonReborn(e *enemy, i int, t float64, verdict *Verdict) {
+	rs := e.spec.RebornSummons[i]
+	if rs.Template == nil || rs.Count <= 0 {
+		return
+	}
+	cx, cy := e.cell()
+	key := strconv.Itoa(cx) + "," + strconv.Itoa(cy)
+	points, ok := rs.Paths[key]
+	if !ok {
+		panic(fmt.Sprintf(
+			"重生期召唤：%s 倒在 %s，而规格里没有这一格的路线——"+
+				"这一份规格不能用，拒绝跑下去（宁可拒跑也不给一条错的路）",
+			e.spec.Name, key))
+	}
+	pts := make([][2]float64, 0, len(points))
+	for _, p := range points {
+		pts = append(pts, [2]float64{p[0], p[1]})
+	}
+	legs := []LegSpec{{Kind: "walk", Points: pts, Length: legLength(pts)}}
+	for n := 0; n < rs.Count; n++ {
+		tmpl := *rs.Template
+		tmpl.Legs = legs
+		e2 := newEnemy(tmpl, len(*c.enemies), [2]float64{float64(cx), float64(cy)}, c)
+		*c.enemies = append(*c.enemies, e2)
+		verdict.Events = append(verdict.Events,
+			Event{T: t, Kind: "summon", Who: e2.spec.Name})
+	}
+}
+
 // polluteFromEnemy 是原版 `_pollute_around`（`sim.py:1280-1303`）：在
 // 「挡它的干员 / 它自己」脚下那一格半径 `radius` 内给田地加病害。
-//
-// 加的是**【缓存】**，不是当场改【实际】/【最大】——落地路径是
-// 缓存 →（每 0.2s 释放 1 点）→【最大】 →（每 1s 靠拢）→【实际】。
 func (c *simCtx) polluteFromEnemy(e *enemy, amount float64, radius float64) float64 {
 	if amount <= 0 {
 		return 0
