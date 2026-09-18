@@ -8,9 +8,15 @@
    总伤害 60750。技能系统是后加进来的，这一条防的是"新代码改坏了旧路径"。
 2. **技能解析的定点值**——机械师的总倍率必须是 9.88（(1+2.8)×2.6），
    这个数有社区标定作对照；取错黑板键会算成 11.4。
-3. **1-7 实机录像用例**——用户提供的单干员（怒潮凛冬）通关录像。
-   只按黑板跑只有 35 击杀；把"第二次及以后"的变体取值叠上才到 41 击杀，
-   与录像一致。这条同时证明了变体解析是对的。
+3. **1-7 实机录像用例**——用户提供的单干员（怒潮凛冬）通关录像：
+   41 击杀 / 0 漏 / 总伤害 60750。
+
+   ⚠️ **这条的判据 2026-09-18 换过一次**：原来靠「只按黑板只有 35 杀、
+   叠上「第二次及以后」的变体才到 41 杀」来证明变体解析是对的。撼地者
+   特性溅射落地后，只按黑板那一局**也**打满 41 杀——溅射把变体少掉的那部分
+   伤害补回来了，于是"少杀"不再能证明任何事。现在盯的是变体独有、且与
+   本条机制无关的那一项：没叠变体要开两次技能（30 秒到点掉线重充），
+   叠上只开一次（「持续时间无限」）。**旧判据不是被放宽，是被换掉。**
 
 第 3 条要说明白：`headb2_s_2[second].atk = 1.8` 是黑板里真实存在的键，
 所以"第二次起加成翻倍"**不是**靠描述文本猜的；但"且持续时间无限"那半句
@@ -34,6 +40,8 @@ from ak_tactic.battle.damage import DamageType, resolve_damage      # noqa: E402
 from ak_tactic.battle.talents import (BLESSING_KEYS, SnowField, find_blessing,
                                       find_snow, find_sp_on_action,
                                       squad_cost_bonus)  # noqa: E402
+from ak_tactic.battle.traits import (apply_splash_talent,  # noqa: E402
+                                     read_trait_splash)
 from ak_tactic.operator.attack_speed import attack_speed_bonus      # noqa: E402
 from ak_tactic.battle.unit import OperatorUnit                      # noqa: E402
 from ak_tactic.battle import displace as D                          # noqa: E402
@@ -64,6 +72,16 @@ def close(a: float, b: float, tol: float = 1e-6) -> bool:
     return abs(float(a) - float(b)) <= tol
 
 
+_TALENT_BOOK: list = []
+
+
+def _talent_book() -> TalentBook:
+    """检查侧共用一个 `TalentBook`（构造要读 char_table，不该每个单位读一遍）。"""
+    if not _TALENT_BOOK:
+        _TALENT_BOOK.append(TalentBook())
+    return _TALENT_BOOK[0]
+
+
 def make_unit(calc, char_id: str, **kw) -> OperatorUnit:
     """按属性计算器的结果造一个 OperatorUnit（与 CLI 一致的取数路径）。"""
     st = calc.stats(char_id, **kw)
@@ -72,6 +90,15 @@ def make_unit(calc, char_id: str, **kw) -> OperatorUnit:
         calc, char_id, elite=kw.get("elite", 2), level=kw.get("level", 1),
         potential=kw.get("potential", 1), module=kw.get("module"),
         module_level=kw.get("module_level", 0))
+    # 特性溅射（撼地者）也要在这里落地。**不能少这一块**：检查侧的单位若比
+    # 真路径少一层，每个用例都得自己记得补，而漏掉的表现是"机制看着做了、
+    # 守卫里却永远不触发"——那正是本项目反复踩过的坑。真路径是
+    # `Verifier.unit()`，两边的口径靠 `[36]` 那条端到端断言钉住。
+    splash = apply_splash_talent(
+        read_trait_splash(calc.character(char_id)),
+        _talent_book().for_operator(char_id, elite=kw.get("elite", 2),
+                                    level=kw.get("level", 1),
+                                    potential=kw.get("potential", 1)))
     return OperatorUnit(
         name=st.name, char_id=char_id, elite=kw.get("elite", 2),
         # 主职业代号——按职业发光环的天赋（星熊「特种作战策略」）要它。
@@ -85,6 +112,11 @@ def make_unit(calc, char_id: str, **kw) -> OperatorUnit:
         attack_speed=float(t.get("attackSpeed", 100) or 100) + aspd.flat,
         aspd_when_free=aspd.when_free,
     aspd_high_ground=aspd.when_high_ground,
+    splash_radius=splash.radius if splash else 0.0,
+    splash_scale=splash.scale if splash else 0.0,
+    splash_damage_scale=splash.damage_scale if splash else 1.0,
+    highland_splash_scale=splash.highland_scale if splash else 0.0,
+    highland_splash_sluggish=splash.highland_sluggish if splash else 0.0,
     )
 
 
@@ -158,9 +190,14 @@ def check_baseline(stage, lib, calc) -> None:
 
 
 def check_calibration(stage, lib, calc, book) -> None:
-    """怒潮凛冬单干员——用户提供的实机通关录像。"""
+    """怒潮凛冬单干员——用户提供的实机通关录像。
+
+    耗时不写死在文字里：它随机制推进而变（特性溅射上线后从 138.6s 走到
+    135.0s），写死会变成一句迟早对不上的话。**锚的是三件事**：41 击杀、
+    0 漏、总伤害 = 全部敌人血量之和。
+    """
     print("\n[2] 1-7 实机录像用例（怒潮凛冬 精英2 60级，单干员）")
-    print("         录像：41 击杀、0 漏、胜利。模拟耗时 142.0s vs 实机 140s（移速校准）")
+    print("         录像：41 击杀、0 漏、胜利；耗时按实测打印，不写死")
 
     def fresh():
         return make_unit(calc, "char_1051_headb2", elite=2, level=60)
@@ -188,13 +225,23 @@ def check_calibration(stage, lib, calc, book) -> None:
     sim2.plan(Deployment(17.0, fresh(), (2, 3), "Right", skill=permanent))
     r = sim2.run()
     print(f"         叠加变体：{r.summary()}")
+    print(f"         模拟耗时 {r.elapsed:.1f}s（实机 140s，差 "
+          f"{r.elapsed - 140.0:+.1f}s——这一项只看量级，不当判据）")
     check("击杀 41（与录像一致）", r.kills == 41, f"实得 {r.kills}")
     check("漏怪 0（与录像一致）", r.leaks == 0, f"实得 {r.leaks}")
     check("总伤害 60750（= 全部 41 只敌人血量之和）",
           close(r.damage_dealt, 60750, 1), f"实得 {r.damage_dealt:,.0f}")
-    check("只按黑板会明显少杀（说明差距来自变体而非别处）",
-          raw.kills < r.kills, f"{raw.kills} < {r.kills}")
-
+    # **这条判据 2026-09-18 改口了。** 原来是「只按黑板会明显少杀」——但特性
+    # 溅射落地之后，只按黑板那一局也打满 41 杀（溅射把变体少掉的那部分伤害
+    # 补回来了），"少杀"不再是变体在做事的证据。**不能因此放宽守卫**，要换一个
+    # 变体**独有**、且与本条机制无关的可观测量：那条变体除了翻倍还写了
+    # 「第二次及以后使用时……持续时间无限」。没叠变体时技能 30 秒到点掉线、
+    # 要重充（本关实测开 2 次）；叠上后只开 1 次且一直挂着。
+    check("反向：只按黑板要**开两次技能**（30 秒到点掉线重充），"
+          "叠上 [second] 只开一次——「持续时间无限」只在变体里",
+          raw.skill_activations > r.skill_activations,
+          f"只按黑板 {raw.skill_activations} 次 vs 叠加变体 "
+          f"{r.skill_activations} 次")
 
 def check_parsing(book) -> None:
     """技能解析的定点值——这些数错了伤害就会错一个量级。"""
@@ -2940,6 +2987,221 @@ def check_push(stage, lib, calc, book_t) -> None:
           "推击" not in "\n".join(sim2.result.log))
 
 
+def check_trait_splash(stage, lib, calc, book_t) -> None:
+    """[36] 撼地者特性溅射 + 天赋「汹涌怒火」的高台溅射（怒潮凛冬）。
+
+    这条特性是**干员侧的第一条溅射**——在此之前 `battle/` 里只有敌人技能
+    那条 `skill_atk_cross`（十字五格），干员的"群攻"根本没有落地。
+
+    判据分四层，缺一层就会出现"看着做完了其实没接上"：
+
+    1. **几何**：两种判定必须**分得开**。重叠判定（半径圆盖到哪些格）在
+       半径 1.0 时是 **3×3 九格**（斜邻近角 0.707 < 1.0），半径降到 0.5 才是
+       十字五格；格子判定（`x-5`）永远是十字五格。守卫特意取了圆心落在
+       **格角上**那一例——那一例的结果不对称（(1,1) 在内、(-1,1) 不在），
+       是"重叠"与"按格心距离"唯一能分开的指纹。
+    2. **数据**：四位撼地者共用同一条特性；`damage_scale` 叠加后是 0.62；
+       精 1 档没有停顿、潜能 5 起高台溅射变 27%。
+    3. **接线（端到端）**：走 `Verifier.unit()`——**不是** `make_unit()`。
+       后者是检查侧自己拼的，绕过 `verify` 那段接线就等于什么都没测。
+    4. **行为**：真跑一次出手，量斜邻格敌人的掉血=攻击力×0.62 过防后的值，
+       同时确认两格外的敌人**一点没吃到**、主目标**只吃普攻那一份**。
+       高台那半单独直调 `_highland_splash`：只打地面、只打十字五格、
+       附 0.5 秒停顿。
+    """
+    print("\n[36] 撼地者特性溅射（半径 1.0 重叠判定）+ 天赋高台溅射（十字五格）")
+    from ak_tactic.battle.traits import (apply_splash_talent,  # noqa: PLC0415
+                                         cross_cells, read_trait_splash,
+                                         splash_tiles)
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    # ---- 1. 几何：两种判定 ----
+    nine = {(x, y) for x in (-1, 0, 1) for y in (-1, 0, 1)}
+    check("半径 1.0 的圆盖到 **3×3 九格**（斜邻近角 √2/2≈0.707 < 1.0）",
+          splash_tiles((0.0, 0.0), 1.0) == nine,
+          f"实得 {len(splash_tiles((0.0, 0.0), 1.0))} 格")
+    check("半径 0.5 时斜邻**掉出去**，只剩十字五格——两条半径必须分得开",
+          splash_tiles((0.0, 0.0), 0.5) == {(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)},
+          f"实得 {sorted(splash_tiles((0.0, 0.0), 0.5))}")
+    check("半径 0.4 只剩本格",
+          splash_tiles((0.0, 0.0), 0.4) == {(0, 0)},
+          f"实得 {sorted(splash_tiles((0.0, 0.0), 0.4))}")
+    odd = splash_tiles((0.5, -0.5), 1.0)
+    check("圆心落在格角上时结果**不对称**（(1,1) 在内、(-1,1) 不在）——"
+          "这是「重叠判定」与「按格心距离」唯一分得开的指纹",
+          len(odd) == 12 and (1, 1) in odd and (-1, 1) not in odd,
+          f"实得 {len(odd)} 格，(1,1)={'in' if (1, 1) in odd else 'out'}、"
+          f"(-1,1)={'in' if (-1, 1) in odd else 'out'}")
+    check("「周围四格 + 本格」（范围码 x-5）是十字五格",
+          cross_cells((2, 3)) == {(2, 3), (3, 3), (1, 3), (2, 2), (2, 4)},
+          f"实得 {sorted(cross_cells((2, 3)))}")
+
+    # ---- 2. 数据 ----
+    cid = "char_1051_headb2"
+    hammer = ["char_1051_headb2", "char_4058_pepe",
+              "char_4131_odda", "char_4185_amoris"]
+    base = read_trait_splash(calc.character(cid))
+    check("怒潮凛冬的特性黑板读得出溅射：半径 1.0、倍率 0.5",
+          base is not None and close(base.radius, 1.0) and close(base.scale, 0.5),
+          f"实得 {base}")
+    # 全表核验：新判据的**命中面**必须先量一遍，否则"顺手"会波及别的干员。
+    carriers = [c for c in calc.all_ids()
+                if read_trait_splash(calc.character(c)) is not None]
+    check("全库核验：带这条特性的**只有**撼地者四位（不误伤别人）",
+          sorted(carriers) == sorted(hammer), f"实得 {carriers}")
+    check("反向：能天使（速射手）与星熊（铁卫）都没有这条特性",
+          read_trait_splash(calc.character("char_103_angel")) is None
+          and read_trait_splash(calc.character("char_136_hsguma")) is None)
+
+    tal = book_t.for_operator(cid, elite=2, level=60, potential=1)
+    sp = apply_splash_talent(base, tal)
+    check("「汹涌怒火」的 damage_scale=1.24 叠在特性 0.5 上 → **0.62**",
+          sp is not None and close(sp.effective_scale, 0.62, 1e-9),
+          f"实得 {sp.effective_scale if sp else None}")
+    check("高台溅射是攻击力的 24%（`attack@splash_atk_scale`），带 0.5 秒停顿",
+          sp is not None and close(sp.highland_scale, 0.24) 
+          and close(sp.highland_sluggish, 0.5),
+          f"scale={sp.highland_scale if sp else None} "
+          f"sluggish={sp.highland_sluggish if sp else None}")
+    sp5 = apply_splash_talent(
+        base, book_t.for_operator(cid, elite=2, level=60, potential=5))
+    check("潜能 5 起高台溅射变 27%（潜 4 档是 24%）",
+          sp5 is not None and close(sp5.highland_scale, 0.27)
+          and close(sp5.effective_scale, 0.62, 1e-9),
+          f"实得 {sp5.highland_scale if sp5 else None}")
+    sp1 = apply_splash_talent(
+        base, book_t.for_operator(cid, elite=1, level=60, potential=1))
+    check("**精 1 那一档没有停顿**（`attack@sluggish` = 0，不是「有键就算有」）",
+          sp1 is not None and sp1.highland_sluggish == 0.0
+          and close(sp1.highland_scale, 0.24),
+          f"sluggish={sp1.highland_sluggish if sp1 else None}")
+
+    # ---- 3. 接线：走真路径 `Verifier.unit()` ----
+    v = Verifier()
+    entry = {"char_id": cid, "elite": 2, "level": 60, "trust": 100,
+             "potential": 1}
+    op0 = v.unit(dict(entry))
+    check("端到端：特性黑板真的走到了战斗单位身上"
+          "（1.0 / 0.5 / 1.24 / 0.24 / 0.5 五个数一个不差）",
+          close(op0.splash_radius, 1.0) and close(op0.splash_scale, 0.5)
+          and close(op0.splash_damage_scale, 1.24)
+          and close(op0.highland_splash_scale, 0.24)
+          and close(op0.highland_splash_sluggish, 0.5),
+          f"radius={op0.splash_radius} scale={op0.splash_scale} "
+          f"ds={op0.splash_damage_scale} hl={op0.highland_splash_scale} "
+          f"sluggish={op0.highland_splash_sluggish}")
+    angel = v.unit({"char_id": "char_103_angel", "elite": 2, "level": 60,
+                    "trust": 100, "potential": 1})
+    check("反向：能天使的单位 `splash_radius` 是 0（整段被跳过，不是走了空逻辑）",
+          angel.splash_radius == 0.0, f"实得 {angel.splash_radius}")
+
+    # ---- 4. 行为：一次出手，量掉血 ----
+    eid = _enemy_ids(stage)[0] if _enemy_ids(stage) else ""
+
+    def _mk(sim, cell, progress=0.0):
+        """造一个**站着不动**的敌人（route 只有一格，不跑 `run()`）。"""
+        pts = [(float(cell[0]), float(cell[1]))]
+        leg = [RouteLeg(kind="walk", points=[cell], length=0.0)]
+        e = sim._build_enemy(eid, 1, pts, leg, 0.0, 0.0)
+        e.position = (float(cell[0]), float(cell[1]))
+        e.progress = progress
+        e.max_hp = e.hp = 1_000_000.0     # 血厚到打不死，掉血量才可精确对账
+        sim.enemies.append(e)
+        return e
+
+    if eid:
+        sim = mechanism_sim(stage, lib)
+        op = v.unit(dict(entry))
+        # **先把高台那半关掉**：本节测的是特性溅射本身，让地图地形混进来
+        # 会让"主目标只吃普攻"这条断言随关卡改图而漂。
+        op.highland_splash_scale = 0.0
+        op.position = (2, 3)
+        op.direction = "Right"
+        sim.operators.append(op)
+        main = _mk(sim, (3, 3), progress=9.0)   # 射程内、进度最大 → 当主目标
+        diag = _mk(sim, (4, 4))                 # 斜邻：在 3×3 内、**不在射程内**
+        far = _mk(sim, (5, 3))                  # 两格外：在射程内，但出了半径
+
+        for _ in range(6):                      # 攒够一次出手（1.8s / 0.5s 一帧）
+            sim._operators_attack(0.5, 1.0)
+
+        want_splash = resolve_damage(
+            op.current_atk(), damage_type="PHYSICAL", scale=0.62,
+            defense=diag.defense, res=diag.res).final
+        got_splash = 1_000_000.0 - diag.hp
+        check("斜邻格的敌人吃到特性溅射，掉血 = 攻击力 × 0.62 过防后的值",
+              close(got_splash, want_splash, 1e-6),
+              f"实得 {got_splash:.1f}，应为 {want_splash:.1f}")
+        check("**两格外的敌人一点没吃到**（半径不是无限大）",
+              far.hp == 1_000_000.0, f"实得掉血 {1_000_000.0 - far.hp:.1f}")
+        want_main = resolve_damage(
+            op.current_atk(), damage_type="PHYSICAL", scale=1.0,
+            defense=main.defense, res=main.res).final
+        check("**主目标只吃普攻那一份，不吃溅射**（正文写的是「周围的**其他**敌人」）",
+              close(1_000_000.0 - main.hp, want_main, 1e-6),
+              f"实得 {1_000_000.0 - main.hp:.1f}，应为 {want_main:.1f}")
+
+        # ---- 4b. 高台那半：单独直调，两套几何分开验 ----
+        hl = None
+        for y in range(stage.map.height):
+            for x in range(stage.map.width):
+                if stage.map.tile(x, y).is_highland:
+                    hl = (x, y)
+                    break
+            if hl:
+                break
+        check("1-7 地图上找得到一个高台格（本节的前提）", hl is not None,
+              f"实得 {hl}")
+        if hl is not None:
+            around = [c for c in sorted(cross_cells(hl))
+                      if stage.map.inside(*c) and c != hl]
+            check("  该高台的十字五格里有图内格（挑得出受害者）", bool(around),
+                  f"实得 {around}")
+            victim_cell = around[0]
+            far_cells = [c for c in ((hl[0] + 2, hl[1]), (hl[0] - 2, hl[1]),
+                                     (hl[0], hl[1] + 2), (hl[0], hl[1] - 2))
+                         if stage.map.inside(*c)]
+            sim2 = mechanism_sim(stage, lib)
+            op2 = v.unit(dict(entry))
+            op2.position = (0, 0)
+            sim2.operators.append(op2)
+            victim = _mk(sim2, victim_cell)
+            outside = _mk(sim2, far_cells[0]) if far_cells else None
+            hits = sim2._highland_splash(op2, {hl}, op2.current_atk(), 1.0)
+            check("溅射到的高台**计数 1**（技能 1/2 的 `sp_per_highland` 要靠它）",
+                  hits == 1, f"实得 {hits}")
+            want_hl = resolve_damage(
+                op2.current_atk(), damage_type="PHYSICAL", scale=0.24,
+                defense=victim.defense, res=victim.res).final
+            check("  十字五格里的地面敌人吃到 攻击力 × 24%",
+                  close(1_000_000.0 - victim.hp, want_hl, 1e-6),
+                  f"实得 {1_000_000.0 - victim.hp:.1f}，应为 {want_hl:.1f}")
+            check("  并被【停顿】0.5 秒（sluggish 计时器 = 0.5）",
+                  close(victim.sluggish_timer, 0.5, 1e-9),
+                  f"实得 {victim.sluggish_timer}")
+            if outside is not None:
+                check("  **十字之外（两格外）的敌人吃不到**",
+                      outside.hp == 1_000_000.0,
+                      f"实得掉血 {1_000_000.0 - outside.hp:.1f}")
+            # 反向：正文限定「所有**地面**敌人」，空中单位必须不吃。
+            victim.hp = 1_000_000.0
+            victim.sluggish_timer = 0.0
+            victim.is_flying = True
+            sim2._highland_splash(op2, {hl}, op2.current_atk(), 2.0)
+            check("  **反向：空中单位不吃高台溅射**（正文限定「地面敌人」）",
+                  victim.hp == 1_000_000.0 and victim.sluggish_timer == 0.0,
+                  f"掉血 {1_000_000.0 - victim.hp:.1f}，"
+                  f"sluggish={victim.sluggish_timer}")
+            # 反向：把高台溅射的倍率置 0，整段必须静默——它只该由天赋驱动。
+            victim.is_flying = False
+            victim.hp = 1_000_000.0
+            op2.highland_splash_scale = 0.0
+            off = sim2._highland_splash(op2, {hl}, op2.current_atk(), 3.0)
+            check("  **反向：把高台倍率置 0 就一点不触发**（不是无条件打）",
+                  off == 0 and victim.hp == 1_000_000.0,
+                  f"计数 {off}，掉血 {1_000_000.0 - victim.hp:.1f}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="战斗与技能的回归检查")
     ap.parse_args()
@@ -2989,6 +3251,7 @@ def main() -> int:
     check_limit_dispatch(stage, lib, calc, book_t)
     check_second_use(stage, lib, calc, book_t)
     check_push(stage, lib, calc, book_t)
+    check_trait_splash(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

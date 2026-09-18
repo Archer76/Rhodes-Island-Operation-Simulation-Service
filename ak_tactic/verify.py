@@ -18,6 +18,7 @@ from typing import Any
 
 from .battle import BattleSimulator, Deployment, RangeProvider
 from .battle.talents import squad_cost_bonus
+from .battle.traits import apply_splash_talent, read_trait_splash
 from .battle.unit import OperatorUnit
 from .gamedata import EnemyLibrary, GameDataSource, RangeTable, load_stage
 from .operator import OperatorCalculator, SkillBook, TalentBook
@@ -231,6 +232,15 @@ class Verifier:
         t = st.total
         c = self.calc.character(cid)
         trait = c.get("description") or ""
+        # 特性里的**结构化**黑板（撼地者溅射那种）。`verify` 是把「数据 → 战斗
+        # 单位」走完的最后一站，所以特性溅射也在这里落地。天赋那一半要叠上去，
+        # 于是这里把该练度的天赋再解一次——与 `run()` 里那次同一口径、同一组
+        # 参数，这点开销可以忽略（`_unit_cache` 会把整组构造参数缓存住）。
+        splash = apply_splash_talent(
+            read_trait_splash(c),
+            self.talents.for_operator(cid, elite=entry["elite"],
+                                      level=entry["level"],
+                                      potential=entry.get("potential", 1)))
         tal_text = " ".join(
             (cand.get("description") or "")
             for t_ in (c.get("talents") or [])
@@ -258,6 +268,12 @@ class Verifier:
             attack_type="MAGIC" if "法术伤害" in trait else "PHYSICAL",
             heals="恢复友方单位生命" in trait,
             weakness_damage="弱点伤害" in tal_text,
+            # 特性溅射（撼地者）：0 = 没有这条，模拟器整段跳过。
+            splash_radius=splash.radius if splash else 0.0,
+            splash_scale=splash.scale if splash else 0.0,
+            splash_damage_scale=splash.damage_scale if splash else 1.0,
+            highland_splash_scale=splash.highland_scale if splash else 0.0,
+            highland_splash_sluggish=splash.highland_sluggish if splash else 0.0,
         )
         self._unit_cache[key] = kw
         return OperatorUnit(**kw)
