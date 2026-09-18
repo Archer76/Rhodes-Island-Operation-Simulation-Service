@@ -135,6 +135,11 @@ class OperatorUnit(Combatant):
     #: 阻挡、被索敌、攻击三处主循环都是均匀遍历 `self.operators`，
     #: 所以召唤物只要挂上这个标记塞进去，这三件事就自动成立。
     summon_of: str = ""
+    #: 主职业的**游戏内部代号**（`TANK` / `WARRIOR` / `SNIPER` …），不是中文名。
+    #: 给「按职业发光环」的天赋用——星熊「特种作战策略」写的是「所有友方【重装】
+    #: 职业干员的防御力提升 6%」，判的是**职业**，与阵营（`team_id`）是两回事。
+    #: 空串 = 没填（手工搭的试验体），按"不匹配任何职业光环"处理。
+    profession: str = ""
     position: tuple[int, int] = (0, 0)
     direction: str = "Right"
     block_cnt: int = 0

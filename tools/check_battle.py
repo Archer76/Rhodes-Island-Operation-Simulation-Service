@@ -74,6 +74,8 @@ def make_unit(calc, char_id: str, **kw) -> OperatorUnit:
         module_level=kw.get("module_level", 0))
     return OperatorUnit(
         name=st.name, char_id=char_id, elite=kw.get("elite", 2),
+        # 主职业代号——按职业发光环的天赋（星熊「特种作战策略」）要它。
+        profession=str(calc.character(char_id).get("profession") or ""),
         max_hp=float(t["maxHp"]), atk=float(t["atk"]), defense=float(t["def"]),
         res=float(t.get("magicResistance", 0) or 0),
         attack_interval=float(t.get("baseAttackTime", 1.0) or 1.0),
@@ -2205,6 +2207,100 @@ def check_faction_aura(stage, lib, calc, book_t) -> None:
           mate.aura_atk_pct == 0.0 and owner.aura_atk_pct == 0.0)
 
 
+def check_class_aura(stage, lib, calc, book_t) -> None:
+    """[29] 「特种作战策略」：**按职业**发的全场光环。
+
+    星熊天赋2：「在场时所有友方【重装】职业干员的防御力提升 6%」。它在此前
+    两份筛子里都报 0 欠账——因为它的键只有一个 `def`，`def` 归得了类，于是
+    第一道放过、第二道（只在第一道失败时跑）也看不见它。**压根没有检测器。**
+
+    本节钉三件事：
+
+    1. **职业过滤真的在起作用**：非重装吃到的是 **0**，不是"也加 6%"；
+    2. 它是**常驻**的（与万众巨潮相反）——主人不开技能照样发；
+    3. `profession` 与 `faction` **是两个量**：`profession` 是主职业代号
+       （`TANK`），`faction` 是阵营 `team_id`。混用会把"重装"发成"某个团"。
+
+    职业是**游戏内部代号**（`TANK`/`SNIPER`…），不是中文名「重装」——判据要
+    按代号取，中文名是显示层的东西。
+    """
+    print("\n[29] 「特种作战策略」：按职业发的全场光环")
+    from ak_tactic.battle.talents import (  # noqa: PLC0415
+        CLASS_AURA_TALENTS, TeamAura, find_class_aura, is_class_aura_talent)
+
+    cid = "char_136_hsguma"
+    tal = book_t.for_operator(cid, elite=2, level=60, potential=1)
+    hit = find_class_aura(tal)
+    check("find_class_aura 认得星熊「特种作战策略」",
+          hit is not None and hit.name == "特种作战策略",
+          hit.name if hit else "None")
+    check("它是职业光环那一族", hit is not None and is_class_aura_talent(hit))
+    check("黑板 def = 6%", abs(hit.value("def", 0) - 0.06) < 1e-9,
+          f"def={hit.value('def')}")
+    check("映射到的是**主职业代号** TANK，不是中文名「重装」",
+          CLASS_AURA_TALENTS.get("特种作战策略") == "TANK",
+          str(CLASS_AURA_TALENTS.get("特种作战策略")))
+
+    # `profession` 是否真的从计算器一路送到了单位上（没送 = 光环恒不生效）
+    tank = make_unit(calc, "char_311_mudrok", elite=2, level=60, potential=1)
+    sniper = make_unit(calc, "char_103_angel", elite=2, level=60, potential=1)
+    owner = make_unit(calc, cid, elite=2, level=60, potential=1)
+    owner.talents = tal
+    check("重装干员的 profession 是 TANK（星熊、泥岩）",
+          owner.profession == "TANK" and tank.profession == "TANK",
+          f"星熊={owner.profession} 泥岩={tank.profession}")
+    check("非重装干员的 profession 不是 TANK（能天使是 SNIPER）",
+          sniper.profession not in ("", "TANK"), f"能天使={sniper.profession}")
+
+    sim = mechanism_sim(stage, lib)
+    sim.operators.extend([owner, tank, sniper])
+    sim.team_auras.append(TeamAura(
+        owner=owner.name, atk_pct=hit.value("atk", 0.0),
+        def_pct=hit.value("def", 0.0), operator=owner,
+        profession=CLASS_AURA_TALENTS[hit.name]))
+
+    owner.skill_active = False
+    sim._refresh_auras()
+    check("**常驻**：主人没开技能时，重装照样拿 +6%（与万众巨潮相反）",
+          abs(tank.aura_def_pct - 0.06) < 1e-9, f"泥岩实得 {tank.aura_def_pct}")
+    check("光环主人**自己是重装**，所以自己也吃",
+          abs(owner.aura_def_pct - 0.06) < 1e-9, f"星熊实得 {owner.aura_def_pct}")
+    check("**非重装一点都吃不到**（这才是职业过滤的意义）",
+          sniper.aura_def_pct == 0.0, f"能天使实得 {sniper.aura_def_pct}")
+    check("它只加防御、不加攻击（黑板里没有 atk）",
+          tank.aura_atk_pct == 0.0 and abs(tank.aura_def_pct - 0.06) < 1e-9,
+          f"atk={tank.aura_atk_pct} def={tank.aura_def_pct}")
+
+    owner.skill_active = True
+    sim._refresh_auras()
+    check("主人开技能**不会**把它翻倍（没有 `double_scale` 那回事）",
+          abs(tank.aura_def_pct - 0.06) < 1e-9, f"泥岩实得 {tank.aura_def_pct}")
+
+    # ---- 反向守卫：职业为空必须**不匹配** ----
+    # 空集对任何集合都是子集，这类"空值恰好通过"的写法在这套代码里已经咬过
+    # 几次（见 `GENERIC_TALENT_KEYS` 那条空键表豁免）。手工搭的试验体
+    # `profession` 就是空串，它绝不能因为"没填"而白拿 6%。
+    blank = make_unit(calc, "char_103_angel", elite=2, level=60, potential=1)
+    blank.profession = ""
+    sim.operators.append(blank)
+    sim._refresh_auras()
+    check("profession 是空串的试验体**不匹配**职业光环（反向守卫）",
+          blank.aura_def_pct == 0.0, f"实得 {blank.aura_def_pct}")
+
+    # 提升档的门槛：库里 `required_potential_rank = 5`，而 rank = 潜能等级 − 1，
+    # 所以那一档是**潜能 6**，不是潜 5。这条一开始写错过一次——按「潜5」取，
+    # 拿回来的还是 6%，断言失败。**rank 与潜能编号差 1，别按名字想当然。**
+    tal6 = book_t.for_operator(cid, elite=2, level=60, potential=6)
+    hit6 = find_class_aura(tal6)
+    check("潜能 6 档是 8%（`required_potential_rank=5` → 潜能 6）",
+          hit6 is not None and abs(hit6.value("def", 0) - 0.08) < 1e-9,
+          f"def={hit6.value('def') if hit6 else None}")
+    hit5 = find_class_aura(book_t.for_operator(cid, elite=2, level=60, potential=5))
+    check("潜能 5 档仍是 6%（反向：别把提升档提前一档）",
+          hit5 is not None and abs(hit5.value("def", 0) - 0.06) < 1e-9,
+          f"def={hit5.value('def') if hit5 else None}")
+
+
 def check_second_use(stage, lib, calc, book_t) -> None:
     """[27] 「第二次及以后使用」的变体取值（怒潮凛冬技2「绝不罢休」）。
 
@@ -2477,6 +2573,7 @@ def main() -> int:
     check_skill_infix(stage, lib, calc, book_t)
     check_barrier_scope(stage, lib, calc, book_t)
     check_faction_aura(stage, lib, calc, book_t)
+    check_class_aura(stage, lib, calc, book_t)
     check_second_use(stage, lib, calc, book_t)
     check_push(stage, lib, calc, book_t)
 
