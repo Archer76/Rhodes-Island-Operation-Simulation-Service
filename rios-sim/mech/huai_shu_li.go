@@ -403,7 +403,9 @@ func (m *farmlandMech) diverTick(ctx Ctx, u *pileUnit, dt, t float64) {
 		return
 	}
 	if best <= cfg.HitRadius {
-		ctx.SetEnemyPosition(u.enemy, targetPos)
+		// 贴上去：**换成单点路线**（原版 `e.route = [op.position]` ＋ `e.legs = []`，
+		// 从此不动），再咬一口、挂天标、`enemy_windup` 秒后自毁。
+		ctx.SetEnemyRoute(u.enemy, [][2]float64{targetPos})
 		ctx.HitOperator(target, u.atk, u.damageType)
 		u.attacked = true
 		u.selfDestructAt = t + ctx.EnemyWindup()

@@ -233,6 +233,10 @@ def _pile_device_spec(sim, d) -> dict[str, Any] | None:
         "kind": "pile",
         "key": str(getattr(d, "key", "")),
         "cell": cell,
+        #: 朝向照送：天桩自己不用它，但**规格的形状要一致**——
+        #: `tools/check_mech_spec.py` 会逐字段核装置的形状，少一个键就报
+        #: `KeyError: 'direction'`（实测就是这么被抓出来的）。
+        "direction": str(getattr(d, "direction", "") or ""),
         "child": pspec,
     }
 
