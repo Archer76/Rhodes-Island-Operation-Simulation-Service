@@ -1589,8 +1589,14 @@ func enemiesAttack(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec,
 				op.defense(), op.res(), op.dodgeVs(e.spec.DamageType))
 			dealt += op.take(dmg)
 			if traceOn {
-				trace("ENEMYATK t=%.4f enemy=%s atk=%.1f target=%s seg=%d/%d dmg=%.3f",
-					t, e.spec.Name, e.spec.ATK, op.spec.Name, seg+1, times, dmg)
+				// `ecell` 不是装饰：同一个名字的敌人有好几只（HS-EX-8 上「勿玷」
+				// 一度同时有六七只），只记名字会把它们全归到同一个键上，于是
+				// "某一只多打了一笔"从痕迹上根本看不出来——对拍时两边笔数不同
+				// 却找不到是哪一只，只能干猜。同一族痕迹（SKILLATK）早就带了它，
+				// 这里补齐。
+				cx, cy := e.cell()
+				trace("ENEMYATK t=%.4f enemy=%s ecell=%d,%d atk=%.1f target=%s seg=%d/%d dmg=%.3f",
+					t, e.spec.Name, cx, cy, e.spec.ATK, op.spec.Name, seg+1, times, dmg)
 			}
 			if !op.alive() {
 				op.deathTime = t
