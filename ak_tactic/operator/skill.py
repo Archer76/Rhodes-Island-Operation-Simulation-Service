@@ -253,6 +253,49 @@ def _wants_multi_hit(description: str) -> int:
     return int(tok) if tok.isdigit() else _CN_DIGIT.get(tok, 0)
 
 
+#: 「射击 N 次，分别射出 a、b、c 支」——**一轮技能放几轮、每轮几支**。
+#: 全表实测（986 条 M3 逐条核过）：这个措辞只出现在焰狐龙梓兰技2「飞翔瞪射」。
+_ARROW_VOLLEYS = re.compile(r"射击(\d+)次[，,]?分别射出([\d、,，]+)支")
+
+#: 「发射 N 支…箭矢」——单轮齐射的箭数。全表实测只出现在同一位的技1「刚射」。
+_ARROW_SHOT = re.compile(r"发射(\d+)支")
+
+
+def _volley_arrows(description: str) -> tuple[int, ...]:
+    """每轮射出的箭数，取不到就是空元组。
+
+    **为什么箭数要按"支"算**：能天使「过载模式」的 5 连发是既有口径——
+    N 支 / N 连发 = N 次独立命中，各自吃防御（守卫 `[38]` 钉的就是这条）。
+    焰狐龙梓兰技2 一次技能放三轮、每轮 3/4/5 支，共 12 支，沿用同一口径。
+
+    她技1 的「刚连射」那 5 支**不在这里**：那一段是"额外消耗一层充能才放"，
+    是否为真要看充能而不是描述，故整段留档（见 `docs/uncertainties.md`
+    第十三节），本函数取到的 `(4,)` 只是基础那 4 支。
+
+    全表逐条核过 986 条 M3：两处措辞都只出现在她身上，零波及。
+    """
+    text = _TAG.sub("", description or "")
+    m = _ARROW_VOLLEYS.search(text)
+    if m:
+        nums = [int(x) for x in re.findall(r"\d+", m.group(2))]
+        return tuple(nums) if nums else ()
+    m = _ARROW_SHOT.search(text)
+    return (int(m.group(1)),) if m else ()
+
+
+def _wants_landing_hit(description: str, bb: dict[str, float]) -> bool:
+    """是否「之后降落并对…造成攻击力 X%」——落地那一击算**独立的一次出手**。
+
+    两段判据，缺一不可：描述里写「之后降落」、黑板里有 `attack@atk_scale_end`。
+    **不按 `atk_scale_2` 键名认**：那个键是"第二个倍率槽"，在十个干员身上有
+    六种互不相同的含义（见 `SkillEffects.final_hit_scale` 的注释）。
+
+    全表实测：这个措辞与 `attack@atk_scale_end` 都只出现在焰狐龙梓兰技2 上。
+    """
+    text = _TAG.sub("", description or "")
+    return "之后降落" in text and bool(bb.get("attack@atk_scale_end"))
+
+
 def _wants_final_double(description: str) -> bool:
     """是否「最后一击系数加倍」——**只认这一个措辞**。
 
@@ -488,11 +531,30 @@ DAMAGE_KEYS: dict[str, str] = {
     "heal_scale": "heal_scale",
     "attack@heal_scale": "heal_scale",
     "attack@trigger_time": "ammo",
+    # 焰狐龙梓兰技2「飞翔瞪射」那一段的两条倍率：`loop` 是三连射每支的倍率、
+    # `end` 是**落地那一击**的倍率。`loop`/`end` 既不是 `_s2` 那种尾缀、
+    # 也不是 `@s3_` 那种中缀，四级降级全都够不着——于是整块黑板五个键
+    # 此前一个都没解析，技2 在模型里退化成一发 100% 的普攻。
+    "attack@atk_scale_loop": "atk_scale",
+    "attack@atk_scale_end": "atk_scale_end",
     # 裸的 `trigger_time` 有 320 处，**绝大多数是"触发间隔"**，只有弹药类
     # 技能里才是弹药数（望「天下劫」：`trigger_time 20` ↔ 描述"装有20发弹药"）。
     # 这里先统一归成 ammo，再由 `_parse_effects` 按 `durationType` 退回去——
     # 判据只有一个，就是 durationType，别在别处再猜一遍。
     "trigger_time": "ammo",
+}
+
+#: 起飞/降落的**演出参数**（焰狐龙梓兰技2 的黑板）：抬升高度、起飞那一瞬、
+#: 落地那一瞬。收成显式字段而不是留在 `other`，是为了让「这两条到底有没有
+#: 人读」有答案（审计的第二道筛子只看源码里有没有字面量读过它）。
+#:
+#: **它们本身不进战斗结算**：干员侧的「起飞」在模拟器里不做机制处理
+#: （与予愿安洁莉娜技3「滑翔起飞」的既有处理一致——那一句也只当演出）。
+#: 留档与待裁定见 `docs/uncertainties.md` 第十三节。
+_FLIGHT_KEYS: dict[str, str] = {
+    "fly_height": "airborne_height",
+    "fly_duration": "airborne_rise",
+    "fly_end_duration": "airborne_fall",
 }
 
 #: 施加的控制效果，值是持续时间（秒）。
@@ -611,6 +673,24 @@ class SkillEffects:
     #: 标本：阿米娅(术战者)技2 影霄·绝影，描述明写「最后一击系数加倍且为
     #: 真实伤害」，其 `atk_scale_2` 恰为 `atk_scale` 的两倍（1.6 → 3.2）。
     final_hit_scale: float | None = None
+    #: 「之后降落并对…造成攻击力 X%」——**技能演完之后的另一段伤害**的倍率，
+    #: 没有就是 None。与 `final_hit_scale` 分开：那是"同一个连击序列的末击"，
+    #: 这是"另一段出手"，只是恰好也排在最后，模拟器里按末击结算。
+    #:
+    #: 标本：焰狐龙梓兰技2 飞翔瞪射——三连射每支 180%（3+4+5 支），
+    #: 落地再补一击 300%（`attack@atk_scale_end`）。
+    landing_scale: float | None = None
+    #: 每轮射出的箭数（`(3, 4, 5)` = 三轮共 12 支）。见 `_volley_arrows`。
+    #: 总数进 `hit_count`；轮次结构留给守卫与文档，模拟器按"一次技能 N 段
+    #: 独立命中"结算（与能天使 5 连发同一口径）。
+    volley_arrows: tuple[int, ...] = ()
+    #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
+    #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
+    #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
+    #: 留档见 `docs/uncertainties.md` 第十三节。
+    airborne_height: float | None = None
+    airborne_rise: float | None = None
+    airborne_fall: float | None = None
     #: 技能结束时**自身**晕眩的秒数，0 = 无。
     #:
     #: 与 `control["stun"]` **不是一回事**：那个归在"控制敌人"里，而
@@ -703,11 +783,20 @@ class SkillEffects:
         只认 `times` / `attack@times`——`cnt` 有 696 处使用，多数是
         "召唤 N 个""棋子 N 枚"，当成连击数会算出几倍的伤害。
         黑板没有 `times` 时依次退到描述里的 `multi_hit`（「攻击变为
-        N 连击」，阿米娅影霄·奔夜）与 `repeat_hits`（「造成 N 次攻击力」，
-        赤刃明霄陈技3 的 3 连击）。
+        N 连击」，阿米娅影霄·奔夜）、`repeat_hits`（「造成 N 次攻击力」，
+        赤刃明霄陈技3 的 3 连击）与 `volley_arrows`（「分别射出 3、4、5 支」，
+        焰狐龙梓兰技2 的 12 支）。
+
+        箭数那一路**还要再加上落地点射那一下**（焰狐龙梓兰技2 是 12 + 1 = 13）：
+        落地是技能演完之后的另一段出手，模拟器按末击结算（`landing_scale`）。
         """
-        return max(1, int(self.damage.get("times") or self.multi_hit
-                          or self.repeat_hits or 1))
+        total = int(self.damage.get("times") or self.multi_hit
+                    or self.repeat_hits or 0)
+        if not total and self.volley_arrows:
+            total = sum(self.volley_arrows)
+            if self.landing_scale:
+                total += 1
+        return max(1, total)
 
     @property
     def max_target(self) -> int:
@@ -1234,6 +1323,13 @@ class SkillBook:
         # 别的干员身上另有含义，不能通用。
         if _wants_final_double(lv.description):
             lv.effects.final_hit_scale = lv.effects.damage.get("atk_scale_2")
+        # 每轮箭数（「分别射出 3、4、5 支」/「发射 4 支」）与**落地点射**。
+        # 落地的倍率**借末击那条路**（`final_hit_scale`）：它确实排在最后，
+        # 但出处与语义是另一回事，所以 `landing_scale` 另存一份。
+        lv.effects.volley_arrows = _volley_arrows(lv.description)
+        if _wants_landing_hit(lv.description, bb):
+            lv.effects.landing_scale = lv.effects.damage.get("atk_scale_end")
+            lv.effects.final_hit_scale = lv.effects.landing_scale
         # 技能结束时的**自身**效果：晕眩与强制退场。两者的数值/语义都
         # 只在描述里，且都与"打在敌人身上"的那套（`control`）无关。
         lv.effects.self_stun = _wants_self_stun(lv.description, bb)
@@ -1381,6 +1477,14 @@ def _parse_effects(bb: dict[str, float], duration_type: str) -> SkillEffects:
         # 落进 `other`，用起来得靠字符串匹配。这里收成规范字段。
         if variant == "kill" and bare == "max_stack_cnt":
             eff.kill_max_stack = int(value)
+            continue
+        # 起飞/降落的演出参数（焰狐龙梓兰技2）：收成规范字段，**不进结算**。
+        # 归在 `_classify` 之前，是因为它们本来就不属于 buff/damage/control
+        # 任何一类，靠分类表永远进不来。
+        flight = bare.rsplit("@", 1)[-1]
+        if flight in _FLIGHT_KEYS:
+            setattr(eff, _FLIGHT_KEYS[flight], float(value))
+            eff.classified += 1
             continue
         hit = _classify(bare)
         if hit is None:

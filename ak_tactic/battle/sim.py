@@ -955,8 +955,17 @@ class BattleSimulator:
                 # 与"这个技能本来就无晕"在输出上长得一模一样，只有守卫能发现。
                 # 取错时让它直接抛。
                 bb = sk.blackboard
-                p = float(bb.get("attack@prob") or 0.0)
-                secs = float(bb.get("attack@stun") or 0.0)
+                # **两套键名**：提丰技2 写 `attack@prob` + `attack@stun`，
+                # 焰狐龙梓兰技1「刚射」写**裸的** `stun_prob` + `stun`
+                # （「每支箭矢有 20% 概率使目标晕眩 2 秒」）。
+                # 不能合并成一个键名去认：`prob` 在同批干员里**同名反义**
+                # （赤刃技2 的 `prob` 是闪避率，不是控场概率）。
+                if "stun_prob" in bb:
+                    p = float(bb.get("stun_prob") or 0.0)
+                    secs = float(bb.get("stun") or 0.0)
+                else:
+                    p = float(bb.get("attack@prob") or 0.0)
+                    secs = float(bb.get("attack@stun") or 0.0)
                 if p > 0.0 and secs > 0.0:
                     e.stun_timer += p * secs
         # ---- 蜕皮（Passive_Hit.）：「祟」混沌形态

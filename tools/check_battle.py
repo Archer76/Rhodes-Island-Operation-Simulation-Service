@@ -3806,6 +3806,122 @@ def check_batch3_sample(stage, lib, calc, book_t) -> None:
           f"物理口径 {resolve_damage(want5, damage_type=DamageType.PHYSICAL, defense=5000.0).final:,.1f}")
 
 
+def check_orchd2(stage, lib, calc, book_t) -> None:
+    """[39] 焰狐龙梓兰（第三批③）：箭数、落地点射、概率晕眩。
+
+    她此前**整块技2 黑板五个键一个都没解析**（全落进 `other`，模型里退化成
+    一发 100% 的普攻），所以这一节按"该机制真正改变的那个可观测量"取数，
+    而不是"某个函数被调用过"：
+
+    * 技2「飞翔瞪射」= 三轮齐射 3/4/5 支（共 12 支，每支 180%）＋**落地点射
+      300%**。可观测量：一次出手的**笔数与逐笔伤害**（13 笔，前 12 笔
+      `面板 × 1.8`、第 13 笔 `面板 × 3.0`）。
+    * 技1「刚射」= 4 支；每支 20% 概率晕眩 2 秒。可观测量：靶子的
+      `stun_timer` = 4 × 0.2 × 2.0 = 1.6 秒（走**期望占比**，与提丰技2 同一条）。
+
+    ⚠️ 期望值从**正文与面板**写起，不从 `current_atk()` 反推（口径裁定的
+    教训，见 `docs/uncertainties.md` §二十一）。
+
+    ⚠️ 反向守卫：`stun_prob` 与提丰的 `attack@prob` **不能混成一个键名**——
+    `prob` 在同批干员里同名反义（赤刃技2 的 `prob` 是闪避率），所以两条路
+    各测一次，改错了会有一边红。
+    """
+    print("\n[39] 焰狐龙梓兰：箭数 / 落地点射 / 概率晕眩")
+    from ak_tactic.operator import SkillBook  # noqa: PLC0415
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    v = Verifier()
+    eid = _enemy_ids(stage)[0]
+    slots = {s.slot: s for s in SkillBook().for_operator("char_1048_orchd2")}
+    s1 = slots[1].level(7, 3)
+    s2 = slots[2].level(7, 3)
+
+    check("技2 三连射的倍率 180% 落进 atk_scale（`attack@atk_scale_loop`）",
+          close(s2.effects.atk_scale, 1.8, 1e-9), f"实得 {s2.effects.atk_scale}")
+    check("技2 每轮箭数 = (3, 4, 5)（正文「射击3次，分别射出3、4、5支」）",
+          s2.effects.volley_arrows == (3, 4, 5), str(s2.effects.volley_arrows))
+    check("技2 一次出手 = 12 支 ＋ 落地点射 1 击 = 13 笔",
+          s2.effects.hit_count == 13, f"实得 {s2.effects.hit_count}")
+    check("技2 落地点射 = 300%（`attack@atk_scale_end`）",
+          close(s2.effects.landing_scale or 0.0, 3.0, 1e-9),
+          f"实得 {s2.effects.landing_scale}")
+    check("技2 起飞/降落参数落成显式字段（0.4 / 0.2 / 0.2，**不进结算**）",
+          close(s2.effects.airborne_height or 0.0, 0.4, 1e-9)
+          and close(s2.effects.airborne_rise or 0.0, 0.2, 1e-9)
+          and close(s2.effects.airborne_fall or 0.0, 0.2, 1e-9),
+          f"{s2.effects.airborne_height}/{s2.effects.airborne_rise}"
+          f"/{s2.effects.airborne_fall}")
+    check("技2 黑板不再有键落进 other（此前是 5 个）",
+          not s2.effects.other, str(s2.effects.other))
+    check("技1 每轮箭数 = (4,)（正文「发射4支」），一次出手 4 笔",
+          s1.effects.volley_arrows == (4,) and s1.effects.hit_count == 4,
+          f"{s1.effects.volley_arrows} / {s1.effects.hit_count}")
+
+    # 全表命中面：这两条措辞**只该命中她这两个技能**。只测标本不测面是
+    # 「真实伤害」那条判据的老坑（2026-09-16 一次误判 28 条），所以扫全表。
+    import sqlite3  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from ak_tactic.operator.skill import _ARROW_SHOT, _ARROW_VOLLEYS  # noqa: PLC0415
+    with sqlite3.connect(Path(__file__).resolve().parent.parent
+                         / "data" / "akdb.sqlite") as con:
+        rows = con.execute(
+            "SELECT skill_id, description FROM skill_level WHERE level=10"
+        ).fetchall()
+    volley_hits = [sid for sid, d in rows if _ARROW_VOLLEYS.search(d or "")]
+    shot_hits = [sid for sid, d in rows if _ARROW_SHOT.search(d or "")]
+    check("  箭数判据的全表命中面：三轮齐射只命中技2、单轮只命中技1",
+          volley_hits == ["skchr_orchd2_2"] and shot_hits == ["skchr_orchd2_1"],
+          f"{volley_hits} / {shot_hits}")
+
+    def fire(cid: str, slot, *, cell=(3, 3)):
+        """让这位干员开一次技能并出手一下，返回 (干员, 逐笔伤害, 靶子)。"""
+        s = mechanism_sim(stage, lib)
+        op = v.unit({"char_id": cid, "elite": 2, "level": 60,
+                     "trust": 100, "potential": 1})
+        op.skill = slot
+        op.position = (2, 3)
+        op.direction = "Right"
+        s.operators.append(op)
+        target = _dummy(s, stage, eid, cell)
+        s._activate(op, 0.0)
+        seen: list[float] = []
+        orig = s._damage_enemy
+
+        def spy(*args, **kw):
+            seen.append(args[1])
+            return orig(*args, **kw)
+
+        s._damage_enemy = spy
+        s._operators_attack(op.current_interval() + 1e-6, 0.0)
+        return op, seen, target
+
+    op2, hits2, tgt2 = fire("char_1048_orchd2", s2)
+    want_loop = op2.atk * 1.8 - tgt2.defense
+    want_land = op2.atk * 3.0 - tgt2.defense
+    check("技2 一次出手打 13 笔，前 12 笔 = 面板 × 180% − 防御",
+          len(hits2) == 13 and all(close(h, want_loop, 1e-6) for h in hits2[:12]),
+          f"实得 {len(hits2)} 笔，前三笔 {[round(h, 1) for h in hits2[:3]]}，"
+          f"应为 {want_loop:,.1f}")
+    check("技2 第 13 笔是落地点射 = 面板 × 300% − 防御",
+          bool(hits2) and close(hits2[-1], want_land, 1e-6),
+          f"实得 {hits2[-1] if hits2 else None}，应为 {want_land:,.1f}")
+
+    op1, hits1, tgt1 = fire("char_1048_orchd2", s1)
+    check("技1 一次出手 4 笔（4 支箭各算一次独立命中）",
+          len(hits1) == 4, f"实得 {len(hits1)} 笔")
+    check("技1 每支 20% 概率晕眩 2 秒 → 靶子晕眩计时 = 4 × 0.2 × 2.0 = 1.6s",
+          close(tgt1.stun_timer, 1.6, 1e-6), f"实得 {tgt1.stun_timer:.3f}s")
+
+    # 反向：提丰技2 走的是 `attack@prob` + `attack@stun`（0.4 × 1.0 = 0.4/笔），
+    # 与上面那条**同名反义的另一半**。改错键名时总有一边红。
+    t_slots = {s.slot: s for s in SkillBook().for_operator("char_2012_typhon")}
+    _op3, hits3, tgt3 = fire("char_2012_typhon", t_slots[2].level(7, 3))
+    check("反向：提丰技2 的 `attack@prob` 通道没被改坏（0.4 × 1.0 = 0.4/笔）",
+          len(hits3) == 1 and close(tgt3.stun_timer, 0.4, 1e-6),
+          f"{len(hits3)} 笔，晕眩 {tgt3.stun_timer:.3f}s")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="战斗与技能的回归检查")
     ap.parse_args()
@@ -3858,6 +3974,7 @@ def main() -> int:
     check_trait_splash(stage, lib, calc, book_t)
     check_hammer_strikes(stage, lib, calc, book_t)
     check_batch3_sample(stage, lib, calc, book_t)
+    check_orchd2(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:
