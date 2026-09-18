@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import time
+import unicodedata
 from pathlib import Path
 
 from textual import work
@@ -149,7 +150,10 @@ class WelcomeScreen(Screen):
             yield Static(theme.APP_SUBTITLE + "\n", classes="muted")
             yield Static(
                 "把「某个关卡」算出一份能过的编队，导出成 MAA 认得的作业 JSON。\n"
-                "四步：选关卡 → 指定编队 → 解算 → 导出。", id="intro")
+                "四步：选关卡 → 指定编队 → 解算 → 导出。\n"
+                "[dim]中文输入法会吞掉字母键（它们被输入法拿去做候选字了）——"
+                "按 Shift 切到英文即可；Enter、Esc、方向键与全角数字不受影响。[/]",
+                id="intro")
         with Vertical(classes="block"):
             yield Label("数据目录", classes="block-title")
             yield Static("", id="dir-line")
@@ -1072,7 +1076,9 @@ class ChapterPickScreen(Screen):
     def _fill(self, kw: str) -> None:
         t = self.query_one("#chapters", DataTable)
         t.clear()
-        k = kw.strip().upper()
+        # **NFKC 归一**：中文输入法全角模式下敲进来的是 ＳＲ 而不是 SR，不归一
+        # 就一条都筛不出来——“程序坏了”与“输入法开了全角”在界面上完全一样。
+        k = unicodedata.normalize("NFKC", kw or "").strip().upper()
         self._shown = [
             c for c in self._rows
             if not k or k in c["title"].upper() or k in c["key"].upper()
@@ -1266,7 +1272,8 @@ class StagePickScreen(Screen):
         from ..db.stages import DIFFICULTY_LABELS
         t = self.query_one("#stages", DataTable)
         t.clear()
-        kw = self.query_one("#kw", Input).value
+        kw = unicodedata.normalize("NFKC",          # 全角 ＳＲ → SR，见上
+                                   self.query_one("#kw", Input).value or "")
         self._rows = D.stage_rows(keyword=kw, limit=400, zone_id=self.zone_id,
                                   env=self.env, difficulty=self._diff)
         one = len({r["difficulty"] for r in self._rows}) <= 1

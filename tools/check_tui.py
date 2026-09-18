@@ -313,6 +313,12 @@ def check_ui() -> None:
             app.screen.query_one("#kw").value = "月行水上"
             await pilot.pause()
             got["chapter_hits"] = len(app.screen._shown)
+            # 全角关键词（中文输入法全角模式）要能筛出同样的结果：NFKC 归一
+            app.screen.query_one("#kw").value = "ＡＣＴ５４ＳＩＤＥ"
+            await pilot.pause()
+            got["fw_hits"] = [c["key"] for c in app.screen._shown]
+            app.screen.query_one("#kw").value = "月行水上"
+            await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
             got["after_chapter"] = type(app.screen).__name__
@@ -370,6 +376,8 @@ def check_ui() -> None:
           got["first"] == "ChapterPickScreen", got["first"])
     check("搜「月行水上」能筛到唯一一条（活动名可搜）",
           got["chapter_hits"] == 1, f"{got['chapter_hits']} 条")
+    check("**全角关键词**也能筛到（ＡＣＴ５４ＳＩＤＥ → act54side，NFKC 归一）",
+          got["fw_hits"] == ["act54side"], str(got["fw_hits"]))
     check("选定一个多分部的活动后进「选哪一部分」屏",
           got["after_chapter"] == "PartPickScreen", got["after_chapter"])
     check("「月行水上」的分部正是通学路与殡仪堂",
@@ -1867,6 +1875,7 @@ def _check_login_wizard_body(A, skland, tmp: Path, conf: Path, read_cfg) -> None
             got["kept"] = skland.current_uid()
             await pilot.press("o")
             await pilot.pause()
+            got["cred_before_logout"] = sorted(p.name for p in tmp.glob("cred_*.json"))
             await pilot.press("1")                  # 退出账号
             await pilot.pause()
             got["after_logout"] = skland.current_uid()
@@ -1948,9 +1957,10 @@ def _check_login_wizard_body(A, skland, tmp: Path, conf: Path, read_cfg) -> None
     check("选「不退出」账号原样留着", got["kept"] == "7b3", str(got["kept"]))
     check("选「退出账号」后当前账号为空", got["after_logout"] is None,
           str(got["after_logout"]))
-    check("退出账号**不删凭据文件**",
-          got["cred_left"] == sorted(["cred_9d1.json", "cred_7b3.json"]),
-          str(got["cred_left"]))
+    check("退出账号**不删凭据文件**（退出前后一份都没少）",
+          got["cred_left"] == got["cred_before_logout"]
+          and {"cred_9d1.json", "cred_7b3.json"} <= set(got["cred_left"]),
+          f"{got['cred_before_logout']} → {got['cred_left']}")
     check("退出账号顺手清掉「以后都不登录」（他要换号，那条不该再拦他）",
           not got["after_logout_cfg"].get("login_prompt"),
           str(got["after_logout_cfg"]))
@@ -2004,7 +2014,7 @@ def _check_login_wizard_body(A, skland, tmp: Path, conf: Path, read_cfg) -> None
           str([n_same, n_known, n_new])[:160])
 
     # ---- 账号行排版：未知时如实说未知并给出补救键
-    unknown = A.D.describe_account("8f8")
+    unknown = A.D.describe_account("0f0f0f")
     check("映射还没建立的账号如实写「游戏用户名未知」并指向 U 键",
           "游戏用户名未知" in unknown and "按 U" in unknown, unknown)
     check("未知账号不假装有名册缓存", "无名册缓存" in unknown, unknown)
