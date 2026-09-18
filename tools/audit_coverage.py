@@ -14,7 +14,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
+import sqlite3
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -106,8 +108,43 @@ def load_roster() -> list[tuple[str, str, str, str]]:
     return out
 
 
-def keys_of(cid: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """返回 (技能键, 天赋键)，元素是 (来源说明, 键名)。"""
+def trait_keys_of(cid: str) -> list[tuple[str, str]]:
+    """**特性**的黑板键——审计的第三处键源。
+
+    2026-09-18 之前审计只扫了**技能**与**天赋**两处黑板，于是**特性黑板整个没被
+    看见**：怒潮凛冬的 `attack@atk_scale_2 = 0.5`（特性溅射的底数）和
+    `attack@ability_range_radius = 1.0`（溅射半径）就在这一处，两道筛子都照不到。
+    全库 `operator_trait` 里带黑板的行中，光 `atk_scale` 就出现 39 次。
+
+    特性**不在独立表里**：`talent_table.json` 404、`character_table` 也没有
+    `traits` 字段；结构化特性只属 156/458 名干员，落在 `operator_trait`
+    （正文进 `override_description`，系数进 `blackboard`）。
+    """
+    out: list[tuple[str, str]] = []
+    db = ROOT / "data" / "akdb.sqlite"
+    if not db.exists():
+        return out
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        for (bb,) in conn.execute(
+                "SELECT blackboard FROM operator_trait WHERE char_id=?"
+                " AND blackboard IS NOT NULL AND blackboard NOT IN ('', '{}')",
+                (cid,)):
+            try:
+                d = json.loads(bb)
+            except Exception:  # noqa: BLE001
+                continue
+            for k in d:
+                out.append(("特性", k))
+    finally:
+        conn.close()
+    return out
+
+
+def keys_of(cid: str) -> tuple[list[tuple[str, str]],
+                              list[tuple[str, str]],
+                              list[tuple[str, str]]]:
+    """返回 (技能键, 天赋键, **特性键**)，元素是 (来源说明, 键名)。"""
     sk_keys: list[tuple[str, str]] = []
     for sk in SkillBook().for_operator(cid):
         try:
@@ -123,7 +160,7 @@ def keys_of(cid: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
                 t_keys.append((getattr(t, "name", "?"), k))
     except Exception:  # noqa: BLE001
         pass
-    return sk_keys, t_keys
+    return sk_keys, t_keys, trait_keys_of(cid)
 
 
 #: 这些黑板键有**通用消费链路**：不靠天赋名，只按键名统一读走。
@@ -199,8 +236,8 @@ def main() -> int:
     nodet_global: Counter[str] = Counter()
     nodet_who: defaultdict[str, list[str]] = defaultdict(list)
     for name, cid, elite, lvl in roster:
-        sk_keys, t_keys = keys_of(cid)
-        allk = sk_keys + t_keys
+        sk_keys, t_keys, tr_keys = keys_of(cid)
+        allk = sk_keys + t_keys + tr_keys
         if not allk:
             continue
         bad = [(src, k) for src, k in allk if _classify(k) is None]
