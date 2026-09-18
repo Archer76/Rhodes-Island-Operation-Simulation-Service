@@ -5131,6 +5131,98 @@ def check_stand_state_machine(stage, lib, calc, book_t) -> None:
           f"duration={me4.stand_duration:g}、alive={me4.alive}")
 
 
+def check_angel2_delivery_cannon(stage, lib, calc, book_t) -> None:
+    """[55] 新约能天使（`char_1041_angel2`）技3「使命必达！」：投递坐标炮击。
+
+    她最后两条欠账是同一句话的两半：
+
+    * `attack@cannon_atk_scale` = 2.5 —— 「若存在投递坐标，**立即**对该处造成
+      一次相当于攻击力 250% 的**物理溅射**伤害」；
+    * `max_deploy_character` = 99 —— 「并将一名再部署时间最长的地面干员部署至
+      该处，使其获得 6 点技力」里的**投递名额**（`attack@sp` = 6）。
+
+    三处如实记的边界（`docs/uncertainties.md` §二十八）：
+
+    * **溅射半径无数据**：正文只说"溅射"，黑板里没有半径类键，暂用仓库既有的
+      3×3 重叠判定口径（`splash_tiles(..., 1.0)`，斜邻也在内）——本节把这条
+      口径**钉成断言**，将来有了真半径，这里会当场失败；
+    * **「再部署时间最长的地面干员」由谁投递没建模**：本仓库的部署一律来自计划，
+      所以只实现「落点在坐标上的干员领 `attack@sp` 点技力并占掉一个名额」；
+    * 「即使剩余弹药少于 5 发仍可消耗 5 发攻击」是**弹药**那一节的语义，不在这里。
+    """
+    print("\n[55] 新约能天使：投递坐标炮击（`attack@cannon_atk_scale`）与投递名额")
+    from ak_tactic.verify import Verifier                        # noqa: PLC0415
+
+    cid = "char_1041_angel2"
+    v = Verifier()
+    slots = {sk.slot: sk for sk in SkillBook().for_operator(cid)}
+    eff3 = slots[3].level(7, 3).effects
+    check("  技3 解析：`cannon_atk_scale`=2.5、`cannon_sp`=6、投递名额=99",
+          abs(eff3.cannon_atk_scale - 2.5) < 1e-9
+          and abs(eff3.cannon_sp - 6.0) < 1e-9
+          and eff3.cannon_deploy_cap == 99,
+          f"{eff3.cannon_atk_scale}/{eff3.cannon_sp}/{eff3.cannon_deploy_cap}")
+    check("  技1/技2 没有这一组（空面：不是「人人都有」）",
+          slots[1].level(7, 3).effects.cannon_atk_scale == 0.0
+          and slots[2].level(7, 3).effects.cannon_atk_scale == 0.0,
+          "技1/技2 都是 0")
+
+    point = (5, 3)
+    eids = _enemy_ids(stage)
+
+    def shoot(*, with_point: bool = True):
+        """开一次技3。四个靶子分别摆在：坐标上、正交邻格、斜邻格、远处。"""
+        sim = mechanism_sim(stage, lib,
+                            delivery_point=point if with_point else None,
+                            skill_book=SkillBook())
+        sim.cost = sim.max_cost = 999.0
+        shooter = v.unit({"char_id": cid, "elite": 2, "level": 60, "trust": 100,
+                          "potential": 1})
+        sim._do_deploy(Deployment(
+            0.0, shooter, (2, 3), "Right", skill=3,
+            talents=list(book_t.for_operator(cid))), 0.0)
+        targets = []
+        for cell in ((5.0, 3.0), (6.0, 3.0), (4.0, 2.0), (9.0, 3.0)):
+            e = _dummy(sim, stage, eids[0], (int(cell[0]), int(cell[1])))
+            e.position = cell
+            targets.append(e)
+        before = [e.hp for e in targets]
+        sim._activate(shooter, 0.0)          # 走模拟器自己的开技路径
+        hits = [b - e.hp for b, e in zip(before, targets)]
+        return sim, shooter, hits, targets
+
+    sim, shooter, hits, _ts = shoot()
+    on_point, orth, diag, far = hits
+    check("  坐标处吃到炮击（物理溅射，按 2.5 倍攻击力结算）",
+          on_point > 0.0 and abs(on_point - orth) < 1e-6,
+          f"坐标 {on_point:.1f} / 正交邻 {orth:.1f}（同一批靶子，防御法抗相同）")
+    check("  溅射形状按仓库既有的 3×3 重叠判定：**斜邻格也在内**",
+          diag > 0.0 and abs(diag - on_point) < 1e-6,
+          f"斜邻 {diag:.1f}（半径 1.0 覆盖斜邻；半径其实无数据，见 uncertainties）")
+    check("  反向：3 格以外打不到（溅射不是全图）", far == 0.0, f"远处 {far:.1f}")
+    check("  开技即开放投递名额（`max_deploy_character` 落成 `delivery_left`）",
+          shooter.delivery_left == 99, f"delivery_left={shooter.delivery_left}")
+
+    mate = v.unit({"char_id": "char_103_angel", "elite": 2, "level": 60,
+                   "trust": 100, "potential": 1})
+    sim._do_deploy(Deployment(0.0, mate, point, "Right"), 0.0)
+    check("  落在坐标上的干员领到 `attack@sp` = 6 点技力，名额 99 → 98",
+          abs(mate.sp - 6.0) < 1e-9 and shooter.delivery_left == 98,
+          f"sp={mate.sp:g}、剩 {shooter.delivery_left} 个名额")
+
+    mate2 = v.unit({"char_id": "char_136_hsguma", "elite": 2, "level": 60,
+                    "trust": 100, "potential": 1})
+    sim._do_deploy(Deployment(0.0, mate2, (6, 3), "Right"), 0.0)
+    check("  反向：落在坐标**旁边**的干员拿不到技力，也不占名额",
+          abs(mate2.sp) < 1e-9 and shooter.delivery_left == 98,
+          f"sp={mate2.sp:g}、剩 {shooter.delivery_left} 个名额")
+
+    _sim_np, shooter_np, hits_np, _t_np = shoot(with_point=False)
+    check("  反向：**没有投递坐标**时不炮击（正文写的是「若存在投递坐标」）",
+          all(h == 0.0 for h in hits_np) and shooter_np.delivery_left == 99,
+          f"四下伤害全 0、名额仍 {shooter_np.delivery_left}")
+
+
 def check_closur_token_refund(stage, lib, calc, book_t) -> None:
     """[54] 可露希尔（`char_4228_closur`）：战术点效果范围内的部署返费。
 
@@ -6187,6 +6279,7 @@ def main() -> int:
     check_stand_state_machine(stage, lib, calc, book_t)
     check_kaltsit_radius_and_regen(stage, lib, calc, book_t)
     check_closur_token_refund(stage, lib, calc, book_t)
+    check_angel2_delivery_cannon(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:
