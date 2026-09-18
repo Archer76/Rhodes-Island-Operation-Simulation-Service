@@ -80,24 +80,42 @@ def load_rulings(path: pathlib.Path) -> dict[tuple[str, str], str]:
     if not path.exists():
         return {}
     out: dict[tuple[str, str], str] = {}
-    section, has_col, ncol = "", False, 0
+    section, has_col, ncol, pending_header = "", False, 0, False
     raw = path.read_text(encoding="utf-8")
     i = raw.find(_PRESERVE_FROM)
     if i >= 0:
         raw = raw[:i]
     for line in raw.splitlines():
         if line.startswith("## "):
-            section, has_col, ncol = line[3:].strip(), False, 0
+            section, has_col, ncol, pending_header = (
+                line[3:].strip(), False, 0, False)
             continue
         if not line.startswith("|"):
             continue
         cells = [c.strip() for c in re.split(r"(?<!\\)\|", line)[1:-1]]
         if not cells:
             continue
+        if set("".join(cells)) <= set("-: "):
+            continue                      # 分隔行
+        if pending_header:
+            # 第六节的行：节 / 键 / 您填的裁定 / 状态
+            if len(cells) >= 4 and cells[0] not in ("节", "—"):
+                key, val = cells[1].strip("`"), cells[-2].replace("\\|", "|")
+                if key and val:
+                    out[(cells[0].strip(), key)] = val
+            continue
+        # 第六节「填了但还没落地的裁定」的**表头**。判据必须是"首两列正好是
+        # 节/键"这种**结构**判据：一开始写的是「某栏里含"裁定"二字」，结果
+        # 第一节的数据行里就有「**请博士裁定**：…」「原裁定「维持不变」…」，
+        # 于是数据行被当成表头、**此后整表列错位**——读回来的键变成了"分歧在哪"
+        # 那一栏的正文，第五列的值也串位。这种错不报错，只是把裁定接到别的键上。
+        if len(cells) >= 2 and cells[0] == "节" and cells[1] == "键":
+            pending_header, has_col, ncol = True, False, len(cells)
+            continue
         if _RULING in cells or any(c.startswith(_RULING) for c in cells):
             has_col, ncol = True, len(cells)
             continue
-        if set("".join(cells)) <= set("-: ") or not has_col:
+        if not has_col:
             continue
         if len(cells) > ncol:
             cells = cells[:ncol - 1] + ["|".join(cells[ncol - 1:])]
@@ -118,6 +136,32 @@ def _cell(text: str, keep_tick: bool = False) -> str:
 
 def _rb(rules: dict, section: str, key: str) -> str:
     return _cell(rules.get((section, key), ""))
+
+
+def _answered(rules: dict, section: str, key: str) -> bool:
+    """这一条**已经裁过了**吗？裁过的行不再出现在问答表里。
+
+    2026-09-18 博士：「检查 uncertainties.md，把已确认的条目删掉」。
+    「已确认」= `裁定` 栏有内容——它们不再是一道**待**裁定的题。落地过的
+    （在 `LANDED` 表里）就此从这份文件消失；填了但还没落地的仍由第六节
+    「填了但还没落地的裁定」原样兜着，**不会丢**。
+
+    ⚠️ 为什么在生成器里判、而不是手工去 md 里删行：这份文件是**生成物**，
+    `load_rulings` 会把 `裁定` 栏读回来续用——手工删掉的行下次生成会**带着
+    裁定原样回来**（删了等于没删，而且看上去像删过了）。要让它不再出现，
+    只能在生成这一侧判。
+
+    ⚠️ 判据必须**两条都算**：只看 `rules`（文件里的裁定栏）会自反弹——行一删，
+    裁定栏也跟着没了，下一次生成 `_answered` 判 False，那一行**又长回来**
+    （真踩过：第一次生成删掉 11 行，第二次原样回来）。所以还要认 `LANDED`
+    这份**代码侧**的台账：它独立于文件，删不掉。
+    """
+    return key in LANDED or bool(rules.get((section, key)))
+
+
+def _keep(rules: dict, section: str, rows, key_of=lambda r: r[0]):
+    """过滤掉已裁的行；顺手把"这一节还剩几条"的计数给出去。"""
+    return [r for r in rows if not _answered(rules, section, key_of(r))]
 
 
 # ------------------------------------------------------------ 语料抽取
@@ -370,6 +414,8 @@ def render(rules: dict, out: pathlib.Path = OUT) -> str:
     add("3. **表格里行序按频次降序**，从高到低裁收益最大；低频长尾可以整段跳过。")
     add("4. 一节里若想批量同意，可以在该节第一行写 `以下全部同意建议`，我会按建议逐条落地。")
     add("5. 填完告诉我，我读回裁定并接进代码，然后跑全套自检。")
+    add("6. **裁过的行不会再出现**在下面这些表里（2026-09-18 起）——落地过的直接"
+        "消失，填了但还没落地的移到第六节，所以这张清单只会越读越短。")
     add("")
 
     # ---------------- 一、项目级 ----------------
@@ -380,7 +426,7 @@ def render(rules: dict, out: pathlib.Path = OUT) -> str:
     add("")
     add("| 问题（键） | 分歧在哪 | 现状与影响 | 我的建议 | 裁定 |")
     add("|---|---|---|---|---|")
-    for q, why, now, sug in _Q:
+    for q, why, now, sug in _keep(rules, sec, _Q):
         add(f"| {_cell(q)} | {_cell(why)} | {_cell(now)} | {_cell(sug)} "
             f"| {_rb(rules, sec, q)} |")
     add("")
@@ -402,6 +448,8 @@ def render(rules: dict, out: pathlib.Path = OUT) -> str:
     add("| 左词（键） | 频次 | 最常见形态 | 我的建议 | 裁定 |")
     add("|---|---|---|---|---|")
     for w in sorted(hi, key=lambda x: (-freq[x], x)):
+        if _answered(rules, sec, w):
+            continue
         form = forms[w].most_common(1)[0][0]
         add(f"| `{_cell(w, True)}` | {freq[w]} | {_cell(form)} | {_cell(suggest(w))} "
             f"| {_rb(rules, sec, w)} |")
@@ -412,6 +460,8 @@ def render(rules: dict, out: pathlib.Path = OUT) -> str:
     add("| 左词（键） | 频次 | 最常见形态 | 我的建议 | 裁定 |")
     add("|---|---|---|---|---|")
     for w in sorted(lo):
+        if _answered(rules, sec, w):
+            continue
         form = forms[w].most_common(1)[0][0]
         add(f"| `{_cell(w, True)}` | 1 | {_cell(form)} | {_cell(suggest(w))} "
             f"| {_rb(rules, sec, w)} |")
@@ -445,6 +495,8 @@ def render(rules: dict, out: pathlib.Path = OUT) -> str:
          "足球模式", "排除（既定口径不收）"),
     ]
     for src, cur, prob, sug in cases:
+        if _answered(rules, sec, src):
+            continue
         add(f"| {_cell(src)} | {_cell(cur)} | {_cell(prob)} | {_cell(sug)} "
             f"| {_rb(rules, sec, src)} |")
     add("")
@@ -473,6 +525,8 @@ def render(rules: dict, out: pathlib.Path = OUT) -> str:
          "周期不必再接数据；抬手要拿只能实机逐帧"),
     ]
     for a, b, c, d in gaps:
+        if _answered(rules, sec, a):
+            continue
         add(f"| {_cell(a)} | {_cell(b)} | {_cell(c)} | {_cell(d)} "
             f"| {_rb(rules, sec, a)} |")
     add("")
@@ -493,6 +547,8 @@ def render(rules: dict, out: pathlib.Path = OUT) -> str:
          "4 件都未建模", "四人剑气方案已在现有模型下取胜（38 杀 1 漏，非三星）",
          "只有要打更难的关才需要"),
     ]:
+        if _answered(rules, sec, a):
+            continue
         add(f"| {_cell(a)} | {_cell(b)} | {_cell(c)} | {_cell(d)} "
             f"| {_rb(rules, sec, a)} |")
     add("")
