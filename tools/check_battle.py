@@ -3201,6 +3201,66 @@ def check_trait_splash(stage, lib, calc, book_t) -> None:
                   off == 0 and victim.hp == 1_000_000.0,
                   f"计数 {off}，掉血 {1_000_000.0 - victim.hp:.1f}")
 
+            # ---- 4c. 技2 的被动半条：`sp_per_highland` ----
+            slots = {s.slot: s for s in SkillBook().for_operator(cid)}
+            s2 = slots[2].level(7, 3)
+            s1 = slots[1].level(7, 3)
+            check("技2「绝不罢休」黑板里有 `sp_per_highland` = 1.0",
+                  close(float(s2.blackboard.get("sp_per_highland") or 0), 1.0, 1e-9),
+                  f"实得 {s2.blackboard.get('sp_per_highland')}")
+            check("  正文把它写在「**被动效果**」段里（不在「自动开启」段）——"
+                  "所以它是**常驻**的，不是技能期间才生效",
+                  "被动效果" in (s2.description or ""),
+                  f"实得 {(s2.description or '')[:20]}")
+            sim3 = mechanism_sim(stage, lib)
+            op3 = v.unit(dict(entry))
+            op3.skill = s2
+            op3.sp = 10.0
+            sim3.operators.append(op3)
+            sim3._highland_sp(op3, 1, 1.0)
+            check("  触发 1 个高台 → 技力 +1", close(op3.sp, 11.0, 1e-9),
+                  f"实得 {op3.sp}")
+            sim3._highland_sp(op3, 2, 2.0)
+            check("  触发 2 个高台 → 一次回 2（**逐高台计**，不是逐次出手计）",
+                  close(op3.sp, 13.0, 1e-9), f"实得 {op3.sp}")
+            op3.sp = 50.0
+            sim3._highland_sp(op3, 9, 3.0)
+            check("  封顶在 `sp_cost`（50），不溢出",
+                  close(op3.sp, 50.0, 1e-9), f"实得 {op3.sp}")
+            op3.sp = 10.0
+            op3.skill_active = True
+            sim3._highland_sp(op3, 1, 4.0)
+            check("  **技能开启期间不回**——与天赋「情绪吸收」共用同一条假设"
+                  "（「技能期间 SP 条不涨」，见 docs/uncertainties.md）",
+                  close(op3.sp, 10.0, 1e-9), f"实得 {op3.sp}")
+            op3.skill_active = False
+            op3.skill = None
+            sim3._highland_sp(op3, 1, 5.0)
+            check("  **反向：没挂技能就不回**", close(op3.sp, 10.0, 1e-9),
+                  f"实得 {op3.sp}")
+            op3.skill = s1
+            sim3._highland_sp(op3, 1, 6.0)
+            check("  **反向：技1 的黑板里没有这个键，挂了技能也不回**"
+                  "（不是「挂上技能就回」）",
+                  close(op3.sp, 10.0, 1e-9), f"实得 {op3.sp}")
+
+            # 端到端：真走一次 `_trait_splash`，确认高台触发接到了技力上。
+            # **期望值按地图算，不写死**：那个落点溅到几个高台是关卡地形决定的
+            # （1-7 上是 8 个，不是 1 个——第一版就栽在这个"想当然"上）。
+            op3.skill = s2
+            op3.sp = 10.0
+            spot = (hl[0] + 1, hl[1] + 1)     # 它的 3×3 里含 hl 这个高台
+            if stage.map.inside(*spot):
+                n_hl = sum(1 for c in splash_tiles(spot, op3.splash_radius)
+                           if stage.map.inside(*c)
+                           and stage.map.tile(*c).is_highland)
+                main3 = _mk(sim3, spot)
+                sim3._trait_splash(op3, main3, op3.current_atk(), 7.0)
+                check(f"  端到端：一次真出手把高台触发接到了技力上"
+                      f"（该落点溅到 {n_hl} 个高台，逐高台各 +1）",
+                      n_hl > 0 and close(op3.sp, 10.0 + n_hl, 1e-9),
+                      f"实得 {op3.sp}，应为 {10.0 + n_hl}")
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="战斗与技能的回归检查")
