@@ -1289,6 +1289,20 @@ func (m *farmlandMech) AttackTick(ctx Ctx, dt float64) {
 		if !e.Alive || e.Leaked || e.OffMap {
 			continue
 		}
+		// 原版这条 tick 的闸门（`sim.py:4352-4354`）：
+		// `if e.frozen or e.down or e.stun_timer > 0 or e.idle_timer > 0
+		//  or e.disarm_timer > 0: continue`。
+		//
+		// ⚠ 只接了 `frozen`：Go 侧还没有 down / stun / idle / disarm 这四种
+		// 状态（它们要靠倒地与控场类效果才会出现）。这里**不写**"假装它们为
+		// 假"的占位——留一句说明比留一个恒假的字段更诚实。
+		//
+		// 少了这道闸门的症状：被冻住的敌人照样按自己的计时器放技能出手。
+		// HS-EX-8 上就是「勿玷」在 63.3–71.3 的冻结窗口里多打了一次
+		// （原版 70.30 只有一笔 335，Go 有两笔）。
+		if e.Frozen {
+			continue
+		}
 		st := m.skillTimers[e.Index]
 		if st == nil {
 			// 原版每只敌人的 `skill_atk_first` 初值为真（`unit.py` 的字段默认值）。

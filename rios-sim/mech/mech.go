@@ -311,6 +311,10 @@ type EnemyView struct {
 	Leaked bool
 	//: 这一只已经离场（原版 `off_map`）。
 	OffMap bool
+	//: 这一只**正被冻结**（原版 `EnemyUnit.frozen`）。只用来当闸门：原版的
+	//: 敌方技能出手（`_skill_attack_tick`）与普攻都要跳过冻结中的敌人。
+	//: 与「停顿」不是一回事——停顿只降移速，照样出手。
+	Frozen bool
 
 	//: 挡着它的那个我方单位脚下的格（原版 `_pollute_around` 取的就是这个圆心：
 	//: 被阻挡时用**挡它的干员**那一格，否则用敌人自己那一格）。
