@@ -5131,6 +5131,128 @@ def check_stand_state_machine(stage, lib, calc, book_t) -> None:
           f"duration={me4.stand_duration:g}、alive={me4.alive}")
 
 
+def check_shield_layers(stage, lib, calc, book_t) -> None:
+    """[57] 「层数护盾」：泥岩「沃土予身」与空弦「铁弦」。
+
+    两位的天赋都是"护盾破裂时"触发的，而**护盾没有值**——博士 2026-09-19 裁定
+    「泥岩的护盾**只要受到伤害就会破裂**」。这与数据自洽：全库天赋黑板里没有任何
+    shield 类键（见 `docs/uncertainties.md` §二十九）。所以实现成**记号**：
+
+    * 泥岩：部署给 1 层（`times`），每 9 秒加 1 层（`interval`），上限 3 层
+      （`max_times`，精二档），任何一次**真正落到本体**的伤害消耗一层并回
+      `hp_ratio`=20% 最大生命；
+    * 空弦：部署给 1 层（正文"获得**一层**护盾"），破裂后给 `sp`=7 点技力。
+
+    三条如实记的边界（见 uncertainties 二十九）：**不吸收伤害**（无值可吸）；
+    被屏障吃掉的伤害不算"受到伤害"（没有落到她身上）；【闭锁】期间不受到伤害
+    所以也不裂。还有一条口径：满层时那一次"获得"**作废**、9 秒照走不攒着——
+    正文没说满层挂起，按字面读。
+    """
+    print("\n[57] 层数护盾：泥岩「沃土予身」（破裂回血）与空弦「铁弦」（破裂给技力）")
+    from ak_tactic.verify import Verifier                        # noqa: PLC0415
+
+    v = Verifier()
+    mud = "char_311_mudrok"
+    arc = "char_332_archet"
+
+    def talent_eff(cid: str):
+        for tal in book_t.for_operator(cid):
+            eff = getattr(tal, "effects", None)
+            if eff is not None and eff.shield_max_layers > 0:
+                return eff
+        return None
+
+    e_mud = talent_eff(mud)
+    check("  泥岩精二档解析：间隔 9s、上限 3 层、部署 1 层、破裂回血 20%",
+          e_mud is not None and abs(e_mud.shield_interval - 9.0) < 1e-9
+          and e_mud.shield_max_layers == 3
+          and e_mud.shield_layers_on_deploy == 1
+          and abs(e_mud.shield_break_heal_ratio - 0.20) < 1e-9,
+          None if e_mud is None else
+          f"interval={e_mud.shield_interval:g} max={e_mud.shield_max_layers} "
+          f"deploy={e_mud.shield_layers_on_deploy} "
+          f"heal={e_mud.shield_break_heal_ratio:.0%}")
+
+    e_arc = None
+    for tal in book_t.for_operator(arc):
+        eff = getattr(tal, "effects", None)
+        if eff is not None and eff.shield_break_sp > 0.0:
+            e_arc = eff
+            break
+    check("  空弦：黑板只有 sp，层数按正文取「一层」= 1、破裂给 7 点技力",
+          e_arc is not None and e_arc.shield_break_sp == 7.0
+          and e_arc.shield_layers_on_deploy == 1,
+          None if e_arc is None else
+          f"层数={e_arc.shield_layers_on_deploy} sp={e_arc.shield_break_sp:g}")
+
+    def deployed(cid: str):
+        sim = mechanism_sim(stage, lib)
+        sim.cost = sim.max_cost = 999.0
+        op = v.unit({"char_id": cid, "elite": 2, "level": 60, "trust": 100,
+                     "potential": 1})
+        sim._do_deploy(Deployment(0.0, op, (2, 3), "Right",
+                                  talents=list(book_t.for_operator(cid))), 0.0)
+        return sim, op
+
+    _s1, mud_op = deployed(mud)
+    check("  部署后立即 1 层（`times`），配置也抄到了单位上",
+          mud_op.shield_layers == 1 and mud_op.shield_max_layers == 3
+          and abs(mud_op.shield_break_heal - 0.20 * mud_op.max_hp) < 1e-9,
+          f"{mud_op.shield_layers}/{mud_op.shield_max_layers} 层、"
+          f"回血 {mud_op.shield_break_heal:.0f}")
+
+    hp = mud_op.hp
+    dealt = mud_op.take(100.0)
+    check("  挨一下 → 掉 1 层、这一下被**整层挡下**（伤害归零）、并按 20% 回血",
+          mud_op.shield_layers == 0 and mud_op.shield_breaks_taken == 1
+          and dealt == 0.0
+          and abs(mud_op.hp - min(mud_op.max_hp, hp + 0.20 * mud_op.max_hp)) < 1e-9,
+          f"层 {mud_op.shield_layers}、扣血 {dealt:g}、血 {mud_op.hp:.0f}"
+          f"（期望 {min(mud_op.max_hp, hp + 0.2 * mud_op.max_hp):.0f}）")
+
+    dealt2 = mud_op.take(50.0)
+    check("  反向：**层用光之后**挨打就正常掉血、也不再回血（不是每次挨打都挡）",
+          mud_op.shield_breaks_taken == 1 and dealt2 > 0.0,
+          f"扣血 {dealt2:g}、破裂仍 {mud_op.shield_breaks_taken} 次")
+
+    _s2, m2 = deployed(mud)
+    for i in range(4):
+        m2.shield_timer = 0.0
+        _s2._shield_tick(m2, 9.0, 9.0 * (i + 1))
+    check("  每 9 秒加 1 层且**封顶 3 层**（满层那次获得作废、9 秒照走）",
+          m2.shield_layers == 3, f"{m2.shield_layers} 层")
+
+    _s3, a_op = deployed(arc)
+    check("  空弦部署后 1 层、上限就是正文那 1 层（她的黑板没有 max_times）",
+          a_op.shield_layers == 1 and a_op.shield_max_layers == 1,
+          f"{a_op.shield_layers}/{a_op.shield_max_layers} 层")
+    a_op.sp = 0.0
+    a_op.take(10.0)
+    check("  空弦破裂后拿 7 点技力（同一条钩子、另一半效果）",
+          a_op.shield_layers == 0 and abs(a_op.sp - 7.0) < 1e-9,
+          f"sp={a_op.sp:g}")
+
+    _s4, m3 = deployed(mud)
+    m3.barrier = 9999.0
+    m3.take(500.0)
+    check("  顺序：护盾先于屏障处理（PRTS：泥岩的护盾几乎永远最先获得）",
+          m3.shield_layers == 0 and m3.shield_breaks_taken == 1
+          and abs(m3.barrier - 9999.0) < 1e-9,
+          f"层 {m3.shield_layers}、屏障一点没用到（剩 {m3.barrier:.0f}）")
+
+    _s5, m4 = deployed(mud)
+    m4.locked_timer = 5.0
+    m4.take(500.0)
+    check("  边界：【闭锁】期间「不受到伤害」，层也不掉（与屏障同理）",
+          m4.shield_layers == 1 and m4.shield_breaks_taken == 0,
+          f"层 {m4.shield_layers}、闭锁 {m4.locked_timer:g}s")
+
+    _s6, other = deployed("char_103_angel")
+    check("  反向：**没有这条天赋**的人不长层（不是人人都有）",
+          other.shield_layers == 0 and other.shield_max_layers == 0
+          and other.shield_break_heal == 0.0, "能天使 0 层、无回血")
+
+
 def check_barrier_break_hook(stage, lib, calc, book_t) -> None:
     """[56] 「屏障/护盾**破裂**」事件钩子——泥岩与空弦的天赋都挂在这个时刻。
 
@@ -5169,6 +5291,12 @@ def check_barrier_break_hook(stage, lib, calc, book_t) -> None:
         seen: list = []
         op.barrier_break_hooks.append(lambda u: seen.append(u))
         sim._do_deploy(Deployment(0.0, op, (2, 3), "Right", talents=tals), 0.0)
+        # 泥岩自己现在会带**层数护盾**（守卫 [57]），而护盾按 PRTS「伤判效果」
+        # 的顺序**先于**屏障处理，会把伤害整层挡下、屏障一点用不到。
+        # 本节测的是屏障那条路，所以把护盾摘掉——不摘的话这里会静默变成
+        # 在测护盾，而"恰好测不出 bug"正是最坏的一种绿。
+        op.shield_layers = 0
+        op.shield_max_layers = 0
         op.barrier = barrier
         return sim, op, seen
 
@@ -6354,6 +6482,7 @@ def main() -> int:
     check_closur_token_refund(stage, lib, calc, book_t)
     check_angel2_delivery_cannon(stage, lib, calc, book_t)
     check_barrier_break_hook(stage, lib, calc, book_t)
+    check_shield_layers(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

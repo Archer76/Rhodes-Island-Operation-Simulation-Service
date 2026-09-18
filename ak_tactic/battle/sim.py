@@ -2028,6 +2028,10 @@ class BattleSimulator:
             # **不动阻挡**，所以它有自己的字段、不能并进 stun_timer。
             if op.freeze_timer > 0:
                 op.freeze_timer = max(0.0, op.freeze_timer - dt)
+            # 「每 N 秒获得 1 层护盾」（泥岩「沃土予身」）与技能**无关**，所以
+            # 必须放在下面 `if op.skill is None: continue` **之前**——放后面会让
+            # 没带技能的泥岩整场不长护盾，而且是静默的。
+            self._shield_tick(op, dt, t)
             if op.skill is None:
                 continue
             sk = op.skill
@@ -3136,6 +3140,56 @@ class BattleSimulator:
                     f"{eff.cannon_sp:g} 点技力（主人还剩 {owner.delivery_left} 个名额）")
             return
 
+    def _attach_talent_shield(self, op: OperatorUnit, t: float) -> None:
+        """把天赋里的「层数护盾」配置抄到单位上，并补上部署时那几层。
+
+        判定按**效果对象**而不是名字猜：`op.talents` 里谁带 `shield_max_layers`
+        就是谁（泥岩「沃土予身」）。空弦「铁弦」的黑板里没有 `max_times`，她那
+        一层是**正文**写的（"获得一层护盾"），解析侧已按正文取到
+        `shield_layers_on_deploy`——本节只认"上限 > 0"这一个判据，两位都能进来。
+        """
+        for tal in op.talents:
+            eff = getattr(tal, "effects", None)
+            if eff is None:
+                continue
+            # 上限只有泥岩有（黑板 `max_times`）；空弦的黑板里没有上限，正文只写
+            # "获得**一层**护盾"，所以她的上限就是那 1 层。退化成部署层数**不是**
+            # 补一个猜的数——那就是正文说的那个数。
+            cap = max(int(eff.shield_max_layers),
+                      int(eff.shield_layers_on_deploy))
+            if cap <= 0:
+                continue
+            op.shield_interval = float(eff.shield_interval)
+            op.shield_max_layers = cap
+            op.shield_break_heal = float(eff.shield_break_heal_ratio) * op.max_hp
+            op.shield_break_sp = float(eff.shield_break_sp)
+            for _ in range(int(eff.shield_layers_on_deploy)):
+                self._grant_shield_layer(op, t)
+            return
+
+    def _grant_shield_layer(self, op: OperatorUnit, t: float) -> None:
+        """加一层护盾；已到上限就作废（层是记号，没有时长可续）。"""
+        if op.shield_max_layers <= 0 or op.shield_layers >= op.shield_max_layers:
+            return
+        op.shield_layers += 1
+        if self.verbose:
+            self.result.log.append(
+                f"{t:7.1f}s  {op.name} 获得 1 层护盾"
+                f"（{op.shield_layers}/{op.shield_max_layers}）")
+
+    def _shield_tick(self, op: OperatorUnit, dt: float, t: float) -> None:
+        """「每 N 秒获得 1 层护盾」：按帧走的加层计时，与技能无关。
+
+        到上限时这一次"获得"**作废**、9 秒照走不攒着——正文只说"每 9 秒获得
+        1 层（最多 3 层）"，没说满层时挂起，所以按字面读（见 uncertainties）。
+        """
+        if op.shield_interval <= 0.0 or op.shield_max_layers <= 0:
+            return
+        op.shield_timer += dt
+        while op.shield_timer >= op.shield_interval:
+            op.shield_timer -= op.shield_interval
+            self._grant_shield_layer(op, t)
+
     def _token_cells(self, token: OperatorUnit, slot: int) -> set:
         """战术点的**效果范围**格子（两步都取到才算数）。
 
@@ -3240,6 +3294,8 @@ class BattleSimulator:
         self._refund_on_deploy(op, t)
         # 「落在投递坐标上的干员拿技力」（新约能天使技3）。
         self._grant_delivery_sp(op, t)
+        # 「部署后立即获得 1 层护盾」（泥岩「沃土予身」/空弦「铁弦」）。
+        self._attach_talent_shield(op, t)
 
         # 部署瞬间的一次性环境伤害：`first_basic_damage + 实际 × first_damage_ratio`。
         # 它**额外于**每秒结算，不是它的第一次——原文两句分开写

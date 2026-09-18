@@ -1136,6 +1136,21 @@ class SkillEffects:
     cannon_sp: float = 0.0
     #: 这次技能**最多投递几个干员**（`max_deploy_character`，她这里是 99）。
     cannon_deploy_cap: int = 0
+    #: 「每 N 秒获得 1 层护盾（最多 M 层），每层护盾破裂时恢复自身 X% 最大生命」
+    #: ——泥岩天赋「沃土予身」。
+    #:
+    #: **这组量里没有"护盾值"，而且本来就不该有**：博士 2026-09-19 裁定
+    #: 「泥岩的护盾**只要受到伤害就会破裂**」。这与数据自洽——全库天赋黑板里
+    #: 没有任何 shield 类键（逐条扫过，见 `docs/uncertainties.md` §二十九）。
+    #: 所以护盾是一层**记号**，不是一段可以吸收的血条：
+    #: `interval` 秒加一层、上限 `max_times` 层、部署时给 `times` 层，
+    #: 任何一次受伤消耗一层并按 `hp_ratio` 回血。**不吸收伤害**（无值可吸）。
+    shield_interval: float = 0.0
+    shield_layers_on_deploy: int = 0
+    shield_max_layers: int = 0
+    shield_break_heal_ratio: float = 0.0
+    #: 破裂后给的技力（空弦「铁弦」的 `sp`=7）。
+    shield_break_sp: float = 0.0
     #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
     #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
     #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
@@ -1891,12 +1906,9 @@ class SkillBook:
         # `cost_return`。消费点在 `sim._refund_on_deploy`（部署当帧结算）。
         if "返还部署费用" in lv.description:
             lv.effects.cost_return = float(bb.get("cost_return") or 0.0)
-        # 「投递坐标」（新约能天使技3「使命必达！」）：判据锚正文里那三个字。
-        if "投递坐标" in lv.description:
-            lv.effects.cannon_atk_scale = float(
-                bb.get("attack@cannon_atk_scale") or 0.0)
-            lv.effects.cannon_sp = float(bb.get("attack@sp") or 0.0)
-            lv.effects.cannon_deploy_cap = int(bb.get("max_deploy_character") or 0)
+        # 只按渲染后正文才能判的规则（投递坐标 / 护盾破裂）。与天赋那条路
+        # **共用同一个函数**——两处各写一份就是"技能里生效、天赋里静默失效"。
+        apply_text_rules(lv.effects, lv.description, bb)
         # 技能结束时的**自身**效果：晕眩与强制退场。两者的数值/语义都
         # 只在描述里，且都与"打在敌人身上"的那套（`control`）无关。
         lv.effects.self_stun = _wants_self_stun(lv.description, bb)
@@ -2000,7 +2012,8 @@ def _range_override(raw: dict, bb: dict[str, float]) -> str | None:
     return str(v) if v else None
 
 
-def parse_effects(bb: dict[str, float], duration_type: str = "NONE") -> SkillEffects:
+def parse_effects(bb: dict[str, float], duration_type: str = "NONE",
+                  description: str = "") -> SkillEffects:
     """把一份黑板归类进四个箱子（+ 变体）。**技能与天赋共用这一个入口。**
 
     天赋黑板与技能黑板同构，所以归类逻辑不必重写；但要注意两条方向性的
@@ -2013,8 +2026,51 @@ def parse_effects(bb: dict[str, float], duration_type: str = "NONE") -> SkillEff
 
     所以天赋的 `effects` 只作参考，真正驱动模拟的是显式建模的那几个
     （见 `ak_tactic.battle.talents`），别拿 `effects` 直接当结论。
+
+    `description` 是**渲染后正文**。有一批规则只能靠正文判（黑板里没有那个
+    意思），例如新约能天使技3 的「投递坐标」、泥岩「沃土予身」的「护盾破裂」。
+    技能那条路自己会传；**天赋那条路必须显式传**——不传的话黑板明明有
+    `interval/times/max_times/hp_ratio` 也认不出来（踩过：解析全 0，静默）。
     """
-    return _parse_effects(bb, duration_type)
+    eff = _parse_effects(bb, duration_type)
+    if description:
+        apply_text_rules(eff, description, bb)
+    return eff
+
+
+def apply_text_rules(eff: SkillEffects, description: str,
+                     bb: dict[str, float]) -> None:
+    """只按**渲染后正文**才能判的那些规则（技能与天赋共用一份）。
+
+    分开成函数是因为它有两个入口：技能按等级建 `SkillLevel` 时调用一次，
+    天赋走 `parse_effects(bb, description=…)` 时再调用一次。两处逻辑必须同一份，
+    否则就是"技能里生效、天赋里静默失效"那类最难查的错。
+    """
+    # 「投递坐标」（新约能天使技3「使命必达！」）：判据锚正文里那三个字。
+    if "投递坐标" in description:
+        eff.cannon_atk_scale = float(bb.get("attack@cannon_atk_scale") or 0.0)
+        eff.cannon_sp = float(bb.get("attack@sp") or 0.0)
+        eff.cannon_deploy_cap = int(bb.get("max_deploy_character") or 0)
+    # 「护盾破裂」：泥岩天赋「沃土予身」与空弦天赋「铁弦」。
+    # 判据锚正文里**同时**出现「护盾」与「破裂」——两者都只在天赋里出现，
+    # 技能正文里一条都没有（扫过全库）。
+    #
+    # 语义按 PRTS「伤判效果」页：**护盾属"抵挡"，是次数制**（页内原话把
+    # "护盾次数"列为伤判条件之一）——所以没有"护盾值"这个量，一层护盾就是
+    # **整层挡下一次伤害**。那一页还专门写了干员泥岩：「护盾不是重新获得，
+    # 而是在已有的护盾之上**补充层数**（即使剩余 0 层也如此）……不会改变
+    # Buff 的获取顺序——它几乎永远是最先被获得的」。
+    if "护盾" in description and "破裂" in description:
+        eff.shield_interval = float(bb.get("interval") or 0.0)
+        eff.shield_max_layers = int(bb.get("max_times") or 0)
+        # 部署时给几层：泥岩在黑板 `times` 里；空弦的黑板只有 `sp`，
+        # 层数写在正文（"获得**一层**护盾"）——按正文取，不猜。
+        layers = int(bb.get("times") or 0)
+        if not layers and "一层护盾" in description:
+            layers = 1
+        eff.shield_layers_on_deploy = layers
+        eff.shield_break_heal_ratio = float(bb.get("hp_ratio") or 0.0)
+        eff.shield_break_sp = float(bb.get("sp") or 0.0)
 
 
 def _parse_effects(bb: dict[str, float], duration_type: str) -> SkillEffects:

@@ -161,11 +161,12 @@ def _build(char_id: str, group: int, cand: dict) -> Talent:
     uc = cand.get("unlockCondition") or {}
     bb = _blackboard(cand.get("blackboard"))
     raw_desc = cand.get("description") or ""
+    rendered = render_description(raw_desc, bb)
     return Talent(
         char_id=char_id,
         group=group,
         name=cand.get("name") or "（未命名天赋）",
-        description=render_description(raw_desc, bb),
+        description=rendered,
         raw_description=raw_desc,
         blackboard=bb,
         phase=_phase_of(uc.get("phase")),
@@ -174,7 +175,7 @@ def _build(char_id: str, group: int, cand: dict) -> Talent:
         range_id=cand.get("rangeId"),
         token_key=cand.get("tokenKey") or "",
         is_hidden=bool(cand.get("isHideTalent")),
-        effects=parse_effects(bb),
+        effects=parse_effects(bb, description=rendered),
     )
 
 
