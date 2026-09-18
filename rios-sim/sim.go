@@ -254,6 +254,9 @@ type operator struct {
 	//: `OperatorUnit` 对象，明识形态的"标记退场"记的是对象身份；Go 侧一名
 	//: 干员复用同一个结构体，用这个号代替——"撤了再下同一个人"因此不算同一个。
 	deploySeq int
+	//: 「圣山的祝福」的免死**这一局用过没有**（原版 `blessing_used`，
+	//: unit.py:492：一次部署只免一回）。
+	blessingUsed bool
 
 	// ---- 技能状态（`skill.go`；没有技能槽时这几个字段一直不动）
 	//:
@@ -272,10 +275,19 @@ func (o *operator) alive() bool { return o.hp > 0 && !o.retreated }
 
 // heal 是原版 `Combatant.heal`：回复**夹在生命上限**，返回**实际回复量**
 // （不是治疗量）。返回值要拿去记日志与累计，所以不能只改 hp 就完事。
+//
+// ⚠ 这是干员回血的**唯一入口**（与 `hurt` 对称）。受击有 `OPDMG` 痕迹而回血
+// 什么都没有的时候，"Go 的人倒得更早但累计承伤反而更少"这种差异只能瞎猜：
+// 承伤少而倒得早，要么是治疗没走到，要么是有一路伤害不留痕。
 func (o *operator) heal(amount float64) float64 {
 	before := o.hp
-	o.hp = math.Min(o.spec.MaxHP, o.hp+math.Max(0, amount))
-	return o.hp - before
+	o.hp = math.Min(o.maxHP(), o.hp+math.Max(0, amount))
+	got := o.hp - before
+	if traceOn && o.sim != nil && got > 0 {
+		trace("OPHEAL t=%.4f op=%s want=%.3f got=%.3f hp=%.3f max=%.3f",
+			*o.sim.time, o.spec.Name, amount, got, o.hp, o.maxHP())
+	}
+	return got
 }
 
 // canBlock 对应 `OperatorUnit.can_block`：飞行单位挡不住，阻挡位满也挡不住。
@@ -808,7 +820,9 @@ func (c *simCtx) HealOperator(index int, amount float64) {
 	if !op.alive() || amount <= 0 {
 		return
 	}
-	op.hp = math.Min(op.spec.MaxHP, op.hp+amount)
+	// 走唯一的回血入口（`operator.heal`），否则这条路上的回血不留痕迹、
+	// 上限也读不到技能期间的那个（见 `heal` 与 `maxHP` 的说明）。
+	op.heal(amount)
 }
 
 func (c *simCtx) ScaleEnemySpeed(index int, scale float64) {
@@ -1894,6 +1908,26 @@ func (o *operator) hurt(dealt float64) {
 		// 时刻差 6 秒时，只有曲线能指出是哪一路快了。
 		trace("OPDMG t=%.4f op=%s dealt=%.3f cum=%.3f hp=%.3f",
 			*o.sim.time, o.spec.Name, dealt, o.damageTaken, o.hp)
+	}
+	// 「圣山的祝福」：**受到致命伤害时不撤退**——免死一次、满血复活，并冻结
+	// 自身若干秒（原版判在 `take()` 里，unit.py:643-650；分派到各调用方必然
+	// 漏一处，而漏掉的那一处会让这个"免死一次"在某个伤害来源下悄悄失效——
+	// 这一句是原版注释里的原话，也是它把判据放在掉血唯一入口的理由）。
+	//
+	// ⚠ 本条**只兑现了"免死 + 满血复活"**。同一天赋的另外两半都未移植：
+	// Go 侧既没有敌人冻结状态（`c2e_freeze`：触发时冻结攻击范围内全体敌人），
+	// 也没有干员冻结状态（`freeze`：触发时自身冻结 N 秒）。所以这里**故意
+	// 不写**"记一个自冻结计时器"——没有消费点的字段就是假完成，它会让人以为
+	// 这条天赋已经接完了。规格仍然把两个数送过来（`wire.OperatorSpec`），
+	// 那是给"哪天补上冻结"留的接口，不是"已经生效"的证据。
+	if o.hp <= 0 && !o.blessingUsed && o.spec.BlessingSave > 0 {
+		o.blessingUsed = true
+		o.hp = o.maxHP()
+		if traceOn && o.sim != nil {
+			trace("BLESSING t=%.4f op=%s 免死→满血 %.1f（自冻结 %.2f、敌冻结 %.2f 均未移植）",
+				*o.sim.time, o.spec.Name, o.hp,
+				o.spec.BlessingSelfFreeze, o.spec.BlessingSave)
+		}
 	}
 	if o.hp <= 0 && !o.deathLogged && o.sim != nil {
 		o.deathLogged = true

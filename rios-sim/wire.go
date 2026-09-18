@@ -74,15 +74,24 @@ type OperatorSpec struct {
 	Name   string `json:"name"`
 	Cell   [2]int `json:"cell"`
 
-	MaxHP          float64 `json:"max_hp"`
-	ATK            float64 `json:"atk"`
-	DEF            float64 `json:"def"`
-	RES            float64 `json:"res"`
-	AttackInterval float64 `json:"interval"`
-	DamageType     string  `json:"damage_type"`
-	BlockCnt       int     `json:"block_cnt"`
-	DeployCost     int     `json:"deploy_cost"`
-	RedeployTime   float64 `json:"redeploy_time"`
+	MaxHP float64 `json:"max_hp"`
+	//: 「圣山的祝福」（圣聆初雪的天赋）：**受到致命伤害时不撤退**——免死一次、
+	//: 满血复活。判在干员掉血的唯一入口里（原版判在 `take()`，unit.py:643）。
+	BlessingSave float64 `json:"blessing_save,omitempty"`
+	//: 触发时**自身**冻结秒数（原版 `blessing_self_freeze`，黑板 `freeze`）。
+	//
+	//: ⚠ 同一天赋的另一半——触发时**冻结攻击范围内全体敌人** N 秒
+	//: （黑板 `c2e_freeze`）——**未移植**：Go 侧还没有敌人冻结状态。所以这条
+	//: 天赋在 Go 里只兑现了"免死+自冻结"，两边不必一致。
+	BlessingSelfFreeze float64 `json:"blessing_self_freeze,omitempty"`
+	ATK                float64 `json:"atk"`
+	DEF                float64 `json:"def"`
+	RES                float64 `json:"res"`
+	AttackInterval     float64 `json:"interval"`
+	DamageType         string  `json:"damage_type"`
+	BlockCnt           int     `json:"block_cnt"`
+	DeployCost         int     `json:"deploy_cost"`
+	RedeployTime       float64 `json:"redeploy_time"`
 
 	//: 天赋给的**常驻闪避比例**（原版 `op.talent_dodge_phys/arts`，
 	//: 来源是 `battle/talents.py::find_damage_block`——库里目前只有星熊「战术装甲」）。
