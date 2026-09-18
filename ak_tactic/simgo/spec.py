@@ -320,6 +320,27 @@ def _operator_spec(sim, d) -> dict[str, Any]:
     # "人被奶住"在那边长得一模一样——满练度作业的偏差就是这么来的。
     if getattr(op, "heals", False):
         out["heals"] = True
+    # `圣山的祝福`（圣聆初雪的天赋）：**受到致命伤害时不撤退**——免死一次、
+    # 满血复活，并冻结自身 `freeze` 秒（原版判在 `take()` 里，unit.py:643-650，
+    # 参数在部署时挂上，sim.py:3417-3418）。
+    #
+    # 两个参数都在部署那一刻就写到了单位上，所以这里直接读即可，不必自己再查
+    # 一遍天赋黑板——少一次重算就少一处会漂的口径。
+    #
+    # ⚠ `c2e_freeze` 那半（触发时**冻结攻击范围内全体敌人** N 秒，sim.py:1069-1090）
+    # 未移植：Go 侧没有敌人冻结状态。Go 现在能免死、能自冻结，但不会冻住敌人，
+    # 两边因此仍**不必**一致——这一条如实留在 `unsupported_reasons` 里。
+    # ⚠ 不能读运行期那两个属性（`op.blessing_save` / `op.blessing_self_freeze`）：
+    # 它们由部署钩子在 `sim.py:3417-3418` 挂上，而这份规格是在**部署那一刻**取的
+    # ——实测取到的是 0（"规格里是 0、原版跑起来却免死了一次"，两边于是永远差
+    # 一条命，而规格看上去"送到了"）。照原版那一句直接查天赋，得到同一个数。
+    from ..battle import talents as _talents
+    _bless = _talents.find_blessing(getattr(d, "talents", None) or [])
+    _bsave = float(_bless.value("c2e_freeze", 0.0) or 0.0) if _bless else 0.0
+    if _bsave > 0.0:
+        out["blessing_save"] = _bsave
+        out["blessing_self_freeze"] = float(
+            (_bless.value("freeze", 0.0) or 0.0) if _bless else 0.0)
     talent_phys, talent_arts = _talent_dodge(op, d)
     if talent_phys or talent_arts:
         out["talent_dodge_phys"] = talent_phys
