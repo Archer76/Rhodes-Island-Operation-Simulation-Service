@@ -27,6 +27,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -52,6 +53,11 @@ type enemy struct {
 	offMap    bool
 	blockedBy *operator
 
+	//: 甲的监测态无敌：挨打掉 0 血，**但照旧会被索敌**——它会白吃干员的输出，
+	//: 这正是它在场上改变胜负的方式（原版 `always_invincible`，由 `spec.Invincible`
+	//: 起步、激活时由机制关掉）。
+	invincible bool
+
 	attackTimer float64
 	attackPause float64
 	hits        int
@@ -72,6 +78,35 @@ func (e *enemy) alive() bool { return e.hp > 0 }
 // 字段、敌人侧也没有天赋抵挡那一对字段。留着这个方法是为了让"这一路上有没有闪避"
 // 这件事**有名字**——写成裸 0 会让下一个人以为这里漏了。
 func (e *enemy) dodgeVs(string) float64 { return 0 }
+
+// summonFrom 是**机制造出来的敌人**（天桩链的甲/乙/天标）。
+//
+// 与出怪表里的敌人共用同一个 `enemy` 结构，只有两点不同：
+//
+//  1. **没有路线**——给一条 `kind: "static"` 的腿。自缚的甲站在装置那一格，
+//     乙在扑出去之前也站着，天标钉在干员脚下。`advance` 见到这条腿一步不走，
+//     `reachedEnd` 也永远是假（腿没走完），于是它们既不会移动、也不会被判成漏怪。
+//  2. **不进 `verdict` 的"这一关有多少敌人"**——`spawns_placed/spawns_total`
+//     只数出怪表（原版也如此：那三个数是 `_spawn_cursor` 与 `len(self._spawns)`）。
+func (c *simCtx) Summon(template json.RawMessage, cell [2]float64) int {
+	var spec SpawnSpec
+	if err := json.Unmarshal(template, &spec); err != nil {
+		// 模板是 Python 侧生成的，解不开说明两边对不上——静默造一个空单位
+		// 比造不出来更糟（那会变成场上一个 0 血的幽灵）。
+		panic(fmt.Sprintf("机制递来的召唤模板解不开：%v", err))
+	}
+	spec.Legs = []LegSpec{{Kind: "static", Points: [][2]float64{cell}}}
+	e := &enemy{
+		spec:       spec,
+		hp:         spec.HP,
+		position:   cell,
+		index:      len(*c.enemies),
+		invincible: spec.Invincible,
+		deathTime:  -1,
+	}
+	*c.enemies = append(*c.enemies, e)
+	return e.index
+}
 
 func (e *enemy) reachedEnd() bool {
 	return e.legIndex >= len(e.spec.Legs)
@@ -289,6 +324,12 @@ func runSim(spec *Spec) (*Verdict, error) {
 		// 空机制整段跳过，通用关卡一帧都不多花。
 		if !mechanisms.Empty() {
 			mechanisms.EnvTick(ctx, dt)
+			// ---- 3.9 天桩链（原版 3884，紧跟 `_device_tick` 之后）
+			//
+			// 和 3.7 同一处"推进之后、阻挡之前"。甲监测的是**这一帧已经被环境
+			// 算过**的病害值，乙扑咬与天标每秒伤害又要与本帧的阻挡/出手对齐——
+			// 挪到帧末会让天标的每秒伤害晚一整帧到账。
+			mechanisms.PileTick(ctx, dt)
 		}
 
 		// ---- 4. 阻挡（1846 → 2289）
@@ -545,6 +586,95 @@ func (c *simCtx) PauseEnemy(index int, seconds float64) {
 	}
 }
 
+// enemyAt 按**出怪顺序下标**取对象（机制递过来的下标就是它）。
+func (c *simCtx) enemyAt(index int) *enemy {
+	for _, e := range *c.enemies {
+		if e.index == index {
+			return e
+		}
+	}
+	return nil
+}
+
+// EnemyHP / EnemyMaxHP / SetEnemyHP —— 天桩链的**直接写血**通道。
+//
+// ⚠ 这里刻意**不走 `take`**：原版那三处（甲监测重设生命、激活自伤、乙/天标自毁）
+// 全是 `e.hp = ...` 的直写，既不计入"我方造成的伤害"，也不该触发任何受击类效果。
+// 用 `take` 会把它们记成战果——那是"看不出错"的那类差别（判决里只差一个数）。
+func (c *simCtx) EnemyHP(index int) float64 {
+	if e := c.enemyAt(index); e != nil {
+		return e.hp
+	}
+	return 0
+}
+
+func (c *simCtx) EnemyMaxHP(index int) float64 {
+	if e := c.enemyAt(index); e != nil {
+		return e.spec.HP
+	}
+	return 0
+}
+
+func (c *simCtx) SetEnemyHP(index int, hp float64) {
+	if e := c.enemyAt(index); e != nil {
+		if hp < 0 {
+			hp = 0
+		}
+		e.hp = hp
+	}
+}
+
+func (c *simCtx) EnemyPosition(index int) [2]float64 {
+	if e := c.enemyAt(index); e != nil {
+		return e.position
+	}
+	return [2]float64{}
+}
+
+func (c *simCtx) SetEnemyPosition(index int, position [2]float64) {
+	if e := c.enemyAt(index); e != nil {
+		e.position = position
+	}
+}
+
+// SetEnemyRoute 把一只敌人的走位换成一条新的折线（原版 `e.route = [...]` 之后
+// 交给普通推进；`e.progress = 0` 重新从这条线的头开始量）。
+//
+// ⚠ 走完**就是漏怪**：`advance` 把腿走完 → `reachedEnd` 成立 → 第 8 步结算扣命。
+// 乙的"扑向干员"用的正是这条路，所以它可以自己飞到目标格（贴到 0.5 之内时机
+// 制再把它钉住），也可能扑空走完、以漏怪收场——原版两件事都会发生。
+func (c *simCtx) SetEnemyRoute(index int, points [][2]float64) {
+	e := c.enemyAt(index)
+	if e == nil || len(points) < 2 {
+		return
+	}
+	length := 0.0
+	for i := 1; i < len(points); i++ {
+		length += math.Hypot(points[i][0]-points[i-1][0], points[i][1]-points[i-1][1])
+	}
+	e.spec.Legs = []LegSpec{{Kind: "walk", Points: points, Length: length}}
+	e.legIndex = 0
+	e.legU = 0
+	e.progress = 0
+	e.offMap = false
+}
+
+// EnemyMoveSpeed 是这一只**这一刻**的推进速度：与主循环 `advance` 用的是同一个
+// 算式（`spec.MoveSpeed × 关卡乘区 × 机制请求的乘区`），免得机制自己抄一份。
+func (c *simCtx) EnemyMoveSpeed(index int) float64 {
+	if e := c.enemyAt(index); e != nil {
+		return e.spec.MoveSpeed * c.spec.SpeedScale * c.speedFor(index)
+	}
+	return 0
+}
+
+// SetEnemyInvincible 关掉/打开甲的监测态无敌（原版 `always_invincible`）。
+func (c *simCtx) SetEnemyInvincible(index int, on bool) {
+	if e := c.enemyAt(index); e != nil {
+		e.invincible = on
+	}
+}
+
 // EnemyWindup 是这一关的"出手动作时间"（原版 `self.enemy_windup`）。
 func (c *simCtx) EnemyWindup() float64 { return c.spec.EnemyWindup }
 
@@ -574,6 +704,12 @@ func advance(e *enemy, dt, speedScale float64) {
 		}
 		leg := e.spec.Legs[e.legIndex]
 		e.offMap = leg.Kind == "vanish"
+		if leg.Kind == "static" {
+			// 自缚：站在原地。这条腿**永远走不完**（`legU` 不动），所以既不会
+			// 位移、也不会被 `reachedEnd` 判成走到路线终点（原版靠"单点路线 +
+			// `reached_end` 要求路线长度 > 0"达到同一效果）。
+			break
+		}
 		if leg.Kind == "walk" {
 			room := leg.Length - e.legU
 			if room <= 0 {
@@ -930,6 +1066,11 @@ func anyActive(enemies []*enemy) bool {
 }
 
 func (e *enemy) take(amount float64) float64 {
+	if e.invincible {
+		// 监测态的甲：**挨打掉 0 血**，但目标选择照旧把它算进去（原版
+		// `_damage_enemy` 里 `always_invincible` 就是返回 0）。
+		return 0
+	}
 	dealt := math.Min(e.hp, math.Max(0, amount))
 	e.hp -= dealt
 	return dealt

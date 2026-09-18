@@ -149,6 +149,94 @@ def _cells_pairs(cells: Any) -> list[list[int]]:
     return [[int(x), int(y)] for x, y in sorted(cells)]
 
 
+def _pile_device_spec(sim, d) -> dict[str, Any] | None:
+    """天桩装置 → **它那条召唤链的四跳模板**（装置 → 甲 → 乙 → 天标）。
+
+    四跳里三跳是"谁造谁"，全在原版的代码里、不在正文里猜：
+
+    * 装置 → 甲：`sim._pile_spec(d)`（结构化字段 `branch_id` → `branches` →
+      `actions[].enemyKey`）；**甲的站位就是装置那一格**，那条关卡指派路径是留档的，
+      甲自缚、不执行它（全活动 32 个天桩逐关核过）。
+    * 甲 → 乙：甲自己的 `awake_enemy_key`（读它的天赋黑板）。
+    * 乙 → 天标：`sim._pile_mark_key(乙)`（这一跳是全链唯一还要查表的，已登记在
+      `docs/verdicts-pending.md`）。
+
+    ⚠ 模板里的每一名都是**真建出来的对象**（`sim._build_enemy`）再走
+    `spec._unit_spec`，与出怪表那条路**同一个口径**。另加的三个动作位：
+
+    * `static` —— 自缚：站在原地、不算走完路线（原版靠"单点路线 + `reached_end`
+      要求路线长度 > 0"实现；Go 侧是 `kind: "static"` 那条腿）。
+    * `invincible` —— 甲**监测状态**下的无敌（激活时 Go 侧会关掉它）。
+    * `self_bind` —— 乙登场自缚的秒数。
+
+    数值（污浊满值、召唤延迟、自缚秒数）**一律从原版的常量里读**，不在 Go 里写死：
+    它们是"原文里的数字"，改口径时改的是这一处。
+    """
+    from ..battle import sim as _sim_mod
+    from . import spec as _spec
+
+    try:
+        child_key, _route = sim._pile_spec(d)
+    except Exception:                                          # noqa: BLE001
+        return None
+    if not child_key:
+        return None
+    cell = [int(d.cell[0]), int(d.cell[1])]
+
+    def build(key: str, positions: list[tuple[float, float]]):
+        try:
+            return sim._build_enemy(key, sim._summon_level(key), positions, [],
+                                    0.0, 0.0)
+        except Exception:                                      # noqa: BLE001
+            return None
+
+    parent = build(child_key, [(float(cell[0]), float(cell[1]))])
+    if parent is None:
+        return None
+    pspec = _spec._unit_spec(sim, parent)
+    pspec["static"] = True
+    #: 监测状态＝"这只甲带 `CheckAwake.`"。⚠ 不能读 `parent.monitor`：那两个位是
+    #: 原版在 `_pile_tick` **里**写上的（`child.monitor = awake_value > 0`），
+    #: 此刻刚建出来的对象上还是默认值——实测第一版就是这么把 `invincible`
+    #: 报成 False 的。照原版那一行的判据自己算一遍。
+    pspec["invincible"] = float(getattr(parent, "awake_value", 0.0) or 0.0) > 0.0
+    pspec["awake_value"] = float(getattr(parent, "awake_value", 0.0) or 0.0)
+    pspec["awake_hp_ratio"] = float(getattr(parent, "awake_hp_ratio", 0.0) or 0.0)
+    pspec["awake_summon_ratio"] = float(
+        getattr(parent, "awake_summon_ratio", 0.0) or 0.0)
+    pspec["awake_summon_cnt"] = int(getattr(parent, "awake_summon_cnt", 0) or 0)
+    pspec["awake_enemy_key"] = str(getattr(parent, "awake_enemy_key", "") or "")
+    pspec["summon_delay"] = float(getattr(_sim_mod, "PILE_SUMMON_DELAY", 1.25))
+    pspec["pollut_full"] = float(getattr(_sim_mod, "PILE_POLLUT_FULL", 100.0))
+
+    diver_key = str(getattr(parent, "awake_enemy_key", "") or "")
+    if diver_key:
+        diver = build(diver_key, [(float(cell[0]), float(cell[1]))])
+        if diver is not None:
+            dspec = _spec._unit_spec(sim, diver)
+            dspec["static"] = False           # 乙会扑向干员，不是自缚
+            dspec["self_bind"] = float(getattr(_sim_mod, "PILE_SELF_BIND", 1.0))
+            dspec["hit_radius"] = 0.5         # 原版"贴到目标格"的判据
+            mark_key = sim._pile_mark_key(diver)
+            if mark_key:
+                mark = build(mark_key, [(float(cell[0]), float(cell[1]))])
+                if mark is not None:
+                    mspec = _spec._unit_spec(sim, mark)
+                    mspec["static"] = True
+                    mspec["unblockable"] = True
+                    mspec["attach_damage"] = float(
+                        getattr(mark, "attach_damage", 0.0) or 0.0)
+                    mspec["attach_radius"] = 0.3
+                    dspec["mark"] = mspec
+            pspec["summon"] = dspec
+    return {
+        "kind": "pile",
+        "key": str(getattr(d, "key", "")),
+        "cell": cell,
+        "child": pspec,
+    }
+
+
 def farmland_spec(sim: Any) -> dict[str, Any] | None:
     """从**当前**模拟器状态抽一份田地规格；这一关没有环境系统则返回 None。
 
@@ -172,16 +260,20 @@ def farmland_spec(sim: Any) -> dict[str, Any] | None:
     devices = []
     for d in getattr(sim, "_devices", None) or []:
         kind = kind_of(getattr(d, "key", None))
-        # **只送运行期真的要动的装置**（泵站：每秒泵水）。
+        # 运行期真的要动的装置才送。
         #
-        # 阻流阀与天桩不送：它们的作用都不在这条时间线上——
-        #  * 阻流阀开场那一次 `sever` **已经算进上面的 `groups`** 了（几何是"此刻"
-        #    的），而"运行期被拆掉 → 地形还原"住在装置层里，本层不碰；
-        #  * 天桩是召唤物链（甲/乙/天标），整套在装置层。
-        # 送过去只会让 Go 侧收到一个它不处理的装置——那种情况必须**拒跑**（不许
-        # 静默忽略），于是会把"装置层还没移植、但这一关实测与装置无关"的关也一起
-        # 挡掉。闸门（`spec.py` 的关卡装置那一条）已经在"装置摘掉判决不变"的实测
-        # 证据上放行了，规格就不该再把它们塞进来。
+        #  * **泵站**：每秒泵水，住在 `_environment_tick`（本层已实现）；
+        #  * **天桩**：召唤链（装置 → 甲 → 乙 → 天标）现在**已接线**，模板随它送过去
+        #    （`_pile_device_spec`），时间在 Go 的机制层跑；
+        #  * **阻流阀**不送：它只剩"运行期被拆掉 → 地形还原"一条动作，而开场那一次
+        #    `sever` **已经算进上面的 `groups`**（几何是"此刻"的）。被拆还原还没移植，
+        #    由对拍台的装置证据控制（只关 `_device_tick`／`_pile_tick` 再看判决）负责，
+        #    证据不成立时闸门整关拒跑——不会静默少算。
+        if kind == "pile":
+            one = _pile_device_spec(sim, d)
+            if one is not None:
+                devices.append(one)
+            continue
         if kind != "pump":
             continue
         devices.append({

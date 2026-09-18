@@ -266,6 +266,42 @@ type SpawnSpec struct {
 	SkillAtkGroundOnly bool    `json:"skill_atk_ground_only,omitempty"`
 
 	Legs []LegSpec `json:"legs"`
+
+	//: ---- 天桩链（怀黍离装置「天桩」的四跳，原版 `_pile_tick` 3884-4130）
+	//:
+	//: 这一组里没有一条是新口径：四跳全部照原版的代码路径来，数值一律从规格
+	//: 送过来（`ak_tactic/simgo/mech.py::_pile_device_spec` 从原版常量读），
+	//: 免得 Go 里再写死一遍"原文里的数字"。
+	//:
+	//: * `Static` —— 自缚：站在原地不动。原版靠"单点路线 + `reached_end` 要求
+	//:   路线长度 > 0"实现；这里对应一条 `kind: "static"` 的腿（既不推进、
+	//:   也不会被判成走到路线终点而漏怪）。
+	//: * `Invincible` —— 甲**监测状态**下的无敌（挨打掉 0 血，但照旧会被索敌，
+	//:   这正是它在场上白吃输出的原因）。激活时机制会把它关掉。
+	//: * `Awake*` —— 甲激活后的自伤与分批召唤（`CheckAwake` 与 `summon` 两组黑板）。
+	//: * `SelfBind` / `HitRadius` —— 乙的登场自缚秒数与"贴到目标"的判据。
+	//: * `AttachDamage` / `AttachRadius` —— 天标的每秒伤害与附着半径。
+	//: * `Summon` / `Mark` —— 下一跳的**模板**（甲→乙、乙→天标）。用模板而不是
+	//:   让机制自己拼规格：谁造谁写在装置配置里，机制只管"什么时候造"。
+	Static     bool `json:"static,omitempty"`
+	Invincible bool `json:"invincible,omitempty"`
+
+	AwakeValue       float64 `json:"awake_value,omitempty"`
+	AwakeHPRatio     float64 `json:"awake_hp_ratio,omitempty"`
+	AwakeSummonRatio float64 `json:"awake_summon_ratio,omitempty"`
+	AwakeSummonCnt   int     `json:"awake_summon_cnt,omitempty"`
+	AwakeEnemyKey    string  `json:"awake_enemy_key,omitempty"`
+
+	SummonDelay float64 `json:"summon_delay,omitempty"`
+	PollutFull  float64 `json:"pollut_full,omitempty"`
+
+	SelfBind     float64 `json:"self_bind,omitempty"`
+	HitRadius    float64 `json:"hit_radius,omitempty"`
+	AttachDamage float64 `json:"attach_damage,omitempty"`
+	AttachRadius float64 `json:"attach_radius,omitempty"`
+
+	Summon *SpawnSpec `json:"summon,omitempty"`
+	Mark   *SpawnSpec `json:"mark,omitempty"`
 }
 
 // Verdict 是一场战斗的结果。字段名与 `BattleResult` 对齐，便于逐项对拍。
