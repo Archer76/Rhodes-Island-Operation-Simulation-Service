@@ -3262,6 +3262,289 @@ def check_trait_splash(stage, lib, calc, book_t) -> None:
                       f"实得 {op3.sp}，应为 {10.0 + n_hl}")
 
 
+def check_hammer_strikes(stage, lib, calc, book_t) -> None:
+    """[37] 怒潮凛冬技3「无可抵挡」：正前方一格的**五连锤击**。
+
+    这是仓库里第一条「**技能自己打一轮**」的伤害通道。在此之前技能开启时只有
+    推击那一步主动效果，伤害一律由普攻循环产生；所以本节有一条判据是
+    **结构性的**：时刻表的间隔必须与攻速无关（把攻速改成 1000，排出来的时刻
+    一模一样），否则这条通道迟早被人并进普攻循环去。
+
+    其余按「数据 → 几何 → 时刻表 → 逐击对账 → 控制」五层。其中三处是本轮
+    真栽过的坑，都配了反向守卫：
+
+    * `current_atk()` 在技能**仍开着的那一帧**已经含了 `atk_base` 与
+      `atk_scale`，拿它再乘一遍会把第一锤算成 4.8 倍（实测 27,510 而非 5,731）；
+    * 半径 1.5 时正交两格地块的最近点距离**正好** 1.5，判据必须取**闭圆**，
+      否则 1.5 与 1.0 盖出同一片 3×3，「溅射范围更大」就是空话；
+    * 【束缚】与【晕眩】【停顿】各是一个字段：正向对照要拿**真敌人开火**来证
+      （只有"不动"不能证明它不是晕眩——晕眩也不动）。
+    """
+    print("\n[37] 技3「无可抵挡」：五连锤击（不吃攻速、逐击累加、1.5 溅射、2 秒束缚）")
+    import sqlite3  # noqa: PLC0415
+
+    from ak_tactic.battle.hammer import (HAMMER_HITS, HAMMER_INTERVAL,  # noqa: PLC0415
+                                         HAMMER_SPLASH_RADIUS, read_hammer)
+    from ak_tactic.battle.traits import cross_cells, splash_tiles  # noqa: PLC0415
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    cid = "char_1051_headb2"
+    slots = {s.slot: s for s in SkillBook().for_operator(cid)}
+    s3 = slots[3].level(7, 3)
+    s1 = slots[1].level(7, 3)
+    s2 = slots[2].level(7, 3)
+
+    # ---- 1. 数据 ----
+    st = read_hammer(s3.blackboard)
+    check("read_hammer 认得技3 的黑板（三个判据键同时在）", st is not None,
+          f"实得 {st}")
+    if st is not None:
+        check("  atk_base = 1.0（技能期间攻击力 +100%）",
+              close(st.atk_pct, 1.0, 1e-9), f"实得 {st.atk_pct}")
+        check("  atk_scale = 2.4（每击 240% 攻击力物理）",
+              close(st.atk_scale, 2.4, 1e-9), f"实得 {st.atk_scale}")
+        check("  atk_step = 0.3（每击之后额外 +30%）",
+              close(st.atk_step, 0.3, 1e-9), f"实得 {st.atk_step}")
+        check("  splash_atk_scale_bonus = 3.5（高台溅射伤害倍数）",
+              close(st.highland_bonus, 3.5, 1e-9), f"实得 {st.highland_bonus}")
+        check("  unmovable = 2.0（控制效果变 2 秒束缚）",
+              close(st.root, 2.0, 1e-9), f"实得 {st.root}")
+        check("  第 5 击的倍率是 **3.2**（各击加成**相加**；"
+              "若误当逐次相乘 1.3×…×1.3 会算成 5.71）",
+              close(st.atk_multiplier(4), 3.2, 1e-9),
+              f"实得 {st.atk_multiplier(4)}")
+        check("  一轮等效总倍率（对裸攻击力）= 31.2",
+              close(st.total_multiplier(), 31.2, 1e-9),
+              f"实得 {st.total_multiplier()}")
+        check("  次数与间隔写死为 5 / 1.8s（备注明写不吃攻速）",
+              st.hits == HAMMER_HITS and close(st.interval, HAMMER_INTERVAL, 1e-9),
+              f"实得 {st.hits} 击 / {st.interval}s")
+    check("反向：技1 的黑板不是这条技能", read_hammer(s1.blackboard) is None)
+    check("反向：技2 的黑板也不是（虽然有 atk/def，但没有 atk_step）",
+          read_hammer(s2.blackboard) is None)
+
+    db = Path(__file__).resolve().parent.parent / "data" / "akdb.sqlite"
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT skill_id, name FROM skill_level WHERE level = 10 "
+            "AND blackboard LIKE '%atk_step%' "
+            "AND blackboard LIKE '%splash_atk_scale_bonus%'").fetchall()
+    check("全库核验：三个判据键同时在场的技能**只有**怒潮凛冬技3「无可抵挡」"
+          "（不是「带 atk_step 的都算」）",
+          len(rows) == 1 and rows[0][1] == "无可抵挡", f"实得 {rows}")
+
+    # ---- 2. 几何：1.5 与 1.0 必须分辨得出 ----
+    r10 = splash_tiles((0.0, 0.0), 1.0)
+    r15 = splash_tiles((0.0, 0.0), HAMMER_SPLASH_RADIUS)
+    check("1.5 的闭圆 = 3×3 加四条正交臂，共 **13 格**", len(r15) == 13,
+          f"实得 {len(r15)}")
+    check("  多出来的正是**正交两格**那四个，且严格包含 1.0 的九格"
+          "（正交两格最近点距离恰好 1.5 ⇒ 判据必须是闭圆，"
+          "否则「溅射范围更大」是空话）",
+          r10 < r15 and (r15 - r10) == {(2, 0), (-2, 0), (0, 2), (0, -2)},
+          f"实得多出 {sorted(r15 - r10)}")
+
+    # ---- 3. 时刻表：五击、1.8s、不吃攻速 ----
+    v = Verifier()
+    entry = {"char_id": cid, "elite": 2, "level": 60, "trust": 100,
+             "potential": 1}
+
+    def fresh(speed=None, skill=None):
+        op = v.unit(dict(entry))
+        op.skill = skill if skill is not None else s3
+        op.position = (2, 3)
+        op.direction = "Right"
+        if speed is not None:
+            op.attack_speed = speed
+        return op
+
+    sim = mechanism_sim(stage, lib)
+    op = fresh()
+    sim.operators.append(op)
+    sim._schedule_hammer(op, 0.0)
+    check("开启技能后排下 **5 击**", len(op.hammer_pending) == HAMMER_HITS,
+          f"实得 {len(op.hammer_pending)}")
+    check("  首击即刻、此后每 1.8s 一击",
+          all(close(op.hammer_pending[i] - op.hammer_pending[i - 1],
+                    HAMMER_INTERVAL, 1e-9) for i in range(1, HAMMER_HITS)),
+          f"实得 {[round(x, 3) for x in op.hammer_pending]}")
+    fast = fresh(speed=1000.0)
+    sim.operators.append(fast)
+    sim._schedule_hammer(fast, 0.0)
+    check("  **不吃攻速**：攻速 1000 排出来的时刻表与攻速 100 一字不差"
+          "（结构上就不该挂在普攻循环里）",
+          fast.hammer_pending == op.hammer_pending,
+          f"实得 {[round(x, 3) for x in fast.hammer_pending]}")
+    slow = fresh(skill=s1)
+    sim.operators.append(slow)
+    sim._schedule_hammer(slow, 0.0)
+    check("  反向：挂技1 排不出时刻表（不是「开技能就锤地」）",
+          slow.hammer is None and not slow.hammer_pending)
+
+    # ---- 4. 行为：逐击对账 ----
+    eid = _enemy_ids(stage)[0]
+    sim2 = mechanism_sim(stage, lib)
+    op2 = fresh()
+    sim2.operators.append(op2)
+
+    def mk(s, cell, progress=0.0):
+        pts = [(float(cell[0]), float(cell[1]))]
+        e = s._build_enemy(eid, 1, pts,
+                           [RouteLeg(kind="walk", points=pts, length=0.0)],
+                           0.0, 0.0)
+        e.position = (float(cell[0]), float(cell[1]))
+        e.progress = progress
+        e.max_hp = e.hp = 1_000_000.0
+        s.enemies.append(e)
+        return e
+
+    front = mk(sim2, (3, 3), progress=5.0)   # 正前方一格 → 主目标
+    near = mk(sim2, (4, 3))                  # 正交一格 → 溅射
+    far = mk(sim2, (5, 3))                   # 正交两格 → **只有 1.5 才够得着**
+    sim2._schedule_hammer(op2, 0.0)
+    dealt: list[float] = []
+    orig_strike = sim2._hammer_strike
+
+    def strike_spy(o, t):
+        before = front.hp
+        orig_strike(o, t)
+        dealt.append(before - front.hp)
+
+    sim2._hammer_strike = strike_spy
+    for i in range(HAMMER_HITS):
+        sim2._hammer_tick(i * HAMMER_INTERVAL)
+
+    check("手工驱动 5 个到点时刻 → 落了 5 击", len(dealt) == HAMMER_HITS,
+          f"实得 {len(dealt)}")
+    base = op2.atk * (1.0 + op2.aura_atk_pct)
+    want = [resolve_damage(base * (1.0 + st.atk_pct + st.atk_step * i),
+                           damage_type="PHYSICAL", scale=st.atk_scale,
+                           defense=front.defense, res=front.res).final
+            for i in range(HAMMER_HITS)]
+    check("五击逐一对账（每击 = 裸攻击力 ×(1+1.0+0.3i) ×240% 过防）",
+          all(close(a, b, 1e-6) for a, b in zip(dealt, want)),
+          f"实得 {[round(x, 1) for x in dealt]}，应为 {[round(x, 1) for x in want]}")
+    check("  **逐击递增**：第 5 击 > 第 1 击（累加 +30%/击）",
+          dealt[-1] > dealt[0] * 1.5,
+          f"{dealt[0]:,.1f} → {dealt[-1]:,.1f}")
+    want_near = sum(resolve_damage(base * (1.0 + st.atk_pct + st.atk_step * i),
+                                   damage_type="PHYSICAL", scale=0.62,
+                                   defense=near.defense, res=near.res).final
+                    for i in range(HAMMER_HITS))
+    check("正交一格的敌人吃到**特性溅射** 62%（五击各一次；每击的溅射按**那一击**"
+          "的攻击力算，所以逐击也递增）",
+          close(1_000_000.0 - near.hp, want_near, 1e-6),
+          f"实得 {1_000_000.0 - near.hp:,.1f}，应为 {want_near:,.1f}")
+    check("**正交两格的敌人也吃到了**——这一条就是 1.5 与 1.0 的分水岭",
+          1_000_000.0 - far.hp > 0.0, f"实得掉血 {1_000_000.0 - far.hp:,.1f}")
+    # 反向：同样的布置走**普通攻击**（特性半径 1.0），正交两格就该一点吃不到。
+    # 注意不能拿 `op.splash_radius` 去改锤击的半径——技3 的半径是技能自己的
+    # 1.5（写在 `HammerStrike` 里），改干员字段根本改不动它。
+    sim3 = mechanism_sim(stage, lib)
+    op3 = fresh()
+    sim3.operators.append(op3)
+    far2 = mk(sim3, (5, 3))
+    near2 = mk(sim3, (4, 3))
+    main3 = mk(sim3, (3, 3), progress=5.0)
+    sim3._trait_splash(op3, main3, base, 0.0)
+    check("  反向：同一张图、同样的落点，走**特性溅射（半径 1.0）**时"
+          "正交两格一点吃不到、正交一格照吃"
+          "（证明上一跳真的是 1.5 带来的）",
+          far2.hp == 1_000_000.0 and near2.hp < 1_000_000.0,
+          f"两格外掉血 {1_000_000.0 - far2.hp:,.1f}，"
+          f"一格掉血 {1_000_000.0 - near2.hp:,.1f}")
+
+    # ---- 5. 高台那一半：×3.5 与 2 秒【束缚】 ----
+    hl = None
+    for y in range(stage.map.height):
+        for x in range(stage.map.width):
+            if stage.map.tile(x, y).is_highland:
+                hl = (x, y)
+                break
+        if hl:
+            break
+    if hl is not None:
+        # 5a. 单位层：bonus 乘在倍率上、root 替换停顿
+        around = [c for c in sorted(cross_cells(hl))
+                  if stage.map.inside(*c) and c != hl]
+        sim4 = mechanism_sim(stage, lib)
+        op4 = fresh()
+        sim4.operators.append(op4)
+        victim = mk(sim4, around[0])
+        hits = sim4._highland_splash(op4, {hl}, op4.atk, 1.0,
+                                     bonus=st.highland_bonus, root=st.root)
+        want_hl = resolve_damage(op4.atk, damage_type="PHYSICAL",
+                                 scale=0.24 * st.highland_bonus,
+                                 defense=victim.defense, res=victim.res).final
+        check("技3 期间高台溅射 = 24% × 3.5 = **84%**",
+              close(1_000_000.0 - victim.hp, want_hl, 1e-6),
+              f"实得 {1_000_000.0 - victim.hp:,.1f}，应为 {want_hl:,.1f}")
+        check("  控制效果**替换**为 2 秒【束缚】（不是叠加，也不是停顿）",
+              close(victim.root_timer, 2.0, 1e-9)
+              and victim.sluggish_timer == 0.0,
+              f"root={victim.root_timer} sluggish={victim.sluggish_timer}")
+        check("  触发计数照样返回（`sp_per_highland` 仍要靠它）", hits == 1,
+              f"实得 {hits}")
+
+        # 5b. 接线层：锤击真的把 bonus / root 传下去了
+        sim5 = mechanism_sim(stage, lib)
+        op5 = fresh()
+        op5.position = (hl[0], hl[1] + 3)
+        op5.direction = "Up"
+        sim5.operators.append(op5)
+        seen: dict = {}
+        orig_hl = sim5._highland_splash
+
+        def hl_spy(o, cells, power, t, **kw):
+            seen.update(kw)
+            return orig_hl(o, cells, power, t, **kw)
+
+        sim5._highland_splash = hl_spy
+        sim5._schedule_hammer(op5, 0.0)
+        sim5._hammer_tick(0.0)
+        check("锤击把 `bonus=3.5` 与 `root=2.0` 传给了高台那一半"
+              "（不是只在单位层对得上）",
+              seen.get("bonus") == st.highland_bonus
+              and seen.get("root") == st.root,
+              f"实得 {seen}")
+
+    # ---- 6. 【束缚】= 不能移动、**但仍能开火** ----
+    sim6 = mechanism_sim(stage, lib)
+    op6 = fresh()
+    op6.position = (2, 3)
+    sim6.operators.append(op6)
+    # 1-7 里唯一的远程是鸡尾酒投掷者（射程 1.75）：近战要先被阻挡才出手，
+    # 拿近战写这条对照会得到"本来就不打"，把机制问题伪装成布置问题。
+    pts = [(3.0, 3.0)]
+    shooter = sim6._build_enemy("enemy_1028_mocock", 1, pts,
+                                [RouteLeg(kind="walk", points=pts, length=0.0)],
+                                0.0, 0.0)
+    shooter.position = (3.0, 3.0)
+    shooter.max_hp = shooter.hp = 1_000_000.0
+    sim6.enemies.append(shooter)
+    pos0 = shooter.position
+    shooter.root_timer = 5.0
+    shooter.advance(1.0, 1.0)
+    check("【束缚】期间**不动**（与停顿一样拦移动）",
+          shooter.position == pos0, f"实得 {shooter.position}")
+    check("  而且**没有被缴械**（`disarm_timer` 仍是 0）——这一条把它与晕眩分开",
+          shooter.disarm_timer == 0.0, f"实得 {shooter.disarm_timer}")
+    hp0 = op6.hp
+    for k in range(6):
+        sim6._enemies_attack(1.0, float(k))
+    hit_rooted = hp0 - op6.hp
+    check("  **正向对照：束缚期间敌人照样开火**（干员真掉血）——"
+          "光「不动」证明不了它不是晕眩，晕眩也不动",
+          hit_rooted > 0.0, f"实得掉血 {hit_rooted:,.1f}")
+    shooter.root_timer = 0.0
+    shooter.stun_timer = 5.0
+    hp1 = op6.hp
+    for k in range(6):
+        sim6._enemies_attack(1.0, float(k))
+    check("  反向：换成【晕眩】就一枪不开（同一只敌人、同一段代码路径）",
+          op6.hp == hp1, f"实得掉血 {hp1 - op6.hp:,.1f}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="战斗与技能的回归检查")
     ap.parse_args()
@@ -3312,6 +3595,7 @@ def main() -> int:
     check_second_use(stage, lib, calc, book_t)
     check_push(stage, lib, calc, book_t)
     check_trait_splash(stage, lib, calc, book_t)
+    check_hammer_strikes(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

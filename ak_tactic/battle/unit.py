@@ -192,6 +192,17 @@ class OperatorUnit(Combatant):
     highland_splash_scale: float = 0.0
     #: 高台溅射附带的【停顿】秒数（精 1 时正文里没有这一半，值为 0）。
     highland_splash_sluggish: float = 0.0
+
+    # ---------------------------------------------------- 技能自己打的一轮伤害
+    # 「无可抵挡」的五连锤击：这是仓库里第一条**不吃攻速、由技能自打的**
+    # 伤害通道（系数与出处见 `battle/hammer.py`）。这三个字段是运行期状态，
+    # 与普攻循环完全无关——挂进普攻循环就必然被攻速带偏。
+    #: 本次锤击序列的系数（`hammer.HammerStrike`）；`None` = 没在打。
+    hammer: Any = None
+    #: 还没落下的锤击时刻（绝对游戏时间，升序）。
+    hammer_pending: list = field(default_factory=list)
+    #: 已完成的锤击数——累加攻击力与"扩散上限 = 已完成锤击数"都按它算。
+    hammer_step: int = 0
     #: 模拟器按 `effect_source` 解析出来的效果（描述驱动的那一层）；
     #: None = 回落到技能自己的黑板效果（见 `effects` 属性）
     effects_override: Any = None
@@ -578,6 +589,15 @@ class EnemyUnit(Combatant):
     #: 但仍然可以攻击——这与眩晕/冻结不同，别混。
     #: 标本：凯尔希·思衡托「保护性拒止」`sluggish 5.0`。
     sluggish_timer: float = 0.0
+    #: 剩余【束缚】秒数（技能黑板里的 `unmovable`）。**束缚 = 不能移动，
+    #: 但可以攻击**——与【停顿】一样拦移动、不拦开火，与【晕眩】不同
+    #: （晕眩还缴械）。
+    #:
+    #: 既然语义与停顿相同，为什么不复用 `sluggish_timer`？因为**束缚不降移速**、
+    #: 停顿降 80%：值相同而"该不该乘 0.2"不同。停顿时移速仍要算出来（用于
+    #: 归一化与日志），合并两者会让"束缚期间移速是多少"这种问题没有答案。
+    #: 标本：怒潮凛冬技3「无可抵挡」的 `unmovable 2.0`。
+    root_timer: float = 0.0
     #: 天赋「死亡拘审」（阿斯卡纶）叠上来的**持续法术伤害**。
     #: `dot_stacks` 是层数（正文「效果最多叠加三层」），`dot_timer` 是剩余秒数，
     #: `dot_per_sec` 是**每层每秒**的伤害，`dot_accum` 是 1 秒一跳的累加器。
@@ -932,6 +952,12 @@ class EnemyUnit(Combatant):
             return
         if self.wait_remaining > 0:
             self.wait_remaining = max(0.0, self.wait_remaining - dt)
+            return
+        if self.root_timer > 0:
+            # 【束缚】= **不能移动，但仍能开火**。与【停顿】的区别是停顿还降
+            # 移速（这里根本不动，降不降无所谓），与【晕眩】的区别是晕眩
+            # **同时缴械**。三者各是一个字段——仓库里"两个量合并"已经栽过
+            # 两次（晕眩/冻结、停顿/移速降低）。
             return
         if self.sluggish_timer > 0 or self.idle_timer > 0:
             # 【停顿】/【待机】不能移动。停顿还能开火，待机连开火也不行
