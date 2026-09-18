@@ -175,9 +175,6 @@ class WelcomeScreen(Screen):
         with Vertical(classes="block"):
             yield Label("登录账号", classes="block-title")
             yield Static("", id="account-line")
-        with Vertical(classes="block"):
-            yield Label("名册", classes="block-title")
-            yield Static("", id="roster-line")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -201,32 +198,83 @@ class WelcomeScreen(Screen):
                     "按 L 进登录屏后按 S 可切回。" if others else "。按 L 扫码登录。")
             return "[warn]当前没有登录的账号[/]" + tail
         # 显示的是**游戏用户名与游戏uid**（博士 2026-09-18 口径），登录账号 id 只作附注。
-        head = D.describe_account(uid, current=True)
+        # 名册那半句不在这里写——`_data_line()` 会单独写一句更准的（份数 + 来源
+        # + 降级警告），同一栏里重复一个「有名册缓存」只会让人以为有两件事。
+        head = D.describe_account(uid, current=True, roster_flag=False)
         if others:
             head += f"　[dim]（本机另有 {len(others)} 个登过的账号）[/]"
         return head + "\n[dim]按 O 退出账号——凭据文件保留，之后可切回，不必重扫。[/]"
 
     def _refresh(self) -> None:
-        g = D.guides_dir()
-        exists = "存在" if g.exists() else "还不存在（导出时自动建）"
-        self.query_one("#dir-line", Static).update(
-            f"{g}\n[dim]{exists}；MAA 作业默认输出到 <数据目录>/<关卡名>/[/]")
+        """重画两栏。
 
+        **逐栏兜底**（博士 2026-09-18 报过「主界面只看得见四行标题」）：任何一栏
+        的取数抛了，就在那一栏写下原因，绝不留空白。空白是最坏的结果——它分不清
+        是「没登录」「没有名册」还是「代码在这台机器上挂了」，而这一屏正是别人
+        第一次跑起来看到的东西。
+        """
+        for wid, build in (("#dir-line", self._dir_line),
+                           ("#account-line", self._account_block)):
+            box = self.query_one(wid, Static)
+            try:
+                box.update(build())
+            except Exception as exc:                          # noqa: BLE001
+                box.update(f"[warn]这一栏取不到：{exc.__class__.__name__}: {exc}[/]")
+
+    def _dir_line(self) -> str:
+        """数据目录：写**当前正在用的**路径，并说清它是默认值还是改过的。
+
+        初次启动（配置里没有 `guides_dir`）时显示的就是默认目录——本工具根目录
+        下的 `Guides/`，并就地标明「默认」；改过之后标「当前设置」，两种状态一眼
+        分得开，不必去猜这个路径是哪来的。
+        """
+        g = D.guides_dir()
+        try:
+            configured = bool((D.load_config().get("guides_dir") or "").strip())
+        except Exception:                                     # noqa: BLE001
+            configured = False
+        how = ("[dim]（当前设置）[/]" if configured
+               else "[dim]（默认目录：本工具根目录下的 Guides/，还没改过）[/]")
+        state = "存在" if g.exists() else "还不存在（导出时自动建）"
+        return (f"{g}　{how}\n"
+                f"[dim]{state}；MAA 作业输出到 {Path(str(g)) / '<关卡名>/'}[/]")
+
+    def _data_line(self) -> str:
+        """名册与干员库的状态，收在账号这一栏里（原来的「名册」一栏已删）。
+
+        博士 2026-09-18 的口径是**两句都要**：名册（森空岛缓存 / MAA OperBox 降级）
+        与干员库（`akdb.sqlite`）各说一句「已获取没有」。没名册时把那句「是哪种
+        没名册」的说明接在后面——它比一个光秃秃的「未获取」有用得多。
+        """
+        parts: list[str] = []
+        r = getattr(self.app.state, "roster", None)
+        if r is None:
+            parts.append("[warn]名册：未获取[/]")
+        else:
+            src = "森空岛缓存" if r.source == "skland" else "MAA OperBox（降级）"
+            tone = "ok" if r.complete else "warn"
+            parts.append(f"[{tone}]名册：已获取[/]（{src} {len(r.operators)} 名）")
+            if not r.complete:
+                # 降级名册缺专精与模组等级，编队里那些「专三/模组三」的前提会算不准。
+                # 这句话原来是「名册」那一栏的 `r.note`，栏删了，但**不能连警告一起删**。
+                parts.append("[warn]（这份名册没有专精与模组等级）[/]")
+        db = D.operator_db_status()
+        if db["operators"] is not None:
+            parts.append(f"[ok]干员库：已获取[/]（{Path(db['path']).name} "
+                         f"{db['operators']} 名）")
+        elif db["exists"]:
+            parts.append(f"[warn]干员库：文件在，但读不出来[/]（{db['error']}）")
+        else:
+            parts.append("[warn]干员库：未获取[/]（先跑 db build）")
+        line = "　".join(parts)
+        if r is None:
+            line += "\n" + self._no_roster_hint()
+        return line
+
+    def _account_block(self) -> str:
         note = f"[warn]{self._note}[/]\n" if self._note else ""
         self._note = ""
-        self.query_one("#account-line", Static).update(note + self._account_line())
-
-        r = self.app.state.roster
-        if r is None:
-            self.query_one("#roster-line", Static).update(
-                "[warn]没有找到名册。[/]\n" + self._no_roster_hint())
-            return
-        tone = "ok" if r.complete else "warn"
-        src = "森空岛缓存" if r.source == "skland" else "MAA OperBox（降级）"
-        head = (f"[{tone}]{src}[/] 共 {len(r.operators)} 名"
-                f"{f'　uid={r.uid}　{r.nick}' if r.uid else ''}")
-        self.query_one("#roster-line", Static).update(
-            f"{head}\n[dim]{r.note}[/]\n[dim]{r.path}[/]")
+        return note + self._account_line() + "\n" + self._data_line()
 
     def _no_roster_hint(self) -> str:
         """没名册时怎么说。

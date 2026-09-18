@@ -870,6 +870,135 @@ def check_home() -> None:
           got["at_home"], "这条用的是没解出方案的假结果")
 
 
+def check_welcome() -> None:
+    """[0b] 主界面两栏（博士 2026-09-18 的三条要求）。
+
+    一条要求一条判据：数据目录栏要写出**当前正在用的路径**（初次启动即默认目录，
+    改过之后要标出来）；登录账号栏要写出**玩家账号用户名**；名册那一栏删掉，
+    名册与干员库的「获取没有」并进账号栏。
+
+    另有一条是**兜底**：任何一栏取数抛了，必须在那一栏写下原因——博士报过
+    「主界面什么都看不见，只有四行标题」，而空白说不出是哪一栏坏了。
+    """
+    print("\n[0b] 主界面两栏")
+
+    from textual.widgets import Static
+
+    from ak_tactic.tui import app as A
+    from ak_tactic.tui import data as D
+
+    src = Path(A.__file__).read_text(encoding="utf-8")
+    check("「名册」那一栏已经删掉（compose 里不再有 roster-line）",
+          'id="roster-line"' not in src, "还有 roster-line")
+    check("两个栏的 id 还在（数据目录 / 登录账号）",
+          'id="dir-line"' in src and 'id="account-line"' in src)
+
+    # ---- 干员库状态：真库数与「库不在」两条路
+    st = D.operator_db_status()
+    check("operator_db_status() 拿得到真库的干员数",
+          st["exists"] and (st["operators"] or 0) > 100,
+          f"{st['operators']} 名 / {st['path']}")
+    import ak_tactic.db as _db
+    old_path = _db.DEFAULT_DB_PATH
+    _db.DEFAULT_DB_PATH = Path(str(old_path) + ".not-exists")
+    try:
+        gone = D.operator_db_status()
+    finally:
+        _db.DEFAULT_DB_PATH = old_path
+    check("库文件不在时如实说不在，而且**不抛**（这一屏不该被一个坏库拖垮）",
+          gone["exists"] is False and gone["operators"] is None
+          and not gone["error"], str(gone))
+
+    # ---- 账号行：用户名还在，名册那句挪到 _data_line
+    line = D.describe_account("0f0f0f")
+    check("默认还是带「（无）名册缓存」那半句（登录屏那几处照旧）",
+          "无名册缓存" in line, line[:60])
+    lean = D.describe_account("0f0f0f", roster_flag=False)
+    check("给主界面用的那一版**不带**那半句（同一栏里不重复说两遍）",
+          "名册缓存" not in lean, lean[:60])
+
+    root = Path(D.__file__).resolve().parents[2]              # 仓库根
+
+    async def flow() -> dict:
+        got: dict = {}
+        app = A.RiosApp()
+        async with app.run_test(size=(110, 44)) as pilot:
+            await pilot.pause()
+            got["screen"] = type(app.screen).__name__
+            got["dir"] = str(app.screen.query_one("#dir-line", Static).render())
+            got["acct"] = str(app.screen.query_one("#account-line", Static).render())
+            try:
+                app.screen.query_one("#roster-line", Static)
+                got["roster_widget"] = True
+            except Exception:                                  # noqa: BLE001
+                got["roster_widget"] = False
+
+        # 配置里有 guides_dir → 标「当前设置」；没有 → 标「默认目录」
+        old_cfg = D.load_config
+        D.load_config = lambda: {"guides_dir": str(root / "Guides")}
+        try:
+            app2 = A.RiosApp()
+            async with app2.run_test(size=(110, 44)) as pilot:
+                await pilot.pause()
+                got["dir_set"] = str(
+                    app2.screen.query_one("#dir-line", Static).render())
+        finally:
+            D.load_config = old_cfg
+
+        # 取数抛错 → 那一栏必须写出原因，账号栏照常
+        def boom():
+            raise RuntimeError("模拟：路径取不到")
+
+        old_dir = D.guides_dir
+        D.guides_dir = boom
+        try:
+            app3 = A.RiosApp()
+            async with app3.run_test(size=(110, 44)) as pilot:
+                await pilot.pause()
+                got["dir_err"] = str(
+                    app3.screen.query_one("#dir-line", Static).render())
+                got["acct_err"] = str(
+                    app3.screen.query_one("#account-line", Static).render())
+        finally:
+            D.guides_dir = old_dir
+        return got
+
+    got = asyncio.run(flow())
+    check("开机进的是主界面", got["screen"] == "WelcomeScreen", got["screen"])
+    check("#roster-line 在真界面里也查不到（不只是源码里删了）",
+          not got["roster_widget"])
+    check("数据目录栏写着当前路径",
+          str(D.guides_dir()) in got["dir"], got["dir"][:80])
+    check("初次启动（配置里没有 guides_dir）标的是「默认目录」",
+          "默认目录" in got["dir"], got["dir"][:80])
+    check("改过目录之后标的是「当前设置」，两种状态分得开",
+          "当前设置" in got["dir_set"], got["dir_set"][:80])
+    check("数据目录栏把作业的实际落点也写出来（不再是 <数据目录> 这种占位）",
+          "<关卡名>" in got["dir"] and "<数据目录>" not in got["dir"],
+          got["dir"][:80])
+    uid = D.skland_uid()
+    if uid:
+        # 用户名本身来自 `account_info`（`describe_account` 用的也是它），
+        # 所以这里比的是**用户名在不在那一栏里**，不是某个写死的名字。
+        nick = (D.account_info(uid) or {}).get("nick") or ""
+        check("登录账号栏写着玩家账号用户名（还没问过时如实写「未知」）",
+              (bool(nick) and nick in got["acct"])
+              or "游戏用户名未知" in got["acct"],
+              got["acct"].splitlines()[0][:70])
+    else:
+        check("没登录时账号栏如实说没有账号，并指向补救键 L",
+              "当前没有登录的账号" in got["acct"],
+              got["acct"].splitlines()[0][:70])
+    check("账号栏里名册与干员库各一句「已获取没有」",
+          "名册：已获取" in got["acct"] and "干员库：已获取" in got["acct"],
+          got["acct"].splitlines()[-1][:80])
+    check("某一栏取数抛错时写出原因（**不留空白**）",
+          "这一栏取不到" in got["dir_err"] and "RuntimeError" in got["dir_err"],
+          got["dir_err"][:70])
+    check("一栏坏了不连累另一栏",
+          "干员库" in got["acct_err"], got["acct_err"][:60])
+
+
 def check_result_back_to_stage() -> None:
     """[9b] 结果屏按 `R` 回**选关页**（关卡列表），章/分部/环境的选择留着。
 
@@ -2446,6 +2575,7 @@ def main() -> int:
         check_squad_keys()
         check_maa_export()
         check_home()
+        check_welcome()
         check_result_back_to_stage()
         check_stage_categories()
         check_stage_layers()
