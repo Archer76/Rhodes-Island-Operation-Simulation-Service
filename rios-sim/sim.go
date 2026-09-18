@@ -643,9 +643,23 @@ func (c *simCtx) SetEnemyPosition(index int, position [2]float64) {
 // ⚠ 走完**就是漏怪**：`advance` 把腿走完 → `reachedEnd` 成立 → 第 8 步结算扣命。
 // 乙的"扑向干员"用的正是这条路，所以它可以自己飞到目标格（贴到 0.5 之内时机
 // 制再把它钉住），也可能扑空走完、以漏怪收场——原版两件事都会发生。
+//
+// **只给一个点**时＝"钉在这一格"（换成自缚腿）：原版「贴到目标」那一步就是
+// `e.route = [op.position]` ＋ `e.legs = []`，一条单点路线永远走不完，于是它既不动
+// 也不会漏怪。⚠ 只改位置而不换路线是个真错：旧的那条飞行路线还挂着，下一帧
+// `advance` 会沿着它继续往前挪（实测 HS-S-1 就是这么让一只乙在自毁前多挨了一下）。
 func (c *simCtx) SetEnemyRoute(index int, points [][2]float64) {
 	e := c.enemyAt(index)
-	if e == nil || len(points) < 2 {
+	if e == nil || len(points) == 0 {
+		return
+	}
+	e.progress = 0
+	e.legU = 0
+	e.legIndex = 0
+	e.offMap = false
+	if len(points) == 1 {
+		e.spec.Legs = []LegSpec{{Kind: "static", Points: points}}
+		e.position = points[0]
 		return
 	}
 	length := 0.0
@@ -653,10 +667,6 @@ func (c *simCtx) SetEnemyRoute(index int, points [][2]float64) {
 		length += math.Hypot(points[i][0]-points[i-1][0], points[i][1]-points[i-1][1])
 	}
 	e.spec.Legs = []LegSpec{{Kind: "walk", Points: points, Length: length}}
-	e.legIndex = 0
-	e.legU = 0
-	e.progress = 0
-	e.offMap = false
 }
 
 // EnemyMoveSpeed 是这一只**这一刻**的推进速度：与主循环 `advance` 用的是同一个

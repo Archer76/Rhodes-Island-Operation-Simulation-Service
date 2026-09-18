@@ -58,6 +58,13 @@ CASES = [
     dict(stage="HS-2", chars=["char_002_amiya"]),
     dict(stage="HS-6", chars=["char_002_amiya", "char_123_fang", "char_124_kroos"]),
     dict(stage="HS-EX-1", chars=["char_124_kroos", "char_123_fang"]),
+    # HS-S-1：第一关**判决真的压在天桩链上**的。它当初在闸门上是"放行"的
+    # （甲是装置召唤物、不在敌人字段表里），所以"放行 ≠ 判决一致"这句话就是
+    # 从它身上量出来的：链条没接线时 Go 给 `0杀/86.1s`，原版 `8杀/52.533s`。
+    # 现在四跳接线后逐位一致（`8杀/4漏/52.533s/伤害 0.0`），连 `damage_dealt`
+    # 都对上了——那一笔曾经是 1.2，根因是"乙贴住目标后旧路线还挂着、下一帧
+    # 又往前挪了一格"，于是它在自毁前多挨了一下（见 `sim.go::SetEnemyRoute`）。
+    dict(stage="HS-S-1", chars=["char_002_amiya", "char_123_fang"]),
 ]
 
 #: **只验"闸门放行 + 判决逐项一致"**的关（不做"田地咬到人"的对照）。
@@ -111,7 +118,7 @@ def spots_of(stage) -> list[tuple[int, int]]:
     return out
 
 
-def negative_controls(go, spec: dict, verdict: dict) -> list[str]:
+def negative_controls(go, spec: dict, verdict: dict, *, layer: str = "") -> list[str]:
     """反证：把这一层的东西**摘掉**之后，判决必须跟着变。
 
     为什么非要有这一条：只比"Go 与原版一致"是**可以被伪造的**——
@@ -119,35 +126,64 @@ def negative_controls(go, spec: dict, verdict: dict) -> list[str]:
     胜负，判决照样一模一样，检查全绿。所以每一个新接线的量都要配一条"把它摘掉
     就应当变"的实测（这层已经吃过一次：三条机制零开技却给了绿灯）。
 
+    `layer` 是**这一关声明要证的那一层**（"environment" / "pile"）。要求**只有
+    那一层**必须咬：一个用例只证得动一件事，硬要它同时把每一层都咬到，结果要么
+    是给不出用例，要么是逼着人放宽判据。HS-S-1 就是这种情形——它的胜负有
+    影响的是天桩链，而"被击倒污染"摘掉一字不变（那一关的敌人身上有这条键，
+    但这一趟它没落地），两者不该互相拖累。
+
     返回不成立的原因（空 = 反证成立）。
     """
     problems = []
+
+    def differs(mutant) -> bool:
+        """摘掉数据之后判决变了没有。
+
+        **Go 拒跑也算"变了"**：把这一层的数据摘掉后规格自相矛盾（例如天桩没了
+        召唤模板），Go 会照约定拒跑而不是硬算——这恰好说明这一层真的在被消费。
+        不这么算的话，工具会被自己的拒跑门撞崩（实测就是这么崩的）。
+        """
+        try:
+            got = go.sim(mutant)
+        except RuntimeError:
+            return True
+        return not _same_core(verdict, got)
+
     has_skill_atk = any(s.get("skill_atk_scale_phys") or s.get("skill_atk_scale_magic")
                         for s in spec.get("spawns", []))
-    if has_skill_atk:
+    if has_skill_atk and layer != "pile":
         mutant = json.loads(json.dumps(spec))
         for s in mutant["spawns"]:
             for key in ("skill_atk_scale_phys", "skill_atk_scale_magic",
                         "skill_atk_pollut"):
                 s.pop(key, None)
-        got = go.sim(mutant)
-        if _same_core(verdict, got):
+        if not differs(mutant):
             problems.append("把敌方技能出手整组清零，判决一字不变"
                             "（这一趟它没落地，用例证明不了它被用上了）")
     has_pollut = any(s.get("passive_pollut") for s in spec.get("spawns", []))
-    if has_pollut:
+    if has_pollut and layer != "pile":
         mutant = json.loads(json.dumps(spec))
         for s in mutant["spawns"]:
             s.pop("passive_pollut", None)
-        got = go.sim(mutant)
-        if _same_core(verdict, got):
+        if not differs(mutant):
             problems.append("把被击倒污染清零，判决一字不变（这一趟它没落地）")
-    if spec.get("mechanisms"):
+    # 天桩链的反证：把**召唤模板**（甲／它身上的乙／乙身上的天标）摘掉。
+    # 摘模板而不是摘装置：装置的"存在"还要撑起开场的断田几何，一起摘会把
+    # 几何也带走（这是装置层那一次踩过的坑，见 `run_py` 的说明）。
+    devices = (spec.get("mech_config", {}).get("huai_shu_li.farmland", {})
+               .get("devices", []))
+    if any(d.get("kind") == "pile" for d in devices) and layer in ("", "pile"):
+        mutant = json.loads(json.dumps(spec))
+        for d in mutant["mech_config"]["huai_shu_li.farmland"]["devices"]:
+            d.pop("child", None)
+        if not differs(mutant):
+            problems.append("把天桩链的召唤模板整组摘掉，判决一字不变"
+                            "（这一趟链条没落地，用例证明不了它被用上了）")
+    if spec.get("mechanisms") and layer != "pile":
         mutant = json.loads(json.dumps(spec))
         mutant["mechanisms"] = []
         mutant.pop("mech_config", None)
-        got = go.sim(mutant)
-        if _same_core(verdict, got):
+        if not differs(mutant):
             problems.append("把机制整层摘掉，判决一字不变（挂没挂上分不出来）")
     return problems
 
@@ -190,7 +226,7 @@ def plan_for(sim, stage, squad, calc, cells: list[tuple[int, int]] | None = None
 
 
 def run_py(stage, squad, calc, *, environment: str = "auto", spec_out: bool = False,
-           drop_device_runtime: bool = False, cells=None):
+           drop_device_runtime: bool = False, drop_pile_runtime: bool = False, cells=None):
     """跑一次原版。
 
     ⚠ `spec_out=True` 时规格取的是**跑之前**的那个状态（`build_spec` 是纯读，
@@ -205,10 +241,17 @@ def run_py(stage, squad, calc, *, environment: str = "auto", spec_out: bool = Fa
     `sim.farmland` 的，Go 的规格**带着**它。早先写成 `sim._devices = []` 是问错了
     问题：那连几何一起摘了，于是把"Go 已经有几何"的关也判成"装置有影响"
     （HS-EX-3 就这么被误挡了一轮）。
+
+    `drop_pile_runtime=True` 只关天桩链那一段（`_pile_tick`），阻流阀的建成/被拆
+    还原照旧。**天桩链的对照必须用它，不能拿"开/关环境"顶替**：HS-S-1 的胜负
+    压在链条上，而病害值开关对它一字不变——拿环境当对照就会把这一关报成
+    "咬不到机制"（⊘），那是**对照问错了问题**，不是"这一关没有内容"。
     """
     sim = BattleSimulator(stage, enemy_at=lib_get(stage), environment=environment)
     if drop_device_runtime:
         sim._device_tick = lambda dt, t: None
+        sim._pile_tick = lambda dt, t: None
+    if drop_pile_runtime:
         sim._pile_tick = lambda dt, t: None
     for d in plan_for(sim, stage, squad, calc, cells):
         sim.plan(d)
@@ -222,36 +265,53 @@ def pick_biting_cells(stage, squad, calc, go=None, *, tries: int = 12):
 
     两条判据都要成立，缺一不算：
 
-    1. **能区分**：同一个落位、同一套编队，开环境与关环境的判决必须不同。
-       相同就说明田地这一场没起作用，那么后面"Go 与 Python 一致"就是一条
-       **没有内容的绿灯**——两边都合起来算错也照样通过。
+    1. **能区分**：同一个落位、同一套编队，**任一层**对照的判决必须不同——
+       开环境 / 关环境的判决不同（田地那一层），**或**开天桩链 / 关天桩链的判决
+       不同（装置召唤那一层）。两条都相同，才说明这一场压根没走到代码，
+       那么后面"Go 与 Python 一致"就是一条**没有内容的绿灯**——两边都合起来算错
+       也照样通过。
+       ⚠ HS-S-1 是"只咬链条、不咬环境"的那种：它是本工具的第二个对照来源，
+       不能拿环境一个开关去顶替（顶替的结果是把它误报成 ⊘）。
     2. **反证成立**（这一关有对应机制时才要求）：把这一层的数据从规格里摘掉
-       （敌方技能出手整组清零 / 被击倒污染清零），Go 的判决必须跟着变。
-       不成立就说明**这一趟它压根没落地**——比如 HS-EX-4／HS-5 的技能出手是
-       "只打地面单位"，而阿米娅、克洛丝都是高台（阻挡 0），技能一次都没触发：
-       这时"Go 与原版一致"证明的是别的东西，不是这段代码。
+       （敌方技能出手整组清零 / 被击倒污染清零 / 天桩的召唤模板摘掉），Go 的判决
+       必须跟着变。不成立就说明**这一趟它压根没落地**——比如 HS-EX-4／HS-5 的
+       技能出手是"只打地面单位"，而阿米娅、克洛丝都是高台（阻挡 0），技能一次都
+       没触发：这时"Go 与原版一致"证明的是别的东西，不是这段代码。
 
-    返回 (落位表, 开环境结果)；试遍了都不行则返回 (None, None)。
+    返回 (落位表, 开环境结果, 咬到的是哪一层)；试遍了都不行则返回 (None, None, None)。
     """
     sim0 = BattleSimulator(stage, enemy_at=lib_get(stage))
     cells = candidate_cells(sim0, stage)
     if not cells:
-        return None, None
+        return None, None, None
     for i in range(min(tries, len(cells))):
         pick = cells[i:] + cells[:i]
+
+        def core(res):
+            return (res.won, res.kills, round(res.elapsed, 9))
+
         _, res_on = run_py(stage, squad, CALC, cells=pick)
         _, res_off = run_py(stage, squad, CALC, environment="off", cells=pick)
-        if res_on.won == res_off.won and res_on.kills == res_off.kills \
-                and abs(res_on.elapsed - res_off.elapsed) <= 1e-9:
+        _, res_nopile = run_py(stage, squad, CALC, drop_pile_runtime=True, cells=pick)
+        # 两层分别报"有没有影响"：**两层都可能有**（HS-S-1 就是），而一个用例
+        # 只证得动一件事——所以下面按层各试一次反证，谁过就算谁咬到了。
+        layers = []
+        if core(res_on) != core(res_off):
+            layers.append("environment")
+        if core(res_on) != core(res_nopile):
+            layers.append("pile")
+        if not layers:
             continue
-        if go is not None and _has_negative_control(stage, squad, pick, go):
-            return pick, res_on
-        elif go is None:
-            return pick, res_on
-    return None, None
+        for layer in layers:
+            if go is not None:
+                _LAST_CONTROL_PROBLEMS.clear()
+                if not _has_negative_control(stage, squad, pick, go, layer):
+                    continue
+            return pick, res_on, layer
+    return None, None, None
 
 
-def _has_negative_control(stage, squad, cells, go) -> bool:
+def _has_negative_control(stage, squad, cells, go, layer: str = "") -> bool:
     """这一趟的规格在 Go 那边摘掉本层数据后，判决会不会变（见 `pick_biting_cells`）。"""
     spec, _, _ = run_py(stage, squad, CALC, spec_out=True, cells=cells)
     if spec["unsupported"]:
@@ -260,7 +320,14 @@ def _has_negative_control(stage, squad, cells, go) -> bool:
         base = go.sim(spec)
     except RuntimeError:
         return False
-    return bool(negative_controls(go, spec, base)) is False
+    problems = negative_controls(go, spec, base, layer=layer)
+    if problems:
+        _LAST_CONTROL_PROBLEMS[:] = problems
+    return not problems
+
+
+#: 最近一次反证不成立的原因（只为把 ⊘ 的措辞说准：是"没走到"还是"反证不过"）。
+_LAST_CONTROL_PROBLEMS: list[str] = []
 
 
 def farmland_state_diff(sim, verdict: dict) -> str:
@@ -381,10 +448,11 @@ def main() -> int:
             code, squad = case["stage"], case["chars"]
             label = f"{code} {squad}"
             stage = load_stage(code, source=SRC)
-            cells, res_on_probe = pick_biting_cells(stage, squad, CALC, go)
+            cells, res_on_probe, layer = pick_biting_cells(stage, squad, CALC, go)
             if cells is None:
-                print(f"⊘ {label}：这套编队在这关**咬不到田地机制**"
-                      f"（试遍了可部署格，开/关环境判决都相同）——不计入通过数")
+                why = "；".join(_LAST_CONTROL_PROBLEMS) or (
+                    "试遍了可部署格：开/关环境判决相同，且开/关天桩链判决也相同")
+                print(f"⊘ {label}：{why}——不计入通过数")
                 weak += 1
                 continue
             spec, sim_on, res_on = run_py(stage, squad, CALC, spec_out=True, cells=cells)
@@ -399,14 +467,30 @@ def main() -> int:
             # （建成/进入触发/被拆还原、天桩链）、保留开场断田几何"判决一字不变，
             # 通过了才敢让 Go 那边只挂几何。不实测就传 True，等于把"装置运行期
             # 与天桩链还没移植"这件事藏起来。
+            #
+            # ⚠ 这条门槛在**天桩链移植之后**改了口径（原来一律要求"关掉不变"）：
+            # 链条现在真的接线了，所以"有影响"本身不再是拦路的理由，而是变成了
+            # **必须带着证据**的理由——有影响就要求规格里真的带着天桩模板，
+            # 然后由下面的逐项对拍来判决。少了这一条，HS-S-1 那种"胜负有影响、
+            # 规格却没带链条"的情形会被静默放行（判决自然对不上，但报错会指向
+            # 别处）；而"有影响 + 规格带链条 + 对拍一致"才是我们要的证据。
             _, res_nodev = run_py(stage, squad, CALC, drop_device_runtime=True,
                                   cells=cells)
             dev_key = tuple(getattr(res_nodev, k) for k in key)
             if dev_key != tuple(on):
-                print(f"❌ {label}：这一关的**装置运行期/天桩链有影响**"
-                      f"（只关它们后 {dev_key} ≠ {tuple(on)}），那两层还没移植，不该放行")
-                bad += 1
-                continue
+                piles = [d for d in (spec.get("mech_config", {})
+                                     .get("huai_shu_li.farmland", {})
+                                     .get("devices", []))
+                         if d.get("kind") == "pile"]
+                if not piles:
+                    print(f"❌ {label}：装置运行期/天桩链**对判决有影响**"
+                          f"（只关它们后 {dev_key} ≠ {tuple(on)}），而规格里"
+                          f"一个天桩模板都没带——那层没接线，判决必然对不上")
+                    bad += 1
+                    continue
+                print(f"   ↳ 这一关的装置/天桩链对判决**有影响**"
+                      f"（关掉后 {dev_key} ≠ {tuple(on)}），规格已带 {len(piles)} "
+                      f"个天桩模板 → 交给下面的逐项对拍")
             if spec["unsupported"]:
                 print(f"❌ {label}：闸门没放行 {spec['unsupported']}")
                 bad += 1
@@ -419,7 +503,7 @@ def main() -> int:
                 continue
             diff = compare(res_on, verdict)
             mech_diff = farmland_state_diff(sim_on, verdict)
-            weak_controls = negative_controls(go, spec, verdict)
+            weak_controls = negative_controls(go, spec, verdict, layer=layer)
             dirty = farmland_touched(sim_on)
             print(f"{'✅' if diff['ok'] and not mech_diff and not weak_controls else '❌'} "
                   f"{label}：落位 {cells[0]}，"
