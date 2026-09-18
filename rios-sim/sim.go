@@ -115,8 +115,8 @@ func runSim(spec *Spec) (*Verdict, error) {
 		return nil, fmt.Errorf("fps 必须是正整数，收到 %d", spec.FPS)
 	}
 	// **关卡特有机制按需取用**（mech 包）：点名的名字取不到就整场拒跑，
-	// 见 `mech.Load` 与 wire.go 里那段注释。
-	mechanisms, err := mech.Load(spec.Mechanisms)
+	// 见 `mech.Load` 与 wire.go 里那段注释。规格按名字一起交出去。
+	mechanisms, err := mech.Load(spec.MechConfig, spec.Mechanisms...)
 	if err != nil {
 		return nil, err
 	}
@@ -269,6 +269,18 @@ func runSim(spec *Spec) (*Verdict, error) {
 				// 没挂机制时 `speedFor` 恒为 1.0，与最小版本逐位相同。
 				advance(e, dt, spec.SpeedScale*ctx.speedFor(e.index))
 			}
+		}
+
+		// ---- 3.5 关卡特有机制：**推进之后、阻挡之前**（原版 2164）
+		//
+		// 位置是照原版逐行核出来的，不是随手挑的：怀黍离的田地/病害值要在这里算
+		// "这一秒站在田地上的干员吃多少环境伤害、回多少血"（原版 `_environment_tick`），
+		// 而原版把它排在**阻挡与出手之前**。挪到帧末会让"这一帧刚被阻挡的敌人把
+		// 干员打退场"与"这一帧的环境伤害"的先后关系反过来——每一秒都差一次。
+		//
+		// 空机制整段跳过，通用关卡一帧都不多花。
+		if !mechanisms.Empty() {
+			mechanisms.EnvTick(ctx, dt)
 		}
 
 		// ---- 4. 阻挡（1846 → 2289）
@@ -430,6 +442,23 @@ func (c *simCtx) DamageOperator(index int, raw float64, trueDamage bool) {
 	if op.hp < 0 {
 		op.hp = 0
 	}
+}
+
+// HealOperator 施加机制请求的回血。
+//
+// 与"负伤害"不是一回事：回血不吃减伤、也不触发受击类效果，上限是这名干员的
+// 最大生命（`unit.py:111` 的 `Combatant.heal`）。怀黍离的田地病害值为 0 时
+// 每秒走的就是这一条。
+func (c *simCtx) HealOperator(index int, amount float64) {
+	objs := *c.objs
+	if index < 0 || index >= len(objs) {
+		return
+	}
+	op := objs[index]
+	if !op.alive() || amount <= 0 {
+		return
+	}
+	op.hp = math.Min(op.spec.MaxHP, op.hp+amount)
 }
 
 func (c *simCtx) ScaleEnemySpeed(index int, scale float64) {

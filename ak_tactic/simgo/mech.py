@@ -38,7 +38,7 @@ from ..battle.devices import BLOCKER_KEY, PILE_KEY, PUMP_KEY
 
 __all__ = [
     "KINDS", "kind_of", "farmland_spec", "from_spec", "spec_summary",
-    "spec_farmland_cells",
+    "spec_farmland_cells", "names_for", "port_reasons",
 ]
 
 #: 装置 key → 规格里的 `kind`。**用 key 判，不用名字**（名字是中文、会随版本改）。
@@ -47,6 +47,98 @@ KINDS: dict[str, str] = {
     PUMP_KEY: "pump",           # 泵站：每秒泵水
     PILE_KEY: "pile",           # 天桩：召唤物，不入本层
 }
+
+#: 机制名（Python 与 Go 之间的契约，改名等于改协议）。
+FARMLAND_ID = "huai_shu_li.farmland"
+
+
+def names_for(sim: Any) -> list[str]:
+    """这一关需要 Go 侧挂上哪些机制。**由规格生成这一侧自己判**，不由调用方点。
+
+    理由：调用方（对拍台/搜索）只知道自己给了什么阵容，不知道这一关地图里有什么；
+    让它点名等于让它重算一遍"这关有没有田地"。而漏点一个名字的症状是
+    **Go 侧什么都不做却照样给判决**——正是机制层立规矩要防的那种错。
+    """
+    out: list[str] = []
+    if getattr(sim, "farmland", None) is not None:
+        out.append(FARMLAND_ID)
+    return out
+
+
+#: 敌人侧的哪些字段一出现，就说明这一关用到了 Go 侧还没建模的敌人行为。
+#:
+#: 判据是**字段驱动**（照着 `EnemyUnit` 的字段列，不照名字猜）：每个字段都在
+#: `sim.py` 里有一个消费点，字段非零就说明那一段代码这一局会跑。
+#: 住在 `spec.py` 的闸门里，这里只留两张表给它查。
+#:
+#: ⚠ 与**田地这一层**的关系：这些字段里有一半读的是田地病害值
+#: （`passive_pollut` / `phit_pollut` / `awake_value`），所以它们既是"敌人侧没建模"
+#: 的理由，也是"田地机制还没接完线"的理由——但**只报一次**（报在敌人侧那条），
+#: 否则同一件事在两处各写一句，读的人会以为有两个问题。
+ENEMY_BEHAVIOR_FIELDS: dict[str, str] = {
+    "skill_atk_scale_phys": "敌方技能出手",
+    "skill_atk_scale_magic": "敌方技能出手",
+    "skill_atk_pollut": "敌方技能出手（并污染田地）",
+    "passive_pollut": "被击倒污染田地",
+    "phit_pollut": "蜕皮污染田地",
+    "phit_block_pollut": "蜕皮污染田地（被阻挡时）",
+    "reborn_pollut": "重生吸病害值",
+    "pm2_mark_pollut": "标记退场污染田地",
+    "awake_value": "按田地病害值觉醒",
+    "hp_drain_per_sec": "持续自伤",
+}
+
+#: 名字带前缀、不是数值字段的那几样（`modes` 是形态表，真值判空列表）。
+#:
+#: `death_token` **不在**这张表里：它只在"计划里真放了装置"时才有后果，
+#: 而那条由 `device_deployments` 独立判——放进这张无条件的表，会把一件
+#: 没有后果的事报成不能跑的理由（见 `spec.py::_enemy_reasons` 里的注释）。
+ENEMY_BEHAVIOR_ATTRS: dict[str, str] = {
+    "modes": "BOSS 换弱点形态",
+}
+
+
+def port_reasons(sim: Any) -> list[str]:
+    """这一关的**关卡机制**里，有哪些是 Go 侧还没接线的？逐条给理由。
+
+    粒度是"哪一样东西"而不是"这关不行"：闸门要能指出该补哪一块，否则
+    "不支持"三个字会变成一个没人敢动的黑洞。
+
+    覆盖边界（2026-09-18，逐条都有出处）：
+
+    * **已接线**：田地几何、环境伤害/回复、泵站每秒泵水。位置 =
+      原版 `sim.py:2164` 的 `_environment_tick`（Go 侧 `EnvTick`）。
+    * **还没接线、但由别的闸门盖住**——不在本函数里重复报：
+      - 敌人侧那条污染链（被击倒/蜕皮/技能出手/重生吸值）：报在
+        `spec.py::_enemy_reasons`（那是敌人行为，Go 侧整段没有）；
+      - 运行期改田地几何（田鼷拆掉阻流阀 → 地形还原）与天桩链：报在
+        `spec.py` 的**关卡装置**那一条上——它们整段住在装置层里，而"装置摘掉
+        结果一字不变"是那一条闸门要求实测证据的原因（拆掉装置连开场那次 `sever`
+        也一并没了，所以那份证据同时盖住了几何的两种状态）。
+
+    于是本函数现在**恒为空**。留着它而不是删掉：下一个机制（全场总攻击装置）
+    会带着自己的一份"用了什么、接没接线"进来，位置在这里。**恒为空不等于可以
+    省掉这条判据**——省掉之后，将来某一份规格漂了，读代码的人找不着"谁该为此负责"。
+    """
+    return []
+
+
+def _spawns_of(sim: Any) -> list[Any]:
+    """这一关会出现的每一种敌人（按 `_spawn` 建一次对象，纯读）。"""
+    out = []
+    for t, sp in getattr(sim, "_spawns", None) or []:
+        try:
+            out.append(sim._spawn(sp.enemy_id, sp.level, sp.route_index, float(t)))
+        except Exception:                                       # noqa: BLE001
+            continue
+    return out
+
+
+def _any_spawn_has(sim: Any, attr: str) -> bool:
+    for e in _spawns_of(sim):
+        if getattr(e, attr, 0):
+            return True
+    return False
 
 
 def kind_of(key: str | None) -> str | None:

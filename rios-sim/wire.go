@@ -13,6 +13,8 @@
 // ——那种"对齐"会把 bug 固化成基线。
 package main
 
+import "encoding/json"
+
 // Spec 是一场战斗的完整输入。
 type Spec struct {
 	Stage    string  `json:"stage"`
@@ -46,6 +48,16 @@ type Spec struct {
 	//: 分不开，而对拍台分不开的两种结果早晚会把偏差固化成基线。
 	//: 本二进制里有哪些机制，看 `ping` 的 `mechanisms`。
 	Mechanisms []string `json:"mechanisms,omitempty"`
+
+	//: 各机制的**规格**，键 = 机制名（与 `Mechanisms` 里的名字一一对应）。
+	//:
+	//: 类型是 `json.RawMessage`：规格长什么样是**那个机制自己的事**，由它自己的
+	//: 工厂去解（`mech.Factory`）。放在这里而不是写成一堆具名字段，是因为机制会
+	//: 一个一个加，每加一个就往协议顶层塞一段字段，协议迟早变成一堆互不相干的
+	//: 平铺字段，而且删掉一个机制还会留下没人读的键。
+	//:
+	//: 点名了却没有对应规格（或反过来）→ 拒跑，见 `mech.Load`。
+	MechConfig map[string]json.RawMessage `json:"mech_config,omitempty"`
 }
 
 // OperatorSpec 是一名**已经在场上**的干员的全部数值。
