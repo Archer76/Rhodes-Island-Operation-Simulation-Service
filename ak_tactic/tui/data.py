@@ -277,7 +277,8 @@ def account_info(login_uid: str) -> dict:
 
 
 def describe_account(login_uid: str, *, current: bool = False,
-                     roster_flag: bool = True) -> str:
+                     roster_flag: bool = True,
+                     login_note: bool = True) -> str:
     """一行账号的排版：**先游戏用户名与游戏uid**，登录账号 id 只作 dim 附注。
 
     `current=True` 加一个 `←当前` 标记。未知的字段如实写「未知」并给出补救办法
@@ -286,6 +287,10 @@ def describe_account(login_uid: str, *, current: bool = False,
     `roster_flag=False` 去掉尾部那句「（无）名册缓存」：主界面把名册状态单独
     写成一句更准的话（份数、来源、降级警告），同一栏里再挂一个粗粒度的
     「有名册缓存」就是重复；登录屏那几处**照旧**带着它。
+
+    `login_note=False` 去掉「（登录账号 <id>）」这个小注（博士 2026-09-18：
+    主界面那一处删掉）。登录屏**照旧**带着它——那里正是要选"哪个账号"的地方，
+    一个号可能有两个 id，标识得写全；主界面只回答"现在登的是哪个号"。
     """
     info = account_info(login_uid)
     uid = info["login_uid"]
@@ -297,7 +302,7 @@ def describe_account(login_uid: str, *, current: bool = False,
              else "　[warn]游戏uid 未知[/]")
     if info["channel"]:
         head += f"　[dim]{info['channel']}[/]"
-    if uid:
+    if uid and login_note:
         head += f"　[dim]（登录账号 {uid}）[/]"
     if roster_flag:
         head += ("　[dim]有名册缓存[/]" if info["has_roster"]

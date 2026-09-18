@@ -969,10 +969,11 @@ def check_welcome() -> None:
           not got["roster_widget"])
     check("数据目录栏写着当前路径",
           str(D.guides_dir()) in got["dir"], got["dir"][:80])
-    check("初次启动（配置里没有 guides_dir）标的是「默认目录」",
-          "默认目录" in got["dir"], got["dir"][:80])
-    check("改过目录之后标的是「当前设置」，两种状态分得开",
-          "当前设置" in got["dir_set"], got["dir_set"][:80])
+    check("数据目录栏**只写路径本身**（「默认目录／当前设置」那个小注已删）",
+          str(D.guides_dir()) in got["dir"]
+          and "默认目录" not in got["dir"] and "还没改过" not in got["dir"]
+          and "当前设置" not in got["dir_set"],
+          got["dir"][:80])
     check("数据目录栏把作业的实际落点也写出来（不再是 <数据目录> 这种占位）",
           "<关卡名>" in got["dir"] and "<数据目录>" not in got["dir"],
           got["dir"][:80])
@@ -998,18 +999,36 @@ def check_welcome() -> None:
     check("一栏坏了不连累另一栏",
           "干员库" in got["acct_err"], got["acct_err"][:60])
 
+    # ---- 博士 2026-09-18 删掉的那两处小注 + 那三行说明
+    check("主界面**不再印登录账号 id**（「（登录账号 …）」删了）",
+          "登录账号" not in got["acct"], got["acct"].splitlines()[0][:70])
+    check("主界面数据目录栏**不再印「默认目录／当前设置」那个小注**",
+          "默认目录" not in got["dir"] and "当前设置" not in got["dir_set"]
+          and "还没改过" not in got["dir"], got["dir"][:70])
+    check("登录屏**照旧**带着登录账号 id（那里正是要分清哪个号的地方）",
+          "登录账号" in D.describe_account(D.skland_uid() or "9d1"),
+          D.describe_account(D.skland_uid() or "9d1")[:70])
+    src = Path(A.__file__).read_text(encoding="utf-8")
+    wseg = src[src.index("class WelcomeScreen"):src.index("class GuidesDirScreen")]
+    check("那三行说明（「算出一份能过的编队」/「四步：」/「中文输入法会吞…」）"
+          "整个删掉了，源码与界面里都没有",
+          "中文输入法会吞掉字母键" not in wseg
+          and "算出一份能过的编队" not in wseg
+          and "#intro" not in wseg)
+
     # ---- 矮窗口里那个「名册/干员库」不能再掉到屏幕外（博士 2026-09-18 第二次报）
     #
     # 他的终端大约 20 行，而改前这一屏的内容排在 30 行以下：**值全在下沿之外**，
     # 只剩标题行看得见——他两次报的现象（「只看见四行标题」与「没有名册那句」）
     # 都是这一个成因。所以这里量的不是"字打出来没有"，而是**落在可见区内没有**。
     from rich.text import Text as _Text
+    from textual.containers import Vertical as _Vertical
 
     async def fold() -> dict:
         sizes: dict = {}
-        intro: dict = {}
-        for w, h in ((80, 14), (80, 16), (80, 18), (80, 20), (80, 24),
-                     (100, 30), (120, 44)):
+        title: dict = {}
+        for w, h in ((80, 10), (80, 12), (80, 14), (80, 16), (80, 18), (80, 20),
+                     (80, 24), (100, 30), (120, 44)):
             app = A.RiosApp()
             async with app.run_test(size=(w, h)) as pilot:
                 await pilot.pause()
@@ -1025,20 +1044,23 @@ def check_welcome() -> None:
                         else:
                             cut.append(f"{wid} 第{i + 1}行 y={y}")
                 sizes[(w, h)] = (seen, cut)
-                intro[h] = bool(app.screen.query_one("#intro", Static).display)
-        return {"sizes": sizes, "intro": intro}
+                title[h] = bool(
+                    app.screen.query_one("#title-block", _Vertical).display)
+        return {"sizes": sizes, "title": title}
 
     folded = asyncio.run(fold())
     bad = {k: v[1] for k, v in folded["sizes"].items() if v[1]}
     check("任何常见窗口高度下，两栏四行**全在可见区内**（博士的 ~20 行终端）",
           not bad, str(bad))
-    check("14 行这么矮也保住那四行（说明与标题按优先级让路）",
-          folded["sizes"][(80, 14)][0] == 4 and not folded["sizes"][(80, 14)][1],
-          str(folded["sizes"][(80, 14)]))
-    check("窗口够高时说明照旧显示（不是一律藏掉）",
-          folded["intro"][44] and folded["intro"][30]
-          and not folded["intro"][20],
-          str({h: folded["intro"][h] for h in (44, 30, 24, 20, 16)}))
+    check("12 行这么矮也保住那四行（窗口再矮才收标题）",
+          folded["sizes"][(80, 12)][0] == 4 and not folded["sizes"][(80, 12)][1],
+          str(folded["sizes"][(80, 12)]))
+    check("10 行（比支持的还矮）照样没有内容掉出去",
+          not folded["sizes"][(80, 10)][1], str(folded["sizes"][(80, 10)]))
+    check("窗口够高时标题块照旧显示（不是一律藏掉）——12 行起就带着它",
+          folded["title"][44] and folded["title"][30] and folded["title"][20]
+          and folded["title"][12] and not folded["title"][10],
+          str({h: folded["title"][h] for h in (44, 30, 24, 20, 16, 12, 10)}))
 
 
 def check_result_back_to_stage() -> None:
@@ -2212,6 +2234,124 @@ def check_deploy_limit() -> None:
           "取不到本关的可部署人数" in seg and "封顶" in seg)
 
 
+def check_small_window() -> None:
+    """**小窗口也要看得见所有内容**（博士 2026-09-18）。
+
+    原话：「做好页面排版，保证终端窗口小的时候也要让玩家看到所有内容」。
+
+    判据是「**不滚动**就要看得见」——Textual 的 `Screen` 默认 `overflow-y: auto`，
+    所以"能滚到的内容"从程序角度看都够得着，但博士看到的是"只看得见四行标题"：
+    **没人会在一个终端界面里先想到去滚动**。于是量的是可见区：
+
+    * 一个 widget 的可见区 = 窗口与**所有祖先区域的交集**（父块被挤扁了，
+      子内容就真的被裁掉了）；
+    * 例外：widget **自己**可滚动（`overflow-y: auto`，如 `#log` / `#result`）
+      ——那是"滚一下就能看全"，算看得见。
+
+    逐屏 × 逐档跑（80x12 到 120x44）。矮窗口靠三层让路：`compact` 收掉块的边框与
+    内边距（每块省 4 行）、`TINY_HEIGHT` 收顶栏、各屏自己再收"看一次就够"的块。
+    """
+    from textual.widgets import Static as _S
+
+    from ak_tactic.tui import app as A2
+
+    def visible_rect(node, size) -> tuple[int, int, int, int]:
+        x, y = 0, 0
+        w, h = size
+        cur = node
+        while cur is not None:
+            r = getattr(cur, "region", None)
+            if r is None:
+                break
+            x, y = max(x, r.x), max(y, r.y)
+            w = max(0, min(x + w, r.x + r.width) - x)
+            h = max(0, min(y + h, r.y + r.height) - y)
+            cur = cur.parent
+        return x, y, w, h
+
+    def unreachable(screen, size) -> list[str]:
+        out: list[str] = []
+        for node in screen.walk_children():
+            if not isinstance(node, _S) or not node.display:
+                continue
+            try:
+                if str(node.styles.overflow_y) in ("auto", "scroll"):
+                    continue                      # 自己可滚动：滚一下看得全
+                text = str(node.render())
+            except Exception:                     # noqa: BLE001
+                continue
+            lines = [ln for ln in _plain_text(text).splitlines() if ln.strip()]
+            if not lines or node.region.height == 0:
+                continue
+            _vx, vy, vw, vh = visible_rect(node, size)
+            bottom = node.region.y + min(len(lines), node.region.height)
+            if vh <= 0 or vw <= 0:
+                out.append(f"{node.id or node.classes} 整个在可见区外")
+            elif bottom > vy + vh:
+                out.append(f"{node.id or node.classes} 有 {bottom - (vy + vh)} 行看不到")
+        return out
+
+    async def sweep() -> dict:
+        got: dict = {}
+        for size in ((80, 12), (80, 16), (80, 20), (100, 30), (120, 44)):
+            app = A2.RiosApp()
+            async with app.run_test(size=size) as pilot:
+                await pilot.pause()
+                got[("主界面", size)] = unreachable(app.screen, size)
+                await pilot.press("l")
+                await pilot.pause()
+                got[("登录屏", size)] = unreachable(app.screen, size)
+                await pilot.press("escape")
+                await pilot.pause()
+                await pilot.press("enter")
+                await pilot.pause()
+                got[("选关：章", size)] = unreachable(app.screen, size)
+                if type(app.screen).__name__ == "ChapterPickScreen":
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    got[("关卡列表", size)] = unreachable(app.screen, size)
+                app.push_screen(A2.GuidesDirScreen())
+                await pilot.pause()
+                got[("改目录", size)] = unreachable(app.screen, size)
+                app.pop_screen()
+                await pilot.pause()
+                # 解算屏：把搜索换成空实现，只量排版（真跑一轮要几十秒）
+                st = app.state
+                st.stage = {"code": "HS-EX-4", "level_id": "act31side_ex04"}
+                st.squad = ["能天使"]
+                st.mode = "auto"
+                st.pool_note = "勾的 1 人 + 名册按练度补 23 人（共 24 人）"
+                orig = A2.SolveScreen._run
+                A2.SolveScreen._run = lambda self: None
+                try:
+                    app.push_screen(A2.SolveScreen())
+                    await pilot.pause()
+                    st.depth = 8
+                    st.deploy_limit = 8
+                    app.screen._tick()
+                    await pilot.pause()
+                    got[("解算中", size)] = unreachable(app.screen, size)
+                finally:
+                    A2.SolveScreen._run = orig
+        return got
+
+    got = asyncio.run(sweep())
+    bad = {f"{k[0]}@{k[1][0]}x{k[1][1]}": v for k, v in got.items() if v}
+    check("每一屏在每一档窗口下都**不滚动就能看全**（80x12 起）",
+          not bad, str(list(bad.items())[:3]))
+    check("最矮那档（80x12）与常见那档（80x20）都跑到了（判据不是空转）",
+          ("主界面", (80, 12)) in got and ("解算中", (80, 20)) in got,
+          f"{len(got)} 个组合")
+    check("紧凑模式（compact）确实在矮窗口上生效",
+          A2.RiosScreen.COMPACT_HEIGHT == 22
+          and A2.RiosScreen.TINY_HEIGHT == 16)
+
+
+def _plain_text(markup: str) -> str:
+    from rich.text import Text
+    return Text.from_markup(markup).plain
+
+
 def check_login_wizard() -> None:
     """[16] 初次干净启动的登录向导 / 本次或以后不登录 / 退出账号 / 切账号。
 
@@ -2740,8 +2880,15 @@ def _check_login_wizard_body(A, skland, tmp: Path, conf: Path, read_cfg) -> None
     check("[0] 屏账号行同样是「游戏用户名 + 游戏uid」",
           "测试博士" in got["welcome_acct"] and "游戏uid=90000001" in got["welcome_acct"],
           got["welcome_acct"][:120])
-    check("通行证账号 id 退成附注（不再冒充 uid）",
-          "uid=9d1" not in got["welcome_acct"] and "登录账号 9d1" in got["welcome_acct"],
+    check("通行证账号 id 不冒充 uid：登录屏把它写成「（登录账号 …）」的附注",
+          "uid=9d1" not in got["login_list"]
+          and "登录账号 9d1" in got["login_list"],
+          got["login_list"][:160])
+    check("[0] 屏账号行**只剩**游戏用户名 + 游戏uid（登录账号 id 已按博士"
+          "2026-09-18 删掉）",
+          "测试博士" in got["welcome_acct"]
+          and "游戏uid=90000001" in got["welcome_acct"]
+          and "登录账号" not in got["welcome_acct"],
           got["welcome_acct"][:160])
 
     # ---- 输入法全角：按键匹配表补了全角孪生，真按下也走通
@@ -2806,6 +2953,7 @@ def main() -> int:
         check_esc_steps()
         check_solve_pool()
         check_deploy_limit()
+        check_small_window()
     finally:
         restore_roster(old_loader)
     # [16] 要真的读本机凭据与名册文件（只是换到临时目录），必须用真函数
