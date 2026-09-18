@@ -193,10 +193,58 @@ class State:
         self.deploy_limit: int = 0
 
 
+# ================================================================ 屏的基类
+
+class RiosScreen(Screen):
+    """本项目所有屏的基类：**矮窗口下装饰让路，内容优先**。
+
+    博士 2026-09-18：「做好页面排版，保证终端窗口小的时候也要让玩家看到所有内容」。
+
+    两层做法：
+
+    * `compact` 类 —— `theme.py` 里 `Screen.compact .block` 那条 CSS 把块的边框、
+      内边距、外边距全收掉。一个块的固定开销本来是 6 行，三块 18 行，加上顶栏、
+      步骤条、底栏要 25 行才装得下，而他的终端只有 ~20 行：**内容就是这么被挤到
+      窗口外面的**；
+    * `_fit_extra(h)` —— 子类再收自己那些"看一次就够"的块（主界面的标题块）。
+
+    阈值 `COMPACT_HEIGHT` 是量出来的，不是估的：`_proto/small_window_audit.py`
+    逐屏逐档核对「不滚动就要看得见」，`tools/check_tui.py` 的 `check_small_window()`
+    把同一套判据钉进自检。
+    """
+
+    #: 窗口矮到这个行数以下就进紧凑模式。
+    COMPACT_HEIGHT = 22
+
+    #: 再矮到这个行数以下，连**顶栏**也收掉（它印的是服务名与时钟，都是装饰；
+    #: 底栏留着——那里的按键是操作）。
+    TINY_HEIGHT = 16
+
+    def _fit(self) -> None:
+        try:
+            h = self.size.height
+        except Exception:                                     # noqa: BLE001
+            return
+        if h <= 0:
+            return
+        self.set_class(h < self.COMPACT_HEIGHT, "compact")
+        try:
+            self.query_one(Header).display = h >= self.TINY_HEIGHT
+        except Exception:                                     # noqa: BLE001
+            pass          # 有些屏（弹窗）本来就没有 Header
+        self._fit_extra(h)
+
+    def _fit_extra(self, h: int) -> None:
+        """子类挂钩：按窗口高度再收点什么。默认什么都不做。"""
+
+    def on_resize(self, event) -> None:
+        self._fit()
+
+
 # ================================================================ [0] 准备
 
-class WelcomeScreen(Screen):
-    """[0] 准备：说明程序要做什么、数据目录在哪、名册从哪来。"""
+class WelcomeScreen(RiosScreen):
+    """[0] 准备：数据目录在哪、名册从哪来、当前登录的是哪个号。"""
 
     #: `key_display` 让 Footer 显示**大写字母**；而**实际能被按下的**不只小写——
     #: 每个单字母绑定都由 `both_cases()` 补了大写孪生，所以照着 Footer 按
@@ -211,27 +259,26 @@ class WelcomeScreen(Screen):
         Binding("q", "quit", "退出程序", key_display="Q"),
     ])
 
-    #: 窗口矮到这个行数以下就把说明那块**收起来**，先把两栏塞进可见区。
+    #: 窗口矮到这个行数以下就把**标题块**收起来（顶栏本来就印着服务名）。
     #:
     #: 博士 2026-09-18 报「主界面只看得见四行标题」、接着又报「登录账号那一栏
     #: 没有名册/干员库那句」——两件事同一个成因：这一屏的内容排在 30 行以下，
     #: 而他的终端大约只有 20 行，**值全掉在下沿之外**，只剩标题行看得见。
     #: 实测（`_proto/home_fold.py`）：80x20 时名册那句在 y=20、窗口只有 0–19。
-    #: 所以矮窗口下该让路的是说明文字，不是数据。
-    SHORT_HEIGHT = 24
+    #: 最底下那一层成因是 Textual 的 `Vertical` 默认 `height: 1fr`：三块把剩余
+    #: 空间均分，各自被撑高几行，内容于是被顶到窗口外面——`.block { height: auto }`
+    #: 修掉之后，这一屏只要 **11 行**就装得下全部四行数据。
+    #:
+    #: 另外那三行说明被博士整个删掉了（「这一段整个删掉，不需要提示」），所以
+    #: 阈值也跟着降到"只剩标题可收"的这档：**12 行起连标题一起显示**。
+    SHORT_HEIGHT = 11
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static(theme.step_bar(0), id="steps")
         with Vertical(classes="block", id="title-block"):
             yield Label(theme.APP_TITLE, classes="block-title")
-            yield Static(theme.APP_SUBTITLE + "\n", classes="muted", id="subtitle")
-            yield Static(
-                "把「某个关卡」算出一份能过的编队，导出成 MAA 认得的作业 JSON。\n"
-                "四步：选关卡 → 指定编队 → 解算 → 导出。\n"
-                "[dim]中文输入法会吞掉字母键（它们被输入法拿去做候选字了）——"
-                "按 Shift 切到英文即可；Enter、Esc、方向键与全角数字不受影响。[/]",
-                id="intro")
+            yield Static(theme.APP_SUBTITLE, classes="muted", id="subtitle")
         with Vertical(classes="block"):
             yield Label("数据目录", classes="block-title")
             yield Static("", id="dir-line")
@@ -246,37 +293,24 @@ class WelcomeScreen(Screen):
         self._fit()
         self._refresh()
 
-    def on_resize(self, event) -> None:
-        """窗口尺寸一变就重新决定「说明要不要收起来」。"""
-        self._fit()
+    def _fit_extra(self, h: int) -> None:
+        """矮窗口下把**标题块**收起来（基类已把块的边框与内边距收掉）。
 
-    def _fit(self) -> None:
-        """把窗口高度换算成「哪些说明该收起来」。
+        **优先级是明写的：数据 > 标题。** 矮窗口里宁可让博士看不见那两条自己
+        已经知道的服务名（顶栏也印着），也不能让他看不见数据目录与名册状态——
+        后者才是他每次来这一屏要看的东西。
 
-        **优先级是明写的：数据 > 说明。** 矮窗口里宁可让博士看不见
-        「中文输入法会吞字母键」那句，也不能让他看不见数据目录与名册状态——
-        后者是他每次都要来这一屏看的东西，前者看一次就够。
+        | 窗口高 | 收起什么 |
+        |---|---|
+        | ≥ 20 | 什么都不收（30 行是常见默认） |
+        | < 20 | 收起**标题块**，两栏四行数据保住 |
 
-        三档（`_proto/home_fold.py` 逐档量过）：
-
-        | 窗口高 | 收起什么 | 理由 |
-        |---|---|---|
-        | ≥ 24 | 什么都不收 | 30 行是常见默认，这一档是它的正常样子 |
-        | 20–23 | 收起**说明文字**（`#intro`） | 四行说明让位给两栏 |
-        | < 20 | 连**标题块**一起收 | 顶栏本来就印着 `R.I.O.S. 罗德岛作战演算服务`，在窄窗口里重复一遍，代价是下面那行「名册/干员库」被顶到屏幕外——实测 80x18 就是差这一行 |
-
-        阈值都是量出来的，不是估的：80x16 与 80x20 两档改完之后，两栏四行全在可见区内。
+        阈值是量出来的：`check_welcome()` 在 80x14 到 120x44 七档上逐行核对
+        「不滚动就要看得见」。
         """
-        try:
-            h = self.size.height
-        except Exception:                                     # noqa: BLE001
-            return
-        if h <= 0:
-            return
-        show_title = h >= 20
+        show_title = h >= self.SHORT_HEIGHT
         try:
             self.query_one("#title-block", Vertical).display = show_title
-            self.query_one("#intro", Static).display = h >= self.SHORT_HEIGHT
             self.query_one("#subtitle", Static).display = show_title
         except Exception:                                     # noqa: BLE001
             pass
@@ -292,10 +326,14 @@ class WelcomeScreen(Screen):
             tail = (f"；本机另存着 {len(others)} 个登过的账号，"
                     "按 L 进登录屏后按 S 可切回。" if others else "。按 L 扫码登录。")
             return "[warn]当前没有登录的账号[/]" + tail
-        # 显示的是**游戏用户名与游戏uid**（博士 2026-09-18 口径），登录账号 id 只作附注。
+        # 显示的是**游戏用户名与游戏uid**（博士 2026-09-18 口径）。
+        # 原先后面还挂一个 `（登录账号 2155938927）` 的小注，博士 2026-09-18
+        # 让删掉：那一层区分（登录账号 id ≠ 游戏 uid）写在文档与登录屏里就够，
+        # 主界面这一行只回答"现在登的是哪个号"。
         # 名册那半句不在这里写——`_data_line()` 会单独写一句更准的（份数 + 来源
         # + 降级警告），同一栏里重复一个「有名册缓存」只会让人以为有两件事。
-        head = D.describe_account(uid, current=True, roster_flag=False)
+        head = D.describe_account(uid, current=True, roster_flag=False,
+                                  login_note=False)
         if others:
             head += f"　[dim]（本机另有 {len(others)} 个登过的账号）[/]"
         return head
@@ -317,24 +355,14 @@ class WelcomeScreen(Screen):
                 box.update(f"[warn]这一栏取不到：{exc.__class__.__name__}: {exc}[/]")
 
     def _dir_line(self) -> str:
-        """数据目录：写**当前正在用的**路径，并说清它是默认值还是改过的。
+        """数据目录：**当前正在用的路径**，两行。
 
-        排版按博士 2026-09-18 给的那一版：**路径独占一行**，第二行写作业落点。
-        原先把「存在；」与输出目录挤在同一行，窄窗口里那一行会折行，把下面几行
-        往屏幕外顶；现在两行各管一件事。
-
-        路径后面那个小注保留（没配过 `guides_dir` 标「默认目录…」，改过标
-        「当前设置」）——它在同一行上，不占高度，而「这个路径是哪来的」正是他
-        会问的下一句。
+        博士 2026-09-18 的排版：路径独占一行，第二行写作业落点。他还把原先跟
+        在路径后面的那个小注（「（默认目录…，还没改过）」／「（当前设置）」）
+        删掉了——路径本身就是他要的信息，"是哪来的"他清楚（能改的地方就按 `D`）。
         """
         g = D.guides_dir()
-        try:
-            configured = bool((D.load_config().get("guides_dir") or "").strip())
-        except Exception:                                     # noqa: BLE001
-            configured = False
-        how = ("[dim]（当前设置）[/]" if configured
-               else "[dim]（默认目录：本工具根目录下的 Guides/，还没改过）[/]")
-        out = f"{g}　{how}\n[dim]MAA 作业输出到 {Path(str(g)) / '<关卡名>'}[/]"
+        out = f"{g}\n[dim]MAA 作业输出到 {Path(str(g)) / '<关卡名>'}[/]"
         if not g.exists():
             out += "[dim]　（这个目录还不存在，导出时自动建）[/]"
         return out
@@ -470,7 +498,7 @@ class PathInput(Input):
         self.post_message(self.Completed(cands))
 
 
-class GuidesDirScreen(Screen):
+class GuidesDirScreen(RiosScreen):
     """可跳过的"重设默认目录"。Esc 不改就回去。"""
 
     BINDINGS = both_cases([Binding("escape", "cancel", "返回", key_display="Esc")])
@@ -660,7 +688,7 @@ class QrScreen(ModalScreen):
         self.dismiss(None)
 
 
-class LoginScreen(Screen):
+class LoginScreen(RiosScreen):
     """[0b] 登录态：**真的能扫码登录**，也允许跳过。
 
     ## 走的是哪条路
@@ -1177,7 +1205,7 @@ class LoginScreen(Screen):
 # 的 `basicInfo`，靠 `zoneToActivity` 才把 `act54side_zone1/2` 归到一起。
 # 平铺成 477 行等于让用户自己认前缀。
 
-class ChapterPickScreen(Screen):
+class ChapterPickScreen(RiosScreen):
     """[1a] 选章节／活动。"""
 
     BINDINGS = both_cases([
@@ -1264,7 +1292,7 @@ class ChapterPickScreen(Screen):
         self.dismiss(None)
 
 
-class PartPickScreen(Screen):
+class PartPickScreen(RiosScreen):
     """[1b-1] 选哪一部分：一个活动含多个 zone 时才有这一层。"""
 
     BINDINGS = both_cases([
@@ -1311,7 +1339,7 @@ class PartPickScreen(Screen):
         self.dismiss(None)
 
 
-class EnvPickScreen(Screen):
+class EnvPickScreen(RiosScreen):
     """[1b-2] 选环境：主线第 9-14 章才有这一层。
 
     第 9 章只有剧情体验／标准实战（**没有磨难险地**），第 10-14 章三档齐全，
@@ -1364,7 +1392,7 @@ class EnvPickScreen(Screen):
         self.dismiss(None)
 
 
-class StagePickScreen(Screen):
+class StagePickScreen(RiosScreen):
     """[1c] 选关卡。
 
     只显示**关卡代号 + 关卡中文名**（「SR-EX-8　虚无之顶」）——博士明确要求
@@ -1491,7 +1519,7 @@ class SquadList(SelectionList[str]):
     ])
 
 
-class SquadAskScreen(Screen):
+class SquadAskScreen(RiosScreen):
     """[2a] 先决定**要不要手动加人**，再决定要不要进选人界面。
 
     不手动加人时**根本不进选人界面**：直接空手进解算，由搜索自己在名册里挑
@@ -1547,7 +1575,7 @@ class SquadAskScreen(Screen):
         self.dismiss(None)
 
 
-class SquadPickScreen(Screen):
+class SquadPickScreen(RiosScreen):
     """[2b] 选编队：按职业分类 + 练度门槛 + 两种模式。
 
     三条交互都是博士定的（2026-09-17）：
@@ -1688,7 +1716,7 @@ class SquadPickScreen(Screen):
 
 # ================================================================ [3] 解算
 
-class SolveScreen(Screen):
+class SolveScreen(RiosScreen):
     """[3] 解算：进度条 + 真实计数 + 日志。
 
     进度条的百分比**不是编的**：搜索有上限 `max_depth`/候选规模，这里用
@@ -1713,19 +1741,26 @@ class SolveScreen(Screen):
         st = self.app.state
         squad = "、".join(st.squad) if st.squad else "（不指定，全名册）"
         mode = "允许补充" if st.mode == "auto" else "只用我选的"
-        self.query_one("#solve-head", Static).update(
-            f"关卡：{st.stage['code']}（{st.stage['level_id']}）\n"
-            f"编队：{squad}\n模式：{mode}")
         self._t0 = time.time()
         self._lines: list[str] = []
         self._aborted = False
         self.app.state.depth = DEPTH_START
         self.app.state.deploy_limit = 0
+        # 开局那几行走同一个 `_head_text()`：极矮窗口下它自己会压成两行，
+        # 免得"开局显示三行、第一跳变成两行"抖一下。
+        self._fit()
+        self.query_one("#solve-head", Static).update(self._head_text(0, 0.0))
         self._log("开始解算……")
         self.set_interval(0.25, self._tick)
         self._worker = self._run()
 
     def _log(self, msg: str) -> None:
+        """往日志里追加一行。
+
+        `#log` 在 CSS 里是可滚动的（`overflow-y: auto`），但这里只留**最后 14 行**
+        ——这一屏的意义是"看得见它在动"，不是"留下完整档案"；真要看全，结果屏
+        与 `--report` 才是那条路。
+        """
         self._lines.append(f"[dim]{time.time() - self._t0:6.1f}s[/]  {msg}")
         self.query_one("#log", Static).update("\n".join(self._lines[-14:]))
 
@@ -1735,16 +1770,40 @@ class SolveScreen(Screen):
         elapsed = time.time() - self._t0
         self.query_one("#prog", ProgressBar).update(
             progress=min(95.0, 5.0 + n * 0.6))
-        # 这一屏也**只写出战人数**（博士 2026-09-18）：`本轮最多 N 人` 是搜索的
-        # 深度上限，也就是"这个方案最多用几个人"；本关的可部署上限写出来，是给他
-        # 一个"还能再加深到几"的边界。候选池多大（`pool_note`）不进这一屏。
+        self.query_one("#solve-head", Static).update(self._head_text(n, elapsed))
+
+    def _head_text(self, n: int, elapsed: float) -> str:
+        """这一屏头顶那几行。
+
+        **窗口极矮时压成两行**（博士 2026-09-18：「保证终端窗口小的时候也要让玩家
+        看到所有内容」）：关卡与人数上限缩到一行、计数缩到一行，一行都不丢——
+        丢的只是换行，不是内容。编队那一行在最矮这档并进第一行（"用什么编队"与
+        "最多几个人"本来就是一件事的两面）。
+        """
+        st = self.app.state
         depth = getattr(st, "depth", DEPTH_START)
         limit = getattr(st, "deploy_limit", 0)
+        squad = "、".join(st.squad) if st.squad else "（不指定，全名册）"
+        mode = "允许补充" if st.mode == "auto" else "只用我选的"
+        try:
+            h = self.size.height
+        except Exception:                                     # noqa: BLE001
+            h = 0
+        if h and h < self.TINY_HEIGHT:
+            cap = f"（本关可部署 {limit}）" if limit else ""
+            return (f"{st.stage['code']}　本轮最多 {depth} 人{cap}\n"
+                    f"已评估 [bold]{n}[/] 个候选　已用 {elapsed:.0f} 秒")
+        # 正常那版：`本轮最多 N 人` 是搜索的深度上限，也就是"这个方案最多用几个人"；
+        # 本关的可部署上限写出来，是给他一个"还能再加深到几"的边界。
+        # 候选池多大（`pool_note`）**不进这一屏**，只在日志里出现。
         cap = f"　[dim]本关最多可部署 {limit} 人[/]" if limit else ""
-        self.query_one("#solve-head", Static).update(
-            f"关卡：{st.stage['code']}（{st.stage['level_id']}）\n"
-            f"本轮最多 {depth} 人{cap}\n"
-            f"已评估 [bold]{n}[/] 个候选　已用 {elapsed:.0f} 秒")
+        out = (f"关卡：{st.stage['code']}（{st.stage['level_id']}）\n"
+               f"本轮最多 {depth} 人{cap}\n")
+        # 编队那一行是**上下文**，不是这一屏的主角（他在上一屏刚选过），所以
+        # 矮窗口下先收它——同一条"数据 > 说明"的优先级。
+        if not h or h >= self.COMPACT_HEIGHT:
+            out += f"[dim]编队：{squad}　模式：{mode}[/]\n"
+        return out + f"已评估 [bold]{n}[/] 个候选　已用 {elapsed:.0f} 秒"
 
     @work(thread=True, exclusive=True)
     def _run(self) -> None:
@@ -1895,7 +1954,7 @@ class SolveScreen(Screen):
 
 # ================================================================ [4] 结果
 
-class ResultScreen(Screen):
+class ResultScreen(RiosScreen):
     """[4] 结果：通过的编队、模组、技能，以及导出。
 
     ## 这一屏**不挂 Esc**（博士 2026-09-17 裁定）
@@ -2317,7 +2376,7 @@ class RiosApp(App):
         self.push_screen(SolveScreen())
 
 
-class NoStageScreen(Screen):
+class NoStageScreen(RiosScreen):
     """关卡表是空的。**给一句能照做的话，不是一句"没有数据"。**"""
 
     BINDINGS = both_cases([Binding("escape", "back", "返回", key_display="Esc"),
