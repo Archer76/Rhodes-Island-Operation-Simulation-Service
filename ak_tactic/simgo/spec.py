@@ -169,7 +169,6 @@ def _enemy_reasons(sim) -> list[str]:
         "skill_atk_scale_phys": "敌方技能出手（物理）",
         "skill_atk_scale_magic": "敌方技能出手（法术）",
         "skill_atk_pollut": "敌方技能出手",
-        "passive_pollut": "被击倒的被动",
         "phit_pollut": "蜕皮被动",
         "phit_block_pollut": "蜕皮被动（被阻挡时）",
         "reborn_pollut": "重生吸病害值",
@@ -177,6 +176,11 @@ def _enemy_reasons(sim) -> list[str]:
         "awake_value": "按田地病害值觉醒",
         "hp_drain_per_sec": "持续自伤",
     }
+    #: `passive_pollut`（被击倒污染田地）**已经接线**，所以不在这张表里：
+    #: 原版 `sim.py:3891-3905` 的 `_on_enemy_death` 对应 Go 侧的 `PostAttack`
+    #: （帧序 7.5），两条黑板数值随敌人规格送过去（`_spawn_spec`）。
+    #: 它曾经在这张表里——那是对的：没接线的时候放行，等于让 Go 少算一层病害值
+    #: 却照样给判决。
     names: dict[str, set[str]] = {}
     for e in mech._spawns_of(sim):
         for attr, why in field_why.items():
@@ -300,6 +304,11 @@ def _spawn_spec(sim, t: float, sp) -> dict[str, Any]:
         "life_cost": int(e.life_cost),
         "kill_cost": int(getattr(e, "kill_cost", 0) or 0),
         "cannot_clear": bool(sim._cannot_clear(e)),
+        # 被击倒时给田地加病害的那两项（怀黍离）。送的是**圆心之外的原始数值**：
+        # 圆心由 Go 在击倒那一刻自己判（被阻挡时取挡它的干员那一格，否则取自己
+        # 那一格）——那不是"敌人是什么"的一部分，是"当时场上是谁"的一部分。
+        "passive_pollut": float(getattr(e, "passive_pollut", 0.0) or 0.0),
+        "passive_radius": float(getattr(e, "passive_radius", 0.0) or 0.0),
         "legs": _legs_spec(e.legs),
     }
 

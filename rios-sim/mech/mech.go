@@ -87,6 +87,20 @@ type EnvTicker interface {
 	EnvTick(ctx Ctx, dt float64)
 }
 
+// PostAttacker 在**两次出手之后、结算之前**被调用。
+//
+// 对应原版 `sim.py:2221` 的 `_enemy_mech_tick`（帧序 7.5）。这一处专门处理
+// **"这一帧谁把谁打倒了"之后的那些一次性效果**：被击倒时给田地加病害
+// （`_on_enemy_death` → `passive_pollut`）、标记退场、明识形态清水。
+// 位置的理由写在原版那一行上：排在两个出手之后，"这一帧谁的出手把谁打倒了，
+// 这里就看得到"；排在结算之前，则"这一帧倒下的"不会漏掉这一次效果。
+//
+// ⚠ 它**不是**帧末那个 `Framer`：帧末看到的是一整帧都结算完的世界（漏怪、扣命
+// 都记过了），而这里要的是"刚被打倒、还没进结算"的那一刻。
+type PostAttacker interface {
+	PostAttack(ctx Ctx, dt float64)
+}
+
 // Framer 在**每一帧的末尾**被调用（`t += dt` 之前，即这一帧的伤害、击杀、
 // 漏怪都已经结算完）。
 //
@@ -94,6 +108,18 @@ type EnvTicker interface {
 // 它自己造成的影响落在下一帧。放在帧中间会让"谁先谁后"变成机制之间的事。
 type Framer interface {
 	Frame(ctx Ctx, dt float64)
+}
+
+// Snapshotter 让机制把自己的状态交给判决，**供对拍逐项比**。
+//
+// 为什么需要它：判决（胜负/击杀/漏怪/时刻）是**粗指标**——怀黍离的病害值累积得
+// 不一样、但这一趟恰好没有干员站在那格上时，判决可以完全相同。那正是这一层最
+// 容易藏住偏差的地方（"病害值涨得快一点"），所以机制状态必须能被原版逐项对照。
+//
+// 返回值必须是**普通 JSON 值**（数字/字符串/数组/映射）：不许把活的运行时对象
+// 塞进来。判决本身不读它，只有对拍台读。
+type Snapshotter interface {
+	State() any
 }
 
 // Ctx 是机制在运行期**能看到的**与**能改的**那一小片世界。
@@ -142,6 +168,24 @@ type EnemyView struct {
 	HP       float64
 	Alive    bool
 	Blocked  bool
+	//: 这一只**已经漏掉**（走到终点扣命）——被击倒类效果不许作用在它身上。
+	Leaked bool
+	//: 这一只已经离场（原版 `off_map`）。
+	OffMap bool
+
+	//: 挡着它的那个我方单位脚下的格（原版 `_pollute_around` 取的就是这个圆心：
+	//: 被阻挡时用**挡它的干员**那一格，否则用敌人自己那一格）。
+	//: `HasBlocker` 与它同真同假——用两个字段而不是"查 `Blocked`"：
+	//: 击倒那一刻 `Blocked` 可能已经因为阻挡者阵亡而被清掉，而原版在
+	//: `_on_enemy_death` 里读的是 `e.blocked_by is not None and e.blocked_by.alive`，
+	//: 两者**不是同一件事**（`HasBlocker` 只表示"挡它的那个还活着"）。
+	HasBlocker  bool
+	BlockerCell [2]int
+
+	//: 被击倒时给它圆心周围田地加多少病害（原版 `passive_pollut`），
+	//: 以及半径（原版 `passive_radius`，0 表示按 1.0）。
+	PollutOnDeath float64
+	PollutRadius  float64
 }
 
 // ---- 注册表 ----
@@ -201,6 +245,7 @@ type Set struct {
 	ids      []ID
 	starters []hookStarter
 	envs     []hookEnv
+	posts    []hookPost
 	framers  []hookFramer
 	all      []Mechanism
 }
@@ -213,6 +258,11 @@ type hookStarter struct {
 type hookEnv struct {
 	id ID
 	m  EnvTicker
+}
+
+type hookPost struct {
+	id ID
+	m  PostAttacker
 }
 
 type hookFramer struct {
@@ -255,6 +305,9 @@ func Load(cfg map[string]json.RawMessage, ids ...string) (*Set, error) {
 		if e, ok := m.(EnvTicker); ok {
 			set.envs = append(set.envs, hookEnv{id, e})
 		}
+		if p, ok := m.(PostAttacker); ok {
+			set.posts = append(set.posts, hookPost{id, p})
+		}
 		if f, ok := m.(Framer); ok {
 			set.framers = append(set.framers, hookFramer{id, f})
 		}
@@ -272,6 +325,25 @@ func (s *Set) IDs() []ID {
 
 // Empty 说明这一场没有任何机制——主循环据此整段跳过，通用关卡一帧都不多花。
 func (s *Set) Empty() bool { return s == nil || len(s.all) == 0 }
+
+// States 收集各机制的**状态快照**（只有实现了 `Snapshotter` 的才有），键 = 机制名。
+//
+// 进判决、供对拍逐项比；判决本身不依赖它（见 `Snapshotter` 的注释）。
+func (s *Set) States() map[string]any {
+	if s == nil || len(s.all) == 0 {
+		return nil
+	}
+	out := map[string]any{}
+	for i, m := range s.all {
+		if sn, ok := m.(Snapshotter); ok {
+			out[string(s.ids[i])] = sn.State()
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
 
 // Start 依次调用各机制的 Start。
 func (s *Set) Start(ctx Ctx) error {
@@ -293,6 +365,16 @@ func (s *Set) EnvTick(ctx Ctx, dt float64) {
 	}
 	for _, h := range s.envs {
 		h.m.EnvTick(ctx, dt)
+	}
+}
+
+// PostAttack 依次调用各机制的 PostAttack（位置见 `PostAttacker` 的注释）。
+func (s *Set) PostAttack(ctx Ctx, dt float64) {
+	if s == nil {
+		return
+	}
+	for _, h := range s.posts {
+		h.m.PostAttack(ctx, dt)
 	}
 }
 

@@ -172,8 +172,18 @@ def farmland_spec(sim: Any) -> dict[str, Any] | None:
     devices = []
     for d in getattr(sim, "_devices", None) or []:
         kind = kind_of(getattr(d, "key", None))
-        if kind is None:
-            continue          # 本层不认识的装置不写进规格（由别的层管或拒跑）
+        # **只送运行期真的要动的装置**（泵站：每秒泵水）。
+        #
+        # 阻流阀与天桩不送：它们的作用都不在这条时间线上——
+        #  * 阻流阀开场那一次 `sever` **已经算进上面的 `groups`** 了（几何是"此刻"
+        #    的），而"运行期被拆掉 → 地形还原"住在装置层里，本层不碰；
+        #  * 天桩是召唤物链（甲/乙/天标），整套在装置层。
+        # 送过去只会让 Go 侧收到一个它不处理的装置——那种情况必须**拒跑**（不许
+        # 静默忽略），于是会把"装置层还没移植、但这一关实测与装置无关"的关也一起
+        # 挡掉。闸门（`spec.py` 的关卡装置那一条）已经在"装置摘掉判决不变"的实测
+        # 证据上放行了，规格就不该再把它们塞进来。
+        if kind != "pump":
+            continue
         devices.append({
             "kind": kind,
             "key": str(getattr(d, "key", "")),
