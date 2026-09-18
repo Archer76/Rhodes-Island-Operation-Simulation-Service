@@ -347,6 +347,11 @@ class OperatorUnit(Combatant):
     #: （哪些写法故意不认，逐条列在 `operator/skill.py` 的 `_BARRIER_NOT_SELF`
     #: 与 `_BARRIER_RATIO` 上方）。
     barrier: float = 0.0
+    #: 【会持续衰减的屏障】每秒衰减量（新约能天使技2：**初始屏障量 / 30**，
+    #: prts `|备注=` 原文如此）。与 `barrier` 分开两件事：那个由技能开关写、
+    #: 技能结束时清零；这个是**自己按秒掉**的，与技能何时结束无关，重复获得时
+    #: 重置（`sim._grant_decay_barrier`）。为 0 = 没有这种屏障在衰减。
+    barrier_decay_per_sec: float = 0.0
     #: 累计被屏障吸收掉的伤害，便于对账——它**不算**进 `damage_taken`，
     #: 因为 `damage_taken` 记的是真实掉掉的血。
     barrier_absorbed: float = 0.0

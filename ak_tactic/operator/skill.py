@@ -1052,6 +1052,19 @@ class SkillEffects:
     #: （可露希尔技1 的 `cost_per_add` / `cost_add_max`）。
     cost_per_add: float = 0.0
     cost_add_max: float = 0.0
+    #: 技2「开火成瘾症」那一族：**会持续衰减**的屏障，比例对**各自的生命上限**算。
+    #:
+    #: ⚠️ 不能复用 `barrier_pct`：那一个由 `_deactivate` 在**技能结束时清零**，
+    #: 而这一种正文写的是「该屏障会持续衰减」——衰减自有节奏，与技能何时结束
+    #: 无关。prts 该技能备注：「获得的屏障均以自身生命上限为标准计算；屏障
+    #: **每秒衰减量为：初始屏障量/30**；**重复获得此屏障时，重置屏障量与衰减
+    #: 速度**」——`shield_max_duration` 那 30 秒正好就是这个分母。
+    #:
+    #: ⚠️ 判据用**正文**（「该屏障会持续衰减」）而不是键名：`shield_max_hp_ratio`
+    #: 在 cairn 技2 上是 **0.9，含义是"最多不超过生命上限的 90%"这个上限**，
+    #: 属性同名反义——按键名认会把上限当成授予量。
+    barrier_decay_pct: float = 0.0
+    barrier_decay_secs: float = 0.0
     #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
     #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
     #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
@@ -1736,6 +1749,13 @@ class SkillBook:
             # 但键是 `addtional_ammo_each`（5，全表只有她）。正文那句是**条件**
             # （成功才给），不是无条件，所以判据要留给模拟器，不能在这里加。
             lv.effects.steal_bonus_ammo = int(bb.get("addtional_ammo_each") or 0)
+            # `recover_each_cnt` 是同一件事的**另一个官方键**：她技2 的黑板里
+            # `addtional_ammo_each` 与 `recover_each_cnt` 都是 5.0，而正文只写了
+            # 一处「额外获得 5 发弹药」。两个键都读，后者只在前者缺席时兜底——
+            # 这样任一个键单独出现都不会让这条通道静默失效。
+            if lv.effects.steal_bonus_ammo <= 0:
+                lv.effects.steal_bonus_ammo = int(
+                    bb.get("recover_each_cnt") or 0)
         # 「使敌人命中率 −X%」（技3「残影」）：两个负数，按类型分。
         if _wants_enemy_hitrate(lv.description, bb):
             (lv.effects.enemy_hitrate_phys,
@@ -1765,6 +1785,13 @@ class SkillBook:
         lv.effects.cost_trickle_interval = _iv
         lv.effects.cost_per_add = float(bb.get("cost_per_add") or 0.0)
         lv.effects.cost_add_max = float(bb.get("cost_add_max") or 0.0)
+        # 技2 那一族：**会持续衰减**的屏障。判据靠正文那一句，见字段上的注释
+        # （`shield_max_hp_ratio` 在 cairn 技2 上同名反义，是"上限"而非"授予量"）。
+        if ("该屏障会持续衰减" in lv.description
+                and float(bb.get("shield_max_hp_ratio") or 0.0) > 0.0):
+            lv.effects.barrier_decay_pct = float(bb["shield_max_hp_ratio"])
+            lv.effects.barrier_decay_secs = float(
+                bb.get("shield_max_duration") or 0.0)
         # 技能结束时的**自身**效果：晕眩与强制退场。两者的数值/语义都
         # 只在描述里，且都与"打在敌人身上"的那套（`control`）无关。
         lv.effects.self_stun = _wants_self_stun(lv.description, bb)

@@ -4725,6 +4725,199 @@ def check_cost_skills(stage, lib, calc, book_t) -> None:
           f"{_hit}")
 
 
+def check_decay_barrier_and_radio(stage, lib, calc, book_t) -> None:
+    """[51] 新约能天使（`char_1041_angel2`）：**会持续衰减的屏障**（技2）、
+    天赋1「火力电台」、天赋2「铳弹协约」。
+
+    这一节把三个机制一次钉住，它们共用同一批无人读的键：
+    `shield_max_hp_ratio` / `shield_max_duration` / `recover_each_cnt`、
+    `aoe_atk_scale`、`mult`。
+
+    ⚠️ 两处**同名反义**是本节的判据核心：
+
+    * `shield_max_hp_ratio` 在她技2 上是**授予量**（2.5 = 250%），而在 cairn 技2
+      上是**上限**（0.9 =「最多不超过生命上限的 90%」）——所以解析侧按**正文**
+      那一句「该屏障会持续衰减」认，守卫里拿 cairn 作反例钉死。
+    * `mult`（2.0）只在「铳弹协约」上出现，含义是"对【拉特兰】翻倍"。
+
+    可观测量：屏障的**数值与归零时刻**、每发弹药回的那口**血**、以及带不带天赋
+    两次跑的**伤害差**（差额就是那轮轰炸的期望）。期望口径见 `docs/uncertainties.md`。
+    """
+    print("\n[51] 新约能天使：衰减屏障 / 火力电台 / 铳弹协约")
+    from ak_tactic.battle.talents import (LATERANO_NATION,  # noqa: PLC0415
+                                          find_ammo_covenant, find_bomb_radio)
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    v = Verifier()
+    slots = {sk.slot: sk for sk in SkillBook().for_operator("char_1041_angel2")}
+    e2 = slots[2].level(7, 3).effects
+    check("  解析（技2）：衰减屏障 250% / 30 秒；偷取成功追加 5 发弹药",
+          (e2.barrier_decay_pct, e2.barrier_decay_secs) == (2.5, 30.0)
+          and e2.steal_bonus_ammo == 5,
+          f"{e2.barrier_decay_pct}/{e2.barrier_decay_secs}s、"
+          f"追弹 {e2.steal_bonus_ammo}")
+    check("  反向（同名反义）：cairn 技2 的 `shield_max_hp_ratio`（0.9）是**上限**，"
+          "不许被认成衰减屏障的授予量",
+          _cairn_decay_pct() == 0.0, f"cairn decay_pct={_cairn_decay_pct():g}")
+
+    tals = list(book_t.for_operator("char_1041_angel2"))
+    radio, covenant = find_bomb_radio(tals), find_ammo_covenant(tals)
+    check("  天赋两个检测器都命中（天赋名 + 键名双锚定）",
+          radio is not None and covenant is not None,
+          f"火力电台={radio is not None}、铳弹协约={covenant is not None}")
+
+    print("     —— 衰减屏障：各按各自的生命上限，每秒掉初始量/30 ——")
+    sim, me, mate = _angel2_pair(v, stage, lib, slots, tals)
+    me.sp = 30.0
+    sim._activate(me, 0.0)
+    want_me = 2.5 * me.max_hp
+    want_mate = 2.5 * mate.max_hp
+    check("  她自己与被偷的那位**各按各自的生命上限**拿 250%",
+          abs(me.barrier - want_me) < 1e-6
+          and abs(mate.barrier - want_mate) < 1e-6,
+          f"她 {me.barrier:.0f}/{want_me:.0f}、被偷者 {mate.barrier:.0f}/"
+          f"{want_mate:.0f}")
+    check("  衰减速率 = 初始屏障量 ÷ 30",
+          abs(me.barrier_decay_per_sec - want_me / 30.0) < 1e-6,
+          f"{me.barrier_decay_per_sec:.2f}/秒")
+    t = 0.0
+    for _ in range(200):                       # 10 秒
+        t += 0.05
+        sim._barrier_decay_tick(0.05, t)
+    check("  10 秒后正好掉掉三分之一",
+          abs(me.barrier - want_me * 2.0 / 3.0) < 1e-3,
+          f"{me.barrier:.1f}（期望 {want_me * 2 / 3:.1f}）")
+    sim._activate(me, 0.0)
+    check("  重复获得时**重置**屏障量与衰减速度（prts 备注）",
+          abs(me.barrier - want_me) < 1e-6
+          and abs(me.barrier_decay_per_sec - want_me / 30.0) < 1e-6,
+          f"{me.barrier:.0f}、{me.barrier_decay_per_sec:.2f}/秒")
+    for _ in range(700):                       # 再 35 秒，越过 30 秒的账
+        t += 0.05
+        sim._barrier_decay_tick(0.05, t)
+    check("  30 秒后自己掉干净，且衰减状态一并归零",
+          me.barrier == 0.0 and me.barrier_decay_per_sec == 0.0,
+          f"{me.barrier:g}/{me.barrier_decay_per_sec:g}")
+
+    print("     —— 火力电台：每发弹药回 6%，并按概率折一轮轰炸 ——")
+    def _run(with_talent: bool):
+        s = mechanism_sim(stage, lib)
+        u = v.unit({"char_id": "char_1041_angel2", "elite": 2, "level": 60,
+                    "trust": 100, "potential": 1})
+        u.position = (2, 3)
+        u.direction = "Right"
+        u.skill = slots[1].level(7, 3)          # 技1：8 发弹药
+        u.talents = list(tals) if with_talent else []
+        s.operators.append(u)
+        tgt = _dummy(s, stage, _enemy_ids(stage)[0], (3, 3))
+        tgt.blocked_by = u
+        u.hp = u.max_hp * 0.5
+        u.sp = 12.0
+        s._activate(u, 0.0)
+        hp0, ehp0 = u.hp, tgt.hp
+        tt = 0.0
+        for _ in range(400):
+            tt += 0.05
+            u.skill_timer = 1e9
+            s._operators_attack(0.05, tt)
+        return u, hp0, ehp0, tgt
+
+    u_on, hp0, ehp0, tgt_on = _run(True)
+    u_off, hp0b, ehp0b, tgt_off = _run(False)
+    ammo0 = int(slots[1].level(7, 3).effects.ammo or 0)
+    healed = u_on.hp - hp0
+    check("  每发弹药回 6% 生命上限（8 发弹药 ⇒ 8 口）",
+          abs(healed - 0.06 * u_on.max_hp * ammo0) < 1e-6,
+          f"回了 {healed:.1f}，期望 {0.06 * u_on.max_hp * ammo0:.1f}"
+          f"（{ammo0} 发）")
+    check("  反向：摘掉天赋就一口都不回（否则那是别处给的）",
+          u_off.hp == hp0b, f"无天赋回了 {u_off.hp - hp0b:g}")
+    dmg_on = ehp0 - tgt_on.hp
+    dmg_off = ehp0b - tgt_off.hp
+    check("  轰炸：带天赋比不带**多打出的那部分**就是按概率折出来的期望"
+          "（同一关、同一次数、只差天赋）",
+          dmg_on > dmg_off > 0.0, f"带 {dmg_on:.1f} / 不带 {dmg_off:.1f}")
+    scale = float(radio.value("aoe_atk_scale", 0.0))
+    prob = float(radio.value("prob", 0.0))
+    one = resolve_damage(u_on.current_atk(), scale=scale,
+                         damage_type="PHYSICAL",
+                         defense=tgt_on.defense, res=tgt_on.res).final
+    check("  差额 = 弹药数 × 概率 × 单发轰炸伤害（预计算口径：按她当前攻击力）",
+          abs((dmg_on - dmg_off) - ammo0 * prob * one) < 1.0,
+          f"差额 {dmg_on - dmg_off:.1f}，期望 {ammo0 * prob * one:.1f}"
+          f"（{prob:g} × {scale:g}）")
+
+    print("     —— 铳弹协约：只发给「携带弹药类技能」的人 ——")
+    sim2, me2, mate2 = _angel2_pair(v, stage, lib, slots, tals)
+    auras = [a for a in sim2.team_auras if getattr(a, "ammo_skill_only", False)]
+    check("  她的光环按「携带弹药技能」筛、对拉特兰翻倍（`mult` = 2.0）",
+          len(auras) == 1 and auras[0].nation_double == LATERANO_NATION
+          and abs(auras[0].double_scale - 2.0) < 1e-9,
+          f"{len(auras)} 条、nation={auras[0].nation_double if auras else None}")
+    ammo_carrier = auras[0].current(me2) if auras else (0.0, 0.0)
+    no_ammo = auras[0].current(_non_ammo_unit(v)) if auras else (0.0, 0.0)
+    check("  携带弹药技能的人吃 +9%，不吃弹药的人一点不吃",
+          abs(ammo_carrier[0] - float(covenant.value("atk", 0.0))) < 1e-9
+          and no_ammo == (0.0, 0.0),
+          f"她 {ammo_carrier[0]:.3f}、非弹药 {no_ammo[0]:.3f}")
+    with sqlite3.connect(Path(__file__).resolve().parent.parent
+                         / "data" / "akdb.sqlite") as _c:
+        _c.row_factory = sqlite3.Row
+        _lat = {r["char_id"] for r in _c.execute(
+            "SELECT char_id FROM operator WHERE nation_id='laterano'")}
+        _lat_ammo = {r["skill_id"] for r in _c.execute(
+            "SELECT skill_id, blackboard FROM skill_level WHERE level = 10")
+            if r["skill_id"].split("_")[1] in {c[5:] for c in _lat}
+            and "attack@trigger_time" in json.loads(r["blackboard"] or "{}")}
+    check("  如实记下的一处盲区：拉特兰 15 位里**没有一位**携带弹药类技能，"
+          "所以 ×2 那一支在现名册上无从触发（只钉住了接线，没钉住数值）",
+          len(_lat) > 0 and not _lat_ammo,
+          f"拉特兰 {len(_lat)} 位、带弹药的 {sorted(_lat_ammo)}")
+
+
+def _cairn_decay_pct() -> float:
+    """cairn 技2 的衰减屏障字段——**必须是 0**（它的同名键是"上限"）。"""
+    try:
+        slots = {sk.slot: sk for sk in SkillBook().for_operator("char_4214_cairn")}
+        return slots[2].level(7, 3).effects.barrier_decay_pct
+    except Exception:
+        return -1.0
+
+
+def _angel2_pair(v, stage, lib, slots, tals):
+    """搭一组：她在 (2,3)、一位友方在 (3,3)（给技2 偷）。
+
+    **走真部署路径**（`_do_deploy`）而不是手工 append：光环注册与天赋装载都挂在
+    那条路上（`sim.py` 的 `op.talents = list(d.talents or [])` 与随后的
+    `find_ammo_covenant` 那一块）。手工 append 会让「铳弹协约」这条光环**根本
+    不出现**，检查就以"0 条"的样子失败——而那正是本节要钉的接线点，不是噪声。
+    """
+    sim = mechanism_sim(stage, lib)
+    sim.dp = 999.0
+    me = v.unit({"char_id": "char_1041_angel2", "elite": 2, "level": 60,
+                 "trust": 100, "potential": 1})
+    sim._do_deploy(Deployment(0.0, me, (2, 3), "Right",
+                              skill=slots[2].level(7, 3),
+                              talents=list(tals)), 0.0)
+    other = {sk.slot: sk for sk in SkillBook().for_operator("char_103_angel")}
+    mate = v.unit({"char_id": "char_103_angel", "elite": 2, "level": 60,
+                   "trust": 100, "potential": 1})
+    sim._do_deploy(Deployment(0.0, mate, (3, 3), "Right",
+                              skill=other[1].level(7, 3), talents=[]), 0.0)
+    if len(sim.operators) != 2:                # 部署被费用/上限挡掉就炸得响亮些
+        raise AssertionError(f"部署没成功：{len(sim.operators)} 人在场")
+    return sim, me, mate
+
+
+def _non_ammo_unit(v):
+    """一个**不携带弹药类技能**的真实单位（用来钉"一点不吃"那半边）。"""
+    u = v.unit({"char_id": "char_311_mudrok", "elite": 2, "level": 60,
+                "trust": 100, "potential": 1})
+    u.skill = {sk.slot: sk for sk in
+               SkillBook().for_operator("char_311_mudrok")}[3].level(7, 3)
+    return u
+
+
 def check_glider_mobility(stage, lib, calc, book_t) -> None:
     """[43] 焰狐龙梓兰天赋2「翔虫机动」——一个天赋横跨两个平面。
 
@@ -5535,6 +5728,7 @@ def main() -> int:
     check_enemy_hitrate(stage, lib, calc, book_t)
     check_lock_awake(stage, lib, calc, book_t)
     check_cost_skills(stage, lib, calc, book_t)
+    check_decay_barrier_and_radio(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

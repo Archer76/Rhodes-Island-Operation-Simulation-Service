@@ -506,6 +506,61 @@ def find_team_aura(talents) -> Talent | None:
     return None
 
 
+#: 新约能天使天赋1「火力电台」——「在场时，每当有**友方干员的弹药被消耗**就会
+#: 回复自身 6% 生命值，并有 20%/25% 概率立即对该干员攻击范围的敌人召唤一次
+#: 轰炸，造成相当于自身攻击力 105%…的物理**溅射**伤害」。
+#:
+#: 判据用**天赋名 + `aoe_atk_scale`** 双锚定：这个键全表只出现在她的天赋上
+#: （四档：1.05 / 1.2 / 1.5 / 1.65，精0 → 精2 逐档抬）。同黑板的
+#: `damage_scale` 是同一个数的别名、`hp_ratio` 是那一口自愈、`prob` 是轰炸概率。
+#:
+#: ⚠️ prts `|备注=` 补了四条正文没写的行为（2026-09-18 取）：
+#: ① 「根据**本轮消耗数量循环处理**治疗与轰炸概率」——一次消耗多发就按发数触发；
+#: ② 「不论消耗数量，**每轮轰炸仅选取一次目标**，每次成功的概率判定都会增加
+#:    一次本轮的轰炸」，单轮多次轰炸之间间隔 0.1s；
+#: ③ 「轰炸半径 1.3，造成**预计算**的物理普通伤害」；
+#: ④ 「轰炸时**借用消耗者的攻击范围**，由新约能天使判断该范围内的轰炸目标
+#:    （**始终使用默认索敌逻辑**）」。
+BOMB_RADIO_NAME = "火力电台"
+
+#: 新约能天使天赋2「铳弹协约」——「在场时，**携带弹药类技能**的干员攻击力
+#: +9%（潜满 +13%），对【拉特兰】干员的效果**翻倍**」。
+#:
+#: 两处判据都不是键名能给的：`atk` 与技能自己的攻击力增益完全同名；
+#: `mult` 在不同天赋里的含义各不相同（本仓库里它只在这一处出现，值 2.0）。
+AMMO_COVENANT_NAME = "铳弹协约"
+
+#: 【拉特兰】的势力代号（`operator.nation_id`）。
+#:
+#: ⚠️ 取的是 gamedata 的 `nationId` 字段，**不是"出身地"**：新约能天使本人这一栏
+#: 写的是 `lungmen`（企鹅物流所在地），所以按本字段她**不吃自己的翻倍**。
+#: 这是数据怎么写的就怎么算；PRTS 若另有说法再改，先记进 uncertainties。
+#: 复核命令：`SELECT char_id, name FROM operator WHERE nation_id='laterano';`
+LATERANO_NATION = "laterano"
+
+
+def is_bomb_radio_talent(t: Talent) -> bool:
+    return t.name == BOMB_RADIO_NAME and t.has("aoe_atk_scale")
+
+
+def find_bomb_radio(talents) -> Talent | None:
+    for t in talents or ():
+        if is_bomb_radio_talent(t):
+            return t
+    return None
+
+
+def is_ammo_covenant_talent(t: Talent) -> bool:
+    return t.name == AMMO_COVENANT_NAME and t.has("atk", "mult")
+
+
+def find_ammo_covenant(talents) -> Talent | None:
+    for t in talents or ():
+        if is_ammo_covenant_talent(t):
+            return t
+    return None
+
+
 @dataclass
 class TeamAura:
     """一个干员发给**全场友方**的攻击力/防御力光环。
@@ -551,6 +606,15 @@ class TeamAura:
     #: 与 `faction`（阵营**翻倍**）是两种语义：那个是"该阵营 ×2、别人 ×1"，
     #: 这个是"只有该势力拿、别人 0"——**筛选**，不是倍率。
     faction_only: str | None = None
+    #: **只发给「携带弹药类技能」的人**（新约能天使「铳弹协约」）。判据是那个人
+    #: **当前装备的技能**是弹药类（`skill.duration_type == "AMMO"`），与技能开没开
+    #: 无关——正文写的是「**携带**弹药类技能」，不是"开技能期间"。
+    ammo_skill_only: bool = False
+    #: **对某个势力的人翻倍**（`nation_id`，如 `laterano` = 【拉特兰】）。
+    #: 与 `faction`（按 char_id 枚举名单翻倍）是两种数据形态：那个是写死的名单，
+    #: 这个是按势力字段判，成员随新干员增加。与 `faction_only`（筛选）也不同：
+    #: 这个是"该势力 ×2、别人 ×1"。倍率用 `double_scale`。
+    nation_double: str | None = None
 
     def current(self, target=None) -> tuple[float, float]:
         """当前对 `target` 生效的 `(攻击力比例, 防御力比例)`。
@@ -561,6 +625,17 @@ class TeamAura:
         if self.self_only and target is not self.operator:
             # 只给自己：**不按 char_id 比**（同名干员会串），按对象同一性。
             return 0.0, 0.0
+        if self.ammo_skill_only:
+            # 按「携带**弹药类技能**」发：与技能开没开无关（正文写的是「携带」）。
+            # 判据看那个人**当前装备的那个技能**是不是 AMMO 型。
+            sk = getattr(target, "skill", None)
+            if sk is None or getattr(sk, "duration_type", "") != "AMMO":
+                return 0.0, 0.0
+            k = 1.0
+            if (self.nation_double is not None
+                    and getattr(target, "nation_id", "") == self.nation_double):
+                k = self.double_scale
+            return self.atk_pct * k, self.def_pct * k
         if self.faction_only is not None:
             # 按势力**发**：不匹配的一律 0（这是筛选，不是翻倍）。
             if getattr(target, "nation_id", "") != self.faction_only:
