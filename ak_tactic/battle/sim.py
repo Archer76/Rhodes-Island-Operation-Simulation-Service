@@ -1813,6 +1813,9 @@ class BattleSimulator:
         # 四段机制有没有，而技力够不够是每局的事。被动开技不扣技力，也就不吃。
         eff_now = sk.effects
         op.charge_extra_ready = False
+        # 「每攻击 N 次后攻击目标数+1」的计数器**按开技清零**：它算的是
+        # "本次技能开启动以来出手几次"，与 `op.hits`（本局总数）分开。
+        op.trigger_hits = 0
         if not passive and eff_now.charge_arrows > 0:
             need = float(sk.sp_cost) * (1 + eff_now.charge_layers)
             if op.sp + 1e-9 >= need:
@@ -3029,6 +3032,10 @@ class BattleSimulator:
                 continue
             op.attack_timer = 0.0
             op.hits += 1
+            # 「每攻击 N 次后攻击目标数+1」：**在选完目标之后**才自增，所以第 9
+            # 次出手打的是旧的个数、第 10 次才是多出来的那个——正文写的是
+            # 「每攻击 9 次**后**」，顺序就是这个意思。
+            op.trigger_hits += 1
 
             scale = skill_scale
             hits = eff.hit_count if eff is not None else 1
