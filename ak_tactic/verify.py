@@ -253,6 +253,7 @@ class Verifier:
             deploy_cost=int(t.get("cost", 0) or 0),
             attack_speed=float(t.get("attackSpeed", 100) or 100) + aspd.flat,
             aspd_when_free=aspd.when_free,
+            aspd_high_ground=aspd.when_high_ground,
             attack_type="MAGIC" if "法术伤害" in trait else "PHYSICAL",
             heals="恢复友方单位生命" in trait,
             weakness_damage="弱点伤害" in tal_text,

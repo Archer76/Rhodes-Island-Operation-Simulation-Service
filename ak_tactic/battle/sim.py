@@ -2203,6 +2203,14 @@ class BattleSimulator:
             d = block.value("prob", 0.0)
             op.talent_dodge_phys = d
             op.talent_dodge_arts = d
+        # 地形条件：**周围四格有高台**（阿斯卡纶「噬光残影」额外 +6 攻速）。
+        # 伏击客不移动，判一次就定死；判据用 `is_highland()`——`tile_wall`
+        # 与 `tile_forbidden` 都是高台（后者不可站人，但仍是高台）。
+        px, py = op.position
+        mp = self.stage.map
+        op.high_ground_neighbor = any(
+            mp.tile(px + dx, py + dy).is_highland
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
         if self.verbose:
             sk = f" 带技能「{op.skill.name}」" if op.skill is not None else ""
             tal = "、".join(f"「{x.name}」" for x in op.talents)
