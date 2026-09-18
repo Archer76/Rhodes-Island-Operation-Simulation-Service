@@ -798,8 +798,10 @@ prts.wiki 该页 `|备注=` 把「迟钝」点名为 `术语|ba.slowdown`：
   而这条是**筛选**语义（**只有**该阵营拿到 +4%、其他人 0）。
   现有的 `TeamAura.faction` 表达不了后者，要新加一个
   **`faction_only`**（照 `profession` / `self_only` 那两处的写法加一个筛即可）。
-* 需要的数据：`operator.team_id` 里【罗德岛】的取值（干员库里本来就有，
-  与「万众巨潮」用的 `STUDENT_TEAM` 同源）。
+* 需要的数据：**【罗德岛】是「国家势力」，取的是 `operator.nation_id`
+  （`rhodes`），不是 `team_id`**——后者是小队字段（`student`/`rainbow` 那一列，
+  「万众巨潮」用的 `STUDENT_TEAM` 走的是它）。分诊时这里曾写成 `team_id`，
+  实现前已更正：两者同名「势力」但不同列。
 * `cost: -3` 那一半**不在战斗层**——「部署费用下限」是**名册/费用规则**侧的量，
   该落在 `search`/`verify` 的费用口径里，不属 `battle/`。
 
