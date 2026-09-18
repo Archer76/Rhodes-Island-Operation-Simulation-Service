@@ -84,15 +84,30 @@ __all__ = [
     "SPLASH_TALENTS",
     "COMBO_ATTACK_KEYS",
     "COMBO_HITS",
+    "HP_DRAIN_TRAIT",
+    "HP_DRAIN_KEY",
     "TraitSplash",
     "ComboAttack",
     "read_trait_splash",
     "apply_splash_talent",
     "is_splash_talent",
     "read_combo_attack",
+    "read_hp_drain",
     "splash_tiles",
     "cross_cells",
 ]
+
+#: 怪杰（`geek`）特性正文——**自身生命会不断流失**。它不是"某个干员"的特征，
+#: 而是一个**子职业**的特性，所以判据按这段正文 + 黑板键，不按干员名。
+#:
+#: 为什么非要这段正文一起判：**只按黑板键会多认三条**。全库特性黑板里带
+#: `hp_ratio` 的有 4 条——三位怪杰（新约能天使 / 阿 / 空构，都是 0.01），
+#: 外加一个工匠的 `token_10027_ironmn_pile3`（它的意思是「可被我方干员攻击但
+#: 不受伤害，受到工匠干员攻击时回复生命」，与流失毫无关系）。
+#: 两条合起来（正文 + 键）正好落到那三位怪杰身上。
+HP_DRAIN_TRAIT = "自身生命会不断流失"
+#: 流失速率的键：**每秒**流失**生命上限**的这个比例（三位怪杰都是 0.01）。
+HP_DRAIN_KEY = "hp_ratio"
 
 #: 特性溅射的**半径**（格）。撼地者四位都是 1.0。
 SPLASH_RADIUS_KEY = "attack@ability_range_radius"
@@ -161,6 +176,31 @@ def read_trait_splash(char: dict) -> TraitSplash | None:
             return TraitSplash(radius=bb[SPLASH_RADIUS_KEY],
                                scale=bb[SPLASH_SCALE_KEY])
     return None
+
+
+def read_hp_drain(char: dict) -> float:
+    """读出「自身生命会不断流失」（怪杰特性）的**速率**：每秒流失生命上限的几成。
+
+    没有这条特性就返回 0.0（调用侧不用判 None——这个量"没有"就是 0）。
+
+    判据两段，缺一不可（理由见 `HP_DRAIN_TRAIT` 的注释）：
+    ① 特性正文（`char["description"]`）含「自身生命会不断流失」；
+    ② 特性黑板里有 `hp_ratio` 且为正。
+
+    出处：prts.wiki「新约能天使」页的 `|备注=` **没有提这条特性**
+    （它讲的全是天坠/弹药那套），所以速率只能取黑板那个 0.01；
+    与 `docs/uncertainties.md` 里先前的记录一致（「每秒流失 1% 生命上限」）。
+    """
+    if HP_DRAIN_TRAIT not in str((char or {}).get("description") or ""):
+        return 0.0
+    for cand in ((char or {}).get("trait") or {}).get("candidates") or ():
+        if not isinstance(cand, dict):
+            continue
+        bb = _pairs_to_dict(cand.get("blackboard"))
+        rate = float(bb.get(HP_DRAIN_KEY) or 0.0)
+        if rate > 0.0:
+            return rate
+    return 0.0
 
 
 def read_combo_attack(char: dict) -> ComboAttack | None:
