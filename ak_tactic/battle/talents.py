@@ -603,6 +603,47 @@ def find_sees_leader(talents) -> Talent | None:
     return None
 
 
+#: 凯尔希 / 凯尔希·思衡托 天赋1「**遗尘守望**」——生命上限与防御力 +25%、
+#: 阻挡数 +1、**阻挡范围扩大**。
+#:
+#: 最后一个键 `block_radius_scale`（0.23）的语义有 prts 备注作准：
+#: 「阻挡范围加成为提升自身的『**阻挡半径倍率**』属性」，而且
+#: 「与一技能效果间**同名效果取最高**」——**不是相加**。她的技1 给同一个属性
+#: 同一个数，取最高之后还是 0.23；照着相加算会变成 0.46。
+RELIC_WATCH_NAME = "遗尘守望"
+
+#: 凯尔希 / 凯尔希·思衡托 **共用**的天赋2「**医者丰碑**」——「其他友方干员进入
+#: 自身攻击范围时立刻获得 1 层护盾并额外获得一次每秒回复 50 点生命值的增益治疗，
+#: 持续 30 秒（不可叠加），增益治疗对【罗德岛】干员的效果翻倍」。
+#:
+#: 三件事各有一个键：`hp_recovery_per_sec`（50）、`buff_duration`（30）、
+#: `rhodes_bonus`（2.0）。**护盾那一层没有对应的黑板键**（层数写在正文里），
+#: 所以它取不到数、也就不建模——见 `docs/uncertainties.md`。
+MEDIC_MONUMENT_NAME = "医者丰碑"
+
+
+def is_relic_watch_talent(t: Talent) -> bool:
+    return t.name == RELIC_WATCH_NAME and t.has("block_radius_scale")
+
+
+def find_relic_watch(talents) -> Talent | None:
+    for t in talents or ():
+        if is_relic_watch_talent(t):
+            return t
+    return None
+
+
+def is_medic_monument_talent(t: Talent) -> bool:
+    return t.name == MEDIC_MONUMENT_NAME and t.has("rhodes_bonus")
+
+
+def find_medic_monument(talents) -> Talent | None:
+    for t in talents or ():
+        if is_medic_monument_talent(t):
+            return t
+    return None
+
+
 @dataclass
 class TeamAura:
     """一个干员发给**全场友方**的攻击力/防御力光环。
@@ -719,6 +760,14 @@ class RegenAura:
     #: 已经吃过这份增益的友方名字——「不可叠加」= 每人只触发一次
     granted: set = field(default_factory=set)
     granted_count: int = 0
+    #: 对某个势力的友方**效果翻倍**（`rhodes_bonus`）：势力代号与倍率。
+    #:
+    #: 凯尔希 / 凯尔希·思衡托 天赋「医者丰碑」原文：「…额外获得一次每秒回复 50
+    #: 点生命值的增益治疗，持续 30 秒（不可叠加），**增益治疗对【罗德岛】干员的
+    #: 效果翻倍**」。黑板上的两个键就是这两件事：`hp_recovery_per_sec` 是 50，
+    #: `rhodes_bonus` 是 2.0。
+    nation_double: str = ""
+    nation_mult: float = 1.0
 
     def tick(self, dt: float, operators, cells_of, *, strict: bool = False) -> float:
         """推进一帧，返回本帧发出的治疗总量。
@@ -749,7 +798,15 @@ class RegenAura:
                 self.granted.add(op.name)
                 self.granted_count += 1
                 op.regen_left = max(op.regen_left, self.duration)
-                op.regen_per_sec = max(op.regen_per_sec, self.hp_per_sec)
+                # 【罗德岛】干员的效果翻倍——翻的是**速率**，不是持续时间
+                # （原文「增益治疗对【罗德岛】干员的效果翻倍」，紧跟在"每秒回复
+                # 50 点"后面）。倍率取黑板 `rhodes_bonus`，不是写死的 2.0：
+                # 同一个键将来给别的数也能用。
+                rate = self.hp_per_sec
+                if (self.nation_double
+                        and getattr(op, "nation_id", "") == self.nation_double):
+                    rate *= self.nation_mult
+                op.regen_per_sec = max(op.regen_per_sec, rate)
             if op.regen_left > 0:
                 # 增益已经挂在身上了，就算光环本人倒掉也照样跳完
                 step = min(dt, op.regen_left)

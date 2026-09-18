@@ -367,6 +367,13 @@ class OperatorUnit(Combatant):
     #: 从 provider 装进来（战斗层不连数据库）；没接 provider 就是空字典，
     #: 等于"这个人没有这条特性"，**不会误触发**。〈替身〉的 `duration` 住在这里。
     trait_blackboard: dict = field(default_factory=dict)
+    #: 「阻挡半径倍率」的**天赋级**增量（凯尔希 / 凯尔希·思衡托「遗尘守望」的
+    #: `block_radius_scale`）。与技能上的同名键之间**取最高**，见
+    #: `current_block_radius_scale`。
+    block_radius_scale: float = 0.0
+    #: 每帧缓存的**阻挡判定阈值平方**：`_update_blocking` 是"每个敌人 × 每个
+    #: 干员"地比距离，所以不在那里现算。默认就是基础容差（站在我这一格）。
+    block_tol2: float = POSITION_TOL * POSITION_TOL
     #: 特性黑板 `duration`（20）：替身形态持续多少秒。**为 0 = 这个人没有这条
     #: 特性**，整台状态机就不会动（守卫里靠这个装出"没有特性"的反例）。
     stand_duration: float = 0.0
@@ -653,6 +660,30 @@ class OperatorUnit(Combatant):
     @property
     def free_block_slots(self) -> int:
         return max(0, self.block_cnt - len(self.blocking))
+
+    def current_block_radius_scale(self) -> float:
+        """当前的「**阻挡半径倍率**」增量——天赋与技能**取最高，不相加**。
+
+        prts 备注里有两句话定了这里：天赋「遗尘守望」那条说「阻挡范围加成为提升
+        自身的『阻挡半径倍率』属性」，技1 那条说「阻挡范围加成为提升受益者的
+        『阻挡半径倍率』属性，**可以对凯尔希自身生效，但与天赋间同名效果取
+        最高**」。照着相加写，0.23 + 0.23 会算成 0.46，凭空多出一倍。
+        """
+        eff = self.effects
+        skill = (float(getattr(eff, "block_radius_scale", 0.0))
+                 if eff is not None else 0.0)
+        return max(self.block_radius_scale, skill)
+
+    def refresh_block_radius(self) -> None:
+        """把当前阻挡半径的**平方**缓存进 `block_tol2`（`_update_blocking` 每帧调）。
+
+        ⚠️ 本仓库把 `POSITION_TOL`（0.35 格）当作**阻挡半径**的代理：它原本只是
+        "敌人是否站在我这一格"的浮点容差，而敌人是按连续坐标穿过格心的，所以它
+        实际决定的就是"离我多近会被挡下"。游戏里的『阻挡半径』是一个独立属性、
+        基准值没有取到——这条对应关系记在 `docs/uncertainties.md`。
+        """
+        tol = POSITION_TOL * (1.0 + self.current_block_radius_scale())
+        self.block_tol2 = tol * tol
 
     def can_block(self, enemy: "EnemyUnit") -> bool:
         # 飞行单位（`motion == "FLY"`）**不可被地面干员阻挡**。
