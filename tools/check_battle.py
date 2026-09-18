@@ -3966,6 +3966,121 @@ def check_stackable_slow(stage, lib, calc, book_t) -> None:
           max(curves, default=0) >= 3, f"最高叠层 {max(curves, default=0)}")
 
 
+def check_target_growth(stage, lib, calc, book_t) -> None:
+    """[45] 可露希尔技3「Q.E.D.」：**按出手次数递增**的攻击目标数。
+
+    正文（M3）：「……每攻击 9 次后攻击目标数+1（**最多触发 6 次**）」。
+
+    ⚠️ 与「攻击目标数+3」那一族**不是一回事**：素心/史尔特尔们是**静态**改写
+    （落进 `max_target`，开技即生效）；这一条要**数出手次数**。所以它必须是
+    独立的一组字段（`target_step` / `target_cap` + `OperatorUnit.trigger_hits`），
+    想在 `max_target` 上表达是表达不了的。
+
+    ⚠️ 计数器的**清零时机**是判据的一部分：它算的是"本次技能开启动以来"出手
+    几次，不是本局总数——所以要挂在 `_activate` 上，不能复用 `op.hits`。
+
+    可观测量取的是**每次出手真的选了几个目标**（`_pick_targets` 的返回值），
+    不是 `current_max_target()` 自己——那是同一条写入路径上的数。
+    """
+    print("\n[45] 可露希尔技3「Q.E.D.」：每 N 次出手攻击目标数+1")
+    from ak_tactic.operator.skill import _wants_target_growth  # noqa: PLC0415
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    v = Verifier()
+    slots = {sk.slot: sk for sk in SkillBook().for_operator("char_4228_closur")}
+    s3 = slots[3].level(7, 3)
+    s2 = slots[2].level(7, 3)
+    check("  解析（技3）：每 9 次出手涨一格、最多涨 6 格",
+          s3.effects.target_step == 9 and s3.effects.target_cap == 6,
+          f"{s3.effects.target_step} / {s3.effects.target_cap}")
+    check("  反向：技2「模型扩展」是**静态**目标数（`max_target` 2），"
+          "不带递增字段——两者别混",
+          s2.effects.max_target == 2 and s2.effects.target_step == 0,
+          f"max_target={s2.effects.max_target} step={s2.effects.target_step}")
+
+    print("     —— 判据的命中面（宁可漏不可错）——")
+    with sqlite3.connect(Path(__file__).resolve().parent.parent
+                         / "data" / "akdb.sqlite") as _c:
+        _rows = _c.execute(
+            "SELECT DISTINCT skill_id, description, blackboard FROM skill_level "
+            "WHERE level = 10").fetchall()
+    _hit = sorted(sid for sid, d, b in _rows
+                  if _wants_target_growth(d, json.loads(b or "{}")))
+    _text = sorted(sid for sid, d, _b in _rows if "攻击目标数" in (d or ""))
+    check("全表（level=10）正文含「攻击目标数」的有 6 条，判据只认 1 条"
+          "（带 `attack_trigger_cnt` 的那条）",
+          len(_text) == 6 and _hit == ["skchr_closur_3"],
+          f"{len(_text)} 条里认了 {_hit}")
+
+    print("     —— 递增与封顶（单位级）——")
+    u = v.unit({"char_id": "char_4228_closur", "elite": 2, "level": 60,
+                "trust": 100, "potential": 1})
+    u.skill = s3
+    u.skill_active = True
+    u.skill_active = False
+    check("技能没开（`effects` 为 None）时永远是 1 个目标",
+          u.current_max_target() == 1, f"实得 {u.current_max_target()}")
+    u.skill_active = True
+    seen: list[int] = []
+    for n in range(0, 64):
+        u.trigger_hits = n
+        seen.append(u.current_max_target())
+    check("  出手 0..8 次 → 1 个；第 9 次之后 → 2 个；第 18 次之后 → 3 个",
+          seen[0] == 1 and seen[8] == 1 and seen[9] == 2 and seen[18] == 3,
+          f"n=0/8/9/18 → {seen[0]}/{seen[8]}/{seen[9]}/{seen[18]}")
+    check("  最多涨 6 格：出手 54 次 → 7 个，出手 63 次**还是** 7 个（封顶）",
+          seen[54] == 7 and seen[63] == 7, f"n=54 → {seen[54]}，n=63 → {seen[63]}")
+    u.trigger_hits = 0
+    check("  开技清零（`_activate` 里那一步）——本局总数 `hits` 不参与",
+          u.current_max_target() == 1 and u.hits == 0,
+          f"{u.current_max_target()} / hits={u.hits}")
+
+    print("     —— 端到端：出手时真的多打了一个敌人 ——")
+    # **手驱攻击循环**（不跑 `run()`）：跑真循环时绝大多数帧里她射程内没有目标
+    # ——她技3 的射程是「自身 + 战术点 + 所有援军视野」的**复合范围**，仓库里
+    # 还没建（见 `docs/uncertainties.md` 第十七节），于是只有基础射程生效。
+    # 那会让"打了几次"这件事被帧数冲散，测出来像是机制没生效。
+    sim = mechanism_sim(stage, lib)
+    u2 = v.unit({"char_id": "char_4228_closur", "elite": 2, "level": 60,
+                 "trust": 100, "potential": 1})
+    u2.skill = s3
+    u2.position = (2, 3)
+    u2.direction = "Right"
+    sim.operators.append(u2)
+    eid = _enemy_ids(stage)[0]
+    for cell in ((3, 2), (3, 3), (3, 4), (4, 2), (4, 3), (4, 4), (5, 3)):
+        e = _dummy(sim, stage, eid, cell)
+        e.defense = 0.0
+        e.res = 0.0
+    u2.skill_active = True
+    u2.skill_timer = 1e9          # 手驱：停机由别的节管，这里只要它开着
+    picks: list[tuple[int, int]] = []
+    orig_pick = sim._pick_targets
+
+    def traced_pick(op, cells, n=1):  # noqa: ANN001, ANN202
+        out = orig_pick(op, cells, n)
+        # 记下**每一次真的出手**的（目标数上限, 实际选中的个数）。只记非空：
+        # 没目标时这一函数也会被调到并返回空表，那些不是出手。
+        if op is u2 and out:
+            picks.append((n, len(out)))
+        return out
+
+    sim._pick_targets = traced_pick
+    for i in range(25):
+        u2.attack_timer = 999.0       # 每轮强制"这一帧就能出手"
+        u2.skill_timer = 1e9
+        sim._operators_attack(0.05, i * 0.05)
+    check("前 9 次出手各打到 1 个敌人；第 10 次起打到 2 个",
+          [g for _n, g in picks[:9]] == [1] * 9 and picks[9][1] == 2,
+          f"前 12 次：{picks[:12]}")
+    check("  第 19 次起打到 3 个——**实际被打到的敌人变多了**，"
+          "这才是递增兑现了的证据",
+          len(picks) < 19 or picks[18][1] == 3,
+          f"第 19 次：{picks[18] if len(picks) >= 19 else '（没打到 19 次）'}")
+    check("  上限一直是 3（场上只布了 3 个在射程里、且封顶远没到）",
+          all(n <= 3 for n, _g in picks), f"上限取值 {sorted({n for n, _g in picks})}")
+
+
 def check_glider_mobility(stage, lib, calc, book_t) -> None:
     """[43] 焰狐龙梓兰天赋2「翔虫机动」——一个天赋横跨两个平面。
 
@@ -4770,6 +4885,7 @@ def main() -> int:
     check_pierce_arrow(stage, lib, calc, book_t)
     check_glider_mobility(stage, lib, calc, book_t)
     check_stackable_slow(stage, lib, calc, book_t)
+    check_target_growth(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:

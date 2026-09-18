@@ -316,6 +316,23 @@ def _charge_volley(description: str, bb: dict[str, float]):
     return int(m.group(1)), int(shot.group(1)), scale
 
 
+def _wants_target_growth(description: str, bb: dict[str, float]) -> bool:
+    """是否「每攻击 N 次后**攻击目标数 +1**（最多触发 M 次）」。
+
+    与「攻击目标数 +1/+3」那一族**不是一回事**：那些是**静态**改写
+    （落进 `max_target`，开技即生效），这一条是**按出手次数递增**的，
+    所以要额外一个计数器。判据两段，缺一不可：
+
+    ① 正文里有「攻击目标数」（全表还有 5 条写死 +1/+3 的技能，靠第 ② 段筛掉）；
+    ② 黑板里有 `attack_trigger_cnt`（**每多少次出手涨一格**）。
+
+    全表实测（level=10）：带 `attack_trigger_cnt` 的只有可露希尔技3「Q.E.D.」
+    一条（9 次 / 最多 6 次），所以这条判据的命中面是 1。
+    """
+    text = _TAG.sub("", description or "")
+    return "攻击目标数" in text and float(bb.get("attack_trigger_cnt") or 0.0) > 0.0
+
+
 def _slowdown_values(bb: dict[str, float]) -> tuple[float, float, float]:
     """从黑板里取迟钝的三个数：每层比例 / 每层秒数 / 封顶。
 
@@ -807,6 +824,17 @@ class SkillEffects:
     slow_per_stack: float = 0.0
     slow_time: float = 0.0
     slow_max: float = 0.0
+    #: **按出手次数递增**的攻击目标数——可露希尔技3「Q.E.D.」的
+    #: 「每攻击 9 次后攻击目标数+1（最多触发 6 次）」。判据见
+    #: `_wants_target_growth`。
+    #:
+    #: * `target_step`——每多少次**出手**涨一格（`attack_trigger_cnt` 9）；
+    #: * `target_cap`——最多涨几格（`max_trigger_cnt` 6）。
+    #:
+    #: 与 `max_target`（开技即生效的**静态**改写）分开：那个是"这一击打几个"，
+    #: 这个是"打了几次之后能多打一个"，静态字段表达不了。
+    target_step: int = 0
+    target_cap: int = 0
     #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
     #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
     #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
@@ -1479,6 +1507,10 @@ class SkillBook:
         if _wants_stackable_slow(lv.description, bb):
             (lv.effects.slow_per_stack, lv.effects.slow_time,
              lv.effects.slow_max) = _slowdown_values(bb)
+        # 按出手次数递增的攻击目标数（技3「Q.E.D.」）：两个整数。
+        if _wants_target_growth(lv.description, bb):
+            lv.effects.target_step = int(bb.get("attack_trigger_cnt") or 0)
+            lv.effects.target_cap = int(bb.get("max_trigger_cnt") or 0)
         # 技能结束时的**自身**效果：晕眩与强制退场。两者的数值/语义都
         # 只在描述里，且都与"打在敌人身上"的那套（`control`）无关。
         lv.effects.self_stun = _wants_self_stun(lv.description, bb)

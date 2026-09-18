@@ -424,6 +424,11 @@ class OperatorUnit(Combatant):
     attack_timer: float = 0.0
     #: 已出手次数，便于对账
     hits: int = 0
+    #: **本次技能开启动以来**出手了几次——可露希尔技3「每攻击 9 次后攻击目标
+    #: 数+1（最多 6 次）」的计数器。与 `hits`（本局出手总数）分开：那个是终身账，
+    #: 这个每次开技清零（清零在 `sim._activate`），每出手一次 +1（在选完目标
+    #: **之后**自增，所以第 9 次打的还是旧个数——正文写的是「每攻击 9 次**后**」）。
+    trigger_hits: int = 0
 
     @property
     def is_summon(self) -> bool:
@@ -550,8 +555,31 @@ class OperatorUnit(Combatant):
         return e.attack_interval(self.attack_interval, spd)
 
     def current_max_target(self) -> int:
+        """这一击最多打几个目标。
+
+        两条来源**相加**，缺一不可：
+
+        * `eff.max_target`——开技即生效的**静态**改写（「攻击目标数+3」那一族，
+          素心/史尔特尔们走这条）；
+        * `eff.target_step` / `target_cap`——**按出手次数递增**的那一族
+          （可露希尔技3「每攻击 9 次后攻击目标数+1，最多触发 6 次」）。
+          计数器 `trigger_hits` 在技能开启动时清零（`sim._activate`），
+          每出手一次 +1（`sim` 的攻击循环里，与 `hits` 同一处）。
+
+        技能没开就退回 1（`effects` 为 None），普攻永远只打一个——这是既定口径，
+        递增的那一段只在技能期内兑现。
+        """
         e = self.effects
-        return e.max_target if e is not None else 1
+        if e is None:
+            return 1
+        base = e.max_target
+        if e.target_step <= 0:
+            return base
+        # 「最多触发 M 次」是**格数**上限，不是次数上限：0 或负数表示没写上限。
+        earned = self.trigger_hits // e.target_step
+        if e.target_cap > 0:
+            earned = min(earned, e.target_cap)
+        return base + earned
 
     def current_range_id(self) -> str | None:
         """开技能期间被改写的攻击范围代号，没有就是 None。"""
