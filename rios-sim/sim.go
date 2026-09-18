@@ -958,6 +958,16 @@ func (c *simCtx) Log(format string, args ...any) {
 		T: *c.time, Kind: "mech", Who: fmt.Sprintf(format, args...)})
 }
 
+func (c *simCtx) Now() float64 { return *c.time }
+
+// Trace 写一行痕迹：只有 `RIOS_TRACE=1` 才输出，且只走 stderr。
+// 与 `Log` 分开——`Log` 会进判决的 `events`，痕迹不该改变判决的载荷。
+func (c *simCtx) Trace(format string, args ...any) {
+	if traceOn {
+		trace(format, args...)
+	}
+}
+
 // ================================================================ 推进
 
 // advance 沿分段计划推进 dt 秒（`EnemyUnit._advance_legs`，unit.py）。
