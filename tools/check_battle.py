@@ -2132,6 +2132,78 @@ def check_barrier_scope(stage, lib, calc, book_t) -> None:
     conn.close()
 
 
+def check_second_use(stage, lib, calc, book_t) -> None:
+    """[27] 「第二次及以后使用」的变体取值（怒潮凛冬技2「绝不罢休」）。
+
+    黑板用方括号键给"同一条属性在另一个场合的取值"：`atk 0.9` 是第 1 次的，
+    `headb2_s_2[second].atk 1.8` 是第 2 次起的。描述写「第二次及以后使用时
+    能力加成变为最初的两倍，**且持续时间无限**」。
+
+    这个坑的形状值得记：**解析层一直是对的**——`_parse_effects` 早把 `[second]`
+    收进了 `variants`，`SkillEffects.with_variant()` 也早就写好（它的 docstring
+    拿本例当标准用例）。缺的只是**从没有人调用它**，于是模拟器一直按第一次的
+    90% 算。解析有、API 有、没人接线——这类"看着像做好了"最容易漏。
+
+    本节还钉住三条边界：
+    1. **第 1 次不受影响**（16 秒、90%）——否则等于把变体一路套到底；
+    2. **"无限"挂在「第二次及以后」那个从句里**，所以不能拿 `infinite` 单独判
+       （它对第 1 次也为真，该技能 `infinite` 本来就是 True）；
+    3. 第 3 次及以后**保持**第 2 次的取值，不会继续翻倍。
+    """
+    print("\n[27] 「第二次及以后使用」的变体取值（怒潮凛冬技2）")
+    from ak_tactic.battle.sim import _INFINITE  # noqa: PLC0415
+
+    cid = "char_1051_headb2"
+    lv = next(s for s in SkillBook().for_operator(cid) if s.slot == 2).level(7, 3)
+    e = lv.effects
+    check("技2 的第一次加成在黑板基础键上", abs(e.buffs.get("atk", 0) - 0.9) < 1e-9,
+          f"atk={e.buffs.get('atk')}")
+    check("[second] 变体被解析出来（解析层一直是对的）",
+          (e.variants.get("second") or {}).get("atk") == 1.8,
+          str(e.variants.get("second")))
+    check("with_variant 是替换语义（1.8 是 0.9 的两倍，不是相加的 2.7）",
+          abs(e.with_variant("second").buffs.get("atk", 0) - 1.8) < 1e-9)
+
+    sim = mechanism_sim(stage, lib)
+    op = make_unit(calc, cid, elite=2, level=60, potential=1)
+    op.skill = next(s for s in SkillBook().for_operator(cid) if s.slot == 2).level(7, 3)
+    sim._activate(op, 0.0)
+    a1 = op.effects.buffs.get("atk")
+    d1 = op.effects.buffs.get("def")
+    t1 = op.skill_timer
+    check("第 1 次 atk 仍是 90%", abs(a1 - 0.9) < 1e-9, f"atk={a1}")
+    check("第 1 次 def 仍是 60%", abs(d1 - 0.6) < 1e-9, f"def={d1}")
+    check("第 1 次时长 16s（不是无限）", abs(t1 - 16.0) < 1e-9, f"timer={t1}")
+    sim._deactivate(op, 1.0)
+    check("技能结束后 effects 归 None", op.effects is None)
+
+    sim._activate(op, 10.0)
+    a2 = op.effects.buffs.get("atk")
+    d2 = op.effects.buffs.get("def")
+    check("第 2 次 atk 是 180%（描述写「变为最初的两倍」）",
+          abs(a2 - 1.8) < 1e-9, f"atk={a2}")
+    check("第 2 次 def 是 120%", abs(d2 - 1.2) < 1e-9, f"def={d2}")
+    check("第 2 次时长无限（描述是「且持续时间无限」）",
+          op.skill_timer >= _INFINITE - 1, f"timer={op.skill_timer}")
+    sim._activate(op, 20.0)
+    check("第 3 次保持 180%，不会继续翻倍",
+          abs(op.effects.buffs.get("atk", 0) - 1.8) < 1e-9,
+          f"atk={op.effects.buffs.get('atk')}")
+
+    # 反向守卫：不带 [second] 的技能**必须**不受影响，否则这条接线会误伤全体。
+    other = make_unit(calc, "char_103_angel", elite=2, level=60, potential=1)
+    other.skill = next(s for s in SkillBook().for_operator("char_103_angel")
+                       if s.slot == 1).level(7, 3)
+    sim3 = mechanism_sim(stage, lib)
+    sim3._activate(other, 0.0)
+    first = dict(other.effects.buffs)
+    sim3._deactivate(other, 1.0)
+    sim3._activate(other, 10.0)
+    check("没有 [second] 变体的技能，第 2 次取值与第 1 次一致",
+          dict(other.effects.buffs) == first,
+          f"{first} -> {dict(other.effects.buffs)}")
+
+
 def check_push(stage, lib, calc, book_t) -> None:
     """[26] 位移接线：推击把敌人推离路线，且推完能走回来。
 
@@ -2331,6 +2403,7 @@ def main() -> int:
     check_element_gaps(stage, lib, calc, book_t)
     check_skill_infix(stage, lib, calc, book_t)
     check_barrier_scope(stage, lib, calc, book_t)
+    check_second_use(stage, lib, calc, book_t)
     check_push(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")

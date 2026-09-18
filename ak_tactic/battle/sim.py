@@ -1515,9 +1515,32 @@ class BattleSimulator:
         if not passive:
             op.sp = max(0.0, op.sp - float(sk.sp_cost))
         op.skill_active = True
+        # 「第二次及以后使用」的取值：黑板用 `[second]` 变体给。怒潮凛冬技2
+        # 「绝不罢休」——第 1 次 atk+90% / def+60% / 16 秒；第 2 次起
+        # atk+180% / def+120%，且**持续时间无限**。
+        #
+        # `SkillEffects.with_variant` 早已写好（它的 docstring 就是拿本例当标准
+        # 用例），解析层也一直把 `[second]` 收进 `variants`——但**没有任何地方
+        # 调用它**，于是模拟器一直按第一次的 90% 算。而这恰恰是真作业用的技能。
+        # 全库只有这一个技能带 `[second]`（已逐行核过 986 条 M3），判据写窄即可。
+        #
+        # `sp_charges` 是累计开启次数（见上方 `once_per_battle` 的用法），
+        # 所以「本次是第 2 次及以后」= 自增**之前** `>= 1`。
+        second_use = op.sp_charges >= 1
         op.sp_charges += 1
+        if second_use and "second" in op.effects.variants:
+            # `with_variant` 是**替换**语义（1.8 是 0.9 的两倍，相加会得 2.7，
+            # 与描述"变为最初的两倍"不符）。它以 `op.effects` 为底做深拷贝，
+            # 所以描述驱动的那一层（`effects_override`）不会被丢掉。
+            op.effects_override = op.effects.with_variant("second")
         dur = sk.effective_duration
-        op.skill_timer = _INFINITE if dur is None else float(dur)
+        if second_use and sk.infinite and dur is not None:
+            # 描述是「第二次及以后使用时能力加成变为最初的两倍，**且持续时间
+            # 无限**」——"无限"挂在这个从句里，所以 16 秒只是第一次的时长。
+            # 不能用 `infinite` 单独判：它对第一次也为真。
+            op.skill_timer = _INFINITE
+        else:
+            op.skill_timer = _INFINITE if dur is None else float(dur)
         op.ammo_left = int(sk.effects.ammo or 0)
         op.apply_max_hp_bonus(sk.effects.buffs.get("max_hp", 0.0))
         # 技能把这一击的伤害类型改写了（"真实伤害"这一族判据）。两种要分开：
