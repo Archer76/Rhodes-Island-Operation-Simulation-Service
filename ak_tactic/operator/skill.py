@@ -1151,6 +1151,13 @@ class SkillEffects:
     shield_break_heal_ratio: float = 0.0
     #: 破裂后给的技力（空弦「铁弦」的 `sp`=7）。
     shield_break_sp: float = 0.0
+    #: 开技时**发给友军**的护盾层数（可露希尔技1「递归策略」的 `shield_cnt`=1）。
+    #:
+    #: 正文「立即使自身的**援军**获得 1 层护盾（**不叠加**），技能持续时间内逐渐
+    #: 获得 3 点部署费用……」——按 PRTS「伤判效果」页，护盾是**次数制抵挡**，
+    #: 所以 `shield_cnt` 就是层数，不是"护盾值"（见 uncertainties 二十九）。
+    #: 援军指的正是**站在战术点效果范围内**的友方（与技2 的返费同一套几何）。
+    shield_grants: int = 0
     #: 起飞/降落的**演出参数**：抬升高度、起飞用时、落地用时（黑板的
     #: `fly_height` / `fly_duration` / `fly_end_duration`）。**不进战斗结算**
     #: ——干员侧的「起飞」目前不做机制，与予愿安洁莉娜技3 的既有处理一致，
@@ -2071,6 +2078,13 @@ def apply_text_rules(eff: SkillEffects, description: str,
         eff.shield_layers_on_deploy = layers
         eff.shield_break_heal_ratio = float(bb.get("hp_ratio") or 0.0)
         eff.shield_break_sp = float(bb.get("sp") or 0.0)
+    # 「发给援军的护盾层数」（可露希尔技1「递归策略」）。
+    # 判据锚正文里的「层护盾」+黑板里的 `shield_cnt`——**层数就是 shield_cnt**，
+    # 不是护盾值（护盾是次数制抵挡，见 uncertainties 二十九）。
+    # 泥岩/空弦的正文同样含"层护盾"，但她们的黑板没有 `shield_cnt`，取到 0，
+    # 所以这一条不会把别人的护盾误读成"发盾"。
+    if "层护盾" in description:
+        eff.shield_grants = int(bb.get("shield_cnt") or 0)
 
 
 def _parse_effects(bb: dict[str, float], duration_type: str) -> SkillEffects:

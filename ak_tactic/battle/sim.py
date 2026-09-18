@@ -2446,6 +2446,9 @@ class BattleSimulator:
         # 物理溅射，并开放这一技能的投递名额（`max_deploy_character`）。
         if eff_now.cannon_atk_scale > 0.0:
             self._fire_delivery_cannon(op, t, eff_now)
+        # 可露希尔技1「递归策略」：开技**立即**给战术点效果范围内的援军发护盾层。
+        if eff_now.shield_grants > 0:
+            self._grant_closur_shield(op, t, eff_now.shield_grants)
         # 「第二次及以后使用」的取值：黑板用 `[second]` 变体给。怒潮凛冬技2
         # 「绝不罢休」——第 1 次 atk+90% / def+60% / 16 秒；第 2 次起
         # atk+180% / def+120%，且**持续时间无限**。
@@ -3189,6 +3192,51 @@ class BattleSimulator:
         while op.shield_timer >= op.shield_interval:
             op.shield_timer -= op.shield_interval
             self._grant_shield_layer(op, t)
+
+    def _grant_closur_shield(self, owner: OperatorUnit, t: float,
+                             cnt: int) -> None:
+        """可露希尔技1「递归策略」：开技立即给**援军**发 `shield_cnt` 层护盾。
+
+        取数：正文「立即使自身的**援军**获得 1 层护盾（**不叠加**），技能持续时间
+        内逐渐获得 3 点部署费用……」；黑板 `shield_cnt` = 1。
+
+        两条口径：
+
+        * **"援军"= 站在战术点效果范围内的友方**——与技2 的返费用的是同一套几何
+          （`_token_cells`，取数钩子还是那个 `token_range_provider`）。
+        * **「不叠加」= 已经有层的人不再加**。所以这里只认"手上有 0 层"。
+          ⚠️ 已知边界：`shield_layers` 是**一个**字段，不分来源——泥岩那种"补层"
+          的护盾与这里的"不叠加"护盾共用一个计数器，所以既有层时不发（宁可少发，
+          不许多发）。要分来源得再引入来源标记，本批不需要。
+
+        按 PRTS「伤判效果」页，护盾是**次数制抵挡**：发了层的人下一次挨打会被
+        整层挡下（`take()` 里那条分支），这里只负责发。
+        """
+        if cnt <= 0 or not owner.alive:
+            return
+        token = None
+        for u in self.operators:
+            if (u.alive and owner.token_key and u.summon_of == owner.char_id
+                    and u.char_id == owner.token_key):
+                token = u
+                break
+        if token is None:
+            return
+        cells = self._token_cells(token, owner.skill_slot)
+        if not cells:
+            return
+        touched = 0
+        for u in self.operators:
+            if not u.alive or u is owner or u is token or u.shield_layers > 0:
+                continue
+            if (int(round(u.position[0])), int(round(u.position[1]))) not in cells:
+                continue
+            u.shield_layers = int(cnt)
+            touched += 1
+        if self.verbose and touched:
+            self.result.log.append(
+                f"{t:7.1f}s  {owner.name} 给战术点范围内的 {touched} 名援军"
+                f"各发 {cnt} 层护盾（不叠加）")
 
     def _token_cells(self, token: OperatorUnit, slot: int) -> set:
         """战术点的**效果范围**格子（两步都取到才算数）。
