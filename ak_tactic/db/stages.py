@@ -332,19 +332,20 @@ def zone_title(zone: dict[str, Any] | None) -> str:
 
 
 def chapter_label(zone: dict[str, Any] | None) -> str:
-    """主线章节在**菜单第一层**的写法：【第X章 ‘章节标题’】（博士 2026-09-18）。
+    """主线章节在**菜单第一层**的写法：`第七章　苦难摇篮`（博士 2026-09-18）。
 
-    「给主线关标题改成【第X章 ’章节标题‘】」——博士原话。引号用中文单引号
-    ‘…’；副标题取 `name_second`（第一至十四章是「黑暗时代·下」这类，第十五至
-    十七章是「离解复合」）。序章没有章号，就写【序章 ‘黑暗时代·上’】。
+    「给主线关标题改成【第X章 ’章节标题‘】」——博士原话，而**书名号与单引号只是
+    他写格式说明用的记号，不是要印在屏幕上的字**（他随后澄清：「那只是我的格式
+    说明」）。所以这一格就是「章号 + 全角空格 + 章节标题」，与第 15–17 章本来
+    的写法（`第十六章　反常光谱`）一致；序章没有章号，写「序章　黑暗时代·上」。
 
     只认主线（`MAINLINE` 与 `MAINLINE_ACTIVITY`——第 15-17 章也是主线）：
-    活动、剿灭作战、插曲那些分部的名字都由活动名或分部名出，不走这里，
-    返回空串，调用方退回 `zone_title()`。
+    活动、剿灭作战、插曲那些名字都由活动名或分部名出，不走这里，返回空串，
+    调用方退回 `zone_title()`。
 
-    与 `zone_title()` 的分工：那个是**通用**章节名（还当着分部名用），
-    这个是菜单第一层的排版。两处各写一份必然会漂，所以章号共用
-    `_chapter_head()`。
+    与 `zone_title()` 的分工：那个是**通用**章节名（第 1-14 章只给章号，别处
+    当分部名用），这个是菜单第一层要的「章号 + 章节标题」。两处各写一份必然会漂，
+    所以章号共用 `_chapter_head()`。
     """
     if not zone or (zone.get("type") or "") not in ("MAINLINE",
                                                     "MAINLINE_ACTIVITY"):
@@ -353,7 +354,7 @@ def chapter_label(zone: dict[str, Any] | None) -> str:
     if not head:
         return ""
     sub = (zone.get("name_second") or "").strip()
-    return f"【{head} ‘{sub}’】" if sub else f"【{head}】"
+    return f"{head}　{sub}" if sub else head
 
 
 def _rows(index: dict[str, dict[str, Any]],
