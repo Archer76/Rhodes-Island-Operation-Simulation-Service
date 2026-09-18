@@ -124,16 +124,26 @@ def unsupported_reasons(sim, *, allow_devices: bool = False,
             else:
                 bad.append(f"技能：{op.name or op.char_id}")
         for attr, why in (("summon_of", "召唤物"),
-                          ("splash_radius", "特性溅射"),
-                          ("highland_splash_scale", "高台溅射"),
                           ("hammer", "锤击"),
                           ("effects_override", "技能效果覆盖"),
                           ("power_attack_count", "天赋「强击瓶专家」"),
                           ("sp_per_attack_talent", "天赋回技力（出手）"),
-                          ("sp_per_kill_talent", "天赋回技力（击杀）")):
+                          ("sp_per_kill_talent", "天赋回技力（击杀）"),
+                          # 特性溅射的两半里，**伤害**那两半已经接线（Go 的
+                          # `traitSplash`：半径圆 + 高台再打一次地面敌人），
+                          # 所以 `splash_radius` / `highland_splash_scale` 不再挡。
+                          # 但高台溅射还附带【停顿】，Go 侧连"停顿"这个状态都
+                          # 没有——这一半仍然挡，免得静默少算一层控场。
+                          ("highland_splash_sluggish", "高台溅射附带停顿")):
             val = getattr(op, attr, 0)
             if val:
                 bad.append(f"{why}：{op.name or op.char_id}")
+        # 「每次有高台触发第一天赋的效果时，获得 N 点技力」住在**技能黑板**里
+        # （原版 `_highland_sp` 读 `sp_per_highland`），Go 侧没有这条。
+        _sk = getattr(op, "skill", None)
+        if _sk is not None and float(
+                (getattr(_sk, "blackboard", None) or {}).get("sp_per_highland") or 0.0):
+            bad.append(f"高台触发回技力：{op.name or op.char_id}")
         # `combo_hits` 的"没有这条"是 **1**（不是 0）：原版判的是 `> 1`。
         # 按真值判会把**每一位没有连击的干员**全挡在门外——实测阿米娅就中招。
         if int(getattr(op, "combo_hits", 1) or 1) > 1:
@@ -302,6 +312,20 @@ def _operator_spec(sim, d) -> dict[str, Any]:
     if talent_phys or talent_arts:
         out["talent_dodge_phys"] = talent_phys
         out["talent_dodge_arts"] = talent_arts
+    # ---- 职业特性溅射（撼地者那四位；解好的三个倍率，见 `battle/traits.py`）
+    #
+    # `splash_damage_scale` 是天赋「汹涌怒火」叠上来的那一半，**只乘溅射**；
+    # 溅射真正用的倍率是 `splash_scale × splash_damage_scale`（0.5 × 1.24）。
+    # 高台那一半的倍率单独送——它是另一套几何（十字五格、只打地面）。
+    _splash_radius = float(getattr(op, "splash_radius", 0.0) or 0.0)
+    if _splash_radius > 0.0:
+        out["splash_radius"] = _splash_radius
+        out["splash_scale"] = float(getattr(op, "splash_scale", 0.0) or 0.0)
+        out["splash_damage_scale"] = float(
+            getattr(op, "splash_damage_scale", 1.0) or 1.0)
+        _high = float(getattr(op, "highland_splash_scale", 0.0) or 0.0)
+        if _high > 0.0:
+            out["highland_splash_scale"] = _high
     if skill is not None:
         out["skill"] = skill
         out["active"] = active
@@ -428,6 +452,24 @@ def _unit_spec(sim, e, *, time: float = 0.0) -> dict[str, Any]:
     }
 
 
+def _highland_cells(sim) -> list[list[int]]:
+    """地图上**高台**格的列表（`[x, y]`）。
+
+    天赋「汹涌怒火」的高台那一半要判"被溅射到的格是不是高台"，而 Go 侧只有
+    规格、没有地图。只送这一个布尔分类，不送整张地形——够用且小。
+    """
+    m = sim.stage.map
+    out: list[list[int]] = []
+    for x in range(int(getattr(m, "width", 0))):
+        for y in range(int(getattr(m, "height", 0))):
+            try:
+                if m.inside(x, y) and m.tile(x, y).is_highland:
+                    out.append([x, y])
+            except Exception:  # 地形取不到就当不是高台，不猜
+                continue
+    return out
+
+
 def _reborn_summons_spec(sim, e) -> list[dict[str, Any]]:
     """重生期召唤的规格：每拍的时间/个数 + **召唤物的完整规格** + 逐格路线表。
 
@@ -527,6 +569,11 @@ def build_spec(sim, *, stage_label: str = "", allow_devices: bool = False,
         "enemy_windup": float(sim.enemy_windup),
         "ranged_enemies": bool(sim.ranged_enemies),
         "speed_scale": float(sim.speed_scale),
+        # 高台格：Go 没有地图，而天赋「汹涌怒火」的高台那一半要判"被溅射到的格
+        # 是不是高台"。只在这条特性真在场时才送（通用关卡一帧都不多花）。
+        "highland_cells": _highland_cells(sim) if any(
+            float(getattr(d.operator, "highland_splash_scale", 0.0) or 0.0) > 0.0
+            for d in sim.deployments) else [],
         "operators": operators,
         "deploys": deploys,
         "spawns": spawns,

@@ -30,6 +30,10 @@ type Spec struct {
 	RangedEnemies bool    `json:"ranged_enemies"`
 	//: 位移速度乘区（`speed_scale`，含关卡 `move_multiplier`）
 	SpeedScale float64 `json:"speed_scale"`
+	//: 高台格（`[x, y]` 列表）。Go 没有地图，而天赋「汹涌怒火」的高台那一半
+	//: 要判"被溅射到的格是不是高台"——这份几何由 Python 随规格送来。
+	//: 不在表里就当没高台（高台溅射那一段因此整段不发生）。
+	HighlandCells [][2]int `json:"highland_cells,omitempty"`
 
 	Operators []OperatorSpec `json:"operators"`
 	Deploys   []DeploySpec   `json:"deploys"`
@@ -91,6 +95,16 @@ type OperatorSpec struct {
 
 	//: 攻击范围（**绝对格**，已按落点与朝向展开；技能改范围在最小版本里不支持）
 	Range [][2]int `json:"range"`
+	//: 职业特性溅射（撼地者那四位共用的一条特性；判据是特性黑板上同时有
+	//: `attack@ability_range_radius` 与 `attack@atk_scale_2`，已由 Python 解好）。
+	//:
+	//: `SplashScale` 是特性给的倍率、`SplashDamageScale` 是天赋「汹涌怒火」
+	//: 叠上来的（溅射真正用的是**两者相乘**），`HighlandSplashScale` 是高台
+	//: 那一半的倍率。三者都为 0 = 没有这条特性。
+	SplashRadius        float64 `json:"splash_radius,omitempty"`
+	SplashScale         float64 `json:"splash_scale,omitempty"`
+	SplashDamageScale   float64 `json:"splash_damage_scale,omitempty"`
+	HighlandSplashScale float64 `json:"highland_splash_scale,omitempty"`
 
 	//: 技能（没有技能槽就是 nil）。数值由 Python 算完送来，Go 只跑状态机：
 	//: 攒技力、什么时候能开、开多久、结束。

@@ -546,7 +546,7 @@ func runSim(spec *Spec) (*Verdict, error) {
 		skillTick(ops, dt, t, spec, &cost, verdict)
 
 		// ---- 6. 我方出手（1870 → 2687）
-		operatorsAttack(ops, enemies, dt, t, verdict)
+		operatorsAttack(ops, enemies, dt, t, spec, verdict)
 
 		// ---- 7. 敌方出手（1873 → 2882）
 		enemiesAttack(ops, enemies, dt, t, spec, verdict)
@@ -1059,7 +1059,7 @@ func updateBlocking(ops []*operator, enemies []*enemy) {
 //   - `hit_count` 是"一次出手打几下"，**每一击都各减一次防御**；
 //   - `final_hit_scale` 只改最后一击的倍率。
 func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
-	verdict *Verdict) {
+	spec *Spec, verdict *Verdict) {
 	for _, op := range ops {
 		if !op.alive() {
 			continue
@@ -1115,6 +1115,11 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 						Event{T: t, Kind: "kill", Who: target.spec.Name})
 				}
 			}
+			// 特性溅射：**每个主目标各一次**（原版把调用写在主目标循环里、
+			// 连击循环外面）。不判主目标死活。
+			if op.spec.SplashRadius > 0 {
+				traitSplash(op, spec, enemies, target, power, t, verdict)
+			}
 		}
 		// 出手回报：攻击回复的技力与弹药消耗（原版 3187-3205，在整次出手之后）
 		spOnAttack(op)
@@ -1123,6 +1128,125 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 			op.ammoLeft--
 		}
 	}
+}
+
+// splashTiles 以 `center` 为心、`radius` 为半径的圆**盖到的地块**——**重叠判定**
+// （原版 `battle/traits.py:splash_tiles`）。
+//
+// 地块 `(x, y)` 是以整数点为心、边长 1 的正方形；"被盖到"判的是圆心到这张
+// 正方形的**最近点**距离 ≤ 半径，最近点距离按分量算（`max(|d| - 0.5, 0)` 再取
+// 欧氏范数）。所以半径 1.0 时斜邻格也在内（近角距 ≈ 0.707）——**这是 3×3 九格，
+// 不是十字五格**；半径 ≤ 0.707 时斜邻才掉出去。
+//
+// ⚠ 圆心是**连续坐标**，不是格心：圆心在格内挪半格，斜邻格的取舍就会变。
+func splashTiles(center [2]float64, radius float64) [][2]int {
+	if radius < 0 {
+		return nil
+	}
+	x, y := center[0], center[1]
+	baseX, baseY := int(math.Floor(x)), int(math.Floor(y))
+	reach := int(math.Ceil(radius + 0.5))
+	var out [][2]int
+	for dx := -reach; dx <= reach; dx++ {
+		for dy := -reach; dy <= reach; dy++ {
+			tx, ty := baseX+dx, baseY+dy
+			gx := math.Max(math.Abs(x-float64(tx))-0.5, 0)
+			gy := math.Max(math.Abs(y-float64(ty))-0.5, 0)
+			if math.Hypot(gx, gy) <= radius+1e-9 {
+				out = append(out, [2]int{tx, ty})
+			}
+		}
+	}
+	return out
+}
+
+// crossCells 是「周围 4 格 + 本格」——**格子判定**（原版 `cross_cells`，范围码 `x-5`）。
+// 高台那一半用它，与上面的半径圆不是同一套几何，不能互相顶替。
+func crossCells(cell [2]int) [5][2]int {
+	x, y := cell[0], cell[1]
+	return [5][2]int{{x, y}, {x + 1, y}, {x - 1, y}, {x, y + 1}, {x, y - 1}}
+}
+
+// traitSplash 是职业特性溅射 + 天赋「汹涌怒火」的高台那一半
+// （原版 `BattleSimulator._trait_splash`，sim.py 2931）。
+//
+// 三条口径：
+//  1. 主目标**自己不吃这一份**（正文写的是"目标**周围的其他**敌人"），
+//     天赋的增伤也只乘溅射、不乘主目标；
+//  2. 高台溅射是**另一套几何**：被溅射到的每个高台，对「它自己周围四格 + 本格」
+//     里的**地面**敌人再打一次（`crossCells`）；
+//  3. `HighlandCells` 由 Python 随规格送来（Go 没有地图）——不在表里就当没有高台。
+//
+// ⚠ 已知未接：高台溅射附带的【停顿】（`highland_splash_sluggish`）与
+// 「每次高台触发回 N 点技力」（`sp_per_highland`）。两者都在闸门里挡着，
+// 不会静默少算。
+func traitSplash(op *operator, spec *Spec, enemies []*enemy, target *enemy,
+	power, t float64, verdict *Verdict) {
+	cells := splashTiles(target.position, op.spec.SplashRadius)
+	if len(cells) == 0 {
+		return
+	}
+	scale := op.spec.SplashScale * op.spec.SplashDamageScale
+	for _, e := range enemies {
+		if e == target || e.hp <= 0 || e.leaked {
+			continue
+		}
+		cx, cy := e.cell()
+		if !hasCell(cells, cx, cy) {
+			continue
+		}
+		splashHit(op, e, power, scale, t, verdict)
+	}
+	if op.spec.HighlandSplashScale <= 0 {
+		return
+	}
+	highland := map[[2]int]bool{}
+	for _, c := range spec.HighlandCells {
+		highland[[2]int{c[0], c[1]}] = true
+	}
+	for _, cell := range cells {
+		if !highland[cell] {
+			continue
+		}
+		for _, victimCell := range crossCells(cell) {
+			for _, e := range enemies {
+				if e.hp <= 0 || e.leaked || e.spec.IsFlying {
+					continue
+				}
+				cx, cy := e.cell()
+				if cx != victimCell[0] || cy != victimCell[1] {
+					continue
+				}
+				splashHit(op, e, power, op.spec.HighlandSplashScale, t, verdict)
+			}
+		}
+	}
+}
+
+// splashHit 是一次溅射伤害的落地（与主目标那一路同一个伤害口径：
+// `resolve_damage` → `take` → 记击杀）。
+func splashHit(op *operator, e *enemy, power, scale, t float64, verdict *Verdict) {
+	dmg := resolveDamage(power, "PHYSICAL", scale,
+		e.spec.DEF, e.spec.RES, e.dodgeVs("PHYSICAL"))
+	dealt := e.take(dmg, op)
+	if dealt <= 0 {
+		return
+	}
+	verdict.DamageDealt += dealt
+	if !e.alive() && !e.pendingReborn() {
+		e.deathTime = t
+		verdict.Events = append(verdict.Events,
+			Event{T: t, Kind: "kill", Who: e.spec.Name})
+	}
+}
+
+func hasCell(cells [][2]int, x, y int) bool {
+	for _, c := range cells {
+		if c[0] == x && c[1] == y {
+			return true
+		}
+	}
+	return false
 }
 
 // pickTargets 目标选择（`_pick_targets`，sim.py 2343）。
