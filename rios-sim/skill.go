@@ -218,6 +218,14 @@ func useSkill(ops []*operator, cell [2]int) {
 // 两者的生命周期不一样（这条查完就没人再跑，也没有版本兼容的负担）。
 var traceOn = os.Getenv("RIOS_TRACE") == "1"
 
+// tracePosName 只对**这一只敌人**逐帧打坐标（空 = 不打）。
+//
+// 为什么要单独一个开关：坐标是每帧每只一行，全开就是几万行，捞不出东西；
+// 而"某只敌人推进得不一样"这类差异，**逐帧坐标比出手笔数早暴露得多**
+// （出手是位置的结果，位置是第一手）。按名字筛而不是按下标：下标在排查时
+// 要先反查名单，名字直接对应到看得见的那一只。
+var tracePosName = os.Getenv("RIOS_TRACE_POS")
+
 func trace(format string, args ...any) {
 	if traceOn {
 		fmt.Fprintf(os.Stderr, format+"\n", args...)
