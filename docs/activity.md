@@ -109,15 +109,18 @@ python tools/check_activity.py                  # 自检
 | `Passive_Hit.` | 「祟」受击蜕皮 | 每 4 **次**伤害一层，80 层封顶；每 10 层重量 −1 |
 | `Reborning.` | 重生期充能 / 召唤 | 两条分支：有 `enemy_key` 就是召唤 |
 
-**待实现**（清单见命令输出，此处不复制以免漂）。
-四处**未做**的，理由各不相同，都不是"忘了"：
+**待实现**：四条曾挂在这里的 TODO 已全部收口（天桩链、装置生命值/被摧毁、
+`DeathPassive.` 部署层、`enemy_skill_blackb_mul` 敌方技能出手），
+清单以命令输出为准（此处不复制以免漂）。收口的**判据是代码不是状态字符串**：
+`tools/check_activity.py` 会去读兑现它的那几个函数的源码，
+谁把状态改回 DONE 而代码不在，会立刻红。
 
-| 键 | 为什么还没做 |
-|---|---|
-| `trap_146_dhdcr` 天桩 | 正文已取到（见下），但它要先把「天桩-甲」这个**敌人**实现出来 |
-| `AuraHit.` | 需要「阻流阀有生命、会被摧毁」这一层；现在装置只是静态表 |
-| `DeathPassive.` | 需要「部署装置」这一层；现在只记账（`BattleResult.device_tokens`） |
-| `enemy_skill_blackb_mul` | 黑板改对了，但模拟器**不驱动敌方技能**，改完没人读 |
+| 键 | 当初卡在哪 | 现在谁兑现 |
+|---|---|---|
+| `trap_146_dhdcr` 天桩 | 要先有「天桩-甲」这个敌人 | `sim._pile_tick` / `_pile_spec`（甲三型、监测/激活、召唤乙） |
+| `AuraHit.` | 要有「阻流阀有生命、会被摧毁」 | `sim._device_tick`（进入即真伤、拆了还田） |
+| `DeathPassive.` | 要有「部署装置」这一层 | `sim._do_deploy_device`（额度＋费用＋建成断田） |
+| `enemy_skill_blackb_mul` | 模拟器不驱动**敌方技能** | `sim._skill_attack_tick`（玷/勿玷「污」：全图地面 1 名＋十字＋受污附加法术） |
 
 天桩的正文已取回并留档在 `out/prts-act31side-pages.txt` / `-pages2.txt`：
 
@@ -133,10 +136,13 @@ python tools/check_activity.py                  # 自检
 
 - 只有怀黍离一个活动登记在 `KNOWN_ACTIVITIES`。下一个活动按同一套流程走：
   先跑 `python -m ak_tactic activity <目录名>` 拿到未登记清单 → 逐项补登记与来历 → 再实现。
-- **怀黍离自己还没"完"**：上表四处未做，每一处都卡在一层不存在的能力上
-  （装置可摧毁 / 部署装置 / 敌方技能结算 / 天桩-甲这个敌人）。
+- **怀黍离自己已"完"一轮**：登记表里 TODO 归零，四项都接通了代码并各带一条
+  能解析的 anchor（`tools/check_activity.py` 逐条核）。但"做完"不等于"读对"——
+  有 16 条读法/口径**我判断不了、也没替你决定**，全部落在
+  `docs/verdicts-pending.md`（E1–E16）等你逐条裁定；
+  其中 E8（甲执不执行那张指派路径）与 E15（装置同时部署上限）影响最大。
   按博士的口径「每个活动的特殊机制都要解析完整再进行下一个」，
-  下一个活动开工前得先把这四处要么做掉、要么写成明确的**不做**理由。
+  下一个活动开工前先把那份清单过一遍，比再开一个活动值。
 - 活动目录名与活动中文名尚未建立映射（`act31side` = 怀黍离），目前靠 `KNOWN_ACTIVITIES` 手写。
   中文名的数据源已经有了：`gamedata/excel/activity_table.json` 的 `basicInfo`，以及 `zone_table` 的 `zoneToActivity`。
 - 敌人黑板的粒度是**前缀**（`Reborning.`），同一前缀下的各键必然同生同死，所以按前缀登记是正确的粒度；

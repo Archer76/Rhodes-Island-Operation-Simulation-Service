@@ -29,12 +29,19 @@ from operbox_path import operbox_path                                  # noqa: E
 BOX = operbox_path()
 
 #: 1-7 无技能三人组。**这就是 `tools/check_battle.py` 的基线**，
-#: 落位与时刻逐字对齐它，只为证明验证器与既有脚本同一口径。
+#: 落位与**时刻**逐字对齐它，只为证明验证器与既有脚本同一口径。
+#:
+#: **2026-09-18 时刻已按真实费用机制重排**（原为 1.0 / 5.0 / 9.0s）。1-7 初始
+#: 10 费、1 秒回 1 点，而三人是 18 / 13 / 19 费共 50 费——旧时刻在真实规则下
+#: **做不出来**，模拟器会逐笔记进 `BattleResult.cost_denied`（1.0s 阿米娅差 7 费、
+#: 9.0s 拉普兰德差 13 费，只有 5.0s 的德克萨斯够）。旧口径等于**替玩家免了
+#: 39 秒的费**。重排取各自最早付得起的时刻再加 1 秒余量（不加余量会卡在离散
+#: 回费节拍的缝里）。新结论 39 杀 / 2 漏 / 58650，耗时仍是 137.0s。
 BASELINE_17 = [
     ("阿米娅", (5, 2), "Left", 0, dict(elite=2, level=80, trust=100,
-                                       potential=6), 1.0),
-    ("德克萨斯", (4, 3), "Right", 0, dict(elite=2, level=1), 5.0),
-    ("拉普兰德", (2, 3), "Right", 0, dict(elite=2, level=1), 9.0),
+                                       potential=6), 9.0),
+    ("德克萨斯", (4, 3), "Right", 0, dict(elite=2, level=1), 22.0),
+    ("拉普兰德", (2, 3), "Right", 0, dict(elite=2, level=1), 41.0),
 ]
 
 
@@ -84,7 +91,7 @@ def check_plan() -> None:
           blob[:70])
     d0 = back.deploys[0]
     check("往返保住坐标、朝向、时刻",
-          d0.position == (5, 2) and d0.direction == "Left" and close(d0.time, 1.0),
+          d0.position == (5, 2) and d0.direction == "Left" and close(d0.time, 9.0),
           f"{d0.position} {d0.direction} {d0.time}")
     check("往返保住信赖与潜能（影响属性，不能丢）",
           d0.trust == 100 and d0.potential == 6,
@@ -200,17 +207,25 @@ def check_terrain() -> None:
 # ---------------------------------------------------------------- 4 星级
 
 def check_stars() -> None:
-    print("\n[4] 星级规则（**这是一条假设**，字段原样带出以便改判）")
+    print("\n[4] 星级规则（**规则由博士 2026-09-18 实机口述确认**）")
     check("不漏怪 = 三星", stars_of(True, 0) == 3)
     check("漏 1 只 = 二星", stars_of(True, 1) == 2)
-    check("漏 2 只 = 一星", stars_of(True, 2) == 1)
-    check("漏 3 只也至少一星（打赢了就不给 0 星）", stars_of(True, 3) == 1)
+    check("漏 2 只**也是二星**（漏几只同档）", stars_of(True, 2) == 2)
+    check("漏 5 只仍是二星（只要生命没扣完）", stars_of(True, 5) == 2)
+    # 这条是**负向**守卫：旧实现写的是「漏 2 只及以上 1 星」，而游戏里
+    # 根本没有一星这一档。留着它，那个错误就再也回不来。
+    check("**没有一星这一档**（漏多少只都不给 1 星）",
+          all(stars_of(True, n) != 1 for n in range(0, 30)))
     check("没打赢 = 0 星（无论漏几只）", stars_of(False, 0) == 0)
+    check("没打赢且漏光 = 0 星", stars_of(False, 10) == 0)
+    check("突袭无漏 = 四星", stars_of(True, 0, challenge=True) == 4)
+    check("突袭漏怪 = 二星（突袭加成只在无漏时给）",
+          stars_of(True, 1, challenge=True) == 2)
 
     p = plan_17()
     v = Verifier().run(p)
     check("Verdict 原样带出 won/life/max_life/leaks 供改判",
-          v.won and v.leaks == 0 and v.life == v.max_life > 0,
+          v.won and v.leaks == 2 and v.life == v.max_life - v.leaks > 0,
           f"won={v.won} life={v.life}/{v.max_life} leaks={v.leaks}")
 
 
@@ -223,10 +238,14 @@ def check_baselines() -> None:
     real = Verifier().run(plan_17())
     check("1-7 真实范围：133.0s",
           close(real.elapsed, 133.0, 0.2), f"实得 {real.elapsed:.1f}s")
-    check("1-7 真实范围：41 杀 / 0 漏 / 60750",
-          real.kills == 41 and real.leaks == 0 and close(real.damage, 60750, 1),
+    check("1-7 真实范围：39 杀 / 2 漏 / 58650（按真实费用重排后的数）",
+          real.kills == 39 and real.leaks == 2 and close(real.damage, 58650, 1),
           f"{real.kills} 杀 {real.leaks} 漏 {real.damage:,.0f}")
-    check("1-7 真实范围：三星", real.stars == 3)
+    # 重排前是 41 杀 / 0 漏 / 60750 三星；那三个时刻在真实费用下做不出来，
+    # 晚上场 39 秒就必然漏掉两只。所以这里**如实钉住二星**——要三星得改方案，
+    # 不能把期望值改回三星了事。
+    check("1-7 真实范围：二星（重排后漏 2 只，如实钉住）", real.stars == 2,
+          f"实得 {real.stars} 星")
 
     deg = Verifier(use_range_table=False).run(plan_17())
     check("1-7 退化范围：137.0s（= check_battle 锚的那条路）",
@@ -347,7 +366,11 @@ def check_cli() -> None:
     if not BOX.exists():
         check("CLI 正常路径（需要 OperBox，跳过）", False, str(BOX))
         return
-    team = ("阿米娅:5,2:Left:0@1; 德克萨斯:4,3:Right:0@5; 拉普兰德:2,3:Right:0@9")
+    # 这节测的是 **CLI 管道**（存盘、往返、退出码），不是某一份具体方案。
+    # 所以样例必须是一份**真能三星**的阵容——否则退出码会如实变成 1，
+    # 把"管道坏了"和"样例本来就打不过"混成同一条红灯。
+    # 用不带 `@时刻` 的写法，交给自动排期（它会按真实费用排到付得起为止）。
+    team = ("拉普兰德:2,3:Left:0; 能天使:3,1:Down:0; 银灰:4,3:Left:0")
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
         rc = cli_main(["verify", "main_01-07", "--team", team,

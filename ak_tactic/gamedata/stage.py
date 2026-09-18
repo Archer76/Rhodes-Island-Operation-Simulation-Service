@@ -62,7 +62,7 @@ class Tile:
 
     key: str
     height: str        # HIGHLAND / LOWLAND
-    buildable: str     # NONE / MELEE / RANGED
+    buildable: str     # NONE / MELEE / RANGED / **ALL**
     passable: str      # ALL / FLY_ONLY
 
     @property
@@ -73,19 +73,26 @@ class Tile:
     def is_lowland(self) -> bool:
         return self.height == "LOWLAND"
 
+    # ⚠ `ALL` 是**真实取值**，不是笔误：关卡 `mapData.tiles[].buildableType`
+    # 一共四个取值（全量扫过 `data/gamedata` 的 34 个怀黍离关卡文件：
+    # NONE 1779 / MELEE 788 / RANGED 359 / **ALL 75**），`ALL` = 地面与高台都能放。
+    # 原先这里只认 MELEE / RANGED，于是 `ALL` 落进"两种都不能"：
+    # `act31side_ex05`（33 格）与 `act31side_sub-1-2`（42 格）**整图一个可部署格
+    # 都没有**，搜索的几何剪枝自然一个候选都不剩——症状就是"无论选什么都是
+    # 0 条结果"（见 `docs/environment.md` 第十四节）。
     @property
     def deployable_melee(self) -> bool:
         """能站地面干员。"""
-        return self.buildable == "MELEE"
+        return self.buildable in ("MELEE", "ALL")
 
     @property
     def deployable_ranged(self) -> bool:
         """能站高台干员。"""
-        return self.buildable == "RANGED"
+        return self.buildable in ("RANGED", "ALL")
 
     @property
     def deployable(self) -> bool:
-        return self.buildable in ("MELEE", "RANGED")
+        return self.buildable in ("MELEE", "RANGED", "ALL")
 
     @property
     def walkable(self) -> bool:
@@ -557,6 +564,50 @@ class StageOptions:
                 f"初始费用 {self.initial_cost:g} / 费用回复 {self.cost_increase_time:g}s 一点")
 
 
+#: 装置「天桩」技能的**默认**分支名。`skill_table.sktok_dhdcr` 的 1 级黑板
+#: 只有一个键 `branch_id = branch_dhdcr_1`；关卡没在 `overrideSkillBlackboard`
+#: 里写覆盖时先试这条（`act31side_ex08` 那一个天桩连它都没有，退到"本关唯一
+#: 一条同前缀支线"，见 `Stage.branch_for`）。
+DEFAULT_DEVICE_BRANCH = "branch_dhdcr_1"
+
+
+def branch_prefix(device_key: str) -> str:
+    """装置 key → 它的支线前缀：``trap_146_dhdcr`` → ``branch_dhdcr``。
+
+    装置 key 的末段就是支线名去掉 ``branch_`` 之后那部分（本活动的天桩
+    ``trap_146_dhdcr`` 对 ``branch_dhdcr`` / ``branch_dhdcr_1..10``）。
+    推不出末段就返回空串——**空串意味着"这个装置没有支线语义"**，
+    阻流阀（``trap_139_dhtl``）与泵站（``trap_140_dhsb``）就靠它挡在门外：
+    它们没有 ``branch_dhtl`` / ``branch_dhsb``，不会误领一条天桩的支线。
+    """
+    tail = (device_key or "").rsplit("_", 1)[-1]
+    return f"branch_{tail}" if tail and tail != device_key else ""
+
+
+@dataclass
+class BranchAction:
+    """一条**支线**里的出怪动作（关卡顶层 ``branches``）。
+    怀黍离的用法：装置「天桩」的技能黑板只有一个键 ``branch_id``，
+    它指向 ``branches`` 里的一条支线；支线里的 SPAWN 动作才是**谁在什么路径
+    上出场**——`key` 是天桩-甲（或失控天桩-甲 / 关卡本地的 ``…_dhdcr_b``），
+    ``routeIndex`` 指向**顶层 ``extraRoutes``**（不是 ``routes``）。
+    """
+
+    branch: str
+    action_type: str
+    enemy_key: str
+    route_index: int
+    count: int = 1
+    interval: float = 1.0
+    pre_delay: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {"branch": self.branch, "action_type": self.action_type,
+                "enemy_key": self.enemy_key, "route_index": self.route_index,
+                "count": self.count, "interval": self.interval,
+                "pre_delay": self.pre_delay}
+
+
 @dataclass
 class Stage:
     level_id: str
@@ -566,6 +617,11 @@ class Stage:
     spawns: list[EnemySpawn]
     options: StageOptions
     raw: dict = field(default_factory=dict, repr=False)
+    #: 顶层 ``extraRoutes``：**装置以预设路径召唤出来**的单位走的那几条路。
+    #: 与 ``routes`` 分开存——两者的 ``routeIndex`` 命名空间不同，混用会串号。
+    extra_routes: list[Route] = field(default_factory=list)
+    #: 顶层 ``branches``：支线名 → 出怪动作。装置用 ``branch_id`` 指过来。
+    branches: dict[str, list[BranchAction]] = field(default_factory=dict)
 
     # ------------------------------------------------------------ 查询
 
@@ -575,10 +631,76 @@ class Stage:
                 return r
         return None
 
+    def extra_route(self, index: int) -> Route | None:
+        """``extraRoutes`` 里的一条（与 ``route()`` 是两个命名空间）。"""
+        for r in self.extra_routes:
+            if r.index == index:
+                return r
+        return None
+
+    def branch_actions(self, branch: str) -> list[BranchAction]:
+        return list(self.branches.get(branch or "", []))
+
+    def branch_for(self, branch_id: str,
+                   *, prefix: str = "branch_dhdcr") -> str:
+        """把一个装置的 ``branch_id`` 解析成**本关真实存在**的支线名。
+
+        判据按可靠性从高到低，**第一条就是数据的原话**：
+
+        1. 装置自己写了 ``branch_id`` 且本关有这条支线 → 直接用它
+           （本活动 8 个带天桩的关卡全走这条）。
+        2. 没写（``overrideSkillBlackboard`` 为 null）→ 先试 ``{prefix}_1``
+           ——``prefix`` 由装置 key 末段推出来（``trap_146_dhdcr`` →
+           ``branch_dhdcr``），而技能默认黑板（``skill_table.sktok_dhdcr``）
+          写的正是 ``branch_dhdcr_1``。
+        3. 还找不到 → 本关**只有一条**以该前缀开头的支线时用它
+           （``act31side_ex08``：那一个天桩没写覆盖，而本关唯一的支线叫
+           ``branch_dhdcr``，设计意图显然就是它）。
+        4. 都不成立 → 返回空串：**宁可不召唤，也不猜错一条路**。
+
+        ⚠ 第 2、3 条是**推断**，已登记在 `docs/verdicts-pending.md`
+        （ex08 是全活动唯一踩到第 3 条的关卡）。
+        """
+        if branch_id and branch_id in self.branches:
+            return branch_id
+        if not prefix:
+            return ""
+        first = f"{prefix}_1"
+        if first in self.branches:
+            return first
+        hits = [b for b in self.branches
+                if b == prefix or b.startswith(prefix + "_")]
+        return hits[0] if len(hits) == 1 else ""
+
     def used_routes(self) -> list[Route]:
         """真正被出怪指令引用到的路线。"""
         used = {s.route_index for s in self.spawns}
         return [r for r in self.routes if r.index in used]
+
+    def local_enemies(self) -> dict[str, dict]:
+        """关卡**自带的**敌人定义：``enemyDbRefs`` 里 ``useDb: false`` 的那些。
+
+        它们的 ``id`` 不在敌人属性库里（属性库里只有 ``prefabKey`` 指向的
+        那一个），整份数据就写在关卡文件的 ``overwrittenData`` 里。
+        怀黍离的 ``enemy_1398_dhdcr_b``（小地图上的天桩-甲）就是这种。
+        """
+        out: dict[str, dict] = {}
+        for ref in (self.raw.get("enemyDbRefs") or []):
+            if ref.get("useDb") is False and ref.get("id"):
+                out[str(ref["id"])] = dict(ref.get("overwrittenData") or {})
+        return out
+
+    def local_enemy_prefab(self, enemy_id: str) -> str:
+        """关卡本地敌人的 ``prefabKey``；不是本地敌人就返回空串。
+
+        用途：本地敌人**没有自己的天赋黑板以外的资料**，正文里那些"砸下什么"
+        "召唤什么"的跳转要顺着 prefab 去找（天桩-乙的 ``…_dhtb_b`` →
+        ``enemy_1399_dhtb`` → 它砸下的天标）。
+        """
+        data = self.local_enemies().get(enemy_id) or {}
+        cell = data.get("prefabKey")
+        val = cell.get("m_value") if isinstance(cell, dict) else cell
+        return str(val or "")
 
     def enemy_counts(self) -> dict[str, int]:
         out: dict[str, int] = {}
@@ -777,6 +899,32 @@ def _parse_options(raw: dict) -> StageOptions:
     )
 
 
+def _parse_branches(raw: dict) -> dict[str, list[BranchAction]]:
+    """顶层 ``branches``：支线名 → 出怪动作列表。
+
+    只收 ``SPAWN`` 动作——怀黍离的支线里也只有它（剧情/预览光标那些不动敌人）。
+    """
+    out: dict[str, list[BranchAction]] = {}
+    for name, blk in (raw.get("branches") or {}).items():
+        acts: list[BranchAction] = []
+        for ph in ((blk or {}).get("phases") or []):
+            for a in (ph.get("actions") or []):
+                if (a.get("actionType") or "").upper() != "SPAWN":
+                    continue
+                acts.append(BranchAction(
+                    branch=name,
+                    action_type="SPAWN",
+                    enemy_key=str(a.get("key") or ""),
+                    route_index=int(a.get("routeIndex", 0) or 0),
+                    count=int(a.get("count", 1) or 1),
+                    interval=float(a.get("interval", 1.0) or 1.0),
+                    pre_delay=float(a.get("preDelay", 0.0) or 0.0),
+                ))
+        if acts:
+            out[name] = acts
+    return out
+
+
 def parse_stage(raw: dict, *, level_id: str = "", code: str = "") -> Stage:
     """把一份关卡 JSON 解析成 Stage。"""
     if "mapData" not in raw:
@@ -788,6 +936,10 @@ def parse_stage(raw: dict, *, level_id: str = "", code: str = "") -> Stage:
         map=world,
         # 路线的 row 要按地图高度翻一次，见 `_parse_routes`
         routes=_parse_routes(raw.get("routes"), world.height),
+        # `extraRoutes` 是**另一个命名空间**（装置召唤出来的单位走它），
+        # 索引与 `routes` 各自从 0 开始，不能混着查。
+        extra_routes=_parse_routes(raw.get("extraRoutes"), world.height),
+        branches=_parse_branches(raw),
         spawns=_parse_spawns(raw.get("waves") or [], raw.get("enemyDbRefs") or []),
         options=_parse_options(raw),
         raw=raw,

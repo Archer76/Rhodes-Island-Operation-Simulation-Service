@@ -1491,6 +1491,18 @@ class ResultScreen(Screen):
         rows.append("")
         rows.append(f"[dim]已评估 {getattr(r, 'evaluated', 0)} 个方案，"
                     f"最深 {getattr(r, 'depth', 0)} 人。[/]")
+        # **为什么要把 `note` 摆出来**：搜索"没有三星方案"有四种完全不同的来路
+        # （几何剪枝后没候选 / 没位置可加 / 全是失败 / 到了人头上限），原先这一屏
+        # 只会说一句"这次没找到三星方案"，四种情况看起来一模一样——博士报的
+        # "无论选什么都是 0 条结果，似乎没接上模拟器"就长这样：真因一个在**地图**
+        # （`buildableType: ALL` 曾被判成"两种都不能放"，整图 0 个落位）、
+        # 一个在**结算**（天桩-甲既打不死也不会离场，有它的关卡永远跑满上限、
+        # 全是 0 星）。两处都在 `docs/environment.md` 第十二 / 十四节。
+        # 一句话的差别决定了要不要去查模拟器。
+        note = str(getattr(r, "note", "") or "").strip()
+        if note:
+            rows.append("")
+            rows.append(f"[warn]{note}[/]")
         return "\n".join(rows)
 
     def action_export(self) -> None:
