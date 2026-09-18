@@ -121,13 +121,49 @@ def known_accounts_safe() -> list[dict]:
 #: `auto` 模式（「允许程序补充」）下**人选池的总大小**：勾的人先进池子，不足就从
 #: 名册里按练度补到这么多。
 #:
-#: 为什么要有个上限：候选数 ≈ 池子人数 × `per_op`（每人挑几个落位），而每层的
-#: 模拟次数 ≈ `beam` × 候选数。211 人的名册 = 一千多个候选 × 5 = 每层五六千次
-#: 模拟，四层就是两万次——那不叫"程序可以补位"，那叫按下去就不动了。
-#:
-#: 24 是实测取的：池子 12 人时 1-7 与 HS-EX-5 各约 40 秒出三星，池子 24 人时约
-#: 80–90 秒（见 `_proto/pool_timing.py`）。够宽，也没慢到让人以为程序死在那里。
+#: **这是候选池，不是出战人数**（博士 2026-09-18 追问过这件事）。它只决定"从多少人
+#: 里挑组合"，与出来的编队有几个人无关；界面上因此不再写这个数，只写有几个人上场。
+#: 池子越大越慢：候选数 ≈ 池子人数 × `per_op`，而每层的模拟次数 ≈ `beam` × 候选数。
 AUTO_POOL = 24
+
+#: 解算深度的**起点**：先按 4 人找（博士 2026-09-18：「默认还是 4 人」）。
+DEPTH_START = 4
+
+#: 自动加深的步长。
+DEPTH_STEP = 2
+
+#: 一支编队最多 12 人（游戏内的编队槽位）。
+#:
+#: 它与**关卡可部署人数**是两回事，博士 2026-09-18 说清了：两者不冲突——场上放不下
+#: 的人可以撤下来换别人上，所以真正的闸门是关卡的可部署人数，12 只是封顶。
+SQUAD_CAP = 12
+
+
+def depth_ladder(deploy_limit: int) -> list[int]:
+    """解算深度的阶梯：从 4 人起，找不到就按 `DEPTH_STEP` 加深，直到关卡可部署人数。
+
+    「关卡可部署人数要接进来，默认还是 4 人，找不到的情况就做自动加深」——博士
+    2026-09-18。所以这里不是"一上来就按上限搜"，而是：
+
+    * 大多数关卡 4 人就够，先花最少的钱试一次；
+    * 4 人以内没找到三星，才加深再试（每深一层都要重跑一遍搜索，代价是真实的，
+      所以步长取 2 而不是 1）；
+    * 天花板是这一关的**可部署人数**（gamedata `options.characterLimit`）；
+    * 取不到这个数（库/网络都没有）时按 `SQUAD_CAP`（12）封顶，并在日志里说明
+      ——悄悄按 12 搜会让人以为这一关真能上 12 个。
+
+    末端一定落在 `cap` 上（`4、6、8` 而不是 `4、6、7` 里漏掉 8），免得"上限 8 人"
+    这一档永远试不到。
+    """
+    cap = min(deploy_limit if deploy_limit > 0 else SQUAD_CAP, SQUAD_CAP)
+    if cap <= 0:
+        return [DEPTH_START]
+    if cap <= DEPTH_START:
+        return [cap]
+    out = list(range(DEPTH_START, cap + 1, DEPTH_STEP))
+    if out[-1] != cap:
+        out.append(cap)
+    return out
 
 
 # ================================================================ 状态
@@ -148,8 +184,13 @@ class State:
         self.error: str = ""
         self.export_path: Path | None = None
         #: 这一轮解算的**人选池**是怎么凑出来的（如「勾的 3 人 + 名册补 24 人」）。
-        #: 显示在解算屏上：池子多大决定这一轮要跑多久，也解释"为什么没结果"。
+        #: 只在日志里用（解释"为什么这么久"）；**不进界面**——博士 2026-09-18：
+        #: 编队人数部分只写有几个人上场。
         self.pool_note: str = ""
+        #: 当前这一轮的**出战人数上限**（搜索深度），会随自动加深往上走。
+        self.depth: int = DEPTH_START
+        #: 这一关的**可部署人数**（gamedata `options.characterLimit`）；0 = 取不到。
+        self.deploy_limit: int = 0
 
 
 # ================================================================ [0] 准备
@@ -1617,9 +1658,12 @@ class SquadPickScreen(Screen):
                f"筛出 [bold]{shown}[/] 人　"
                f"已勾 [bold]{len(self._picked)}[/] 人\n")
         if st.mode == "auto":
+            # 不再写「补到 24 人」这个数（博士 2026-09-18：「编队人数部分只写
+            # 使用了几人编队」）。24 是**候选池**大小，与出战人数是两件事，写在
+            # 编队这一屏只会让人以为要带 24 个人上场。池子多大是程序内部的事，
+            # 出来几个人的编队在结果屏上写着（「用到的干员（N 人）」）。
             txt += ("模式：[bold]允许程序补充[/]　"
-                    f"[dim]你勾的人先进池子，不够的从名册按练度补到 "
-                    f"{AUTO_POOL} 人一起挑组合[/]")
+                    "[dim]你勾的人优先；不够的程序从名册按练度补人来挑组合[/]")
         else:
             txt += ("模式：[bold]只用我选的[/]　"
                     "[dim]只在勾的这些人里找组合，一个都没勾就搜不出东西[/]")
@@ -1675,6 +1719,8 @@ class SolveScreen(Screen):
         self._t0 = time.time()
         self._lines: list[str] = []
         self._aborted = False
+        self.app.state.depth = DEPTH_START
+        self.app.state.deploy_limit = 0
         self._log("开始解算……")
         self.set_interval(0.25, self._tick)
         self._worker = self._run()
@@ -1689,24 +1735,82 @@ class SolveScreen(Screen):
         elapsed = time.time() - self._t0
         self.query_one("#prog", ProgressBar).update(
             progress=min(95.0, 5.0 + n * 0.6))
-        pool = f"\n[dim]人选池：{st.pool_note}[/]" if st.pool_note else ""
+        # 这一屏也**只写出战人数**（博士 2026-09-18）：`本轮最多 N 人` 是搜索的
+        # 深度上限，也就是"这个方案最多用几个人"；本关的可部署上限写出来，是给他
+        # 一个"还能再加深到几"的边界。候选池多大（`pool_note`）不进这一屏。
+        depth = getattr(st, "depth", DEPTH_START)
+        limit = getattr(st, "deploy_limit", 0)
+        cap = f"　[dim]本关最多可部署 {limit} 人[/]" if limit else ""
         self.query_one("#solve-head", Static).update(
             f"关卡：{st.stage['code']}（{st.stage['level_id']}）\n"
-            f"已评估 [bold]{n}[/] 个候选　已用 {elapsed:.0f} 秒{pool}")
+            f"本轮最多 {depth} 人{cap}\n"
+            f"已评估 [bold]{n}[/] 个候选　已用 {elapsed:.0f} 秒")
 
     @work(thread=True, exclusive=True)
     def _run(self) -> None:
-        """在后台线程里跑搜索。界面线程只负责读计数器。"""
+        """在后台线程里跑搜索。界面线程只负责读计数器。
+
+        ## 为什么要在这个循环里做「自动加深」
+
+        博士 2026-09-18：「关卡可部署人数要接进来，默认还是 4 人，找不到的情况就
+        做自动加深」。所以先按 4 人跑一遍（大多数关卡这样就够），只有在**没找到
+        三星**时才往上加，一直加到这一关的可部署人数为止（`depth_ladder()`）。
+
+        加深的代价是真实的——每深一层都要把搜索整个重跑一遍——所以每一轮都往日志
+        里写一行，让人看得见"它在加深，不是卡住了"。
+        """
         st = self.app.state
+        result = None
         try:
             from ..plan import Roster as PlanRoster
             from ..search import Searcher
             roster = PlanRoster.from_json(st.roster.path)
             st.plan_roster = roster
             pool, st.pool_note = self._pool(roster)
+            # 候选池只在日志里说一句——博士 2026-09-18 要的是"编队部分只写出战
+            # 人数"，但"这一轮为什么这么久"得有地方答，日志正是那块地方。
+            # 措辞必须点明它与出战人数无关，否则又变成"要带 24 个人上场"的误会。
+            if st.pool_note:
+                self.app.call_from_thread(
+                    self._log, f"候选池：{st.pool_note}"
+                              "　[dim]（这是程序挑组合的范围，不是出战人数）[/]")
             searcher = Searcher(verbose=False)
             st.searcher = searcher
-            result = searcher.search(st.stage["level_id"], roster, pool)
+            level_id = st.stage["level_id"]
+            try:
+                st.deploy_limit = searcher.deploy_limit(level_id)
+            except Exception as exc:                      # noqa: BLE001
+                st.deploy_limit = 0
+                self.app.call_from_thread(
+                    self._log,
+                    f"[warn]取不到本关的可部署人数（{type(exc).__name__}: {exc}），"
+                    f"按编队上限 {SQUAD_CAP} 人封顶[/]")
+            ladder = depth_ladder(st.deploy_limit)
+            if st.deploy_limit:
+                self.app.call_from_thread(
+                    self._log,
+                    f"本关最多可部署 {st.deploy_limit} 人；先按 {ladder[0]} 人找")
+            for i, depth in enumerate(ladder):
+                st.depth = depth
+                if len(ladder) > 1:
+                    self.app.call_from_thread(
+                        self._log, f"第 {i + 1}/{len(ladder)} 轮：最多 {depth} 人")
+                result = searcher.search(level_id, roster, pool, max_ops=depth)
+                if result is not None and result.verdict is not None \
+                        and result.verdict.stars == 3:
+                    break
+                if i + 1 < len(ladder):
+                    self.app.call_from_thread(
+                        self._log,
+                        f"{depth} 人以内没找到三星，加深到 {ladder[i + 1]} 人再试一轮")
+            else:
+                # 跑到阶梯末端还是没有三星（`for` 的 `else`：一次都没 break）。
+                # 此时 `result` 是**最深那一轮**的结果，它里面带着"最好差在哪"。
+                if len(ladder) > 1:
+                    self.app.call_from_thread(
+                        self._log,
+                        f"加深到 {ladder[-1]} 人（本关可部署上限）仍没找到三星，"
+                        "把最接近的那个方案交给你")
         except Exception as exc:                          # noqa: BLE001
             st.error = f"{type(exc).__name__}: {exc}"
             self.app.call_from_thread(self._done, None)
@@ -2178,6 +2282,8 @@ class RiosApp(App):
         st.error = ""
         st.export_path = None
         st.pool_note = ""
+        st.depth = DEPTH_START
+        st.deploy_limit = 0
 
     def _stage_picked(self, row: dict | None) -> None:
         if row is None:
