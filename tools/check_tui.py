@@ -1173,10 +1173,61 @@ def check_stage_layers() -> None:
               D.zone_envs(five["parts"][0]["zone_id"]) == [], "空")
     fifteen = by_key.get("act2mainss")
     if fifteen:
-        check("第十五章标题是「第十五章　离解复合」（章号要自己拼，"
+        check("第十五章标题是【第十五章 ‘离解复合’】（章号要自己拼，"
               "它的 name_first 是英文）",
-              fifteen["title"].startswith("第十五章"),
-              fifteen["title"])
+              fifteen["title"] == "【第十五章 ‘离解复合’】", fifteen["title"])
+
+    # --- 主线标题的写法：【第X章 ‘章节标题’】（博士 2026-09-18）---
+    import re as _re
+
+    from ak_tactic.db import DEFAULT_DB_PATH as _DB_PATH
+    from ak_tactic.db import connect as _connect
+    from ak_tactic.db.stages import chapter_label, load_zones, zone_title
+    pat = _re.compile(r"^【(第[一二三四五六七八九十]+章|序章) ‘.+’】$")
+    conn = _connect()
+    try:
+        zones = load_zones(conn)
+    finally:
+        conn.close()
+    main_keys = {zid for zid, v in zones.items()
+                 if (v.get("type") or "") in ("MAINLINE", "MAINLINE_ACTIVITY")}
+    main_rows = [c["title"] for c in chapters
+                 if any(p["zone_id"] in main_keys for p in c["parts"])]
+    other_rows = [c["title"] for c in chapters
+                  if not any(p["zone_id"] in main_keys for p in c["parts"])]
+    check("主线每一章的标题都是【第X章 ‘章节标题’】",
+          bool(main_rows) and all(pat.match(t) for t in main_rows),
+          str([t for t in main_rows if not pat.match(t)][:3]))
+    check("序章也带上了章节标题（它没有章号，写【序章 ‘黑暗时代·上’】）",
+          "【序章 ‘黑暗时代·上’】" in main_rows,
+          str(main_rows[:2]))
+    check("活动那些标题**不套**这个格式（引号与书名号只给主线）",
+          not any(t.startswith("【") for t in other_rows),
+          str([t for t in other_rows if t.startswith("【")][:3]))
+    check("章号与副标题都取自 zone 表（不是拼死的字符串）",
+          chapter_label(zones["main_7"]) == "【第七章 ‘苦难摇篮’】"
+          and chapter_label(zones["act4mainss_zone1"]) == "【第十七章 ‘相变临界’】",
+          f"{chapter_label(zones['main_7'])} / "
+          f"{chapter_label(zones.get('act4mainss_zone1'))}")
+    check("非主线 zone 上 chapter_label 返回空串（调用方好退回 zone_title）",
+          chapter_label(zones["act54side_zone1"]) == ""
+          and chapter_label(zones["camp_zone_1"]) == ""
+          and chapter_label(None) == "")
+    check("zone_title 的旧口径没被改坏（分部名还在用它，第十五章仍带副标题）",
+          zone_title(zones["act3mainss_zone1"]) == "第十六章　反常光谱"
+          and zone_title(zones["main_1"]) == "第一章",
+          f"{zone_title(zones['act3mainss_zone1'])} / {zone_title(zones['main_1'])}")
+
+    # --- 分部那一列不许横到屏幕外（剿灭作战 15 个分部）---
+    from ak_tactic.tui import app as A
+    cell = A.ChapterPickScreen._parts_cell(by_key["act54side"])
+    check("两个分部照实写全（通学路、殡仪堂）", cell == "通学路、殡仪堂", cell)
+    camp_cell = A.ChapterPickScreen._parts_cell(by_key["剿灭作战"])
+    check("15 个分部的那一格只写前几个 + 「共 N 个分部」",
+          "共 15 个分部" in camp_cell and len(camp_cell) < 80, camp_cell[:70])
+    check("单分部那一列留空（没有第二层可点）",
+          A.ChapterPickScreen._parts_cell(by_key["main_5"]) == "",
+          A.ChapterPickScreen._parts_cell(by_key["main_5"]))
 
     # --- 条数一致：菜单报几关，下一层就得给几行 ---
     mismatched = []
