@@ -309,6 +309,8 @@ class BattleSimulator:
         *,
         enemy_at: Callable[[str, int], object],
         range_provider: Callable[[str, int, str, tuple[int, int]], set] | None = None,
+        #: 战术点效果范围取数钩子：`(token_key, 技能槽) -> range_id | None`。
+        token_range_provider: Callable[[str, int], str | None] | None = None,
         skill_book=None,
         summon_book=None,
         fps: int = FPS,
@@ -382,6 +384,11 @@ class BattleSimulator:
         if self.rune_muls:
             self.enemy_at = wrap_enemy_at(enemy_at, self.rune_muls)
         self.range_provider = range_provider
+        #: **战术点效果范围**取数钩子：`(token_key, 技能槽) -> range_id | None`。
+        #: 战术点自己的 `operator_phase.range_id` 只说"能摆在哪儿"，**效果范围是它
+        #: 自己的技能给的**（可露希尔的「指挥中心」带技1/2/3 → `x-5`/`x-4`/`x-6`）。
+        #: 与 `range_provider` 同样：战斗层不连库，取不到就当没有战术点范围。
+        self.token_range_provider = token_range_provider
         self.skill_book = skill_book
         #: 技能效果的来源策略。三者都建立在**黑板**之上，区别只在描述那一路
         #: 走多远：
@@ -1698,6 +1705,15 @@ class BattleSimulator:
             return
         if not isinstance(spec, int):
             op.skill = spec                      # 已经是 SkillLevel
+            # `SkillLevel` 自己不带槽号，但有些机制要按槽查（可露希尔的战术点
+            # 范围就随携带技能变）。`skill_book` 在的时候按 skill_id 回查一下；
+            # 查不到就保持调用方可能自己设的值（默认 0）。
+            sid = getattr(spec, "skill_id", "") or getattr(spec, "id", "")
+            if sid and self.skill_book is not None:
+                for _s in self.skill_book.for_operator(op.char_id):
+                    if getattr(_s, "skill_id", "") == sid:
+                        op.skill_slot = int(getattr(_s, "slot", 0) or 0)
+                        break
         else:
             if self.skill_book is None:
                 raise ValueError(
@@ -1710,6 +1726,7 @@ class BattleSimulator:
                     f"{op.char_id} 没有 {spec} 号技能槽"
                     f"（有 {[s.slot for s in slots]}）")
             op.skill = hit.level(d.skill_level, d.skill_mastery)
+            op.skill_slot = int(spec)            # 带的是槽位号：槽号就是它
 
         if op.skill is not None and not op.skill.is_passive:
             op.sp = float(op.skill.init_sp)
@@ -3048,6 +3065,74 @@ class BattleSimulator:
         if self.verbose:
             self.result.log.append(f"{t:7.1f}s  {op.name} 落地被拒：{why}")
 
+    def _token_cells(self, token: OperatorUnit, slot: int) -> set:
+        """战术点的**效果范围**格子（两步都取到才算数）。
+
+        ① `token_range_provider(token_key, 技能槽)` 给**范围码**——战术点自己的
+           `operator_phase.range_id` 只说"能摆在哪儿"，**效果范围是它自己的技能
+           给的**：可露希尔的「指挥中心」带技1/2/3 分别是 `x-5`/`x-4`/`x-6`；
+        ② `range_provider` 按那个码取格子。
+
+        缺任何一步都返回**空集**——宁可"没有范围"，也不退回一个猜的范围。
+        """
+        if self.token_range_provider is None or self.range_provider is None:
+            return set()
+        code = self.token_range_provider(token.char_id, slot)
+        if not code:
+            return set()
+        try:
+            return set(self.range_provider(token.char_id, token.elite,
+                                           token.direction, token.position,
+                                           range_id=code))
+        except TypeError:            # 自定义 provider 未必接受 range_id
+            return set()
+
+    def _refund_on_deploy(self, newbie: OperatorUnit, t: float) -> None:
+        """「在**战术点效果范围**内部署干员时，立即返还部署费用的一部分」。
+
+        可露希尔技2「模型扩展」（`cost_return = 0.4`）。prts 备注把三件容易写错的
+        事钉死了：
+
+        * **基数是"当前部署费用属性"**，不是这次实际扣了多少费——「由新约能天使
+          投递干员时（或类似情况下），即使玩家没有实际消耗费用，干员仍可能拥有
+          非 0 的部署费用属性。本技能仍然可以就这一情况进行回费」；
+        * **向上取整**；
+        * 「若此次部署前，干员上一次撤退/离场的原因为**移动**，【返费】效果不会
+          生效」——本仓库**没有"离场原因"这个通道**，这一条不建模，记在
+          `docs/uncertainties.md`。
+
+        「下一帧立刻」按**当帧**结算：主循环一帧 1/30 秒，返费只影响此后能不能
+        部署，一帧差别不可观测（同批其他机制同口径）。
+        """
+        for owner in self.operators:
+            sk = getattr(owner, "skill", None)
+            eff = getattr(sk, "effects", None)
+            pct = float(getattr(eff, "cost_return", 0.0) or 0.0)
+            if pct <= 0.0 or not owner.token_key or not owner.alive:
+                continue
+            # 技能得**真开着**：`op.skill` 是这位干员带着哪个技能，不是"正在开"。
+            if not getattr(owner, "skill_active", False):
+                continue
+            # 槽号优先取挂技能时记下的那个（`SkillLevel` 自己不带槽号）。
+            slot = int(getattr(owner, "skill_slot", 0)
+                       or getattr(sk, "slot", 0) or 0)
+            mine = [u for u in self.operators
+                    if getattr(u, "summon_of", "") == owner.char_id
+                    and u.char_id == owner.token_key and u.alive]
+            if not mine:
+                continue
+            cell = (int(round(newbie.position[0])), int(round(newbie.position[1])))
+            if cell not in self._token_cells(mine[0], slot):
+                continue
+            back = math.ceil(float(newbie.deploy_cost) * pct)
+            self.cost = min(self.max_cost, self.cost + back)
+            newbie.cost_refunded = True
+            if self.verbose:
+                self.result.log.append(
+                    f"{t:7.1f}s  {owner.name} 的战术点罩住了 {newbie.name} 的落点，"
+                    f"返还部署费用 {back}（{pct:.0%}）")
+            return
+
     def _do_deploy(self, d: Deployment, t: float) -> None:
         op = d.operator
         if not self._can_deploy_again(op, t):
@@ -3074,6 +3159,14 @@ class BattleSimulator:
         self._attach_skill(op, d)
         self.operators.append(op)
         self._mobility_on_deploy(op, d, t)
+        # 天赋附带的**战术点/召唤物**（`Talent.token_key`，全库 37 位有）：
+        # 战斗层靠这个名字认"战场上哪个单位是我的战术点"，**按 char_id 判**。
+        for _t in op.talents or ():
+            if getattr(_t, "token_key", ""):
+                op.token_key = _t.token_key
+                break
+        # 「在战术点效果范围内部署干员时返还部署费用」（可露希尔技2）。
+        self._refund_on_deploy(op, t)
 
         # 部署瞬间的一次性环境伤害：`first_basic_damage + 实际 × first_damage_ratio`。
         # 它**额外于**每秒结算，不是它的第一次——原文两句分开写

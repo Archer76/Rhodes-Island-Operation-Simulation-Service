@@ -72,6 +72,12 @@ class Talent:
     unlock_level: int
     required_potential: int          # 0 起算：4 表示需潜能 5
     range_id: str | None
+    #: 这条天赋**附带的召唤物/战术点**（`operator_talent.token_key`）。
+    #:
+    #: 全库 37 位干员有它：凯尔希的 Mon3tr、深海色的触手、可露希尔的「指挥中心」……
+    #: 战斗层要判"某个单位是不是我的战术点"就得有这个名字（按 char_id 判，
+    #: 不能按名字或描述猜）。
+    token_key: str
     is_hidden: bool
     effects: SkillEffects
 
@@ -166,6 +172,7 @@ def _build(char_id: str, group: int, cand: dict) -> Talent:
         unlock_level=int(uc.get("level") or 1),
         required_potential=int(cand.get("requiredPotentialRank") or 0),
         range_id=cand.get("rangeId"),
+        token_key=cand.get("tokenKey") or "",
         is_hidden=bool(cand.get("isHideTalent")),
         effects=parse_effects(bb),
     )

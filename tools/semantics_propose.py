@@ -45,6 +45,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 
+from ak_tactic.operator import SkillBook, TalentBook   # noqa: E402
 from ak_tactic.operator.skill import _classify      # noqa: E402
 import audit_coverage as A                          # noqa: E402
 
@@ -129,18 +130,77 @@ def _notes_of(cid: str) -> list[tuple[str, str, str]]:
         con.close()
 
 
-def _note_for(key: str, notes: list[tuple[str, str, str]]) -> str:
-    """给这条键找备注里**最相关的一句**（找不到就空串）。"""
+def _notes_for(key: str, notes: list[tuple[str, str, str]],
+               srcs: list[str], limit: int = 3) -> list[str]:
+    """给这条键找备注里相关的几句（找不到就空表）。
+
+    两条路，**顺序不能反**：
+
+    ① **语义表里的家族关键词**——表里有的键才走这条，命中就是最准的那一句；
+    ② **挂靠物对应的备注**——按技能名/天赋名取。第二条才是主力：**新键在语义表
+       里必然缺席**（表是裁定结果的沉淀），而它的语义恰恰就写在它挂靠的那条技能
+       或天赋的 `※` 备注段里。所以备注按**挂靠物**兜底，而不是按键名硬猜。
+    """
+    if not notes:
+        return []
+    out: list[str] = []
     spec = SEMANTICS.get(key)
-    if spec is None or not notes:
-        return ""
-    hints = _NOTE_HINTS.get(spec[0], ())
-    for _kind, _anchor, text in notes:
-        for h in hints or (key,):
-            i = text.find(h)
-            if i >= 0:
-                return text[max(0, i - 30):i + 70].strip()
-    return ""
+    hints = _NOTE_HINTS.get(spec[0], ()) if spec else ()
+    if hints:
+        for _kind, _anchor, text in notes:
+            for h in hints:
+                i = text.find(h)
+                if i >= 0:
+                    out.append(text[max(0, i - 30):i + 70].strip())
+                    break
+    # 挂靠物：来源写法是「技能id·技能名」或天赋名，备注的 anchor 是**名字**
+    names = {s.split("·")[-1].strip() for s in srcs} | {s.split("·")[0].strip()
+                                                        for s in srcs}
+    for kind, anchor, text in notes:
+        if anchor.strip() in names:
+            out.append(f"[{kind}·{anchor}] {text[:150]}")
+    seen: list[str] = []
+    for line in out:
+        if line not in seen:
+            seen.append(line)
+    return seen[:limit]
+
+
+def _blackboards(cid: str) -> tuple[dict[str, float], dict[str, str]]:
+    """黑板取值 + **挂靠物的正文**。
+
+    正文是裁定一条新键语义的最后一块拼图：PRTS 备注只挑重点写（可露希尔技1 的
+    备注通篇讲**回费**，而 `shield_cnt` 那层护盾只写在技能正文里）。所以取值、
+    正文、备注三件一起给，人才不必再开一次探针。
+    """
+    vals: dict[str, float] = {}
+    descs: dict[str, str] = {}
+
+    def _rec(key: str, raw: object) -> None:
+        try:
+            fv = float(raw)                              # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return
+        if fv or key not in vals:
+            vals[key] = fv
+
+    try:
+        for sk in SkillBook().for_operator(cid):
+            try:
+                lv = sk.level(level=7, mastery=3)
+            except Exception:                            # noqa: BLE001
+                continue
+            for k, v in (lv.blackboard or {}).items():
+                _rec(k, v)
+            descs[f"{sk.skill_id}·{lv.name}"] = _WS.sub(" ", lv.description or "")
+        for t in TalentBook().for_operator(cid):
+            for k, v in (getattr(t, "blackboard", None) or {}).items():
+                _rec(k, v)
+            nm = getattr(t, "name", "") or "?"
+            descs[nm] = _WS.sub(" ", getattr(t, "description", "") or "")
+    except Exception:                                    # noqa: BLE001
+        pass
+    return vals, descs
 
 
 def _classify_ok(key: str) -> bool | None:
@@ -163,29 +223,38 @@ def brief(cid: str, name: str, lits: set[str], det: str, *,
         by_key.setdefault(k, []).append(src)
 
     lines = [f"{name}  {cid}   真欠账 {len(by_key)} 键 / 黑键合计 {len(allk)}"]
+    notes = _notes_of(cid) if with_notes else []
+    vals, descs = _blackboards(cid)
     queue: list[str] = []
     for k, srcs in sorted(by_key.items()):
+        # ⚠️ 备注要在**分流之前**算好：`待裁定` 那条分支原来先 `continue` 了，
+        # 于是最需要看备注的键（表里没有的）反而一句备注都不打。
+        note_lines = ([f"          备注：「{n}」" for n in _notes_for(k, notes, srcs)]
+                      if with_notes else [])
         spec = SEMANTICS.get(k)
         # 同一件事常有两种写法（`rhodes_bonus` 与 `attack@rhodes_bonus`），
         # 指出它的"另一半"能省一次翻黑板——审计的字面量筛子按裸键判，
         # 所以只要裸键出现在源码里，两半都算有人读。
         twin = ("双写 裸键 " + k.rsplit("@", 1)[-1] if "@" in k
                 else "双写 前缀 attack@" + k)
+        v = vals.get(k)
         where = "、".join(dict.fromkeys(srcs))[:60]
+        vtxt = f" = {v:g}" if v is not None else ""
         if spec is None:
             c1 = _classify_ok(k)
             tag = "未归类" if c1 is False else ("归类未知" if c1 is None else "归类过")
-            lines.append(f"  [待裁定] {k:<30} {where}   （{tag}，语义表里没有）")
+            lines.append(f"  [待裁定] {k:<30}{vtxt}  {where}   （{tag}）")
+            d = next((descs[s] for s in srcs if s in descs), "")
+            if d:
+                lines.append(f"          正文：{d[:200]}")
+            lines.extend(note_lines)
             queue.append(f"{name}: {k}")
             continue
         fam, consumer, merge, verdict = spec
         mark = {"可落": "可落", "需裁定": "需裁定", "空面": "空面"}[verdict]
-        lines.append(f"  [{mark}] {k:<30} {where}")
+        lines.append(f"  [{mark}] {k:<30}{vtxt}  {where}")
         lines.append(f"          → {fam}；消费点 {consumer}；合并 {merge}；{twin}")
-        if with_notes:
-            n = _note_for(k, _notes_of(cid))
-            if n:
-                lines.append(f"          备注：「{n}」")
+        lines.extend(note_lines)
 
     # 第三道筛子：天赋整个没有具名检测器
     for tn in A.talent_names_of(cid):
@@ -199,31 +268,134 @@ def brief(cid: str, name: str, lits: set[str], det: str, *,
     return lines, len(by_key)
 
 
-def run(names: list[tuple[str, str, str, str]], *, with_notes: bool) -> None:
+def all_operators(roster: list[tuple[str, str, str, str]]
+                  ) -> list[tuple[str, str, str, str]]:
+    """**名册在前、游戏库里其余的干员接在后面**。
+
+    博士要的是"所有人的数据"，而 `docs/roster-*.md` 只是**练度序名册**（他实际
+    练的那批，211 位）；游戏库里 `is_operator=1` 有 460 位。两者都要覆盖：名册在
+    前便于按练度序读，库里的其余人补在后，谁都不漏。
+    """
+    out = list(roster)
+    seen = {r[1] for r in out}
+    ak = ROOT / "data" / "akdb.sqlite"
+    if ak.exists():
+        con = sqlite3.connect(ak)
+        try:
+            for cid, name in con.execute(
+                    "SELECT char_id, name FROM operator WHERE is_operator=1"):
+                if cid not in seen:
+                    out.append((name, cid, "", ""))
+                    seen.add(cid)
+        finally:
+            con.close()
+    return out
+
+
+def verify(roster: list[tuple[str, str, str, str]]) -> None:
+    """取数完整性：名册每位干员有没有页、有没有备注、有没有正文与事实。
+
+    「拉下来了」要能拿数字回答，而不是凭印象。判据分三层：
+
+    * **有页且抓成功**（`page.ok=1`）——没有页 = 根本没抓；
+    * **有事实行**（`fact`：天赋效果 / 技能专精3描述）——正文一个字都没有 = 页
+      抓歪了（比如抓到同名的别的东西）；
+    * **有备注**——**这一层允许为 0**：确实有一批干员整页没有 `※` 备注段，
+      那不是漏抓。所以只报数、不报错。
+
+    同时反向查：库里有页但**不在名册**的名字（多半是同名歧义或非干员页）。
+    """
+    if not NOTES_DB.exists():
+        print("还没有 data/prts-notes.sqlite——先跑 tools/fetch_prts_notes.py")
+        return
+    con = sqlite3.connect(NOTES_DB)
+    pages = {r[0]: (r[1], r[2], r[3], r[4]) for r in con.execute(
+        "SELECT char_id, name, ok, n_notes, note FROM page")}
+    facts = {r[0]: r[1] for r in con.execute(
+        "SELECT char_id, COUNT(*) FROM fact GROUP BY char_id")}
+    con.close()
+    no_page, bad, no_note, no_fact = [], [], [], []
+    for name, cid, _e, _l in roster:
+        if cid not in pages:
+            no_page.append(f"{name}({cid})")
+            continue
+        _nm, ok, n_notes, _txt = pages[cid]
+        if not ok:
+            bad.append(f"{name}({cid})")
+        if not n_notes:
+            no_note.append(name)
+        if not facts.get(cid):
+            no_fact.append(name)
+    print(f"名册 {len(roster)} 位：有页 {len(roster) - len(no_page)}、"
+          f"抓成功 {len(roster) - len(no_page) - len(bad)}")
+    if no_page:
+        print(f"  **没有页**（{len(no_page)}）：{no_page[:10]}")
+    if bad:
+        print(f"  **抓失败**（{len(bad)}）：{bad[:10]}")
+    if no_fact:
+        print(f"  **连正文都没有**（{len(no_fact)}，这才是可疑的）：{no_fact[:10]}")
+    print(f"  整页没有 ※ 备注的（{len(no_note)} 位，**允许**，不是漏抓）："
+          f"{no_note[:10]}")
+    extra = [f"{v[0]}({k})" for k, v in pages.items()
+             if k not in {r[1] for r in roster}]
+    print(f"  库里有页但不在名册（{len(extra)}，非干员页/同名歧义）：{extra[:6]}")
+
+
+def run(names: list[tuple[str, str, str, str]], *, with_notes: bool,
+        out: str = "") -> None:
     lits = A.source_literals()
     det = A.detector_text()
     total = Counter()
+    buf: list[str] = []
     # ⚠️ 名册元组的列序是 (名字, charId, 精英, 等级)——`brief` 要的是 (charId, 名字)，
     # 别照抄（这一处写反过：筛选用 r[1] 找名字，一个都匹配不上，静默打空）。
     for name, cid, _elite, _level in names:
         lines, n = brief(cid, name, lits, det, with_notes=with_notes)
-        print("\n".join(lines))
+        buf.extend(lines)
         total["keys"] += n
-    print(f"\n合计真欠账 {total['keys']} 键 / {len(names)} 位干员"
-          f"（复核：python tools/audit_coverage.py --top {len(names)}）")
+    tail = (f"\n合计真欠账 {total['keys']} 键 / {len(names)} 位干员"
+            f"（复核：python tools/audit_coverage.py --top {len(names)}）")
+    if out:
+        Path(out).write_text("\n".join(buf) + "\n" + tail + "\n", encoding="utf-8")
+        print(f"已写入 {out}（{len(names)} 位、{total['keys']} 键欠账）")
+    else:
+        print("\n".join(buf))
+    print(tail.strip())
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="干员机制体检 + 语义提议")
     ap.add_argument("--only", default="", help="名字含该子串的干员")
     ap.add_argument("--top", type=int, default=0, help="欠账最多的前 N 位")
+    ap.add_argument("--all", action="store_true", help="**全库每位干员**都出一份简报")
+    ap.add_argument("--out", default="", help="把简报写进这个文件（默认只打屏）")
+    ap.add_argument("--verify", action="store_true",
+                    help="只查取数完整性：名册每位有没有页、有没有备注与正文")
     ap.add_argument("--queue", action="store_true", help="只打待裁定队列（全库）")
     ap.add_argument("--notes", action="store_true", help="附带命中的 PRTS 备注原文")
+    ap.add_argument("--dump", default="",
+                    help="把某位干员的备注原文全打出来（排查挂靠物对不对）")
     a = ap.parse_args()
 
     roster = A.load_roster()
+    if a.verify:
+        verify(roster)
+        return
+    if a.dump:
+        hit = [r for r in roster if a.dump in r[0]]
+        if not hit:
+            print(f"名册里没有含「{a.dump}」的干员——注意 `--dump` 认的是**名字**，"
+                  f"不是 charId。")
+            return
+        for name, cid, _e, _l in hit:
+            print(f"== {name} {cid}")
+            for kind, anchor, text in _notes_of(cid):
+                print(f"[{kind}·{anchor}] {text[:500]}")
+        return
     if a.only:
         picked = [r for r in roster if a.only in r[0]]
+    elif a.all:
+        picked = all_operators(roster)
     elif a.top or a.queue:
         # 欠账数要用真筛子算，所以这里全量跑一遍（约一两分钟）
         lits, det = A.source_literals(), A.detector_text()
@@ -239,7 +411,7 @@ def main() -> None:
     if not picked:
         print("没有命中的干员。")
         return
-    run(picked, with_notes=a.notes)
+    run(picked, with_notes=a.notes, out=a.out)
 
 
 if __name__ == "__main__":

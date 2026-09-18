@@ -5131,6 +5131,132 @@ def check_stand_state_machine(stage, lib, calc, book_t) -> None:
           f"duration={me4.stand_duration:g}、alive={me4.alive}")
 
 
+def check_closur_token_refund(stage, lib, calc, book_t) -> None:
+    """[54] 可露希尔（`char_4228_closur`）：战术点效果范围内的部署返费。
+
+    她最后两条欠账挂在**同一块地基**上——战术点（`token_10066_closur_ourbase`
+    「指挥中心」）。本节做其中的 `cost_return`（技2「模型扩展」）；`shield_cnt`
+    （技1「递归策略」给援军护盾）另记 `docs/uncertainties.md`：正文只说「1 层
+    护盾」，**护盾量没有黑板键**。
+
+    取数三条（akdb + prts 页面，都不是猜的）：
+
+    * 技2 正文「在**战术点效果范围**内部署干员时，立即返还部署费用的 40%」，
+      黑板 `cost_return = 0.4`；
+    * 备注把**基数**钉死了：「下一帧立刻回复干员**当前部署费用属性**的 40%
+      （向上取整）……由新约能天使投递干员时，即使玩家没有实际消耗费用，干员
+      仍可能拥有非 0 的部署费用属性」——所以基数取 `deploy_cost`，**不是**这次
+      实际扣掉多少费；
+    * 战术点的**效果范围由它自己的技能给**：带技1/2/3 → `x-5`/`x-4`/`x-6`；
+      它自己的 `operator_phase.range_id` 是 `0-1`，那只是「能摆在哪儿」。
+    """
+    print("\n[54] 可露希尔：战术点范围内部的部署返费（`cost_return`）")
+    import math                                                 # noqa: PLC0415
+    import sqlite3                                              # noqa: PLC0415
+    from ak_tactic.battle.summons import SummonDeployment       # noqa: PLC0415
+    from ak_tactic.verify import Verifier                       # noqa: PLC0415
+
+    cid = "char_4228_closur"
+    tok = "token_10066_closur_ourbase"
+    v = Verifier()
+    slots = {sk.slot: sk for sk in SkillBook().for_operator(cid)}
+    tals = list(book_t.for_operator(cid))
+    check("  技2「模型扩展」解析出 `cost_return` = 0.4",
+          abs(slots[2].level(7, 3).effects.cost_return - 0.4) < 1e-9,
+          f"{slots[2].level(7, 3).effects.cost_return}")
+    check("  技1 没有返费（空面：不是「人人都有」）",
+          abs(slots[1].level(7, 3).effects.cost_return) < 1e-9,
+          f"{slots[1].level(7, 3).effects.cost_return}")
+    check("  天赋带着战术点，而且是**按 char_id** 认出来的（不按名字猜）",
+          any(getattr(t, "token_key", "") == tok for t in tals),
+          f"{[getattr(t, 'token_key', '') for t in tals]}")
+
+    db = sqlite3.connect(str(Path(__file__).resolve().parent.parent
+                             / "data" / "akdb.sqlite"))
+
+    def token_range(token_key: str, slot: int):
+        """战术点**效果范围**的范围码：查它自己的技能（按槽）。"""
+        row = db.execute(
+            "SELECT l.range_id FROM operator_skill s "
+            "JOIN skill_level l ON l.skill_id = s.skill_id "
+            "WHERE s.char_id=? AND s.slot=? AND l.level=1",
+            (token_key, slot)).fetchone()
+        return row[0] if row else None
+
+    check("  效果范围码随**携带技能**变：技1→x-5、技2→x-4、技3→x-6",
+          (token_range(tok, 1), token_range(tok, 2), token_range(tok, 3))
+          == ("x-5", "x-4", "x-6"),
+          f"{token_range(tok, 1)}/{token_range(tok, 2)}/{token_range(tok, 3)}")
+
+    rp = v.range_provider(stage)
+    place, token_at = (2, 3), (4, 3)
+
+    def build(skill_slot: int, *, with_token: bool = True):
+        sim = mechanism_sim(stage, lib, range_provider=rp,
+                            token_range_provider=token_range,
+                            skill_book=SkillBook())
+        sim.cost = sim.max_cost = 999.0
+        me = v.unit({"char_id": cid, "elite": 2, "level": 60, "trust": 100,
+                     "potential": 1})
+        # 技能按**槽位号**给（1/2/3）——这样模拟器会顺手把槽号记在干员身上，
+        # 而战术点的效果范围正是按槽查的（技1→x-5、技2→x-4、技3→x-6）。
+        sim._do_deploy(Deployment(
+            0.0, me, place, "Right", skill=skill_slot or 0, talents=tals), 0.0)
+        if skill_slot:
+            me.skill_active = True      # 夹具：测「技能开着时」，不是 SP 链
+        if with_token:
+            # 走**真实召唤通道**（计划 + `_do_deploy_summon`），不是往场上塞对象
+            sim.plan_summon(SummonDeployment(0.0, tok, token_at, "Right", owner=cid))
+            sim._do_deploy_summon(sim.summon_deployments.pop(0), 0.0)
+        return sim, me
+
+    sim, me = build(2)
+    check("  战术点经真实召唤通道落场（证明它够得着，不是死代码）",
+          any(u.char_id == tok and u.summon_of == cid for u in sim.operators),
+          f"场上 {len(sim.operators)} 个单位；拒收记录 "
+          f"{list(sim.result.summon_rejected)}")
+
+    cells = sorted(rp(tok, 2, "Right", token_at, range_id="x-4"))
+    inside = (int(cells[0][0]), int(cells[0][1]))
+    tok_unit = next(u for u in sim.operators if u.char_id == tok)
+    cells_now = sim._token_cells(tok_unit, 2)
+    check("  效果范围真算出来了（`x-4` 在战术点位置上展开成格子集）",
+          inside in cells_now,
+          f"范围 {len(cells_now)} 格、含落点 {inside in cells_now}；技能对象 "
+          f"{type(me.skill).__name__}、active={me.skill_active}、"
+          f"effects={getattr(me.skill, 'effects', None) is not None}")
+    ally = v.unit({"char_id": "char_103_angel", "elite": 2, "level": 60,
+                   "trust": 100, "potential": 1})
+    before = sim.cost
+    sim._do_deploy(Deployment(0.0, ally, inside, "Right"), 0.0)
+    got = sim.cost - before
+    want = -ally.deploy_cost + math.ceil(ally.deploy_cost * 0.4)
+    check(f"  范围内({inside})落人：当帧按 `deploy_cost` 的 40%（向上取整）返费",
+          ally.cost_refunded and abs(got - want) < 1e-9,
+          f"费用变化 {got:g}（期望 {want:g} = -{ally.deploy_cost} + "
+          f"{math.ceil(ally.deploy_cost * 0.4)}）")
+
+    sim2, _me2 = build(2, with_token=False)
+    ally2 = v.unit({"char_id": "char_103_angel", "elite": 2, "level": 60,
+                    "trust": 100, "potential": 1})
+    sim2._do_deploy(Deployment(0.0, ally2, inside, "Right"), 0.0)
+    check("  反向：**没有战术点在场**时不返费（范围不是凭空有的）",
+          not ally2.cost_refunded, f"cost_refunded={ally2.cost_refunded}")
+
+    sim3, me3 = build(0)
+    ally3 = v.unit({"char_id": "char_103_angel", "elite": 2, "level": 60,
+                    "trust": 100, "potential": 1})
+    sim3._do_deploy(Deployment(0.0, ally3, inside, "Right"), 0.0)
+    check("  反向：**技能没开**时不返费（`op.skill` 是带什么，不是正在开）",
+          not ally3.cost_refunded and me3.token_key == tok,
+          f"cost_refunded={ally3.cost_refunded}、token={me3.token_key!r}")
+
+    check("  反向：**没带战术点的干员**不返费（不是人人都有）",
+          not any(getattr(t, "token_key", "")
+                  for t in book_t.for_operator("char_103_angel")),
+          "能天使的天赋里没有 token_key")
+
+
 def check_kaltsit_radius_and_regen(stage, lib, calc, book_t) -> None:
     """[53] 凯尔希·思衡托（`char_1052_kalts2`）：阻挡半径倍率 + 【罗德岛】翻倍。
 
@@ -6060,6 +6186,7 @@ def main() -> int:
     check_decay_barrier_and_radio(stage, lib, calc, book_t)
     check_stand_state_machine(stage, lib, calc, book_t)
     check_kaltsit_radius_and_regen(stage, lib, calc, book_t)
+    check_closur_token_refund(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:
