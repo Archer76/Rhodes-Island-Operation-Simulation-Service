@@ -62,6 +62,7 @@ from .talents import (CLASS_AURA_TALENTS, FACTION_AURA_NAME, STUDENT_TEAM,
                       squad_cost_bonus)
 from .p3r import BreakState, TotalAttackDevice, affinity_multiplier, damage_slot
 from .summons import SummonDeployment, build_summon_unit
+from .hammer import HAMMER_HITS, HAMMER_INTERVAL, read_hammer
 from .traits import cross_cells, splash_tiles
 from ..operator.summons import SummonBook
 from . import displace
@@ -1575,6 +1576,10 @@ class BattleSimulator:
         self.result.skill_activations += 1
         self._spawn_qi(op, t)
         self._apply_push(op, t)
+        # 技能**自己**打的伤害（技3「无可抵挡」的五连锤击）：排一张时刻表，
+        # 由 `_hammer_tick` 按固定间隔兑现。这一条与普攻循环完全无关——
+        # 间隔不吃攻速，见 `battle/hammer.py`。
+        self._schedule_hammer(op, t)
         if self.verbose:
             d = "无限" if dur is None else f"{dur:g}s"
             ammo = f" 弹药 {op.ammo_left}" if op.ammo_left else ""
@@ -1753,6 +1758,10 @@ class BattleSimulator:
             for e in self.enemies:
                 if e.sluggish_timer > 0:
                     e.sluggish_timer = max(0.0, e.sluggish_timer - dt)
+                # 【束缚】与停顿一样拦移动，所以同样要在这里减——写进
+                # `advance()` 里会永远减不动（那两条在开头就 return 了）。
+                if e.root_timer > 0:
+                    e.root_timer = max(0.0, e.root_timer - dt)
                 if e.idle_timer > 0:
                     e.idle_timer = max(0.0, e.idle_timer - dt)
                 if e.disarm_timer > 0:
@@ -1801,6 +1810,8 @@ class BattleSimulator:
             # 天赋欠下的那次范围冻结（圣山的祝福）在这里兑现
             self._blessing_tick(t)
             self._qi_tick(dt, t)
+            # 技能自打的伤害：五连锤击按时刻表兑现（不吃攻速）
+            self._hammer_tick(t)
 
             # 3.6 P3R：刷新倒地 → 全场总攻击装置
             self._p3r_tick(dt, t)
@@ -2511,7 +2522,8 @@ class BattleSimulator:
                 f"技力 +{op.sp - before:g}（{op.sp:g}/{sk.sp_cost:g}）")
 
     def _highland_splash(self, op: OperatorUnit, cells: set, power: float,
-                         t: float) -> int:
+                         t: float, *, bonus: float = 1.0,
+                         root: float = 0.0) -> int:
         """天赋「汹涌怒火」的高台那一半，返回**触发的高台数**。
 
         返回值是留给技能 1/2 的 `sp_per_highland` 的（「每次有高台触发第一
@@ -2525,6 +2537,10 @@ class BattleSimulator:
         「地面敌人」按 `is_flying` 排除空中单位，依据是天赋正文里那两个字
         （「所有**地面**敌人」）。这与特性溅射本身不同：那句只写「其他敌人」，
         没有地面限定，所以那一层不排除空中。
+
+        `bonus` 乘在高台溅射倍率上（技3 的 `splash_atk_scale_bonus` = 3.5）；
+        `root` > 0 时控制效果从【停顿】**替换**为【束缚】并取该秒数
+        （技3 的 `unmovable` = 2.0）。两者都只由技3 那条路传进来。
         """
         if op.highland_splash_scale <= 0.0:
             return 0
@@ -2539,13 +2555,123 @@ class BattleSimulator:
                        and e.cell() in cross_cells(cell)]
             for e in victims:
                 dmg = resolve_damage(power, damage_type="PHYSICAL",
-                                     scale=op.highland_splash_scale,
+                                     scale=op.highland_splash_scale * bonus,
                                      defense=e.defense, res=e.res)
                 self._damage_enemy(e, dmg.final, t, "PHYSICAL", source=op)
-                if op.highland_splash_sluggish > 0.0:
+                if root > 0.0:
+                    # 技3「控制效果**变为** 2 秒【束缚】」——是替换不是叠加，
+                    # 所以这一支只挂 root，不碰 sluggish。
+                    e.root_timer = max(e.root_timer, root)
+                elif op.highland_splash_sluggish > 0.0:
                     e.sluggish_timer = max(e.sluggish_timer,
                                            op.highland_splash_sluggish)
         return triggered
+
+    # ------------------------------------------------ 技能自打的伤害（技3）
+
+    def _schedule_hammer(self, op: OperatorUnit, t: float) -> None:
+        """给「无可抵挡」排一轮五连锤击的时刻表。
+
+        首击**即刻**（手动触发的技能，触发那一刻就落第一锤），此后每
+        `HAMMER_INTERVAL` 一次。间隔写进**时刻表**而不是"每帧判一个计时器"，
+        是为了让"不吃攻速"这件事在结构上就成立——攻速那条路只在普攻循环里。
+        """
+        sk = op.skill
+        if sk is None:
+            return
+        strike = read_hammer(sk.blackboard)
+        if strike is None:
+            return
+        op.hammer = strike
+        op.hammer_step = 0
+        op.hammer_pending = [t + i * HAMMER_INTERVAL for i in range(HAMMER_HITS)]
+        if self.verbose:
+            self.result.log.append(
+                f"{t:7.1f}s  {op.name} 起手五连锤击"
+                f"（间隔 {HAMMER_INTERVAL:g}s，不受攻速影响）")
+
+    def _hammer_tick(self, t: float) -> None:
+        """兑现到点的锤击。每帧一次，与其它 `*_tick` 同处（推进之后）。"""
+        for op in self.operators:
+            if not op.hammer_pending:
+                continue
+            if not op.alive or op.retreated:
+                # 中途退场/阵亡：剩下的锤子不落，也不记账。
+                op.hammer_pending.clear()
+                op.hammer = None
+                continue
+            while op.hammer_pending and op.hammer_pending[0] <= t:
+                op.hammer_pending.pop(0)
+                self._hammer_strike(op, t)
+
+    def _hammer_strike(self, op: OperatorUnit, t: float) -> None:
+        """落下第 `op.hammer_step` 击。"""
+        st = op.hammer
+        if st is None:
+            return
+        fx, fy = op.facing
+        # 锤击中心 = **正前方 1.0 距离位置**（不是格心，也不是"前方那一格的
+        # 格心"）——与特性溅射同属重叠判定，圆心偏半格会改变斜邻格的取舍。
+        center = (op.position[0] + fx * 1.0, op.position[1] + fy * 1.0)
+        # 攻击力按 `current_atk()` 的**同一个括号**算，但不用它本身：
+        # 本技能在数据里 duration = 0，"开启中"只持续一帧，而五锤要跨 7.2 秒
+        # ——拿"这一帧开没开"去决定加不加本技能的加成，必然一半对一半错。
+        # 所以裸攻击力 + 全场光环（那部分与开不开技能无关），再加上本技能的
+        # `atk_base` 与逐击累加的 `atk_step`：三者同属"攻击力+X%"，**相加**。
+        # （先前的写法用 `current_atk() × atk_multiplier()`：技能仍开着的那一帧
+        # `current_atk()` 已含 `atk_base` 与 `atk_scale`，于是那第一锤被重复计成
+        # 4.8 倍——守卫里"第一锤与第五锤都按公式对账"正是为抓这类错。）
+        buff = st.atk_pct + st.atk_step * op.hammer_step + op.aura_atk_pct
+        power = op.atk * (1.0 + buff)
+        cells = splash_tiles(center, st.splash_radius)
+        main = self._hammer_main_target(center)
+        if main is not None:
+            dmg = resolve_damage(power, damage_type="PHYSICAL",
+                                 scale=st.atk_scale,
+                                 defense=main.defense, res=main.res)
+            self._damage_enemy(main, dmg.final, t, "PHYSICAL", source=op)
+        # 这一锤**也是攻击**，所以「其他敌人吃 50%×1.24」照样生效，
+        # 只是半径按技能正文的"溅射范围更大"取 1.5（`st.splash_radius`）。
+        scale = op.splash_scale * op.splash_damage_scale
+        if scale > 0.0:
+            for e in self.enemies:
+                if e is main or not e.alive or e.leaked:
+                    continue
+                if e.cell() not in cells:
+                    continue
+                dmg = resolve_damage(power, damage_type="PHYSICAL", scale=scale,
+                                     defense=e.defense, res=e.res)
+                self._damage_enemy(e, dmg.final, t, "PHYSICAL", source=op)
+        if op.highland_splash_scale > 0.0:
+            triggered = self._highland_splash(op, cells, power, t,
+                                              bonus=st.highland_bonus,
+                                              root=st.root)
+            self._highland_sp(op, triggered, t)
+        if self.verbose:
+            self.result.log.append(
+                f"{t:7.1f}s  {op.name} 第 {op.hammer_step + 1} 锤"
+                f"（攻击力 ×{1.0 + buff:,.2f}，单次伤害 {power * st.atk_scale:,.0f}）")
+        op.hammer_step += 1
+        if op.hammer_step >= st.hits:
+            op.hammer_pending.clear()
+            op.hammer = None
+
+    def _hammer_main_target(self, center: tuple[float, float]) -> "EnemyUnit | None":
+        """正前方那一格里的一个单位（wiki：会尝试选择前方 1 格的一个单位）。
+
+        **挑不到不是异常**——备注明写"通常情况下锤击不存在主目标"：这时这一锤
+        只剩溅射，主目标那一份没人吃。
+
+        挑法取**进度最大**的那一个，与普攻索敌同一口径（`_pick_targets` 也是
+        这个键），免得同一格里有两只时两处给出不同的答案。
+        """
+        cell = (int(round(center[0])), int(round(center[1])))
+        pool = [e for e in self.enemies
+                if e.alive and not e.leaked and e.cell() == cell]
+        if not pool:
+            return None
+        pool.sort(key=lambda e: e.progress, reverse=True)
+        return pool[0]
 
     def _operators_attack(self, dt: float, t: float) -> None:
         for op in self.operators:
