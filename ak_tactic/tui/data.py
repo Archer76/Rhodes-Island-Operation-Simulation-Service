@@ -22,6 +22,7 @@ from pathlib import Path
 __all__ = ["Operator", "Roster", "load_roster", "default_guides_dir",
            "load_config", "save_config", "config_path", "stage_rows",
            "chapter_rows", "zone_envs", "zone_diffs", "complete_dir",
+           "operator_db_status",
            "PROFESSION_CN", "PROFESSION_ORDER", "TRAINED_FILTERS",
            "profession_cn", "group_label", "meets_trained",
            "skland_uid", "skland_game_uid", "roster_file", "roster_meta",
@@ -275,11 +276,16 @@ def account_info(login_uid: str) -> dict:
     return out
 
 
-def describe_account(login_uid: str, *, current: bool = False) -> str:
+def describe_account(login_uid: str, *, current: bool = False,
+                     roster_flag: bool = True) -> str:
     """一行账号的排版：**先游戏用户名与游戏uid**，登录账号 id 只作 dim 附注。
 
     `current=True` 加一个 `←当前` 标记。未知的字段如实写「未知」并给出补救办法
     （按 U 问一次森空岛）——把"还没问过"写成空白，人只会以为是程序坏了。
+
+    `roster_flag=False` 去掉尾部那句「（无）名册缓存」：主界面把名册状态单独
+    写成一句更准的话（份数、来源、降级警告），同一栏里再挂一个粗粒度的
+    「有名册缓存」就是重复；登录屏那几处**照旧**带着它。
     """
     info = account_info(login_uid)
     uid = info["login_uid"]
@@ -293,7 +299,9 @@ def describe_account(login_uid: str, *, current: bool = False) -> str:
         head += f"　[dim]{info['channel']}[/]"
     if uid:
         head += f"　[dim]（登录账号 {uid}）[/]"
-    head += "　[dim]有名册缓存[/]" if info["has_roster"] else "　[dim]无名册缓存[/]"
+    if roster_flag:
+        head += ("　[dim]有名册缓存[/]" if info["has_roster"]
+                 else "　[dim]无名册缓存[/]")
     if not info["known"]:
         head += "\n    [dim]按 U 问一次森空岛，就能把这个号的用户名与游戏 uid 记下来。[/]"
     if current:
@@ -438,6 +446,39 @@ def meets_trained(op, elite_min: int, level_min: int) -> bool:
 
 
 # ---------------------------------------------------------------- 关卡
+
+def operator_db_status() -> dict:
+    """干员库（`akdb.sqlite`）在不在、有多少名干员。
+
+    主界面要在账号那一栏写一句「干员库是否已获取」（博士 2026-09-18），
+    而**开机那一屏不能被它拖住**：只查一次 `COUNT`、只读打开、任何异常都
+    如实装进返回值，绝不往外抛——那一栏宁可写「文件在，但读不出来」，
+    也不要让整屏因为一个库文件坏掉而空白。
+
+    返回 `{"path", "exists", "operators", "error"}`；`operators` 为 `None`
+    表示没读到（库不在，或读失败，看 `error`）。
+    """
+    import sqlite3
+
+    from ..db import DEFAULT_DB_PATH
+
+    out = {"path": str(DEFAULT_DB_PATH), "exists": False,
+           "operators": None, "error": ""}
+    try:
+        out["exists"] = Path(DEFAULT_DB_PATH).exists()
+        if not out["exists"]:
+            return out
+        # 只读打开：这一屏绝不改库（`connect()` 会建表，不该在显示时发生）
+        conn = sqlite3.connect(f"file:{DEFAULT_DB_PATH}?mode=ro", uri=True)
+        try:
+            out["operators"] = conn.execute(
+                "SELECT COUNT(*) FROM operator").fetchone()[0]
+        finally:
+            conn.close()
+    except Exception as exc:                                  # noqa: BLE001
+        out["error"] = f"{exc.__class__.__name__}: {exc}"
+    return out
+
 
 def _ro_stage_conn():
     """打开的只读连接；库不存在或没有 stage 表时返回 None。"""
