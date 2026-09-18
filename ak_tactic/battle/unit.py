@@ -377,6 +377,16 @@ class OperatorUnit(Combatant):
         敌人没有（`EnemyUnit` 一行都不用改，三关基线自然不受影响）。
         返回值仍是"真实扣掉多少血"，与基类同义，所以对账口径不变。
         """
+        if self.locked_timer > 0.0:
+            # 【闭锁】期间**不受到伤害**（泥岩技3「秽壤的血脉」的前 10 秒）。
+            # 直接收下 0、**不走屏障**：正文是"不受到伤害"，与"被屏障吃掉"
+            # 不是一回事——上层用返回值累积击破值，屏障吃掉的伤害已经不算击破，
+            # 这里更不该算。prts 该技能备注也印证：那 10 秒是**闭锁**状态。
+            #
+            # ⚠️ 这一段必须在 `OperatorUnit.take` 上：`EnemyUnit.take` 里有个
+            # 同名同形的屏障分支（那边叫 `shield`），照着形似往里写会写错类，
+            # 而敌人永远不会 `locked_timer > 0`——错在那里是**静默**的。
+            return 0.0
         if self.barrier > 0.0:
             absorbed = min(self.barrier, max(0.0, amount))
             self.barrier -= absorbed
@@ -435,6 +445,15 @@ class OperatorUnit(Combatant):
     #: 判据在 `traits.read_hp_drain`（特性正文 + 特性黑板 `hp_ratio` 两段）。
     #: prts.wiki 该页备注没有提这条特性，速率只能取黑板那个 0.01。
     hp_drain_per_sec: float = 0.0
+    #: 【闭锁】剩余秒数（泥岩技3「秽壤的血脉」开技后的前 10 秒）。闭锁期间：
+    #: **不能行动**（`sim._operators_attack` 跳过）、**不受到伤害**（`take` 直接
+    #: 收下 0）。由开技时写入、`sim._lock_tick` 每帧递减，递减到 0 的那一帧
+    #: 触发"醒来"那一下（晕眩周围地面敌人）。
+    #:
+    #: ⚠️ **不复用 `stun_timer`**：prts 备注写明那 10 秒是「**闭锁**（非无法
+    #: 行动），且持有眩晕/冻结/沉默**反制**」——晕眩会被后续控制续上、闭锁
+    #: 不会；拿晕眩顶替是把反制当成了易感。
+    locked_timer: float = 0.0
     #: **偷来的**攻击速度（新约能天使技2）：白拿的点数，直接加进 `current_attack_speed`。
     #: 技能一结束（或她离场）就归零——归零在 `sim._revert_steal` 一处。
     aspd_steal_bonus: float = 0.0
@@ -794,6 +813,14 @@ class EnemyUnit(Combatant):
     #: ——掷骰会让同一份作业每次跑出不同结果，搜索与回归都不可复现。
     hitrate_phys: float = 0.0
     hitrate_arts: float = 0.0
+    #: 【闭锁】带来的移速系数（泥岩技3 前 10 秒的「周围敌人移动速度 −60%」）。
+    #: **每帧由 `sim._lock_tick` 重算**（先全场置 1.0 再向范围内的敌人刷），
+    #: 所以技能一结束、敌人一走出范围就自动恢复，不留印子。
+    #:
+    #: ⚠️ 为什么不并进 `speed_multiplier`：那一个是**积雪私有**的——
+    #: `_snow_tick` 开局 `if not self.snow_fields: return`，没有积雪场时
+    #: 它整整一帧都不重置；往那里乘会逐帧连乘、几帧内就归零（实测 0.4⁵ ≈ 0）。
+    lock_slow: float = 1.0
     #: 出手方式（`applyWay`）与射程（`rangeRadius`，格）。
     #: `RANGED` 的敌人**在射程内开火，但不会因此停下不走**——它只是
     #: 在攻击动作期间停一下（见 `attack_pause`），动作一结束就继续推进。
@@ -1152,7 +1179,8 @@ class EnemyUnit(Combatant):
         if self.blocked_by is not None:
             return
         speed = (self.move_speed * speed_scale * self.speed_multiplier
-                 * self.haste_multiplier * (1.0 - self.slow_pct))
+                 * self.haste_multiplier * (1.0 - self.slow_pct)
+                 * self.lock_slow)
         if speed <= 0:
             return
         if self.displaced is not None:
