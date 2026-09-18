@@ -62,6 +62,7 @@ from .talents import (CLASS_AURA_TALENTS, FACTION_AURA_NAME, STUDENT_TEAM,
                       squad_cost_bonus)
 from .p3r import BreakState, TotalAttackDevice, affinity_multiplier, damage_slot
 from .summons import SummonDeployment, build_summon_unit
+from .traits import cross_cells, splash_tiles
 from ..operator.summons import SummonBook
 from . import displace
 from .unit import POSITION_TOL, EnemyUnit, OperatorUnit, point_at
@@ -2446,6 +2447,76 @@ class BattleSimulator:
         step = tal.value("interval", 1.0)
         target.dot_interval = step if step and step > 0 else 1.0
 
+    def _trait_splash(self, op: OperatorUnit, target: EnemyUnit,
+                      power: float, t: float) -> None:
+        """职业特性溅射 + 天赋「汹涌怒火」的高台溅射。
+
+        依据与几何全在 `battle/traits.py` 的模块文档里（prts.wiki 的原文 +
+        撼地者四位共用的特性黑板）。这里只说三条实现上的事：
+
+        1. **圆心取主目标的连续坐标**，不是它的格心。特性溅射走的是
+           **重叠判定**（半径圆盖到哪些格），圆心在格内挪半格，斜邻格的
+           取舍就会变——守卫里有 `(0.5, -0.5)` 那一例（12 格，且不对称）。
+        2. **主目标自己不吃这一份**：正文写的是「目标**周围的其他**敌人」。
+           天赋的 1.24 也只乘溅射，不乘主目标（wiki 备注明写「不对特性主目标
+           生效」），所以主目标那一下仍是它自己算出来的伤害，不在这里改。
+        3. **高台溅射是另一套几何**：由被溅射到的每个高台，对「它自己周围
+           四格 + 本格」（`cross_cells`，格子判定）里的**地面**敌人再打一次。
+           这句里的「周围四格」正是 `x-5` 那个范围码，与上面的半径圆
+           不能互相顶替——照抄任一种到另一段都会错，且错得不显眼。
+        """
+        cells = splash_tiles(target.position, op.splash_radius)
+        if not cells:
+            return
+        scale = op.splash_scale * op.splash_damage_scale
+        for e in self.enemies:
+            if e is target or not e.alive or e.leaked:
+                continue
+            if e.cell() not in cells:
+                continue
+            dmg = resolve_damage(power, damage_type="PHYSICAL", scale=scale,
+                                 defense=e.defense, res=e.res)
+            self._damage_enemy(e, dmg.final, t, "PHYSICAL", source=op)
+        if op.highland_splash_scale > 0.0:
+            self._highland_splash(op, cells, power, t)
+
+    def _highland_splash(self, op: OperatorUnit, cells: set, power: float,
+                         t: float) -> int:
+        """天赋「汹涌怒火」的高台那一半，返回**触发的高台数**。
+
+        返回值是留给技能 1/2 的 `sp_per_highland` 的（「每次有高台触发第一
+        天赋的效果时，获得 1 点技力」）——那一半属于技能层，等技能 1/2 接线
+        时再由调用方消费。
+
+        **闸门放在这里、不放在调用方**：`highland_splash_scale <= 0` 时整段
+        静默返回 0（连计数都不给）。放在调用方过一版的反例是"计数照样 +1、
+        伤害却是 0"——那种半开状态在接 `sp_per_highland` 时会变成凭空的技力。
+
+        「地面敌人」按 `is_flying` 排除空中单位，依据是天赋正文里那两个字
+        （「所有**地面**敌人」）。这与特性溅射本身不同：那句只写「其他敌人」，
+        没有地面限定，所以那一层不排除空中。
+        """
+        if op.highland_splash_scale <= 0.0:
+            return 0
+        m = self.stage.map
+        triggered = 0
+        for cell in cells:
+            if not m.inside(*cell) or not m.tile(*cell).is_highland:
+                continue
+            triggered += 1
+            victims = [e for e in self.enemies
+                       if e.alive and not e.leaked and not e.is_flying
+                       and e.cell() in cross_cells(cell)]
+            for e in victims:
+                dmg = resolve_damage(power, damage_type="PHYSICAL",
+                                     scale=op.highland_splash_scale,
+                                     defense=e.defense, res=e.res)
+                self._damage_enemy(e, dmg.final, t, "PHYSICAL", source=op)
+                if op.highland_splash_sluggish > 0.0:
+                    e.sluggish_timer = max(e.sluggish_timer,
+                                           op.highland_splash_sluggish)
+        return triggered
+
     def _operators_attack(self, dt: float, t: float) -> None:
         for op in self.operators:
             if not op.alive:
@@ -2567,6 +2638,15 @@ class BattleSimulator:
                         if self.verbose:
                             self.result.log.append(
                                 f"{t:7.1f}s  {op.name} 击杀 {target.name}")
+
+                # 特性溅射：**每次出手、每个主目标各一次**，中心是这一击的落点
+                # （主目标的连续坐标）。放在连击循环**外面**——一次出手打 N 段
+                # 是同一击，溅射不该结算 N 遍。
+                # **不判主目标死活**：把主目标打下场的那一击照样砸在地上，
+                # 旁边的敌人一样要吃这 50%——早先写过的 `target.alive` 守卫
+                # 会把"击杀旁边就少溅一次"这种错悄悄埋进去。
+                if op.splash_radius > 0.0:
+                    self._trait_splash(op, target, power, t)
 
             # 斩击打完了：此后技能期内的普攻整体走 `skill_attack_type`
             if slashing:
