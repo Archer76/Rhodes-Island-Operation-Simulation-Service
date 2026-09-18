@@ -5131,6 +5131,79 @@ def check_stand_state_machine(stage, lib, calc, book_t) -> None:
           f"duration={me4.stand_duration:g}、alive={me4.alive}")
 
 
+def check_barrier_break_hook(stage, lib, calc, book_t) -> None:
+    """[56] 「屏障/护盾**破裂**」事件钩子——泥岩与空弦的天赋都挂在这个时刻。
+
+    全库有两位干员的天赋是"护盾破裂时"触发的：
+
+    * 泥岩「沃土予身」——「每层护盾破裂时恢复自身 20% 最大生命」；
+    * 空弦「铁弦」——「部署后立即获得一层护盾，护盾破裂后获得 7 点技力」。
+
+    而在这之前 `take()` 只是把 `barrier` 扣到 0，**没有任何地方知道"它刚刚破了"**，
+    所以这类机制根本无从挂起。本节把"那一下"变成可观测量（`barrier_breaks` +
+    回调），并验证它该触发时触发、不该触发时不触发。
+
+    **本节没有建护盾本身的"值"**：全库天赋黑板里**一个 shield 类键都没有**
+    （逐条扫 `operator_talent.blackboard`，命中 0 种）——泥岩那条只有
+    `interval/times/max_times/hp_ratio`，其中 `hp_ratio` 是破裂后的**治疗量**；
+    空弦那条只有 `sp`。值不在数据里，所以"何时破裂"仍算不出来，见
+    `docs/uncertainties.md` §二十九。
+    """
+    print("\n[56] 屏障破裂事件钩子（泥岩/空弦的天赋都挂在这个时刻）")
+    from ak_tactic.verify import Verifier                        # noqa: PLC0415
+
+    v = Verifier()
+    cid = "char_311_mudrok"
+    tals = list(book_t.for_operator(cid))
+    text = " ".join(getattr(t, "description", "") for t in tals)
+    check("  这条钩子有真实消费者在等它：泥岩天赋正文就是「每层护盾破裂时恢复"
+          "自身 20% 最大生命」",
+          "护盾破裂" in text and "20%" in text,
+          "天赋正文命中「护盾破裂」与 20%")
+
+    def fresh(barrier: float = 300.0):
+        sim = mechanism_sim(stage, lib)
+        sim.cost = sim.max_cost = 999.0
+        op = v.unit({"char_id": cid, "elite": 2, "level": 60, "trust": 100,
+                     "potential": 1})
+        seen: list = []
+        op.barrier_break_hooks.append(lambda u: seen.append(u))
+        sim._do_deploy(Deployment(0.0, op, (2, 3), "Right", talents=tals), 0.0)
+        op.barrier = barrier
+        return sim, op, seen
+
+    _s1, op, seen = fresh()
+    op.take(100.0)
+    check("  反向：没打穿就不算破裂（屏障还剩 >0）",
+          op.barrier_breaks == 0 and not seen and op.barrier > 0.0,
+          f"剩 {op.barrier:g}、破裂 {op.barrier_breaks} 次")
+
+    hp_before = op.hp
+    op.take(400.0)               # 剩下 200 屏障 + 超出 200 打在本体上
+    check("  打穿的那一下记成**一次**破裂，回调被调用一次",
+          op.barrier_breaks == 1 and seen == [op],
+          f"破裂 {op.barrier_breaks} 次、回调 {len(seen)} 次")
+    check("  吸收口径不变：剩下的 200 屏障全吃掉，本体只掉超出的 200",
+          abs((hp_before - op.hp) - 200.0) < 1e-9,
+          f"本体掉 {hp_before - op.hp:g}、累计吸收 {op.barrier_absorbed:g}")
+
+    op.take(50.0)
+    check("  反向：破了之后再挨打**不再**记破裂（不会一直触发）",
+          op.barrier_breaks == 1, f"破裂 {op.barrier_breaks} 次")
+
+    _s2, op2, seen2 = fresh()
+    op2.barrier = 0.0
+    op2.take(10.0)
+    check("  反向：**本来就没有屏障**的人挨打不算破裂（不是人人都有）",
+          op2.barrier_breaks == 0 and not seen2, f"破裂 {op2.barrier_breaks} 次")
+
+    _s3, op3, seen3 = fresh(barrier=200.0)
+    op3.take(200.0)              # 刚好打光
+    check("  边界：恰好打光（归零那一下）也算一次破裂",
+          op3.barrier_breaks == 1 and len(seen3) == 1,
+          f"破裂 {op3.barrier_breaks} 次、屏障 {op3.barrier:g}")
+
+
 def check_angel2_delivery_cannon(stage, lib, calc, book_t) -> None:
     """[55] 新约能天使（`char_1041_angel2`）技3「使命必达！」：投递坐标炮击。
 
@@ -6280,6 +6353,7 @@ def main() -> int:
     check_kaltsit_radius_and_regen(stage, lib, calc, book_t)
     check_closur_token_refund(stage, lib, calc, book_t)
     check_angel2_delivery_cannon(stage, lib, calc, book_t)
+    check_barrier_break_hook(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:
