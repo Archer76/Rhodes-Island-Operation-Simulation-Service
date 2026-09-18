@@ -3806,6 +3806,166 @@ def check_batch3_sample(stage, lib, calc, book_t) -> None:
           f"物理口径 {resolve_damage(want5, damage_type=DamageType.PHYSICAL, defense=5000.0).final:,.1f}")
 
 
+def check_stackable_slow(stage, lib, calc, book_t) -> None:
+    """[44] 可露希尔技3「Q.E.D.」的【迟钝】：**可叠加**的移速降低。
+
+    正文（M3）：「……造成可露希尔 250% 攻击力的物理伤害并施加持续 3 秒的 6%
+    迟钝效果（**可叠加，最高 60%**），每攻击 9 次后攻击目标数+1……」。
+    prts.wiki 该页 `|备注=` 把「迟钝」点名为 `术语|ba.slowdown`——
+    「※仅能对敌人类敌方单位施加迟钝」。
+
+    ⚠️ 与【停顿】是**两个量**（既有裁定，见 `docs/uncertainties.md` 速度那几条）：
+    停顿是关键词、走 `sluggish_timer`（不能移动）；迟钝是**可叠加的百分比
+    移速降低**，走 `EnemyUnit.slow_timers` 层表、乘在 `advance()` 的速度式上。
+    合并两者会让「现在几层」这个问题没有答案。
+
+    ⚠️ 层表而不是计数器：**每层各自计时**——3 秒前打的那层该掉就掉，不因为刚又
+    打了一层而续命。用计数器必然续命，而且**不报错**（这一节里的
+    「逐层过期」那两条就是钉这个的）。
+
+    ⚠️ 可观测量取的是**逐帧位移**，不是层数：层数是同一条写入路径上的数，
+    它只能证明"我写进去了"。
+    """
+    print("\n[44] 可露希尔技3「Q.E.D.」：【迟钝】可叠加的移速降低")
+    from ak_tactic.operator.skill import (  # noqa: PLC0415
+        _slowdown_values,
+        _wants_stackable_slow,
+    )
+    from ak_tactic.verify import Verifier  # noqa: PLC0415
+
+    v = Verifier()
+    slots = {sk.slot: sk for sk in SkillBook().for_operator("char_4228_closur")}
+    s3 = slots[3].level(7, 3)
+    check("  解析（M3）：每层 6% / 每层各自 3 秒 / 封顶 60%",
+          close(s3.effects.slow_per_stack, 0.06, 1e-9)
+          and close(s3.effects.slow_time, 3.0, 1e-9)
+          and close(s3.effects.slow_max, 0.6, 1e-9),
+          f"{s3.effects.slow_per_stack} / {s3.effects.slow_time} / "
+          f"{s3.effects.slow_max}")
+    _bb = dict(s3.blackboard or {})
+    _cap_bb = float(_bb.get("max_stack_cnt")
+                    or _bb.get("attack@max_stack_cnt") or 0.0)
+    check("  封顶与叠层上限是同一件事：0.6 ÷ 0.06 = 10 = 黑板 `max_stack_cnt`",
+          int(round(s3.effects.slow_max / s3.effects.slow_per_stack)) == 10
+          and int(_cap_bb) == 10,
+          f"{s3.effects.slow_max / s3.effects.slow_per_stack} 层 vs "
+          f"max_stack_cnt={_cap_bb}")
+
+    print("     —— 判据的命中面（宁可漏不可错）——")
+    with sqlite3.connect(Path(__file__).resolve().parent.parent
+                         / "data" / "akdb.sqlite") as _c:
+        _rows = _c.execute(
+            "SELECT DISTINCT skill_id, description, blackboard FROM skill_level "
+            "WHERE level = 10").fetchall()
+    _slow_text = sorted(sid for sid, d, _b in _rows if "迟钝" in (d or ""))
+    _slow_key = sorted(
+        sid for sid, _d, b in _rows
+        if _slowdown_values(json.loads(b or "{}"))[0])
+    check("全表（level=10）正文含「迟钝」的只有可露希尔技3，且它与 "
+          "`slow_down` 这个键**同一批**出现",
+          _slow_text == ["skchr_closur_3"] and _slow_key == ["skchr_closur_3"],
+          f"正文 {_slow_text} / 键 {_slow_key}")
+    _other = [d for sid, d, _b in _rows if sid == "skchr_bdhkgt_2"]
+    check("  反向：另一条带 `slow_down_duration` 的技能（bhdkgt 技2）**不认**"
+          "——同一个族里的另一个键，正文里也没有「迟钝」",
+          bool(_other) and not _wants_stackable_slow(_other[0], {}),
+          f"{str(_other[:1])[:40]}")
+
+    print("     —— 层表语义（每层各自计时，不是计数器）——")
+    s = mechanism_sim(stage, lib)
+    e = _dummy(s, stage, _enemy_ids(stage)[0], (5, 3))
+    e.apply_slow(0.06, 0.6, 3.0)
+    check("加一层 → 6%；加满十层 → 60%（封顶生效）",
+          close(e.slow_pct, 0.06, 1e-9), f"一层 {e.slow_pct}")
+    for _ in range(9):
+        e.apply_slow(0.06, 0.6, 3.0)
+    check("  十层 = 60%（= `slow_down_max`）",
+          len(e.slow_timers) == 10 and close(e.slow_pct, 0.6, 1e-9),
+          f"{len(e.slow_timers)} 层 / {e.slow_pct}")
+    e.apply_slow(0.06, 0.6, 3.0)
+    check("  第十一次命中**不会**变 11 层（封顶按层数也按比例）",
+          len(e.slow_timers) == 10, f"实得 {len(e.slow_timers)} 层")
+
+    e2 = _dummy(s, stage, _enemy_ids(stage)[0], (6, 3))
+    e2.apply_slow(0.06, 0.6, 3.0)
+    e2.tick_slow(1.0)
+    e2.apply_slow(0.06, 0.6, 3.0)      # 第二层晚 1 秒打上
+    check("两层相差 1 秒时，2.5 秒后**只剩一层**——先打的那层自己掉了",
+          (e2.tick_slow(2.5), len(e2.slow_timers) == 1)[1],
+          f"实得 {len(e2.slow_timers)} 层 / {[round(x, 2) for x in e2.slow_timers]}")
+    e2.tick_slow(0.6)
+    check("  再走 0.6 秒 → 层表空、`slow_pct` 归 0（没有残留）",
+          not e2.slow_timers and e2.slow_pct == 0.0,
+          f"{e2.slow_timers} / {e2.slow_pct}")
+
+    e3 = _dummy(s, stage, _enemy_ids(stage)[0], (7, 3))
+    for _ in range(10):
+        e3.apply_slow(0.06, 0.6, 3.0)
+    e3.tick_slow(2.9)                  # 十层都只剩 0.1 秒
+    e3.apply_slow(0.06, 0.6, 3.0)      # 到顶之后再来一层
+    check("  到顶后再命中：层数不变，但**最老那层被续满**"
+          "（否则「一直被命中」也会掉回 0）",
+          len(e3.slow_timers) == 10 and max(e3.slow_timers) > 2.9,
+          f"{len(e3.slow_timers)} 层 / 最长 {max(e3.slow_timers):.2f}s")
+
+    check("  迟钝与【停顿】**互不写入**（两个量，字段分开）",
+          e3.sluggish_timer == 0.0 and not e2.slow_timers,
+          f"sluggish={e3.sluggish_timer}")
+
+    print("     —— 端到端：逐帧位移（这才证明移速真的被降了）——")
+    sim = mechanism_sim(stage, lib)
+    u = v.unit({"char_id": "char_4228_closur", "elite": 2, "level": 60,
+                "trust": 100, "potential": 1})
+    u.skill = s3
+    u.position = (2, 3)
+    u.direction = "Right"
+    sim.operators.append(u)
+    u.sp = 30.0
+    seen: dict[int, tuple[object, list[tuple[float, float, int]]]] = {}
+    orig_adv = EnemyUnit.advance
+
+    def traced(self, dt, speed_scale):  # noqa: ANN001, ANN202
+        before = self.position
+        out = orig_adv(self, dt, speed_scale)
+        # 强引用留着，免得对象被回收后 `id()` 被别的敌人复用。
+        box = seen.setdefault(id(self), (self, []))
+        box[1].append((dt, abs(before[0] - self.position[0])
+                       + abs(before[1] - self.position[1]),
+                       len(self.slow_timers)))
+        return out
+
+    EnemyUnit.advance = traced
+    try:
+        res = sim.run()
+    finally:
+        EnemyUnit.advance = orig_adv
+    check("跑得完、且真的挂上了迟钝", res is not None and any(
+        k for _o, rows in seen.values() for _dt, _d, k in rows),
+        f"层数峰值 {max((k for _o, rows in seen.values() for _dt, _d, k in rows), default=0)}")
+
+    # 每个敌人**自己**比自己：同一条路线上，未减速时的速度就是它的最大速度。
+    books: dict[int, float] = {}
+    for eid, (_o, rows) in seen.items():
+        base = max((d / dt for dt, d, _k in rows if dt > 0), default=0.0)
+        if base > 0:
+            books[eid] = base
+    curves: dict[int, float] = {}
+    for _eid, rows in seen.values():
+        base = max((d / dt for dt, d, _k in rows if dt > 0), default=0.0)
+        if base <= 0:
+            continue
+        for dt, d, k in rows:
+            if d > 0 and dt > 0:
+                curves.setdefault(k, []).append(d / dt / base)
+    _hot = {k: (len(vals), max(vals)) for k, vals in curves.items() if len(vals) >= 5}
+    check("逐帧位移与层数**对得上**：k 层时速度 = 基准 × (1 − 0.06k)（±12%）",
+          bool(_hot) and all(abs(mx - (1.0 - 0.06 * k)) <= 0.12
+                             for k, (_n, mx) in _hot.items()),
+          "、".join(f"k={k}: {n} 帧 max={mx:.3f}" for k, (n, mx) in sorted(_hot.items())))
+    check("  且真的出现了高叠层（否则上面那条是空转的）",
+          max(curves, default=0) >= 3, f"最高叠层 {max(curves, default=0)}")
+
+
 def check_glider_mobility(stage, lib, calc, book_t) -> None:
     """[43] 焰狐龙梓兰天赋2「翔虫机动」——一个天赋横跨两个平面。
 
@@ -4609,6 +4769,7 @@ def main() -> int:
     check_power_attack(stage, lib, calc, book_t)
     check_pierce_arrow(stage, lib, calc, book_t)
     check_glider_mobility(stage, lib, calc, book_t)
+    check_stackable_slow(stage, lib, calc, book_t)
 
     print(f"\n通过 {_PASSED} 项", end="")
     if _FAILED:
