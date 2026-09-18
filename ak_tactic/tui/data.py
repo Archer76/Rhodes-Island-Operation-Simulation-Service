@@ -232,6 +232,75 @@ def roster_meta(uid: str) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
+# ------------------------------------------------- 账号行：游戏用户名 + 游戏uid
+#
+# **登录账号 ≠ 游戏 uid，这是两个量。** 登录账号是鹰角通行证的账号 id（13 位），
+# 凭据文件 `cred_<它>.json` 用它命名；游戏 uid（8 位）才是森空岛数据与名册
+# （`roster_<它>.json`）用的那个。两者通常不相等，而且账号 id **不出现在任何一份
+# 森空岛数据里**，所以离线推不出映射，只能问一次森空岛再记住
+# （`ak_tactic.skland.resolve_game_uid*` → `~/.skland/accounts.json`）。
+#
+# 账号列表原先两处都印**登录账号**、昵称又拿**登录账号**去名册里查——名册是按
+# 游戏 uid 存的，于是昵称几乎永远是空的，一行看下来只有一串认不出的数字。
+# 博士 2026-09-18 的口径：列表要显示**游戏用户名与游戏uid**，登录账号 id 只作附注。
+
+def account_info(login_uid: str) -> dict:
+    """一个**登录账号**在界面上要的两件事：游戏用户名、游戏uid。**离线**。
+
+    来源按可信度排：
+      ① `accounts.json` 里那条映射（按 U 真的问过森空岛之后记下的）——最准；
+      ② 映射在、昵称空时，读该游戏 uid 的名册缓存里的 `nickName` 补一手。
+
+    映射还没有时**不猜**：老机器上账号 id 与游戏 uid 有可能相同，那就用
+    `roster_<登录账号>.json` 是否存在来反证——真存在才算，否则如实报未知。
+    """
+    login_uid = str(login_uid or "").strip()
+    out = {"login_uid": login_uid, "game_uid": "", "nick": "", "channel": "",
+           "has_roster": False, "known": False}
+    try:
+        from ak_tactic import skland
+        rec = skland.accounts_map().get(login_uid) or {}
+    except Exception:                                         # noqa: BLE001
+        rec = {}
+    game = str(rec.get("gameUid") or "").strip()
+    nick = str(rec.get("nickName") or "").strip()
+    out["channel"] = str(rec.get("channelName") or "").strip()
+    if not game and login_uid and roster_file(login_uid).exists():
+        game = login_uid
+    if not nick and game:
+        nick = str(roster_meta(game).get("nickName") or "").strip()
+    out["game_uid"], out["nick"] = game, nick
+    out["has_roster"] = bool(game) and roster_file(game).exists()
+    out["known"] = bool(game or nick)
+    return out
+
+
+def describe_account(login_uid: str, *, current: bool = False) -> str:
+    """一行账号的排版：**先游戏用户名与游戏uid**，登录账号 id 只作 dim 附注。
+
+    `current=True` 加一个 `←当前` 标记。未知的字段如实写「未知」并给出补救办法
+    （按 U 问一次森空岛）——把"还没问过"写成空白，人只会以为是程序坏了。
+    """
+    info = account_info(login_uid)
+    uid = info["login_uid"]
+    if info["nick"]:
+        head = f"[bold]{info['nick']}[/]"
+    else:
+        head = "[warn]游戏用户名未知[/]"
+    head += (f"　游戏uid={info['game_uid']}" if info["game_uid"]
+             else "　[warn]游戏uid 未知[/]")
+    if info["channel"]:
+        head += f"　[dim]{info['channel']}[/]"
+    if uid:
+        head += f"　[dim]（登录账号 {uid}）[/]"
+    head += "　[dim]有名册缓存[/]" if info["has_roster"] else "　[dim]无名册缓存[/]"
+    if not info["known"]:
+        head += "\n    [dim]按 U 问一次森空岛，就能把这个号的用户名与游戏 uid 记下来。[/]"
+    if current:
+        head += "　[ok]←当前[/]"
+    return head
+
+
 def roster_for_uid(uid: str) -> tuple[list[Operator], dict, Path] | None:
     """某个账号的名册缓存。**只认这一个 uid**，取不到返回 None。"""
     f = roster_file(uid)

@@ -1532,11 +1532,17 @@ def _check_login_wizard_body(A, skland, tmp: Path, conf: Path, read_cfg) -> None
           str(descs))
     lb = [(b.key, b.action) for b in A.LoginScreen.BINDINGS]
     check("登录屏挂了 S → 切换账号", ("s", "switch") in lb, str(lb))
-    check("登录屏的 Esc 还在（它就是「不登录」那个动作）",
+    check("登录屏挂了 U → 补全账号信息（联网问一次绑定列表）",
+          ("u", "fill") in lb, str(lb))
+    check("登录屏的 Esc 还在（它仍是「回主界面」，只是已登录时不再补问）",
           ("escape", "close") in lb, str(lb))
-    check("AskScreen 只认数字选项与 Esc",
-          sorted(b.key for b in A.AskScreen.BINDINGS) ==
-          ["1", "2", "3", "4", "5", "6", "7", "8", "9", "escape"],
+    check("AskScreen 的选项键是数字 1–9 与 Esc（另补**全角数字**孪生，不上 Footer）",
+          sorted(b.key for b in A.AskScreen.BINDINGS if b.key.isascii())
+          == sorted(["escape"] + [str(i) for i in range(1, 10)]),
+          str([(b.key, b.show) for b in A.AskScreen.BINDINGS]))
+    check("AskScreen 补了全角数字（中文输入法全角模式下 1 送来的是 １）",
+          all(any(b.key == chr(ord(str(i)) + 0xFEE0) for b in A.AskScreen.BINDINGS)
+              for i in range(1, 10)),
           str([b.key for b in A.AskScreen.BINDINGS]))
     check("AskScreen 的 Esc 文案是「返回」（博士：类似提示都简化成一个词）",
           [b.description for b in A.AskScreen.BINDINGS if b.key == "escape"]
@@ -1710,6 +1716,77 @@ def _check_login_wizard_body(A, skland, tmp: Path, conf: Path, read_cfg) -> None
     check("补完仍失败 → 抛的是**原来那个**错，且只补一次（不反复刷）",
           second == stale and n_fail == 2, f"n={n_fail} err={second}")
 
+    # ---- `resolve_game_uid_for`：给**指定**账号补，不碰当前账号指向
+    #
+    # 登录屏按 U 要一次补好几个号，而 `resolve_game_uid` 只认当前账号。
+    # 两条真判据：① 读的是那一个号自己的凭据文件；② 非当前账号失败**不许**
+    # 拿当前账号的 hgToken 去补 cred（那是"静默换错号"的入口）。
+    _bl2 = skland.binding_list
+    _fl2 = skland.finish_login
+    _cur_c = skland.current_uid()
+    try:
+        skland.save_cred({"hgToken": "hg-9d1", "cred": "cr-9d1", "token": "tk-9d1",
+                          "userId": "9d1", "stage": "ready"})
+        skland.save_cred({"hgToken": "hg-8f8", "cred": "cr-8f8", "token": "tk-8f8",
+                          "userId": "8f8", "stage": "ready"})
+        skland.set_current_uid("9d1")
+        used: list[tuple[str, str]] = []
+
+        def seen_cred(cred, token):
+            used.append((cred, token))
+            return [{"uid": "50000002", "nickName": "另一个号", "channelName": "B服"}]
+
+        skland.binding_list = seen_cred
+        got_for = skland.resolve_game_uid_for("8f8")
+        check("resolve_game_uid_for 读的是**指定账号**的凭据（8f8，不是当前 9d1）",
+              used == [("cr-8f8", "tk-8f8")], str(used))
+        check("补完记在**那个账号**名下，当前账号的映射不受影响",
+              (skland.accounts_map().get("8f8") or {}).get("gameUid") == "50000002"
+              and (skland.accounts_map().get("9d1") or {}).get("gameUid")
+              != "50000002",
+              str(skland.accounts_map().get("8f8")))
+
+        called = {"n": 0}
+
+        def counting_finish(home=None):
+            called["n"] += 1
+            return {"userId": "8f8", "cred": "cr-nope", "token": "tk-nope",
+                    "stage": "ready"}
+
+        skland.finish_login = counting_finish
+
+        def bad(cred, token):
+            raise skland.SklandError(stale)
+
+        skland.binding_list = bad
+        try:
+            skland.resolve_game_uid_for("8f8")
+            err_noncur = None
+        except skland.SklandError as exc:
+            err_noncur = str(exc)
+        check("非当前账号失败 → **不补 cred**（补 cred 只认当前账号的 hgToken，"
+              "拿去救别的号会换错号）",
+              called["n"] == 0 and err_noncur == stale,
+              f"finish_login 调了 {called['n']} 次，err={err_noncur}")
+
+        # 当前账号自己失败时才补一次（与 resolve_game_uid 同一条路）
+        skland.finish_login = lambda home=None: {
+            "userId": "9d1", "cred": "cr-fresh", "token": "tk-fresh",
+            "stage": "ready"}
+
+        def bad_then_ok(cred, token):
+            if cred == "cr-fresh":
+                return [{"uid": "50000001", "nickName": "补来的", "channelName": "官服"}]
+            raise skland.SklandError(stale)
+
+        skland.binding_list = bad_then_ok
+        got_cur = skland.resolve_game_uid_for("9d1")
+        check("当前账号自己失败 → 补一次 cred 再问（与 resolve_game_uid 同一条路）",
+              got_cur.get("gameUid") == "50000001", str(got_cur))
+    finally:
+        skland.binding_list, skland.finish_login = _bl2, _fl2
+        skland.set_current_uid(_cur_c or "")
+
     bl = [{"uid": "1"}, {"uid": "2", "isDefault": True}]
     check("pick_binding：没指定就取**默认角色**",
           skland.pick_binding(bl)["uid"] == "2", "isDefault 优先")
@@ -1730,6 +1807,8 @@ def _check_login_wizard_body(A, skland, tmp: Path, conf: Path, read_cfg) -> None
     check("绑定列表为空 → 报「没有绑定任何明日方舟角色」", ok_empty, "")
 
     # ---- 真跑 TUI：初次启动 → Esc 补问 → 本次/以后 → 退出账号
+    from textual.widgets import Static as _Static
+
     async def flow() -> dict:
         got: dict = {}
         conf.unlink(missing_ok=True)
@@ -1793,6 +1872,47 @@ def _check_login_wizard_body(A, skland, tmp: Path, conf: Path, read_cfg) -> None
             got["after_logout"] = skland.current_uid()
             got["after_logout_cfg"] = read_cfg()
             got["cred_left"] = sorted(p.name for p in tmp.glob("cred_*.json"))
+
+        # ---- 已登录时：Esc 直接回主界面；登录成功**自动**回主界面（博士 2026-09-18）
+        skland.save_cred({"hgToken": "hg-x", "cred": "cr-x", "token": "tk-x",
+                          "userId": "9d1", "stage": "ready"})
+        skland.set_game_uid("9d1", "90000001", nick="测试博士", channel="官服")
+        app5 = A.RiosApp(skip_login=False)
+        async with app5.run_test(size=(120, 44)) as pilot:
+            await pilot.pause()
+            got["logged_start"] = type(app5.screen).__name__
+            app5.push_screen(A.LoginScreen())
+            await pilot.pause()
+            got["login_list"] = str(
+                app5.screen.query_one("#login-accounts", _Static).render())
+            await pilot.press("escape")
+            await pilot.pause()
+            got["esc_logged"] = type(app5.screen).__name__
+            got["welcome_acct"] = str(
+                app5.screen.query_one("#account-line", _Static).render())
+            # 扫码成功：LoginDone(ok=True) 一进来就该弹回 [0]
+            app5.push_screen(A.LoginScreen())
+            await pilot.pause()
+            app5.screen.post_message(
+                A.LoginScreen.LoginDone(True, "登录成功，凭据已保存。"))
+            await pilot.pause()
+            got["after_done"] = type(app5.screen).__name__
+            got["after_done_note"] = str(
+                app5.screen.query_one("#account-line", _Static).render())
+
+        # ---- 全角按键（中文输入法全角模式）：ｌ 进登录屏、ｓ 弹切号
+        app6 = A.RiosApp(skip_login=True)
+        async with app6.run_test(size=(120, 44)) as pilot:
+            await pilot.pause()
+            app6.push_screen(A.WelcomeScreen())
+            await pilot.pause()
+            got["fw_before"] = type(app6.screen).__name__
+            await pilot.press("\uff4c")             # 全角 ｌ
+            await pilot.pause()
+            got["fw_l"] = type(app6.screen).__name__
+            await pilot.press("\uff33")             # 全角 ｓ
+            await pilot.pause()
+            got["fw_s"] = type(app6.screen).__name__
         return got
 
     got = asyncio.run(flow())
@@ -1834,6 +1954,60 @@ def _check_login_wizard_body(A, skland, tmp: Path, conf: Path, read_cfg) -> None
     check("退出账号顺手清掉「以后都不登录」（他要换号，那条不该再拦他）",
           not got["after_logout_cfg"].get("login_prompt"),
           str(got["after_logout_cfg"]))
+
+    # ---- 博士 2026-09-18 那一组：登已有账号要说话 · 账号列表口径 · Esc/登录成功直接回车
+    check("已有账号时启动**不拦登录向导**（直接落在 [0]）",
+          got["logged_start"] == "WelcomeScreen", got["logged_start"])
+    check("**已登录时按 Esc 直接回主界面**，不再弹「是否不登录」",
+          got["esc_logged"] == "WelcomeScreen", got["esc_logged"])
+    check("扫码成功 → **自动回主界面**（不再等用户按 Esc）",
+          got["after_done"] == "WelcomeScreen", got["after_done"])
+    check("回主界面时把「登的是哪个号」写在账号行上",
+          "测试博士" in got["after_done_note"], got["after_done_note"][:120])
+    check("账号列表显示**游戏用户名**（不是空白）",
+          "测试博士" in got["login_list"], got["login_list"][:120])
+    check("账号列表显示**游戏uid**",
+          "游戏uid=90000001" in got["login_list"], got["login_list"][:120])
+    check("[0] 屏账号行同样是「游戏用户名 + 游戏uid」",
+          "测试博士" in got["welcome_acct"] and "游戏uid=90000001" in got["welcome_acct"],
+          got["welcome_acct"][:120])
+    check("通行证账号 id 退成附注（不再冒充 uid）",
+          "uid=9d1" not in got["welcome_acct"] and "登录账号 9d1" in got["welcome_acct"],
+          got["welcome_acct"][:160])
+
+    # ---- 输入法全角：按键匹配表补了全角孪生，真按下也走通
+    check("全角 ｌ（U+FF4C）也能进登录屏——中文输入法全角模式的产物",
+          got["fw_before"] == "WelcomeScreen" and got["fw_l"] == "LoginScreen",
+          f"{got['fw_before']} → {got['fw_l']}")
+    check("全角 ｓ（U+FF53）也能弹切号屏",
+          got["fw_s"] == "AskScreen", got["fw_s"])
+
+    # ---- `_back_note` 三种情形（登回当前号 / 登回已有别的号 / 新号）
+    def _note(cur_before, known) -> str:
+        scr = A.LoginScreen()
+        scr._cur_before = cur_before
+        scr._known_before = set(known)
+        return scr._back_note()
+
+    skland.activate("9d1")
+    n_same = _note("9d1", ("9d1",))
+    n_known = _note("7b3", ("9d1", "7b3"))
+    n_new = _note("7b3", ("7b3",))
+    check("登录成功：登回**当前这个号** → 明说「本来就登录着」（账号没变多）",
+          "本来就登录着" in n_same, n_same)
+    check("登录成功：登到本机**已有的另一个号** → 明说「本机已经登录过」",
+          "本机已经登录过" in n_known, n_known)
+    check("登录成功：**新号** → 明说这是新账号",
+          "新账号" in n_new, n_new)
+    check("这三种话都带上游戏用户名与游戏uid",
+          all("游戏uid=" in x for x in (n_same, n_known, n_new)),
+          str([n_same, n_known, n_new])[:160])
+
+    # ---- 账号行排版：未知时如实说未知并给出补救键
+    unknown = A.D.describe_account("8f8")
+    check("映射还没建立的账号如实写「游戏用户名未知」并指向 U 键",
+          "游戏用户名未知" in unknown and "按 U" in unknown, unknown)
+    check("未知账号不假装有名册缓存", "无名册缓存" in unknown, unknown)
 
 
 def main() -> int:
@@ -1880,3 +2054,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

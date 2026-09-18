@@ -41,29 +41,63 @@ from . import theme
 __all__ = ["RiosApp", "run", "both_cases"]
 
 
+def _full_width(key: str) -> str | None:
+    """半角可打印 ASCII → 它的**全角孪生**（不可逆时返回 None）。
+
+    中文输入法切到**全角**时，按 `l` 送过来的是 `ｌ`（U+FF4C），按 `1` 送的是
+    `１`（U+FF11）——与半角是两个不同字符，按键匹配表里一个都不命中，
+    界面上明明写着 `L`，按下去毫无反应。全角孪生就是 `+0xFEE0` 那一批，
+    只覆盖 `!`~`~`；已经是全角、或本身就是多字符的键（`escape`）返回 None。
+    """
+    if len(key) != 1:
+        return None
+    o = ord(key)
+    return chr(o + 0xFEE0) if 0x21 <= o <= 0x7E else None
+
+
 def both_cases(rows: list[Binding]) -> list[Binding]:
-    """把**单字母**绑定展开成大小写两份。
+    """把**单字符**绑定展开成若干份：大写孪生 + 全角孪生。
 
     ## 这一步为什么必需
 
-    `Binding("h", "home", "主界面", key_display="H")` 里的 `key_display` **只管
-    显示**：Footer 上印的是 `H`，真正注册的键却只有小写 `h`。而 Textual 的键
-    匹配**区分大小写**——用户照着 Footer 按 Shift+H，送过来的是大写 `H`，
-    一个绑定都不匹配，**界面上明明写着 H 却按不动**。实测：
+    **一、大小写。** `Binding("h", "home", "主界面", key_display="H")` 里的
+    `key_display` **只管显示**：Footer 上印的是 `H`，真正注册的键却只有小写 `h`。
+    而 Textual 的键匹配**区分大小写**——用户照着 Footer 按 Shift+H，送过来的是
+    大写 `H`，一个绑定都不匹配，**界面上明明写着 H 却按不动**。实测：
     `press("h")` 命中 1 次，`press("H")` 与 `press("shift+h")` 各命中 0 次。
 
     反过来把键写成 `Binding("H", …)` 也不行——那就变成"必须按住 Shift"。
 
-    唯一的解法是**两份都收**：显示沿用大写（需求「字母改大写」说的是提示文字），
-    同时补一个 `show=False` 的大写孪生。非字母键（enter/escape/space/tab、
-    ctrl+c 这类带修饰的）原样返回。
+    **二、全角。** 中文输入法在全角模式下，`l` 送过来是 `ｌ`、`1` 送过来是
+    `１`（见 `_full_width`）。同一张表只认半角，用户按了也白按——他看不到
+    "程序收不到"，只看到"这个键坏了"。所以每个单字符键都补一个全角孪生。
+
+    这就是唯一的解法：**都收**。显示沿用 `key_display` 给的那一份（需求
+    「字母改大写」说的是提示文字），其余变体一律 `show=False`，不上 Footer。
+    `AskScreen` 的 `1`–`9` 也走这同一张表，所以全角数字同样能选。
     """
     out: list[Binding] = []
+    seen: set[str] = set()
     for b in rows:
         out.append(b)
+        seen.add(b.key)
+    for b in rows:
         k = b.key
-        if len(k) == 1 and k.isalpha() and k.islower():
-            out.append(Binding(k.upper(), b.action, b.description or "",
+        if len(k) == 1 and k.isalpha():
+            group = {k.lower(), k.upper()}
+        elif len(k) == 1:
+            group = {k}
+        else:
+            continue                       # escape / enter / ctrl+c 这类不动
+        for v in list(group):
+            fw = _full_width(v)
+            if fw:
+                group.add(fw)
+        for v in sorted(group):
+            if v == k or v in seen:
+                continue
+            seen.add(v)
+            out.append(Binding(v, b.action, b.description or "",
                                show=False, priority=b.priority))
     return out
 
@@ -147,9 +181,8 @@ class WelcomeScreen(Screen):
             tail = (f"；本机另存着 {len(others)} 个登过的账号，"
                     "按 L 进登录屏后按 S 可切回。" if others else "。按 L 扫码登录。")
             return "[warn]当前没有登录的账号[/]" + tail
-        meta = D.roster_meta(uid)
-        nick = str(meta.get("nickName") or "")
-        head = f"uid={uid}" + (f"　{nick}" if nick else "")
+        # 显示的是**游戏用户名与游戏uid**（博士 2026-09-18 口径），登录账号 id 只作附注。
+        head = D.describe_account(uid, current=True)
         if others:
             head += f"　[dim]（本机另有 {len(others)} 个登过的账号）[/]"
         return head + "\n[dim]按 O 退出账号——凭据文件保留，之后可切回，不必重扫。[/]"
@@ -219,8 +252,15 @@ class WelcomeScreen(Screen):
 
     def action_login(self) -> None:
         # 登录回来要把名册行重画一遍：登录可能刚落下一份新凭据，
-        # 这一行原先是按旧状态画的。
-        self.app.push_screen(LoginScreen(), lambda _r: self._refresh())
+        # 这一行原先是按旧状态画的。登录屏还可能带回一句话（登的是新号还是老号），
+        # 那句就显示在账号行上——所以回调不是个丢弃返回值的 lambda。
+        self.app.push_screen(LoginScreen(), self._login_done)
+
+    def _login_done(self, result) -> None:
+        """登录屏关闭：`result` 非空时是一句要显示在账号行上的话。"""
+        if isinstance(result, str) and result.strip():
+            self._note = result
+        self._refresh()
 
     def action_game_uid(self) -> None:
         """按 `U`：问一次森空岛，把这个账号的**游戏 uid** 定下来。
@@ -385,12 +425,12 @@ class AskScreen(ModalScreen):
     返回给调用方的是**行里的值**（字符串），按 Esc 时是 `None`。
     """
 
-    BINDINGS = [
-        # 1–9 是选项键，**不上 Footer**（见类文档）。数字键不需要
-        # `both_cases()`——那是给单字母键补大写孪生的，数字没有大小写。
+    BINDINGS = both_cases([
+        # 1–9 是选项键，**不上 Footer**（见类文档）。走 `both_cases` 是为了拿
+        # 全角孪生：中文输入法全角模式下按 1 送来的是 `１`，不补就选不动。
         *[Binding(str(i), f"pick({i})", show=False) for i in range(1, 10)],
         Binding("escape", "cancel", "返回", key_display="Esc"),
-    ]
+    ])
 
     CSS = """
     AskScreen { align: center middle; }
@@ -558,20 +598,31 @@ class LoginScreen(Screen):
     顺带**重读一遍本机缓存的名册**（读盘，不联网）——因为刚落下的凭据可能
     属于另一个账号，而名册是按当前账号取的。
 
-    ## `Esc` 在这里是「不登录」，所以要补问一句
+    ## `Esc` 在这里是「不登录」，所以要补问一句——**只在他还没登进去时**
 
-    博士 2026-09-17 的裁定：在登录屏按 `Esc` 一律先问「本次不登录 / 以后都不
+    博士 2026-09-17 的裁定：在登录屏按 `Esc` 先问「本次不登录 / 以后都不
     登录」。差别是真的——答「以后都不」写进 `~/.rios/tui.json`，此后启动不再
     自动进这个向导；答「本次」什么都不写，下一次干净启动还会问。问屏上再按
     `Esc` 是**取消这一问**（回登录屏继续扫码），不是答"不登录"。
 
+    博士 2026-09-18 收紧了一条：**已经登录着账号时，`Esc` 直接回主界面，
+    不再问那一句**。他刚扫码登进去、按 `Esc` 想回主界面，却被问「确定不登录
+    吗」——这一问在那时是荒唐的，问的是他已经做完的事。同理，**扫码登录成功
+    后直接弹回主界面**（不再留在本屏等他按 `Esc`）。那一问只留给"手上确实
+    还没有账号"的那一刻，也就是它当初被设计出来的那一刻。
+
     `S` 列出本机登过的账号并切过去。**不联网、不重扫**——退出账号不删文件，
-    所以凭据与名册都还在本地，这正是"切号不必重扫"的根据。
+    所以凭据与名册都还在本地，这正是"切号不必重扫"的根据。列表按博士
+    2026-09-18 的口径显示**游戏用户名与游戏uid**（登录账号 id 只作附注）。
+
+    `U` 补全本机账号的游戏用户名与游戏 uid——它**联网**，所以不是开机自动跑，
+    而是按一下才去问（与 `[0]` 屏的 `U` 同一条理由）。
     """
 
     BINDINGS = both_cases([
         Binding("l", "login", "扫码登录", key_display="L"),
         Binding("s", "switch", "切换账号", key_display="S"),
+        Binding("u", "fill", "补全账号信息", key_display="U"),
         Binding("escape", "close", "返回", key_display="Esc"),
     ])
 
@@ -602,6 +653,13 @@ class LoginScreen(Screen):
             self.ok = ok
             self.text = text
 
+    class FillDone(Message):
+        """补全账号信息（联网问绑定列表）跑完一轮。"""
+
+        def __init__(self, lines: list[str]) -> None:
+            super().__init__()
+            self.lines = lines
+
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical(classes="block"):
@@ -621,12 +679,21 @@ class LoginScreen(Screen):
         self._busy = False
         #: 正在问"本次不登录还是以后都不"。问的时候再按 Esc 不该再叠一层问。
         self._asking = False
+        #: 扫码**开始前**的账号快照。登录成功后要靠它分辨"登的是新号还是老号"
+        #: （博士 2026-09-18：登到已有账号上要明说一句）。不快照就分不清——
+        #: 登录写盘之后，那个号已经在列表里了。
+        self._known_before: set[str] = set()
+        self._cur_before: str | None = None
+        #: 正在补全账号信息（联网）。与扫码登录互斥，两件事都会写凭据目录。
+        self._filling = False
         self._refresh_accounts()
 
     def _refresh_accounts(self) -> None:
         """画"本机登录过的账号"那一块。**离线**——读的都是本地文件。
 
         退出账号不删文件，所以这里通常不止一行；"切回不必重扫"的根据就是它。
+        每行显示**游戏用户名与游戏uid**（`D.describe_account`），因为博士认的
+        是游戏里的那个名字与 uid，而不是凭据文件名上那串通行证账号 id。
         """
         try:
             from ak_tactic import skland
@@ -639,21 +706,34 @@ class LoginScreen(Screen):
             self.query_one("#login-accounts", Static).update(
                 "[dim]本机还没有登录过的账号。[/]")
             return
-        lines = []
-        for a in rows:
-            nick = str(D.roster_meta(a["uid"]).get("nickName") or "")
-            cached = "有名册缓存" if D.roster_file(a["uid"]).exists() else "无名册缓存"
-            mark = "　[ok]←当前[/]" if a["uid"] == cur else ""
-            lines.append(f"uid={a['uid']}"
-                         f"{f'　{nick}' if nick else ''}　[dim]{cached}[/]{mark}")
+        lines = [D.describe_account(a["uid"], current=(a["uid"] == cur))
+                 for a in rows]
+        hint = "按 S 切换账号（不必重扫）。"
+        if any(not D.account_info(a["uid"])["known"] for a in rows):
+            hint += "　按 U 补全游戏用户名与游戏 uid（联网，按一次问一次）。"
         self.query_one("#login-accounts", Static).update(
-            "\n".join(lines) + "\n[dim]按 S 切换账号（不必重扫）。[/]")
+            "\n".join(lines) + f"\n[dim]{hint}[/]")
 
     @property
     def _qr_screen(self) -> QrScreen | None:
         """栈顶是不是那个二维码屏（状态更新要落到它身上）。"""
         scr = self.app.screen
         return scr if isinstance(scr, QrScreen) else None
+
+    def _who(self, uid: str | None) -> str:
+        """把"哪个账号"写成**游戏用户名 + 游戏uid**（博士 2026-09-18 口径）。
+
+        登录账号 id 只作附注：它是凭据文件名上的东西，认不出人；而游戏用户名
+        与 uid 是他在游戏里看到的那两个。还没问过森空岛时如实说"未知"并给出
+        那一键（`U`）——空白会让人以为程序坏了。
+        """
+        uid = str(uid or "").strip()
+        if not uid:
+            return "（没有登录账号）"
+        info = D.account_info(uid)
+        nick = info["nick"] or "游戏用户名未知，按 U 问一次"
+        game = info["game_uid"] or "未知，按 U 问一次"
+        return f"{nick}　游戏uid={game}　[dim]（登录账号 {uid}）[/]"
 
     def _status(self) -> str:
         r = self.app.state.roster
@@ -662,7 +742,7 @@ class LoginScreen(Screen):
         try:
             from ak_tactic import skland
             st = skland.load_cred()
-            who = f"当前账号 uid={uid}。" if uid else ""
+            who = f"当前账号：{self._who(uid)}\n" if uid else ""
             if st.get("cred"):
                 head = (f"{who}已保存凭据：有效期内可直接 `status` 校验；"
                         "过期会由 hgToken 静默重铸。\n")
@@ -688,10 +768,18 @@ class LoginScreen(Screen):
             return
         self._busy = True
         self._abort = False
+        # 快照**扫码之前**的账号状态：登录写盘之后那个号已经在列表里了，
+        # 不快照就分不清"登的是新号"还是"登回了老号"。
+        try:
+            from ak_tactic import skland
+            self._known_before = {a["uid"] for a in skland.known_accounts()}
+        except Exception:                                     # noqa: BLE001
+            self._known_before = set()
+        self._cur_before = D.skland_uid()
         self.query_one("#login-note", Static).update("正在申请二维码……")
         self._run_login()
 
-    @work(thread=True, exclusive=True)
+    @work(thread=True, exclusive=True, group="login")
     def _run_login(self) -> None:
         """后台线程里跑完整条登录链；只回 UI 线程发消息。"""
         try:
@@ -742,9 +830,34 @@ class LoginScreen(Screen):
                 f"[bold]{event.text}[/]\n"
                 "[dim]名册要另走 `skland fetch` 才会刷新（本屏只负责落凭据）。[/]")
             self.query_one("#login-status", Static).update(self._status())
+            # **登录成功直接回主界面**（博士 2026-09-18 裁定）。原先留在本屏、
+            # 等他按 Esc 才走，而 Esc 又弹一句「确定不登录吗」——他刚登进来。
+            self._abort = True
+            self.dismiss(self._back_note())
             return
         self.query_one("#login-note", Static).update(
             f"[warn]{event.text}[/]\n[dim]按 L 可以重新申请一个二维码。[/]")
+
+    def _back_note(self) -> str:
+        """登录成功后带回 `[0]` 屏、显示在账号行上的那句话。
+
+        **登到已有账号上要明说**（博士 2026-09-18）：本机原先就登过这个号时，
+        这次扫码只是刷新了凭据，账号条数没变——不提醒的话，人会以为多了一个号。
+        三种情形分开说：登回当前这个号、登回本机已有的另一个号、新号。
+        """
+        uid = D.skland_uid()
+        info = D.account_info(uid) if uid else {}
+        who = info.get("nick") or "游戏用户名未知（按 U 问一次）"
+        game = info.get("game_uid") or "未知（按 U 问一次）"
+        msg = f"已登录：{who}　游戏uid={game}"
+        if uid and uid == self._cur_before:
+            msg += "；这个号**本来就登录着**，这次只刷新了凭据（账号没有变多）。"
+        elif uid and uid in self._known_before:
+            msg += ("；这个号**本机已经登录过**——凭据更新了，账号没有变多，"
+                    "按 L 进登录屏后按 S 可以切回其他号。")
+        else:
+            msg += "；这是**新账号**，已加进本机账号列表（按 L 可按 S 切回旧号）。"
+        return msg
 
     def action_switch(self) -> None:
         """切回本机登过的某个账号。**不联网、不重扫**——凭据与名册都在本地。"""
@@ -761,9 +874,9 @@ class LoginScreen(Screen):
         cur = D.skland_uid()
         rows = []
         for a in accts:
-            nick = str(D.roster_meta(a["uid"]).get("nickName") or "")
-            label = f"uid={a['uid']}" + (f"　{nick}" if nick else "")
-            label += "　（当前）" if a["uid"] == cur else ""
+            # 列表按**游戏用户名 + 游戏uid**排（登录账号 id 作附注），
+            # 与账号列表、[0] 屏账号行同一口径。
+            label = D.describe_account(a["uid"], current=(a["uid"] == cur))
             rows.append((a["uid"], label))
         self.app.push_screen(
             AskScreen("切换账号",
@@ -785,16 +898,98 @@ class LoginScreen(Screen):
         self.query_one("#login-status", Static).update(self._status())
         self._refresh_accounts()
         self.query_one("#login-note", Static).update(
-            f"[ok]已切到 uid={uid}[/]\n[dim]名册已按这个账号重读。[/]")
+            f"[ok]已切到 {self._who(uid)}[/]\n[dim]名册已按这个账号重读。[/]")
+
+    def action_fill(self) -> None:
+        """按 `U`：把本机每个账号的**游戏用户名与游戏 uid**补全。**联网**。
+
+        ## 为什么要有这一键
+
+        账号列表要显示的是游戏用户名与游戏 uid（博士 2026-09-18 口径），而这两个
+        量**离线推不出来**：登录账号 id 是通行证账号（13 位），游戏 uid 是 8 位，
+        账号 id 不出现在任何一份森空岛数据里。唯一的来源是问一次森空岛再记住
+        （`~/.skland/accounts.json`）。名册缓存里只带昵称、不带 uid，映射没建立
+        的号就只能显示"未知"——所以给一个能补的键，而不是让人对着"未知"发愣。
+
+        ## 为什么按一下才跑、为什么在后台线程
+
+        与 `[0]` 屏的 `U` 同一条理由：联网动作不该在挂载时悄悄打一次。而
+        `resolve_game_uid_for` 要发 HTTP，在 UI 线程里做会把界面钉住。
+
+        **一个账号失败不影响别的账号**：逐个记结果、逐个报，而不是整张列表一起
+        沉掉。已经知道用户名与 uid 的号直接跳过，不白打接口。
+        """
+        if self._busy or self._filling:
+            return
+        try:
+            from ak_tactic import skland
+            uids = [a["uid"] for a in skland.known_accounts()]
+        except Exception as exc:                              # noqa: BLE001
+            self.query_one("#login-note", Static).update(f"[warn]{exc}[/]")
+            return
+        if not uids:
+            self.query_one("#login-note", Static).update(
+                "[warn]本机没有登录过的账号。[/]\n[dim]按 L 扫码登录。[/]")
+            return
+        todo = [u for u in uids
+                if not (D.account_info(u)["nick"] and D.account_info(u)["game_uid"])]
+        if not todo:
+            self.query_one("#login-note", Static).update(
+                "[dim]账号信息本来就是全的：每个号的游戏用户名与游戏 uid 都已记下。[/]")
+            return
+        self._filling = True
+        self.query_one("#login-note", Static).update(
+            f"正在问森空岛补全 {len(todo)} 个账号的信息……")
+        self._run_fill(todo)
+
+    @work(thread=True, exclusive=True, group="fill")
+    def _run_fill(self, uids: list[str]) -> None:
+        """后台线程里逐个账号问绑定列表；只回 UI 线程发消息。"""
+        from ak_tactic import skland
+        lines: list[str] = []
+        for uid in uids:
+            info = D.account_info(uid)
+            try:
+                got = skland.resolve_game_uid_for(uid, uid=info["game_uid"] or None)
+            except Exception as exc:                          # noqa: BLE001
+                lines.append(f"[warn]账号 {uid} 补全失败：{exc}[/]")
+                continue
+            lines.append(f"[ok]{got.get('nickName') or '（森空岛没给昵称）'}[/]"
+                         f"　游戏uid={got.get('gameUid')}"
+                         f"　[dim]（登录账号 {uid}）[/]")
+        if self.is_mounted:
+            self.post_message(self.FillDone(lines))
+
+    def on_login_screen_fill_done(self, event: FillDone) -> None:
+        self._filling = False
+        self._refresh_accounts()
+        if not event.lines:
+            self.query_one("#login-note", Static).update(
+                "[dim]没有需要补的账号。[/]")
+            return
+        self.query_one("#login-note", Static).update(
+            "\n".join(event.lines)
+            + "\n[dim]已记在 `~/.skland/accounts.json`，下次不必再问。[/]")
 
     def action_close(self) -> None:
-        """Esc = **不登录**。按博士 2026-09-17 的裁定，先补问一句。
+        """Esc：**已经登录着就直接回主界面**，没登录才补问「不登录」那一句。
+
+        博士 2026-09-18 收紧（原裁定是 2026-09-17 的「一律先问」）：
+        「即使用户已经登录账号，现在按 Esc 返回主界面时也会弹出那个询问是否
+        不登录的页面」——那一问问的是他已经做完的事。所以：
+
+          * 手上有账号（`D.skland_uid()`）→ 直接 `dismiss` 回车，**不问**；
+          * 手上确实没有账号 → 仍然问「本次 / 以后都不登录」。
 
         问这一次还是以后都——差别是真的：答「以后都不登录」写进
         `~/.rios/tui.json`，此后启动不再自动进登录向导；答「本次不登录」
         什么都不写，下一次全新启动还会问。
         """
         if self._asking:
+            return
+        if D.skland_uid():
+            self._abort = True
+            self.dismiss("")
             return
         self._asking = True
         self.app.push_screen(

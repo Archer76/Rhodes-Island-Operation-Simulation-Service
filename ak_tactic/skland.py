@@ -720,6 +720,62 @@ def resolve_game_uid(*, home: Path | None = None, uid: str | None = None,
             "channelName": target.get("channelName")}
 
 
+def resolve_game_uid_for(login_uid: str, *, home: Path | None = None,
+                         uid: str | None = None,
+                         save: bool = True) -> dict[str, Any]:
+    """**联网**给**指定的已登录账号**问一次绑定列表——它不必是当前账号。
+
+    与 `resolve_game_uid` 的分工：那个只认**当前账号**（`load_cred()` 读的就是
+    当前账号那一份）。而 TUI 的账号列表要一次给**每个登过的号**补上
+    「游戏用户名 + 游戏uid」，切号又只动一个当前指向——所以这里按 uid 直接读
+    那一份 `cred_<uid>.json`。
+
+    ## 为什么不给非当前账号"补一次 cred"
+
+    `finish_login()` 走的是**当前账号**的 hgToken 文件与在途票据（`pending.json`）。
+    拿它去救另一个号，最坏的情况是**静默换错号**（`finish_login` 的文档里记的
+    就是这个坑）。所以补 cred 只对当前账号做，别的账号失败就如实报错。
+
+    失败时抛 `SklandError`，调用方要能逐账号分开报——一个号失败不该让整张
+    列表都画不出来。
+    """
+    login_uid = str(login_uid or "").strip()
+    if not login_uid:
+        raise SklandError("补全账号信息要知道是哪个登录账号。")
+    st = read_json(cred_path_for(login_uid, home))
+    if not st:
+        raise SklandError(f"账号 {login_uid} 的凭据文件不见了，补不了信息。")
+    cred, token = require_ready(st)
+
+    def _ask(c: str, t: str) -> dict[str, Any]:
+        return pick_binding(binding_list(c, t), uid)
+
+    try:
+        target = _ask(cred, token)
+    except SklandError as first:
+        if current_uid(home) != login_uid:
+            raise
+        try:
+            fresh = finish_login(home)
+        except Exception:                                     # noqa: BLE001
+            raise first from None
+        cred2, token2 = require_ready(fresh)
+        try:
+            target = _ask(cred2, token2)
+        except SklandError:
+            raise first from None
+
+    g = str(target.get("uid") or "").strip()
+    if not g:
+        raise SklandError(f"绑定列表里这条没有 uid：{target}")
+    if save:
+        set_game_uid(login_uid, g, nick=target.get("nickName"),
+                     channel=target.get("channelName"), home=home)
+    return {"loginUid": login_uid, "gameUid": g,
+            "nickName": target.get("nickName"),
+            "channelName": target.get("channelName")}
+
+
 def activate(uid: str, home: Path | None = None) -> dict[str, Any]:
     """切回某个登录过的账号（不必重扫）。"""
     uid = str(uid or "").strip()
