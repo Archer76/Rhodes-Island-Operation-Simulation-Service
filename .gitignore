@@ -43,3 +43,9 @@ _vid*/
 # 2026-09-17 已把整个目录从历史里摘掉（含此前的 _proto/*.c 源码）。
 # 需要留档就往别处放；这里一律不入库。
 _proto/
+
+# ---- Go 版模拟器的构建产物（rios-sim/，见 docs/tui-plan.md 第十二节）----
+# 二进制是可再生的（`go build` 一条命令），不入库；源码与 go.mod 入库。
+rios-sim/rios-sim
+rios-sim/rios-sim.exe
+rios-sim/*.test.exe
