@@ -137,6 +137,25 @@ def main() -> int:
     check("ping 里的版本与本文件认的一致（v1）",
           ping.get("pong", {}).get("version") == 1)
 
+    # ---- 关卡特有机制层（mech 包）：按需取用、取不到就拒跑
+    mechs = ping.get("pong", {}).get("mechanisms")
+    check("ping 报出本二进制编译进来的机制名单（Python 据此判断能不能交给 Go 跑）",
+          isinstance(mechs, list), f"{mechs!r}")
+
+    rc, rows, _ = _proto([], '{"id":9,"cmd":"sim","spec":{"fps":30,'
+                             '"mechanisms":["没有这个机制"]}}\n')
+    check("点名了一个没有的机制 → **拒跑**，不是静默忽略"
+          "（少挂一个机制与本来没这机制在判决上分不开）",
+          len(rows) == 1 and rows[0].get("ok") is False
+          and "没有这个机制" in rows[0].get("error", "")
+          and "verdict" not in rows[0], json.dumps(rows[:1])[:130])
+
+    rc, rows, _ = _proto([], '{"id":10,"cmd":"sim","spec":{"fps":30,'
+                              '"mechanisms":[],"max_time":1}}\n')
+    check("机制名单空着时照常跑（空层对判决的影响必须是零）",
+          len(rows) == 1 and rows[0].get("ok") is True
+          and "verdict" in rows[0], json.dumps(rows[:1])[:110])
+
     rc, rows, _ = _proto([], '{"id":2,"cmd":"nope"}\n')
     check("不认识的命令 → ok:false 并说清支持什么",
           len(rows) == 1 and rows[0].get("ok") is False

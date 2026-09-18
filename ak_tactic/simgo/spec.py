@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 #: 攻击间隔的下限与攻速下限，与 `battle/unit.py` 同源（那里写死 0.05 / 20）
@@ -175,11 +176,17 @@ def _spawn_spec(sim, t: float, sp) -> dict[str, Any]:
 
 
 def build_spec(sim, *, stage_label: str = "", allow_devices: bool = False,
-               allow_skills: bool = False) -> dict[str, Any]:
+               allow_skills: bool = False, mechanisms: Iterable[str] = ()) -> dict[str, Any]:
     """`BattleSimulator` → 规格 dict。**调用前要先把 plan 排好。**
 
     只读 `sim` 的状态（`_spawn` 与 `_range_of` 都是纯读；后者要先补 position——
     见 `_operator_spec` 的说明），不改战斗状态。`allow_*` 见 `unsupported_reasons`。
+
+    `mechanisms` 是**关卡特有机制**的名字（博士 2026-09-18：「机制单独成层、
+    每个活动分开、按需取用」）：Go 侧照名字从 `mech` 包里取，取不到就拒跑。
+    这一版机制层还是空的，所以默认一个都不挂；等 `rios-sim/mech/` 里落了真机制，
+    调用方（对拍台 / 搜索）再按关卡点名。**名字是 Python 与 Go 之间的契约**，
+    两边都得改的时候一起改。
     """
     operators: list[dict[str, Any]] = []
     deploys: list[dict[str, Any]] = []
@@ -208,4 +215,5 @@ def build_spec(sim, *, stage_label: str = "", allow_devices: bool = False,
         "spawns": spawns,
         "unsupported": unsupported_reasons(
             sim, allow_devices=allow_devices, allow_skills=allow_skills),
+        "mechanisms": list(mechanisms),
     }

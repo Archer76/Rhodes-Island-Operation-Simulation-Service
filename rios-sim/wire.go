@@ -36,6 +36,14 @@ type Spec struct {
 	//: 这一局用到了最小版本没覆盖的机制时，Python 侧在这里逐条写明。
 	//: 非空即拒跑——见文件头。
 	Unsupported []string `json:"unsupported,omitempty"`
+
+	//: 这一局要挂上的**关卡特有机制**（博士 2026-09-18：机制单独成层、按需取用）。
+	//: 由 Python 点名——它知道"这一关有哪几样机制"；Go 侧按名字从 `mech` 包里取。
+	//:
+	//: 取不到 → **拒跑**，不是忽略：少挂一个机制与"这关本来就没这机制"在判决上
+	//: 分不开，而对拍台分不开的两种结果早晚会把偏差固化成基线。
+	//: 本二进制里有哪些机制，看 `ping` 的 `mechanisms`。
+	Mechanisms []string `json:"mechanisms,omitempty"`
 }
 
 // OperatorSpec 是一名**已经在场上**的干员的全部数值。

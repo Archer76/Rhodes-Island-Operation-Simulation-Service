@@ -31,6 +31,8 @@ import (
 	"math"
 	"sort"
 	"time"
+
+	"rios-sim/mech"
 )
 
 // : 与原版同源的两个常量（`unit.py` 27-40）。攻击间隔的下限与攻速下限一起用。
@@ -100,6 +102,12 @@ func runSim(spec *Spec) (*Verdict, error) {
 	if spec.FPS <= 0 {
 		return nil, fmt.Errorf("fps 必须是正整数，收到 %d", spec.FPS)
 	}
+	// **关卡特有机制按需取用**（mech 包）：点名的名字取不到就整场拒跑，
+	// 见 `mech.Load` 与 wire.go 里那段注释。
+	mechanisms, err := mech.Load(spec.Mechanisms)
+	if err != nil {
+		return nil, err
+	}
 	start := time.Now()
 
 	dt := 1.0 / float64(spec.FPS)
@@ -134,6 +142,14 @@ func runSim(spec *Spec) (*Verdict, error) {
 	}
 
 	t := 0.0
+	frameNo := 0
+	// 机制看到的世界：**读**用只读视图，**写**一律走效果请求，由主循环施加
+	// （帧内顺序的权威只有一处）。空机制时这一层不产生任何行为——`Empty()` 直接跳。
+	ctx := &simCtx{spec: spec, objs: &objs, enemies: &enemies, mechanisms: mechanisms,
+		time: &t, frame: &frameNo, verdict: verdict}
+	if err := mechanisms.Start(ctx); err != nil {
+		return nil, err
+	}
 	won := false
 	for t < spec.MaxTime {
 		// ---- 0. 费用回复（1689-1692）
@@ -207,7 +223,9 @@ func runSim(spec *Spec) (*Verdict, error) {
 			}
 			if e.alive() && !e.leaked && !e.offMap && e.blockedBy == nil &&
 				e.attackPause <= 0 {
-				advance(e, dt, spec.SpeedScale)
+				// 关卡特有机制可以改这一只的推进速度乘区（如田地/阻流阀）；
+				// 没挂机制时 `speedFor` 恒为 1.0，与最小版本逐位相同。
+				advance(e, dt, spec.SpeedScale*ctx.speedFor(e.index))
 			}
 		}
 
@@ -237,6 +255,17 @@ func runSim(spec *Spec) (*Verdict, error) {
 			won = true
 			break
 		}
+		// ---- 9. 关卡特有机制（`mech` 包）：**帧末、t += dt 之前**
+		//
+		// 位置是定的：机制看到的是一个已经结算完的帧（伤害、击杀、漏怪都记过了），
+		// 它自己造成的影响落在下一帧。放到帧中间会让"谁先谁后"变成机制之间的事，
+		// 而机制之间**不许有顺序**——它们各自只跟主循环打交道。
+		//
+		// 空机制（通用关卡）整段跳过，一帧都不多花。
+		if !mechanisms.Empty() {
+			mechanisms.Frame(ctx, dt)
+		}
+		frameNo++
 		t += dt
 	}
 
@@ -262,6 +291,113 @@ func runSim(spec *Spec) (*Verdict, error) {
 	verdict.SimMS = float64(time.Since(start).Microseconds()) / 1000.0
 	return verdict, nil
 }
+
+// ================================================================ 机制层的接口实现
+
+// simCtx 把主循环的状态借给 `mech` 包。
+//
+// 指针字段是**故意的**：`ops`/`enemies` 在循环里会被 append 重新分配，视图必须
+// 每次现取，不能在第一帧把切片头存下来（否则机制看到的是一个冻结的、越用越旧的
+// 列表——这类错只在"敌人变多的那一刻"才现形）。
+type simCtx struct {
+	spec       *Spec
+	objs       *[]*operator
+	enemies    *[]*enemy
+	mechanisms *mech.Set
+	time       *float64
+	frame      *int
+	verdict    *Verdict
+
+	//: 本场被请求的推进速度乘区（**出怪顺序下标** → 乘区）。机制只提请求，
+	//: 主循环在推进那一步施加。没被请求过的敌人乘区是 1.0。
+	//:
+	//: 语义是"一直有效，直到改口"（不是"只管一帧"）：田地那种按"敌人此刻站在
+	//: 哪"生效的机制每帧重报一次即可；而"脱战就恢复"的实现者也只需在自己认
+	//: 为恢复时报回 1.0，不必依赖主循环替它清理。
+	speedReq map[int]float64
+}
+
+func (c *simCtx) Time() float64 { return *c.time }
+func (c *simCtx) Frame() int    { return *c.frame }
+func (c *simCtx) DT() float64   { return 1.0 / float64(c.spec.FPS) }
+
+// speedFor 是某一只敌人此刻的速度乘区（没请求过就是 1.0）。
+func (c *simCtx) speedFor(index int) float64 {
+	if c.speedReq == nil {
+		return 1.0
+	}
+	if s, ok := c.speedReq[index]; ok {
+		return s
+	}
+	return 1.0
+}
+
+// Operators 列的是**`Spec.Operators` 里的每一个单位对象**（不在场的也在，`Alive`
+// 为 false）。用对象下标而不是"在场列表的下标"：后者随部署顺序增长，机制拿到的
+// 编号会随着场上人数变化而漂。
+func (c *simCtx) Operators() []mech.OpView {
+	objs := *c.objs
+	out := make([]mech.OpView, 0, len(objs))
+	for i, o := range objs {
+		out = append(out, mech.OpView{
+			Index: i, CharID: o.spec.CharID, Name: o.spec.Name,
+			Cell: o.spec.Cell, HP: o.hp, MaxHP: o.spec.MaxHP,
+			Alive: o.alive(),
+		})
+	}
+	return out
+}
+
+func (c *simCtx) Enemies() []mech.EnemyView {
+	out := make([]mech.EnemyView, 0, len(*c.enemies))
+	for _, e := range *c.enemies {
+		out = append(out, mech.EnemyView{
+			Index: e.index, Name: e.spec.Name, Position: e.position,
+			HP: e.hp, Alive: e.alive(), Blocked: e.blockedBy != nil,
+		})
+	}
+	return out
+}
+
+// DamageOperator 施加机制请求的伤害。
+//
+// **按单位对象下标**取人（与 `Operators()` 的 `Index` 同一套编号，也就是
+// `DeploySpec.Index`）：同一位干员的不同次部署是不同的对象，所以"扣血"扣的一定是
+// 机制想扣的那一个。
+func (c *simCtx) DamageOperator(index int, raw float64, trueDamage bool) {
+	objs := *c.objs
+	if index < 0 || index >= len(objs) {
+		return
+	}
+	op := objs[index]
+	if !op.alive() {
+		return
+	}
+	// 真伤不吃防御与法抗；否则按**物理**口径扣（机制自己说要哪种，这里不猜）。
+	dealt := raw
+	if !trueDamage {
+		dealt = math.Max(raw-op.spec.DEF, raw*0.05)
+	}
+	op.hp -= dealt
+	op.damageTaken += dealt
+	if op.hp < 0 {
+		op.hp = 0
+	}
+}
+
+func (c *simCtx) ScaleEnemySpeed(index int, scale float64) {
+	if c.speedReq == nil {
+		c.speedReq = map[int]float64{}
+	}
+	c.speedReq[index] = scale
+}
+
+func (c *simCtx) Log(format string, args ...any) {
+	c.verdict.Events = append(c.verdict.Events, Event{
+		T: *c.time, Kind: "mech", Who: fmt.Sprintf(format, args...)})
+}
+
+// ================================================================ 推进
 
 // advance 沿分段计划推进 dt 秒（`EnemyUnit._advance_legs`，unit.py）。
 //
