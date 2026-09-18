@@ -161,6 +161,23 @@ type PollutionAdder interface {
 	PolluteAround(cell [2]int, amount float64, radius float64) float64
 }
 
+// ClearWaterProbe 回答"这一格算不算**清水**"（怀黍离「祟」明识形态的清水判定，
+// 原版 `_pm2_tick` 里那一支与 `_in_clear_pump`）。
+//
+// 又是模拟器发起、机制回答：要判的两件事都住在田地/装置那一层——
+//  1. 这一格是田地，且它的【实际】病害值 ≤ 0；
+//  2. 或者这一格在某个泵站的**前向射线**上，且那条射线的水源地是一片清水
+//     田地（水源地上站着我方单位时还能多推一段）。
+//
+// `allies` 是本帧所有**活着**的我方单位脚下的格子——第二条里的"水源地上有人"
+// 用它。传格子而不是传单位：这一层不该认识我方单位是什么。
+//
+// ⚠ 不是清水一律返回 false（原版 `cell not in farmland` 就是假）。
+// 不要"取最近的水源"之类的近似——那不是原版的判定。
+type ClearWaterProbe interface {
+	IsClear(cell [2]int, allies [][2]int) bool
+}
+
 // Framer 在**每一帧的末尾**被调用（`t += dt` 之前，即这一帧的伤害、击杀、
 // 漏怪都已经结算完）。
 //
@@ -375,6 +392,7 @@ type Set struct {
 	posts    []hookPost
 	drains   []hookDrain
 	adds     []hookAdd
+	clears   []hookClear
 	framers  []hookFramer
 	all      []Mechanism
 }
@@ -407,6 +425,12 @@ type hookDrain struct {
 type hookAdd struct {
 	id ID
 	m  PollutionAdder
+}
+
+// hookClear 是清水探针的挂点（见 `ClearWaterProbe`）。
+type hookClear struct {
+	id ID
+	m  ClearWaterProbe
 }
 
 type hookAttack struct {
@@ -468,6 +492,9 @@ func Load(cfg map[string]json.RawMessage, ids ...string) (*Set, error) {
 		}
 		if a, ok := m.(AttackTicker); ok {
 			set.attacks = append(set.attacks, hookAttack{id, a})
+		}
+		if cp, ok := m.(ClearWaterProbe); ok {
+			set.clears = append(set.clears, hookClear{id, cp})
 		}
 		if f, ok := m.(Framer); ok {
 			set.framers = append(set.framers, hookFramer{id, f})
@@ -571,6 +598,22 @@ func (s *Set) PolluteAround(cell [2]int, amount float64, radius float64) float64
 		}
 	}
 	return 0.0
+}
+
+// IsClear 依次问各机制"这一格算不算清水"，取**第一个回答算的**。
+//
+// 一个机制都没挂、或谁都不认领这一格时返回 false——原版里 `farmland is None`
+// 就是"不清水"，明识形态因此不拿那一份防御加成。
+func (s *Set) IsClear(ctx Ctx, cell [2]int, allies [][2]int) bool {
+	if s == nil {
+		return false
+	}
+	for _, h := range s.clears {
+		if h.m.IsClear(cell, allies) {
+			return true
+		}
+	}
+	return false
 }
 
 // AttackTick 依次调用各机制的 AttackTick（位置见 `AttackTicker` 的注释）。
