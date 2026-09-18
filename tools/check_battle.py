@@ -2132,6 +2132,79 @@ def check_barrier_scope(stage, lib, calc, book_t) -> None:
     conn.close()
 
 
+def check_faction_aura(stage, lib, calc, book_t) -> None:
+    """[28] 「万众巨潮」：**只在技能期间生效**且**按阵营翻倍**的全场光环。
+
+    怒潮凛冬天赋2：「技能期间所有场上干员攻击力和防御力 +14%，【乌萨斯学生
+    自治团】干员获得加成效果翻倍」。此前 `atk` / `def` / `scale_bonus` 三个键
+    全在"无人读"里——`find_team_aura` 只认名字写死的「青色怒火」。
+
+    两种光环**不能共用一个倍率**，这是本节最要紧的一条：
+
+    * 青色怒火 = **常驻**底子，主人开技能时全场 ×2；
+    * 万众巨潮 = 主人**不开技能就一点都没有**（0），开了才是底子，且只对
+      自治团 ×`scale_bonus`。
+
+    把后者写成前者，会得到一个"怒潮凛冬一上场就给全队加 14%"的错模型——
+    她还没开技能呢。反向也一样错。所以本节把"未开技能必须为 0"单列一条。
+
+    另外钉两点：`scale_bonus` 与青色怒火的 `talent_scale` 是**两个不同的键**
+    （别互相当别名），以及**光环主人自己也在自治团里**，所以她吃双倍。
+    """
+    print("\n[28] 「万众巨潮」：技能期间的全场光环与阵营翻倍")
+    from ak_tactic.battle.talents import (  # noqa: PLC0415
+        STUDENT_TEAM, FACTION_AURA_NAME, TeamAura, find_team_aura,
+        is_faction_aura_talent)
+
+    cid = "char_1051_headb2"
+    tal = book_t.for_operator(cid, elite=2, level=60, potential=1)
+    hit = find_team_aura(tal)
+    check("find_team_aura 认得「万众巨潮」（此前只认名字写死的青色怒火）",
+          hit is not None and hit.name == FACTION_AURA_NAME,
+          hit.name if hit else "None")
+    check("它是阵营光环那一族", hit is not None and is_faction_aura_talent(hit))
+    check("黑板 atk/def 都是 14%",
+          abs(hit.value("atk", 0) - 0.14) < 1e-9 and abs(hit.value("def", 0) - 0.14) < 1e-9,
+          f"atk={hit.value('atk')} def={hit.value('def')}")
+    check("阵营倍率取自 `scale_bonus`（=2.0，不是青色怒火的 `talent_scale`）",
+          abs(hit.value("scale_bonus", 0) - 2.0) < 1e-9,
+          f"scale_bonus={hit.value('scale_bonus')}")
+    check("自治团成员是 7 位（team_id='student'）", len(STUDENT_TEAM) == 7,
+          f"{len(STUDENT_TEAM)} 位")
+    check("光环主人怒潮凛冬**自己**也在自治团里",
+          cid in STUDENT_TEAM)
+
+    sim = mechanism_sim(stage, lib)
+    owner = make_unit(calc, cid, elite=2, level=60, potential=1)
+    owner.talents = tal
+    mate = make_unit(calc, "char_103_angel", elite=2, level=60, potential=1)
+    sim.operators.extend([owner, mate])
+    sim.team_auras.append(TeamAura(
+        owner=owner.name, atk_pct=hit.value("atk", 0.0), def_pct=hit.value("def", 0.0),
+        operator=owner, skill_only=True, faction=STUDENT_TEAM,
+        faction_scale=hit.value("scale_bonus", 2.0)))
+
+    owner.skill_active = False
+    sim._refresh_auras()
+    check("主人**没开技能**时，全场一点光环都没有（不是常驻的）",
+          mate.aura_atk_pct == 0.0 and owner.aura_atk_pct == 0.0,
+          f"外人={mate.aura_atk_pct} 主人={owner.aura_atk_pct}")
+
+    owner.skill_active = True
+    sim._refresh_auras()
+    check("技能期间：非自治团干员 +14%",
+          abs(mate.aura_atk_pct - 0.14) < 1e-9, f"实得 {mate.aura_atk_pct}")
+    check("技能期间：自治团干员翻倍到 +28%",
+          abs(owner.aura_atk_pct - 0.28) < 1e-9, f"实得 {owner.aura_atk_pct}")
+    check("攻防同值（描述里 atk/def 都给 14%）",
+          abs(mate.aura_def_pct - 0.14) < 1e-9, f"实得 {mate.aura_def_pct}")
+
+    owner.skill_active = False
+    sim._refresh_auras()
+    check("技能一结束光环立刻归零（不是留到下一帧或整场）",
+          mate.aura_atk_pct == 0.0 and owner.aura_atk_pct == 0.0)
+
+
 def check_second_use(stage, lib, calc, book_t) -> None:
     """[27] 「第二次及以后使用」的变体取值（怒潮凛冬技2「绝不罢休」）。
 
@@ -2403,6 +2476,7 @@ def main() -> int:
     check_element_gaps(stage, lib, calc, book_t)
     check_skill_infix(stage, lib, calc, book_t)
     check_barrier_scope(stage, lib, calc, book_t)
+    check_faction_aura(stage, lib, calc, book_t)
     check_second_use(stage, lib, calc, book_t)
     check_push(stage, lib, calc, book_t)
 

@@ -37,6 +37,31 @@ TABLE_ROW = re.compile(
 _LITERAL = re.compile(r"""["']([A-Za-z_@][A-Za-z0-9_@]*)["']""")
 
 
+_VARIANT_RE = re.compile(r"\[([^\]]+)\]")
+
+
+def is_read(key: str, lits: set[str]) -> bool:
+    """这个键在源码里有人读吗？——三种写法都算"有人读"。
+
+    1. **全键字面量**：`bb["atk"]` 这类直接按键名取的；
+    2. **去掉 `xxx@` 前缀**：`attack@atk_scale` 在源码里写的是 `"atk_scale"`；
+    3. **方括号变体键改判条件名**：`headb2_s_2[second].atk` 在源码里**根本不会
+       整串出现**——运行时是按条件名选的（`effects.with_variant("second")`）。
+       拿全键去找必然找不到，于是被误报成"无人读"。
+
+    第 3 条是被误报逼出来的：怒潮凛冬技2 的 `[second]` 明明已经接好线
+    （2026-09-18 提交），审计却仍把它列在欠账里，因为源码里出现的是
+    `"second"` 而不是那个全键。**判据必须跟着"运行时怎么选"走，而不是跟着
+    "键长什么样"走。**
+    """
+    if key in lits:
+        return True
+    m = _VARIANT_RE.search(key)
+    if m is not None:
+        return m.group(1) in lits
+    return key.rsplit("@", 1)[-1] in lits
+
+
 def source_literals() -> set[str]:
     out: set[str] = set()
     for p in (ROOT / "ak_tactic").rglob("*.py"):
@@ -120,8 +145,7 @@ def main() -> int:
             continue
         bad = [(src, k) for src, k in allk if _classify(k) is None]
         # 第二道：源码里没人读过 = 真的没建模
-        dead = [(src, k) for src, k in bad
-                if k not in lits and k.rsplit("@", 1)[-1] not in lits]
+        dead = [(src, k) for src, k in bad if not is_read(k, lits)]
         for _src, k in bad:
             unclass_global[k] += 1
             unclass_who[k].append(name)
