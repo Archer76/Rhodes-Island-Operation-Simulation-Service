@@ -2333,6 +2333,31 @@ def check_small_window() -> None:
                     got[("解算中", size)] = unreachable(app.screen, size)
                 finally:
                     A2.SolveScreen._run = orig
+                app.pop_screen()
+                await pilot.pause()
+                # 结果屏的正文比屏幕长得多：量的是**它可不可滚动**（一百行假正文，
+                # 这一条量排版不量内容；真跑一轮 1-7 要二十几秒 × 五档）
+                orig_body = A2.ResultScreen._body
+                A2.ResultScreen._body = lambda self: "\n".join(
+                    f"第 {i} 行：结果正文的一行" for i in range(1, 101))
+                try:
+                    app.push_screen(A2.ResultScreen())
+                    await pilot.pause()
+                    got[("结果屏", size)] = unreachable(app.screen, size)
+                    app.pop_screen()
+                    await pilot.pause()
+                finally:
+                    A2.ResultScreen._body = orig_body
+                app.push_screen(A2.NoStageScreen())
+                await pilot.pause()
+                got[("关卡表空", size)] = unreachable(app.screen, size)
+                app.pop_screen()
+                await pilot.pause()
+                app.push_screen(A2.AskScreen("退出账号", "确定要退出吗？",
+                                             [("yes", "退出"), ("no", "不退出")]))
+                await pilot.pause()
+                got[("弹窗", size)] = unreachable(app.screen, size)
+                app.pop_screen()
         return got
 
     got = asyncio.run(sweep())
