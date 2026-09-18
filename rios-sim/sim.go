@@ -123,16 +123,38 @@ func (c *simCtx) Summon(template json.RawMessage, cell [2]float64) int {
 		panic(fmt.Sprintf("机制递来的召唤模板解不开：%v", err))
 	}
 	spec.Legs = []LegSpec{{Kind: "static", Points: [][2]float64{cell}}}
-	e := &enemy{
-		spec:       spec,
-		hp:         spec.HP,
-		position:   cell,
-		index:      len(*c.enemies),
-		invincible: spec.Invincible,
-		deathTime:  -1,
-	}
+	e := newEnemy(spec, len(*c.enemies), cell)
 	*c.enemies = append(*c.enemies, e)
 	return e.index
+}
+
+// newEnemy 是**所有**敌人生成的唯一入口（出怪表与机制召唤共用）。
+//
+// 为什么必须只有一个：敌人身上有一批"初始化不变量"，它们的零值**不是**默认值——
+// `rebornAt`/`rebornChargeAt` 必须是 -1（0 会被 `pendingReborn()` 读成"正在等
+// 重生"，于是这一只在生成的那一帧就被按 `reborn_hp_ratio` 重置了 hp、清空了
+// `blockedBy`，还多记一笔重生事件）；`deathTime` 必须是 -1（0 会被读成"在 0 秒
+// 就阵亡了"）。
+//
+// 召唤路径曾经自己拼 `&enemy{}`，恰好漏掉这三个。判决当时没变，但那是运气：
+// 甲被"复活"过一次、刚贴上来的阻挡被清掉过一次，只是那几帧里没人受影响。
+// 这一类缺口不会自己报错，只会偶尔改一个判决——所以把口子合成一个。
+func newEnemy(spec SpawnSpec, index int, position [2]float64) *enemy {
+	return &enemy{
+		spec:       spec,
+		hp:         spec.HP,
+		position:   position,
+		index:      index,
+		invincible: spec.Invincible,
+		deathTime:  -1.0,
+		// 重生：窗口从 -1 起步（不在窗口里）；防御力基准按原版在
+		// `_build_enemy` 里取一次（`sim.py:1663`）——充能的防御加成按它重算，
+		// 二次重生时不会把上次的加成再乘一遍。
+		rebornLeft:     spec.RebornLeft,
+		rebornAt:       -1.0,
+		rebornChargeAt: -1.0,
+		rebornDefBase:  spec.DEF,
+	}
 }
 
 func (e *enemy) reachedEnd() bool {
@@ -315,13 +337,8 @@ func runSim(spec *Spec) (*Verdict, error) {
 		// ---- 2. 出怪（1753-1760）
 		for cursor < len(spec.Spawns) && spec.Spawns[cursor].Time <= t {
 			sp := spec.Spawns[cursor]
-			e := &enemy{spec: sp, hp: sp.HP, legIndex: 0, index: cursor,
-				deathTime: -1,
-				// 重生：窗口从 -1 起步（不在窗口里），防御力基准按原版
-				// 在 `_build_enemy` 里取一次（`sim.py:1663`）——充能的
-				// 防御加成按它重算，二次重生时不会把上次的加成再乘一遍。
-				rebornLeft: sp.RebornLeft, rebornAt: -1.0, rebornChargeAt: -1.0,
-				rebornDefBase: sp.DEF}
+			e := newEnemy(sp, cursor, [2]float64{})
+			e.legIndex = 0
 			// 起点 = 第一段的第一个点（`_build_enemy` 给的是 `pts[0]`）
 			if len(sp.Legs) > 0 && len(sp.Legs[0].Points) > 0 {
 				e.position = sp.Legs[0].Points[0]

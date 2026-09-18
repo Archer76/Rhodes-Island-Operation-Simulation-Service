@@ -14,7 +14,10 @@
 from __future__ import annotations
 
 import json
+import copy
+import dataclasses
 import pathlib
+import subprocess
 import sqlite3
 import sys
 
@@ -27,6 +30,9 @@ from ak_tactic.battle.unit import OperatorUnit                     # noqa: E402
 from ak_tactic.gamedata import GameDataSource, EnemyLibrary, load_stage  # noqa: E402
 from ak_tactic.operator import OperatorCalculator                  # noqa: E402
 from ak_tactic.simgo import Simgo, build_spec, compare, find_binary  # noqa: E402
+from ak_tactic.plan import Plan, Roster                              # noqa: E402
+from ak_tactic.simgo.verifier import GoVerifier                      # noqa: E402
+from ak_tactic.verify import Verifier                                # noqa: E402
 
 #: 关卡 × 编队。练度按各人可达的最高档（`make_unit`），两边一致即可。
 #:
@@ -256,7 +262,8 @@ def plan_for(sim, stage, squad, calc, cells: list[tuple[int, int]] | None = None
 
 def run_py(stage, squad, calc, *, environment: str = "auto", spec_out: bool = False,
            drop_device_runtime: bool = False, drop_pile_runtime: bool = False,
-           drop_reborn: bool = False, cells=None):
+           drop_reborn: bool = False, weaken_reborn: float | None = None,
+           plan_file=None, cells=None):
     """跑一次原版。
 
     ⚠ `spec_out=True` 时规格取的是**跑之前**的那个状态（`build_spec` 是纯读，
@@ -280,8 +287,17 @@ def run_py(stage, squad, calc, *, environment: str = "auto", spec_out: bool = Fa
     `drop_reborn=True` 关的是**重生**那一段（`_reborn_tick`）：BOSS 的"多一条命"
     与「瘴 / 鄙瘴」的重生期充能都住在那儿。同一课又上了一遍——HS-EX-5 的胜负
     压在这一层上，开/关环境与开/关天桩链都一字不变，于是它被报成 ⊘。
+
+    `plan_file` 给的是**解算器存下来的真作业**（`search --save-plan`）。为什么需要它：
+    本工具自己那套 `plan_for` 把第 i 个人摆在候选格里的第 i 个，而候选格按地图顺序
+    排——除头一格，其余都在路线之外。实测 HS-8 加到 5 个人，伤害一字不变；逐格扫 50
+    格、四个朝向，没有一格能碰到「瘴」。也就是说"打到瘴"这件事**不是调参能凑出来的**，
+    它要一份真作业。给了 `plan_file` 就用它，`squad`/`cells` 都不再看。
     """
-    sim = BattleSimulator(stage, enemy_at=lib_get(stage), environment=environment)
+    sim = BattleSimulator(stage,
+                          enemy_at=(lib_get(stage) if weaken_reborn is None
+                                    else weakened_lib(stage, weaken_reborn)),
+                          environment=environment)
     if drop_device_runtime:
         sim._device_tick = lambda dt, t: None
         sim._pile_tick = lambda dt, t: None
@@ -291,9 +307,17 @@ def run_py(stage, squad, calc, *, environment: str = "auto", spec_out: bool = Fa
         # ⚠ 只关这一帧的结算：重生期充能与"多一条命"都住在这里，所以
         # `reborn_charge` 会一直是 0，普攻附加伤害（在敌方出手里）也跟着没了——
         # 一处关掉就覆盖了整族，不必再去动 `_enemies_attack`。
+        #
+        # ⚠ 签名是 `_reborn_tick(self, t)`——**只收一个 t**，别照抄上面
+        # `_device_tick`/`_pile_tick` 的 `(dt, t)`：写成两个参数会在第一帧就
+        # `missing 1 required positional argument: 't'`（实测踩过）。
         sim._reborn_tick = lambda t: None
-    for d in plan_for(sim, stage, squad, calc, cells):
-        sim.plan(d)
+    if plan_file is not None:
+        for d in load_plan(pathlib.Path(plan_file), calc):
+            sim.plan(d)
+    else:
+        for d in plan_for(sim, stage, squad, calc, cells):
+            sim.plan(d)
     spec = build_spec(sim, allow_devices=True) if spec_out else None
     res = sim.run()
     return (spec, sim, res) if spec_out else (sim, res)
@@ -420,6 +444,142 @@ def lib_get(stage):
     return LIB.get
 
 
+#: 受控重生用例：把「瘴」的血按**同一个数**调低，两边收到同一份规格。
+#:
+#: 为什么需要它：真关卡里走到"重生"那段要求**打得死瘴**（15000 血、400 防），而现有
+#: 编队×落位下伤害只有三五千、瘴全程满血；本工具给每个人摆的是候选格里的第 i 个，
+#: 而候选格按地图顺序排——除头一格，其余都在路线之外（实测加人到 5 个，伤害一字不变）。
+#: 要真打，得有解算器给出的作业。在那之前，这条用例证的是**那段代码的逐位一致**：
+#: 敌人血少 → 会倒下 → 会进重生窗口 → 会归来 → 击杀数只能算 1 次。
+#:
+#: ⚠ 它**不是**这一关真实判决的证据，读数时别混。所以在输出里单独成行、写明"受控"。
+REBORN_CASE = dict(stage="HS-8", weaken_reborn=1500.0)
+
+#: 受控用例让解算器先找一份作业时限定的人选（**只影响找作业**，不影响判决口径）。
+#: 名册本身是个人数据，不进仓库：这一条要用 `--box <名册>` 才跑。
+REBORN_TEAM = "史尔特尔,能天使,阿米娅,星熊,闪灵,夜莺,塞雷娅,银灰,白面鸮,凯尔希"
+
+
+def _with_max_hp(e, hp):
+    """把一份敌人数值的血改掉（原对象不动）。"""
+    try:
+        return dataclasses.replace(e, max_hp=float(hp))
+    except Exception:                                         # noqa: BLE001
+        clone = copy.copy(e)
+        object.__setattr__(clone, "max_hp", float(hp))
+        return clone
+
+
+def weakened_lib(stage, hp):
+    """`lib_get` 的变体：会把**会重生**的敌人血量改成 `hp`（其余不动）。"""
+    base = lib_get(stage)
+
+    def get(key, level):
+        e = base(key, level)
+        if getattr(e, "reborn_count", 0):
+            e = _with_max_hp(e, hp)
+        return e
+
+    return get
+
+
+def _reborn_pass(exe, src, box=None) -> int:
+    """受控重生用例：**真作业 + 把「瘴」的血按同一个数调低**，走两条引擎对拍。
+
+    返回失败条数（0 = 通过；`None` 语义上不在这里——跳过由调用方报）。
+
+    为什么非得这么绕（每一步都是量出来的）：
+
+    1. **真作业**。本工具自己那套 `plan_for` 把第 i 个人摆在候选格里的第 i 个，
+       而候选格按地图顺序排——除头一格，其余都在路线之外：实测 HS-8 加到 5 个人
+       伤害一字不变，逐格扫 50 格 × 四个朝向没有一格能碰到「瘴」。也就是说，
+       "打到瘴"不是调参能凑出来的，要一份解算器给的作业。
+    2. **走 Verifier 而不是手搓 sim**。`Verifier` 默认接**真实攻击范围表**；
+       本工具早先手搓的 `BattleSimulator` 没接，范围退化，落位普遍接不到人。
+    3. **受控血量**。瘴 15000 血／400 防，现有名册与解算器在 HS-7／HS-8／HS-MO-1
+       上都撑不到打死它（解算器到不了三星，最好一次 3 杀 3 漏 73s）。于是把
+       **会重生的敌人**血量按同一个数调低——**两边收到同一份规格**，公平；证的
+       是那段代码的逐位一致，**不是**这一关的真实判决。所以输出里写明"受控"。
+
+    三件事一起报：① 关掉原版 `_reborn_tick` 判决必须变（咬到）；② Go 与原版逐项
+    一致；③ Go 侧确实记下了重生事件（"这条路被走过"的直接证据）。
+    """
+    case = REBORN_CASE
+    code, hp = case["stage"], case["weaken_reborn"]
+    label = f"{code}（受控：瘴血量 → {hp:.0f}，两边同规格）"
+    if not box or not pathlib.Path(box).exists():
+        # ⚠ 跳过**不算通过**：说清楚缺什么，别让一行 ⚠ 被读成绿灯。
+        print(f"⚠ {label}：没有名册（`--box`），这一条**没跑**——不计入通过数")
+        return 0
+    plan_path = pathlib.Path("out") / "mech_parity_reborn_plan.json"
+    if not plan_path.exists():
+        level_id = load_stage(code, source=src).level_id
+        plan_path.parent.mkdir(exist_ok=True)
+        print(f"   受控用例要先解一份真作业（{level_id}），可能要几分钟……")
+        r = subprocess.run(
+            [sys.executable, "-m", "ak_tactic", "search", level_id,
+             "--box", box, "--team", REBORN_TEAM, "--max-ops", "8",
+             "--save-plan", str(plan_path)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        if not plan_path.exists():
+            print(f"❌ {label}：解算器没给出作业（退出码 {r.returncode}），"
+                  f"这一条跑不了——不是通过")
+            return 1
+
+    plan = Plan.load(plan_path)
+    roster = Roster.from_json(box)
+    orig_get = EnemyLibrary.get
+
+    def weakened(self, key, level=None, *a, **kw):
+        e = orig_get(self, key, level, *a, **kw)
+        if getattr(e, "reborn_count", 0):
+            e = _with_max_hp(e, hp)
+        return e
+
+    def key(res):
+        return (getattr(res, "stars", None), getattr(res, "kills", None),
+                getattr(res, "leaks", None),
+                round(getattr(res, "elapsed", 0.0), 6),
+                round(getattr(res, "damage_dealt", 0.0), 6))
+
+    EnemyLibrary.get = weakened
+    try:
+        py_on = Verifier(source=src).run(plan, roster=roster)
+        orig_tick = BattleSimulator._reborn_tick
+        BattleSimulator._reborn_tick = lambda self, t: None
+        try:
+            py_off = Verifier(source=src).run(plan, roster=roster)
+        finally:
+            BattleSimulator._reborn_tick = orig_tick
+        go_res = GoVerifier(source=src).run(plan, roster=roster)
+    except Exception as exc:                                  # noqa: BLE001
+        print(f"❌ {label}：跑不起来 {type(exc).__name__}: {exc}")
+        return 1
+    finally:
+        EnemyLibrary.get = orig_get
+
+    bad = 0
+    if key(py_on) == key(py_off):
+        print(f"❌ {label}：关掉重生之后判决一字不变——这一段还是没跑到"
+              f"（那条用例证明不了它）")
+        return 1
+    print(f"✅ {label}：真作业 {len(plan.deploys)} 手；"
+          f"原版开重生 {key(py_on)} → 关重生 {key(py_off)}（**击杀数差 1** = 那只"
+          f"倒下进窗口、既不算活也不算死）；Go {key(go_res)}")
+    if key(go_res) != key(py_on):
+        print(f"❌ {label}：Go 与原版不一致（见上两行）")
+        bad += 1
+    got = go_res.result if isinstance(getattr(go_res, "result", None), dict) else {}
+    reborn = [e for e in (got.get("events") or []) if e.get("kind") == "reborn"]
+    if not reborn:
+        print(f"❌ {label}：Go 侧一次重生都没记到——那条路没被走过")
+        bad += 1
+    else:
+        who = ", ".join(f"{e.get('who')}@{e.get('t'):.2f}s" for e in reborn[:3])
+        print(f"   Go 侧重重生事件 {len(reborn)} 次：{who}")
+    return bad
+
+
 def farmland_touched(sim) -> float:
     """这一关打完时，田地上的病害值总量（用来判断机制是否真动过）。"""
     fs = getattr(sim, "farmland", None)
@@ -467,6 +627,15 @@ def _spec_only_pass(exe, src) -> int:
 
 
 def main() -> int:
+    #: `--box <名册>` 只给**受控重生用例**用：它要先让解算器找一份真作业。
+    #: 名册是个人数据、不进仓库，所以缺了就如实报"这一条没跑"，不算通过。
+    box = ""
+    argv = sys.argv[1:]
+    for i, a in enumerate(argv):
+        if a == "--box" and i + 1 < len(argv):
+            box = argv[i + 1]
+        elif a.startswith("--box="):
+            box = a.split("=", 1)[1]
     exe = find_binary()
     if exe is None:
         print("[skip] 找不到 rios-sim 可执行文件（先 `cd rios-sim; go build`）")
@@ -574,6 +743,7 @@ def main() -> int:
         print("❌ 一条有效证据都没有：这不算通过")
         return 1
     bad += _spec_only_pass(exe, SRC)
+    bad += _reborn_pass(exe, SRC, box)
     return 0 if bad == 0 else 1
 
 
