@@ -103,6 +103,21 @@ def both_cases(rows: list[Binding]) -> list[Binding]:
     return out
 
 
+def known_accounts_safe() -> list[dict]:
+    """本机登录过的账号；**取不到就当空的**。
+
+    这是显示用的信息（主界面的账号行、登录屏的列表、退出账号的确认文案都要它），
+    读失败不该拖垮一整屏。主界面与登录屏两处都要用，所以放在模块层，**只有一份**
+    ——退出账号的按键从主界面搬到登录屏时，最容易出的错就是复制一份出来、
+    然后两份各改一半。
+    """
+    try:
+        from ak_tactic import skland
+        return skland.known_accounts()
+    except Exception:                                         # noqa: BLE001
+        return []
+
+
 #: `auto` 模式（「允许程序补充」）下**人选池的总大小**：勾的人先进池子，不足就从
 #: 名册里按练度补到这么多。
 #:
@@ -152,17 +167,24 @@ class WelcomeScreen(Screen):
         Binding("enter", "go", "开始", key_display="Enter"),
         Binding("d", "dir", "改目录", key_display="D"),
         Binding("l", "login", "登录", key_display="L"),
-        Binding("u", "game_uid", "取账号 uid", key_display="U"),
-        Binding("o", "logout", "退出账号", key_display="O"),
         Binding("q", "quit", "退出程序", key_display="Q"),
     ])
+
+    #: 窗口矮到这个行数以下就把说明那块**收起来**，先把两栏塞进可见区。
+    #:
+    #: 博士 2026-09-18 报「主界面只看得见四行标题」、接着又报「登录账号那一栏
+    #: 没有名册/干员库那句」——两件事同一个成因：这一屏的内容排在 30 行以下，
+    #: 而他的终端大约只有 20 行，**值全掉在下沿之外**，只剩标题行看得见。
+    #: 实测（`_proto/home_fold.py`）：80x20 时名册那句在 y=20、窗口只有 0–19。
+    #: 所以矮窗口下该让路的是说明文字，不是数据。
+    SHORT_HEIGHT = 24
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static(theme.step_bar(0), id="steps")
-        with Vertical(classes="block"):
+        with Vertical(classes="block", id="title-block"):
             yield Label(theme.APP_TITLE, classes="block-title")
-            yield Static(theme.APP_SUBTITLE + "\n", classes="muted")
+            yield Static(theme.APP_SUBTITLE + "\n", classes="muted", id="subtitle")
             yield Static(
                 "把「某个关卡」算出一份能过的编队，导出成 MAA 认得的作业 JSON。\n"
                 "四步：选关卡 → 指定编队 → 解算 → 导出。\n"
@@ -180,15 +202,47 @@ class WelcomeScreen(Screen):
     def on_mount(self) -> None:
         #: 上一步动作留下的失败原因（如退出账号写盘失败）。只给下一帧看一眼。
         self._note = ""
+        self._fit()
         self._refresh()
 
-    def _known_accounts(self) -> list[dict]:
-        """本机登录过的账号。取不到就当空的——这是显示用的信息，不该拖垮一屏。"""
+    def on_resize(self, event) -> None:
+        """窗口尺寸一变就重新决定「说明要不要收起来」。"""
+        self._fit()
+
+    def _fit(self) -> None:
+        """把窗口高度换算成「哪些说明该收起来」。
+
+        **优先级是明写的：数据 > 说明。** 矮窗口里宁可让博士看不见
+        「中文输入法会吞字母键」那句，也不能让他看不见数据目录与名册状态——
+        后者是他每次都要来这一屏看的东西，前者看一次就够。
+
+        三档（`_proto/home_fold.py` 逐档量过）：
+
+        | 窗口高 | 收起什么 | 理由 |
+        |---|---|---|
+        | ≥ 24 | 什么都不收 | 30 行是常见默认，这一档是它的正常样子 |
+        | 20–23 | 收起**说明文字**（`#intro`） | 四行说明让位给两栏 |
+        | < 20 | 连**标题块**一起收 | 顶栏本来就印着 `R.I.O.S. 罗德岛作战演算服务`，在窄窗口里重复一遍，代价是下面那行「名册/干员库」被顶到屏幕外——实测 80x18 就是差这一行 |
+
+        阈值都是量出来的，不是估的：80x16 与 80x20 两档改完之后，两栏四行全在可见区内。
+        """
         try:
-            from ak_tactic import skland
-            return skland.known_accounts()
+            h = self.size.height
         except Exception:                                     # noqa: BLE001
-            return []
+            return
+        if h <= 0:
+            return
+        show_title = h >= 20
+        try:
+            self.query_one("#title-block", Vertical).display = show_title
+            self.query_one("#intro", Static).display = h >= self.SHORT_HEIGHT
+            self.query_one("#subtitle", Static).display = show_title
+        except Exception:                                     # noqa: BLE001
+            pass
+
+    def _known_accounts(self) -> list[dict]:
+        """本机登录过的账号（与登录屏共用模块层的 `known_accounts_safe()`）。"""
+        return known_accounts_safe()
 
     def _account_line(self) -> str:
         uid = D.skland_uid()
@@ -203,7 +257,7 @@ class WelcomeScreen(Screen):
         head = D.describe_account(uid, current=True, roster_flag=False)
         if others:
             head += f"　[dim]（本机另有 {len(others)} 个登过的账号）[/]"
-        return head + "\n[dim]按 O 退出账号——凭据文件保留，之后可切回，不必重扫。[/]"
+        return head
 
     def _refresh(self) -> None:
         """重画两栏。
@@ -224,9 +278,13 @@ class WelcomeScreen(Screen):
     def _dir_line(self) -> str:
         """数据目录：写**当前正在用的**路径，并说清它是默认值还是改过的。
 
-        初次启动（配置里没有 `guides_dir`）时显示的就是默认目录——本工具根目录
-        下的 `Guides/`，并就地标明「默认」；改过之后标「当前设置」，两种状态一眼
-        分得开，不必去猜这个路径是哪来的。
+        排版按博士 2026-09-18 给的那一版：**路径独占一行**，第二行写作业落点。
+        原先把「存在；」与输出目录挤在同一行，窄窗口里那一行会折行，把下面几行
+        往屏幕外顶；现在两行各管一件事。
+
+        路径后面那个小注保留（没配过 `guides_dir` 标「默认目录…」，改过标
+        「当前设置」）——它在同一行上，不占高度，而「这个路径是哪来的」正是他
+        会问的下一句。
         """
         g = D.guides_dir()
         try:
@@ -235,9 +293,10 @@ class WelcomeScreen(Screen):
             configured = False
         how = ("[dim]（当前设置）[/]" if configured
                else "[dim]（默认目录：本工具根目录下的 Guides/，还没改过）[/]")
-        state = "存在" if g.exists() else "还不存在（导出时自动建）"
-        return (f"{g}　{how}\n"
-                f"[dim]{state}；MAA 作业输出到 {Path(str(g)) / '<关卡名>/'}[/]")
+        out = f"{g}　{how}\n[dim]MAA 作业输出到 {Path(str(g)) / '<关卡名>'}[/]"
+        if not g.exists():
+            out += "[dim]　（这个目录还不存在，导出时自动建）[/]"
+        return out
 
     def _data_line(self) -> str:
         """名册与干员库的状态，收在账号这一栏里（原来的「名册」一栏已删）。
@@ -329,90 +388,16 @@ class WelcomeScreen(Screen):
             self._note = result
         self._refresh()
 
-    def action_game_uid(self) -> None:
-        """按 `U`：问一次森空岛，把这个账号的**游戏 uid** 定下来。
-
-        ## 为什么非问不可
-
-        凭据里的 `userId` 是**通行证账号 id**，名册却是按**游戏 uid** 存的，
-        两者通常不相等（前者 13 位、后者 8 位）。而账号 id
-        **不出现在任何一份森空岛数据里**（player_info / opers / roster 三份
-        全查过），所以这个映射**离线推不出来**，只能问一次再记住。
-        博士 2026-09-17 的裁定就是这条：识别要用森空岛给的 uid。
-
-        ## 为什么是按键而不是开机自动问
-
-        它是**联网**的。悄悄在挂载时打一次接口，既会让人对着界面等，
-        也会在没网时把一次失败糊进启动过程。按一下更诚实：他知道自己在请求什么。
-
-        线程里跑、结果用 `call_from_thread` 送回来——`resolve_game_uid` 要发
-        HTTP，在 UI 线程里做会把界面钉住。
-        """
-        if not D.skland_uid():
-            self._note = "当前没有登录的账号，先按 L 扫码登录。"
-            self._refresh()
-            return
-        self._note = "[dim]正在问森空岛要游戏 uid…[/]"
-        self._refresh()
-        self._resolve_game_uid()
-
-    @work(thread=True, exclusive=True)
-    def _resolve_game_uid(self) -> None:
-        try:
-            from ak_tactic import skland
-            res = skland.resolve_game_uid()
-        except Exception as exc:                              # noqa: BLE001
-            self.app.call_from_thread(self._uid_failed, str(exc))
-            return
-        self.app.call_from_thread(self._uid_resolved, res)
-
-    def _uid_failed(self, why: str) -> None:
-        self._note = f"取账号 uid 失败：{why}"
-        self._refresh()
-
-    def _uid_resolved(self, res: dict) -> None:
-        self._note = (f"游戏 uid={res['gameUid']}"
-                      f"　{res.get('nickName') or ''}".rstrip())
-        self.app.state.roster = D.load_roster()
-        self._refresh()
-
-    def action_logout(self) -> None:
-        """退出账号。**一个文件都不删**——只把"当前账号"这个指向清空。
-
-        博士 2026-09-17 裁定：退出账号是为了**换号**，所以凭据与名册全都留着，
-        之后在登录屏按 S 就能切回登过的号，不必重扫。
-        """
-        uid = D.skland_uid()
-        if not uid:
-            self.app.push_screen(AskScreen(
-                "没有可退出的账号",
-                "当前本来就没有登录的账号。\n"
-                "按 L 扫码登录；登过的号按 L 再按 S 可以切回。",
-                [("ok", "知道了")]))
-            return
-        others = [a for a in self._known_accounts() if a["uid"] != uid]
-        body = ("退出后当前账号的名册不再显示，会降级成 MAA OperBox"
-                "（没有专精与模组等级）。\n"
-                "**凭据与名册文件一个都不删。**")
-        body += (f"\n本机另存着 {len(others)} 个登过的账号，之后按 S 可以切回。"
-                 if others else "\n之后按 L 重新扫码即可登回。")
-        self.app.push_screen(
-            AskScreen("退出账号", body,
-                      [("yes", "退出账号"), ("no", "不退出")]),
-            self._logout_answered)
-
-    def _logout_answered(self, choice: str | None) -> None:
-        if choice == "yes":
-            try:
-                from ak_tactic import skland
-                skland.logout()
-            except Exception as exc:                          # noqa: BLE001
-                self._note = f"退出账号失败：{exc}"
-            else:
-                # 退出账号 = 他想换号，那条「以后都不登录」就不该再拦着他
-                D.save_config(login_prompt="")
-                self.app.state.roster = D.load_roster()
-        self._refresh()
+    # 原先这里还有两个动作，博士 2026-09-18 的界面草图把它们挪去了登录屏：
+    #
+    #   * `U`（取账号 uid，`skland.resolve_game_uid`）——只在**登录**时才有意义，
+    #     而登录屏的 `U`（`LoginScreen.action_fill`）本来就是它的**更全版本**
+    #     （一次补齐本机每个账号，不只当前这一个）。主界面不再挂它，逻辑也不留
+    #     副本——留一份就是两处迟早会漂。
+    #   * `O`（退出账号）——退出是为了换号，而换号是在登录屏上做的（那里才有
+    #     账号列表与「按 S 切回」的上下文）。
+    #
+    # 两件事现在都只在登录屏上，见 `LoginScreen.BINDINGS` 与 `action_logout`。
 
     def action_quit(self) -> None:
         self.app.exit()
@@ -690,6 +675,7 @@ class LoginScreen(Screen):
         Binding("l", "login", "扫码登录", key_display="L"),
         Binding("s", "switch", "切换账号", key_display="S"),
         Binding("u", "fill", "补全账号信息", key_display="U"),
+        Binding("o", "logout", "退出账号", key_display="O"),
         Binding("escape", "close", "返回", key_display="Esc"),
     ])
 
@@ -775,7 +761,11 @@ class LoginScreen(Screen):
             return
         lines = [D.describe_account(a["uid"], current=(a["uid"] == cur))
                  for a in rows]
-        hint = "按 S 切换账号（不必重扫）。"
+        # 博士 2026-09-18：「按 O 退出账号——凭据文件保留，之后可切回，不必重扫」
+        # 这一句从主界面搬到**这里**。它本来就只是在讲"退出"这件事，而退出这个
+        # 动作也在这块屏上；主界面留着它要多占一行，矮窗口里正好把名册状态顶出去。
+        hint = "按 O 退出账号——凭据文件保留，之后可切回，不必重扫。"
+        hint += "\n按 S 切换账号（同样不必重扫）。"
         if any(not D.account_info(a["uid"])["known"] for a in rows):
             hint += "　按 U 补全游戏用户名与游戏 uid（联网，按一次问一次）。"
         self.query_one("#login-accounts", Static).update(
@@ -980,11 +970,14 @@ class LoginScreen(Screen):
 
         ## 为什么按一下才跑、为什么在后台线程
 
-        与 `[0]` 屏的 `U` 同一条理由：联网动作不该在挂载时悄悄打一次。而
+        联网动作不该在挂载时悄悄打一次（博士 2026-09-17 裁定）。而
         `resolve_game_uid_for` 要发 HTTP，在 UI 线程里做会把界面钉住。
 
         **一个账号失败不影响别的账号**：逐个记结果、逐个报，而不是整张列表一起
         沉掉。已经知道用户名与 uid 的号直接跳过，不白打接口。
+
+        主界面原有一个只管**当前账号**的 `U`，博士 2026-09-18 把它撤了：
+        同一件事不该有两个按钮，而这一版（本机全部账号）严格更全。
         """
         if self._busy or self._filling:
             return
@@ -1030,6 +1023,9 @@ class LoginScreen(Screen):
     def on_login_screen_fill_done(self, event: FillDone) -> None:
         self._filling = False
         self._refresh_accounts()
+        # 补全可能刚刚才把**游戏 uid** 定下来（原先离线推不出来），而名册是按
+        # 游戏 uid 存的文件——所以顺手重读一次名册，别让主界面继续按旧状态画。
+        self.app.state.roster = D.load_roster()
         if not event.lines:
             self.query_one("#login-note", Static).update(
                 "[dim]没有需要补的账号。[/]")
@@ -1037,6 +1033,51 @@ class LoginScreen(Screen):
         self.query_one("#login-note", Static).update(
             "\n".join(event.lines)
             + "\n[dim]已记在 `~/.skland/accounts.json`，下次不必再问。[/]")
+
+    def action_logout(self) -> None:
+        """按 `O`：退出账号。**一个文件都不删**——只把"当前账号"这个指向清空。
+
+        博士 2026-09-17 的裁定：退出账号是为了**换号**，所以凭据与名册全都留着，
+        之后在这块屏上按 `S` 就能切回登过的号，不必重扫。
+
+        博士 2026-09-18 把这个键从主界面搬到这里：退出是登录屏上的事（这里才有
+        账号列表与「切回」的上下文），而主界面那行「按 O 退出账号……」的说明也
+        一起搬了过来。
+        """
+        uid = D.skland_uid()
+        if not uid:
+            self.app.push_screen(AskScreen(
+                "没有可退出的账号",
+                "当前本来就没有登录的账号。\n"
+                "按 L 扫码登录；登过的号按 L 再按 S 可以切回。",
+                [("ok", "知道了")]))
+            return
+        others = [a for a in known_accounts_safe() if a["uid"] != uid]
+        body = ("退出后当前账号的名册不再显示，会降级成 MAA OperBox"
+                "（没有专精与模组等级）。\n"
+                "**凭据与名册文件一个都不删。**")
+        body += (f"\n本机另存着 {len(others)} 个登过的账号，之后按 S 可以切回。"
+                 if others else "\n之后按 L 重新扫码即可登回。")
+        self.app.push_screen(
+            AskScreen("退出账号", body,
+                      [("yes", "退出账号"), ("no", "不退出")]),
+            self._logout_answered)
+
+    def _logout_answered(self, choice: str | None) -> None:
+        if choice == "yes":
+            try:
+                from ak_tactic import skland
+                skland.logout()
+            except Exception as exc:                          # noqa: BLE001
+                self.query_one("#login-note", Static).update(
+                    f"[warn]退出账号失败：{exc}[/]")
+            else:
+                # 退出账号 = 他想换号，那条「以后都不登录」就不该再拦着他
+                D.save_config(login_prompt="")
+                self.app.state.roster = D.load_roster()
+        # 退完就地重画：登录态与账号列表（当前那只的 `←当前` 标记要落下来）
+        self.query_one("#login-status", Static).update(self._status())
+        self._refresh_accounts()
 
     def action_close(self) -> None:
         """Esc：**已经登录着就直接回主界面**，没登录才补问「不登录」那一句。

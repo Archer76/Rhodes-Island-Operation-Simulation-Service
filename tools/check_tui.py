@@ -998,6 +998,48 @@ def check_welcome() -> None:
     check("一栏坏了不连累另一栏",
           "干员库" in got["acct_err"], got["acct_err"][:60])
 
+    # ---- 矮窗口里那个「名册/干员库」不能再掉到屏幕外（博士 2026-09-18 第二次报）
+    #
+    # 他的终端大约 20 行，而改前这一屏的内容排在 30 行以下：**值全在下沿之外**，
+    # 只剩标题行看得见——他两次报的现象（「只看见四行标题」与「没有名册那句」）
+    # 都是这一个成因。所以这里量的不是"字打出来没有"，而是**落在可见区内没有**。
+    from rich.text import Text as _Text
+
+    async def fold() -> dict:
+        sizes: dict = {}
+        intro: dict = {}
+        for w, h in ((80, 14), (80, 16), (80, 18), (80, 20), (80, 24),
+                     (100, 30), (120, 44)):
+            app = A.RiosApp()
+            async with app.run_test(size=(w, h)) as pilot:
+                await pilot.pause()
+                seen, cut = 0, []
+                for wid in ("#dir-line", "#account-line"):
+                    node = app.screen.query_one(wid, Static)
+                    plain = _Text.from_markup(str(node.render())).plain
+                    for i, ln in enumerate(x for x in plain.splitlines()
+                                           if x.strip()):
+                        y = node.region.y + i
+                        if y < h:
+                            seen += 1
+                        else:
+                            cut.append(f"{wid} 第{i + 1}行 y={y}")
+                sizes[(w, h)] = (seen, cut)
+                intro[h] = bool(app.screen.query_one("#intro", Static).display)
+        return {"sizes": sizes, "intro": intro}
+
+    folded = asyncio.run(fold())
+    bad = {k: v[1] for k, v in folded["sizes"].items() if v[1]}
+    check("任何常见窗口高度下，两栏四行**全在可见区内**（博士的 ~20 行终端）",
+          not bad, str(bad))
+    check("14 行这么矮也保住那四行（说明与标题按优先级让路）",
+          folded["sizes"][(80, 14)][0] == 4 and not folded["sizes"][(80, 14)][1],
+          str(folded["sizes"][(80, 14)]))
+    check("窗口够高时说明照旧显示（不是一律藏掉）",
+          folded["intro"][44] and folded["intro"][30]
+          and not folded["intro"][20],
+          str({h: folded["intro"][h] for h in (44, 30, 24, 20, 16)}))
+
 
 def check_result_back_to_stage() -> None:
     """[9b] 结果屏按 `R` 回**选关页**（关卡列表），章/分部/环境的选择留着。
@@ -2121,14 +2163,20 @@ def check_login_wizard() -> None:
 def _check_login_wizard_body(A, skland, tmp: Path, conf: Path, read_cfg) -> None:
     # ---- 静态：按键挂对了没有
     wb = A.WelcomeScreen.BINDINGS
-    check("[0] 准备屏挂了 O → 退出账号",
-          any(b.key == "o" and b.action == "logout" for b in wb),
-          str([(b.key, b.action) for b in wb]))
-    descs = {b.action: b.description for b in wb}
-    check("退出账号（O）与退出程序（Q）的文案分得开，不都印「退出」",
-          descs.get("logout") == "退出账号" and descs.get("quit") == "退出程序",
-          str(descs))
     lb = [(b.key, b.action) for b in A.LoginScreen.BINDINGS]
+    check("[0] 准备屏**不再**挂 U/O（博士 2026-09-18：「取账号 uid 按钮去掉、"
+          "退出账号按钮移到登陆界面」）",
+          not any(b.key in ("u", "o") for b in wb),
+          str([(b.key, b.action) for b in wb if b.key.isascii()]))
+    check("主界面上退出程序（Q）还在，文案是「退出程序」",
+          any(b.key == "q" and b.description == "退出程序" for b in wb),
+          str({b.action: b.description for b in wb}))
+    check("两个动作在主界面上也**没有留下副本**（免得两处各改一半）",
+          not hasattr(A.WelcomeScreen, "action_logout")
+          and not hasattr(A.WelcomeScreen, "action_game_uid"))
+    check("登录屏接手了 O → 退出账号", ("o", "logout") in lb, str(lb))
+    check("登录屏那只 action_logout 真在（不是只挂了个键名）",
+          callable(getattr(A.LoginScreen, "action_logout", None)))
     check("登录屏挂了 S → 切换账号", ("s", "switch") in lb, str(lb))
     check("登录屏挂了 U → 补全账号信息（联网问一次绑定列表）",
           ("u", "fill") in lb, str(lb))
@@ -2447,6 +2495,10 @@ def _check_login_wizard_body(A, skland, tmp: Path, conf: Path, read_cfg) -> None
         async with app3.run_test(size=(120, 44)) as pilot:
             await pilot.pause()
             got["third"] = type(app3.screen).__name__
+            # O 现在挂在登录屏上（博士 2026-09-18 搬过去的），所以先按 L 进去
+            await pilot.press("l")
+            await pilot.pause()
+            got["after_l"] = type(app3.screen).__name__
             await pilot.press("o")                  # 此刻没账号
             await pilot.pause()
             got["no_acct_title"] = getattr(app3.screen, "_title", "")
@@ -2456,6 +2508,10 @@ def _check_login_wizard_body(A, skland, tmp: Path, conf: Path, read_cfg) -> None
         app4 = A.RiosApp(skip_login=False)
         async with app4.run_test(size=(120, 44)) as pilot:
             await pilot.pause()
+            await pilot.press("l")
+            await pilot.pause()
+            got["login_hint"] = str(
+                app4.screen.query_one("#login-accounts", _Static).render())
             await pilot.press("o")
             await pilot.pause()
             got["logout_title"] = getattr(app4.screen, "_title", "")
@@ -2540,6 +2596,14 @@ def _check_login_wizard_body(A, skland, tmp: Path, conf: Path, read_cfg) -> None
           got["third"] == "WelcomeScreen", got["third"])
     check("没有账号时按 O 给一句说明，不当场报错",
           got["no_acct_title"] == "没有可退出的账号", got["no_acct_title"])
+    check("按 O 之前得先在 [0] 屏按 L 进登录屏（退出账号已经搬过去了）",
+          got["after_l"] == "LoginScreen", got["after_l"])
+    check("那句「按 O 退出账号——凭据文件保留，之后可切回，不必重扫」"
+          "现在印在**登录屏**的账号列表下面",
+          "按 O 退出账号" in got["login_hint"]
+          and "凭据文件保留" in got["login_hint"]
+          and "不必重扫" in got["login_hint"],
+          got["login_hint"].splitlines()[-1][:90])
     check("有账号时按 O 先弹确认", got["logout_title"] == "退出账号",
           got["logout_title"])
     check("确认是二选一：退出 / 不退出",

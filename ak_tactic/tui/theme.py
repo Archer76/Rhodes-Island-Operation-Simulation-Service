@@ -62,7 +62,7 @@ Footer {
 /* ---- 向导的步骤条 ---- */
 
 #steps {
-    height: 3;
+    height: 2;
     padding: 1 2 0 2;
     color: $text-muted;
 }
