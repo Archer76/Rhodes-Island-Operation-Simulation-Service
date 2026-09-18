@@ -66,10 +66,37 @@ type enemy struct {
 	deathTime   float64
 	costAwarded bool
 
+	// ---- 重生（原版 `_reborn_tick`，帧序 3.4）
+	//
+	// 两件事共用这套状态：BOSS 的"多一条命"（`Reborn.*`）与怀黍离
+	// 「瘴 / 鄙瘴」的**重生期充能**（`Reborning.*`）。原版把它们写在同一个
+	// `pending_reborn` 分支里，所以这里也放在一起。
+	//
+	// ⚠ 等重生的（`rebornAt >= 0`）既不算活、也不算死：它不推路（帧序 3 的
+	// 条件是 `alive()`）、不出手（帧序 7 同理）、**不进击杀数**（收尾结算里
+	// 由 `pendingReborn()` 排除）。少排一条，判决就会多记一次击杀。
+	rebornLeft     int
+	rebornAt       float64 //: >= 0 = 倒下等重生；-1 = 不在窗口里
+	rebornChargeAt float64
+	rebornCharge   int
+	rebornDefBase  float64 //: 防御力基准：充能加成每次都按它重算，不能累乘
+
 	index int //: 出生顺序（同分排序用，等价于原版敌人列表的顺序）
 }
 
 func (e *enemy) alive() bool { return e.hp > 0 }
+
+// pendingReborn 是原版的 `e.pending_reborn`：倒下等待重生。
+func (e *enemy) pendingReborn() bool { return e.rebornAt >= 0 }
+
+// rebornCharge 是原版的 `e.reborn_charge`——重生期吸到的病害层数。它只在
+// **重生窗口里**增长（原文「重生期间每0.5s」），重生完成即定住。
+func (e *enemy) rebornChargeBonus() float64 {
+	if e.rebornCharge == 0 || e.spec.RebornDamageMagic == 0 {
+		return 0.0
+	}
+	return e.spec.ATK * e.spec.RebornDamageMagic * float64(e.rebornCharge)
+}
 
 // dodgeVs 是这只敌人针对某个伤害类型的闪避比例。
 //
@@ -289,7 +316,12 @@ func runSim(spec *Spec) (*Verdict, error) {
 		for cursor < len(spec.Spawns) && spec.Spawns[cursor].Time <= t {
 			sp := spec.Spawns[cursor]
 			e := &enemy{spec: sp, hp: sp.HP, legIndex: 0, index: cursor,
-				deathTime: -1}
+				deathTime: -1,
+				// 重生：窗口从 -1 起步（不在窗口里），防御力基准按原版
+				// 在 `_build_enemy` 里取一次（`sim.py:1663`）——充能的
+				// 防御加成按它重算，二次重生时不会把上次的加成再乘一遍。
+				rebornLeft: sp.RebornLeft, rebornAt: -1.0, rebornChargeAt: -1.0,
+				rebornDefBase: sp.DEF}
 			// 起点 = 第一段的第一个点（`_build_enemy` 给的是 `pts[0]`）
 			if len(sp.Legs) > 0 && len(sp.Legs[0].Points) > 0 {
 				e.position = sp.Legs[0].Points[0]
@@ -311,6 +343,66 @@ func runSim(spec *Spec) (*Verdict, error) {
 				// 关卡特有机制可以改这一只的推进速度乘区（如田地/阻流阀）；
 				// 没挂机制时 `speedFor` 恒为 1.0，与最小版本逐位相同。
 				advance(e, dt, spec.SpeedScale*ctx.speedFor(e.index))
+			}
+		}
+
+		// ---- 3.4 重生结算（原版 2264 → `_reborn_tick`）
+		//
+		// 位置照原版：**推进之后、机制（3.5）之前**。怀黍离的重生期充能要读
+		// 敌人所在格的病害值并从那里扣走，所以它必须排在田地那一步前面。
+		//
+		// 两件事共用这个窗口：BOSS 的"多一条命"，与「瘴 / 鄙瘴」的重生期充能。
+		for _, e := range enemies {
+			if e.leaked {
+				continue
+			}
+			if e.pendingReborn() {
+				// 充能：窗口内按 interval 逐个结算。用 while 而不是 if——
+				// fps 高时不会漏，fps=1 的粗扫时又会一次补上欠下的所有拍。
+				for e.rebornChargeAt >= 0 && t >= e.rebornChargeAt {
+					// 间隔非正就是"没有充能节拍"，先退出——否则
+					// `rebornChargeAt` 会原地踏步，这个 while 永不收敛。
+					if e.spec.RebornInterval <= 0 {
+						break
+					}
+					e.rebornChargeAt += e.spec.RebornInterval
+					// 原文把"降低病害值"与"获得1层充能"写在同一个条件里：
+					// 本格病害值 > 0 才**同时**发生两件事，否则一件都不发生。
+					// `DrainPollution` 在 ≤0 时返回 0，正好当这个条件用。
+					//
+					// ⚠ 必须用四舍五入到整数格的坐标（原版 `e.cell()`）——病害值
+					// 的键是**整数格**，传浮点进去不会报错，只是永远取不到，
+					// 于是充能永远是 0 层、整条机制静默失效。
+					cell := [2]int{int(math.Round(e.position[0])),
+						int(math.Round(e.position[1]))}
+					if moved := mechanisms.DrainPollution(cell, e.spec.RebornPollut); moved > 0 {
+						e.rebornCharge++
+					}
+				}
+				if t >= e.rebornAt {
+					e.rebornAt = -1.0
+					e.rebornChargeAt = -1.0
+					e.hp = e.spec.HP * e.spec.RebornHPRatio
+					// 重生后：防御力 +(def_add × 层数)%。从**基准**重算，
+					// 免得二次重生时把上一次的加成再乘一遍。
+					if e.rebornCharge > 0 && e.spec.RebornDefAdd != 0 {
+						e.spec.DEF = e.rebornDefBase *
+							(1.0 + e.spec.RebornDefAdd*float64(e.rebornCharge))
+					}
+					e.blockedBy = nil
+					e.deathTime = -1.0
+					verdict.Events = append(verdict.Events,
+						Event{T: t, Kind: "reborn", Who: e.spec.Name})
+				}
+			} else if e.hp <= 0 && e.rebornLeft > 0 {
+				e.rebornLeft--
+				e.rebornAt = t + e.spec.RebornDelay
+				// 充能窗口与重生窗口同长：进来就排第一拍
+				if e.spec.RebornInterval > 0 {
+					e.rebornChargeAt = t + e.spec.RebornInterval
+				} else {
+					e.rebornChargeAt = -1.0
+				}
 			}
 		}
 
@@ -401,7 +493,9 @@ func runSim(spec *Spec) (*Verdict, error) {
 	verdict.Deployed = len(ops)
 	verdict.TimedOut = !won && life > 0
 	for _, e := range enemies {
-		if !e.alive() && !e.leaked {
+		// 等重生的既不算活也不算死（原版收尾结算里同样排除 `pending_reborn`）：
+		// 少排这一条，一只"重生过一次"的敌人会被记成两次击杀。
+		if !e.alive() && !e.leaked && !e.pendingReborn() {
 			verdict.Kills++
 		}
 		if e.leaked {
@@ -889,7 +983,7 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 				// `result.damage_dealt += dealt`）；**不是**干员承受的伤害——
 				// 两者名字都叫 damage，混起来会让对拍看起来"完全对不上"。
 				verdict.DamageDealt += dealt
-				if !target.alive() {
+				if !target.alive() && !target.pendingReborn() {
 					target.deathTime = t
 					verdict.Events = append(verdict.Events,
 						Event{T: t, Kind: "kill", Who: target.spec.Name})
@@ -1018,6 +1112,24 @@ func enemiesAttack(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec,
 		}
 		// 受击回复的技力：这一下**真的掉血了**才回（原版 3301-3306）
 		spOnHit(op, dealt)
+
+		// 【怀黍离】重生后的普攻附加伤害（瘴 / 鄙瘴）：「普通攻击附加攻击力
+		// (10×充能层数)%的无途径法术普通伤害」（原版 3447-3465）。
+		//
+		// 「无途径」= 不受攻击方式/途径影响，所以这里独立结算：攻击力 × 比例
+		// × 层数，**按法术算**（吃目标法抗），并同样吃闪避期望。
+		// ⚠ 它是**附加**在普攻上的，不是替代——上面那次已经结算完了。
+		if bonus := e.rebornChargeBonus(); bonus > 0.0 && op.alive() {
+			extra := resolveDamage(bonus, "MAGIC", 1.0, op.defense(), op.res(),
+				op.dodgeVs("MAGIC"))
+			dmg := op.take(extra)
+			spOnHit(op, dmg)
+			if !op.alive() {
+				op.deathTime = t
+				verdict.Events = append(verdict.Events,
+					Event{T: t, Kind: "death", Who: op.spec.Name})
+			}
+		}
 	}
 }
 

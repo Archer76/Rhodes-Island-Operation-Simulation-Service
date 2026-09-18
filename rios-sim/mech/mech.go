@@ -133,6 +133,21 @@ type Summoner interface {
 	Summon(template json.RawMessage, cell [2]float64) int
 }
 
+// PollutionDrainer 让**模拟器**从机制手里扣走病害值（怀黍离「瘴 / 鄙瘴」的
+// 重生期充能：重生窗口里每 0.5s 吸走本格 10 点）。
+//
+// 方向与 `Summoner` 相反：那是机制要模拟器做事，这是模拟器要机制交数据。
+// 之所以由模拟器发起，是因为**"什么时候吸"是敌人侧的行为**（原版写在
+// `_reborn_tick` 里，与田地那一步是两个函数），而"病害值住在哪一格、扣多少"
+// 是田地这一层的事。谁发起的就由谁那边写循环，机制只回答一个问题。
+//
+// 返回**实际扣掉的量**（不是请求量）：本格不足时按剩余量扣；本格 ≤ 0 时返回 0。
+// 调用方拿这个返回值当条件用——原文把"降低病害值"与"获得1层充能"写在同一个
+// 条件里，所以"没扣到"就等于"没给层数"。
+type PollutionDrainer interface {
+	DrainPollution(cell [2]int, want float64) float64
+}
+
 // Framer 在**每一帧的末尾**被调用（`t += dt` 之前，即这一帧的伤害、击杀、
 // 漏怪都已经结算完）。
 //
@@ -345,6 +360,7 @@ type Set struct {
 	piles    []hookPile
 	attacks  []hookAttack
 	posts    []hookPost
+	drains   []hookDrain
 	framers  []hookFramer
 	all      []Mechanism
 }
@@ -367,6 +383,11 @@ type hookEnv struct {
 type hookPost struct {
 	id ID
 	m  PostAttacker
+}
+
+type hookDrain struct {
+	id ID
+	m  PollutionDrainer
 }
 
 type hookAttack struct {
@@ -419,6 +440,9 @@ func Load(cfg map[string]json.RawMessage, ids ...string) (*Set, error) {
 		}
 		if p, ok := m.(PostAttacker); ok {
 			set.posts = append(set.posts, hookPost{id, p})
+		}
+		if d, ok := m.(PollutionDrainer); ok {
+			set.drains = append(set.drains, hookDrain{id, d})
 		}
 		if a, ok := m.(AttackTicker); ok {
 			set.attacks = append(set.attacks, hookAttack{id, a})
@@ -491,6 +515,23 @@ func (s *Set) PileTick(ctx Ctx, dt float64) {
 	for _, h := range s.piles {
 		h.m.PileTick(ctx, dt)
 	}
+}
+
+// DrainPollution 依次问各机制"这一格能扣走多少病害值"，取第一个回答 > 0 的。
+//
+// 由**模拟器**在帧序 3.4（重生结算）里调用，见 `PollutionDrainer` 的注释。
+// 没有机制、或这一格没挂田地 → 返回 0，重生期的充能就一层都拿不到（与原版
+// "本格病害值 ≤ 0 则一件都不发生"同义）。
+func (s *Set) DrainPollution(cell [2]int, want float64) float64 {
+	if s == nil || want <= 0 {
+		return 0.0
+	}
+	for _, h := range s.drains {
+		if moved := h.m.DrainPollution(cell, want); moved > 0 {
+			return moved
+		}
+	}
+	return 0.0
 }
 
 // AttackTick 依次调用各机制的 AttackTick（位置见 `AttackTicker` 的注释）。

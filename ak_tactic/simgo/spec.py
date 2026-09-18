@@ -177,11 +177,19 @@ def _enemy_reasons(sim) -> list[str]:
     field_why = {
         "phit_pollut": "蜕皮被动",
         "phit_block_pollut": "蜕皮被动（被阻挡时）",
-        "reborn_pollut": "重生吸病害值",
+        "reborn_summons": "重生期召唤",
         "pm2_mark_pollut": "明识形态",
         "awake_value": "按田地病害值觉醒",
         "hp_drain_per_sec": "持续自伤",
     }
+    #: 已经接线、因此**不在这张表里**的敌人行为：
+    #:  * `skill_atk_*`（敌方技能出手「污」）→ Go 的 `AttackTick`（帧序 7.2）；
+    #:  * `passive_pollut`（被击倒污染田地）→ Go 的 `PostAttack`（帧序 7.5）；
+    #:  * `reborn_pollut` 与整套 `Reborn.*`（重生、重生期充能、归来后的防御
+    #:    加成与普攻附加法术伤害）→ Go 的帧序 3.4 与 `PollutionDrainer`。
+    #: 它们曾经都在表里，那是对的：没接线的时候放行，等于让 Go 少算一层却照样
+    #: 给判决。**新加一条进这张表时先确认那条路真的没接线**，别把已接的留在
+    #: 表里——那会让整关无谓地被挡住。
     #: `skill_atk_*`（敌方技能出手「污」）与 `passive_pollut`（被击倒污染田地）
     #: **都已经接线**，所以不在这张表里：
     #:  * 技能出手 → Go 侧的 `AttackTick`（帧序 7.2，`sim.py:3468`）；
@@ -370,6 +378,19 @@ def _unit_spec(sim, e, *, time: float = 0.0) -> dict[str, Any]:
         "skill_atk_cross": int(getattr(e, "skill_atk_cross", 0) or 0),
         "skill_atk_pollut": float(getattr(e, "skill_atk_pollut", 0.0) or 0.0),
         "skill_atk_ground_only": bool(getattr(e, "skill_atk_ground_only", False)),
+        # ---- 重生（`Reborn.*`，怀黍离「瘴 / 鄙瘴」的 `Reborning.*` 共用这套状态）
+        #
+        # 这一段曾经**整条没送**：Go 那边因此静默少算 BOSS 的一条命，只有恰好
+        # 因此改变判决的关卡才会露馅。送的是"敌人是什么"这一半；"什么时候吸、
+        # 吸哪一格"由 Go 的帧序 3.4 与田地那一层分别负责。
+        "reborn_left": int(getattr(e, "reborn_left", 0) or 0),
+        "reborn_delay": float(getattr(e, "reborn_delay", 0.0) or 0.0),
+        "reborn_hp_ratio": float(getattr(e, "reborn_hp_ratio", 1.0) or 1.0),
+        "reborn_interval": float(getattr(e, "reborn_interval", 0.0) or 0.0),
+        "reborn_pollut": float(getattr(e, "reborn_pollut", 0.0) or 0.0),
+        "reborn_def_add": float(getattr(e, "reborn_def_add", 0.0) or 0.0),
+        "reborn_damage_magic": float(
+            getattr(e, "reborn_damage_magic", 0.0) or 0.0),
         "legs": _legs_spec(e.legs),
     }
 

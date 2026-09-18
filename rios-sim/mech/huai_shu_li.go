@@ -961,6 +961,46 @@ func actualStep(delta, divisor, base float64) float64 {
 
 // ---- 结算 ----
 
+// DrainPollution 从这一格的【实际】病害值里扣掉 `want`，返回**实际扣掉的量**。
+//
+// 对应敌人「瘴 / 鄙瘴」的重生期充能（原文：「重生期间每0.5s，若自身所在田地
+// 地块病害值>0，则降低此地块10点病害值并获得1层充能」）。
+//
+// ⚠ 三处口径照原版（`environment.py::drain_cell`），别"顺手统一"：
+//   - 判据是**这一格**的病害值 > 0（不是它所属连片的【最大】），扣的也是
+//     **这一格**的【实际】；不大于 0 则**不扣、也不给层数**——原文把"降低"
+//     与"获得1层充能"写在同一个条件里，调用方拿返回值当那个条件用。
+//   - 只动【实际】，**不动【最大】**。这与泵站受污那一支（两者都抬）不对称，
+//     但两边原文就是这么写的。
+//   - 返回实际扣掉的量而不是请求量：本格不足时按剩余量扣，免得把负数写进去。
+func (fs *Farmland) DrainPollution(cell Cell, want float64) float64 {
+	cur := fs.actual[cell]
+	if cur <= 0 || want <= 0 {
+		return 0
+	}
+	moved := want
+	if moved > cur {
+		moved = cur
+	}
+	if left := cur - moved; left <= 0 {
+		delete(fs.actual, cell)
+	} else {
+		fs.actual[cell] = left
+	}
+	return moved
+}
+
+// DrainPollution 是机制层的入口：模拟器在帧序 3.4 问"这一格能扣走多少"。
+//
+// 参数是**整数格**（原版 `e.cell()`）。调用方传浮点不会报错，只是永远取不到，
+// 于是充能永远是 0 层、整条机制静默失效——所以这里签名就定为整数格。
+func (m *farmlandMech) DrainPollution(cell [2]int, want float64) float64 {
+	if m.field == nil {
+		return 0
+	}
+	return m.field.DrainPollution(Cell{cell[0], cell[1]}, want)
+}
+
 // DeployDamage 是部署瞬间的一次性环境法术伤害（病害值为 0 时不结算）。
 func (fs *Farmland) DeployDamage(x, y int) float64 {
 	a := fs.ActualAt(x, y)
