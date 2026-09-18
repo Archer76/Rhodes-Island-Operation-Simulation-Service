@@ -759,13 +759,17 @@ def check_home() -> None:
     binds = {(b.key, b.action) for b in ResultScreen.BINDINGS}
     check("结果屏挂了 H → home（不是只写了按键没接动作）",
           ("h", "home") in binds, str(sorted(binds)))
-    check("出口只有退出程序与回主界面：Q → quit、H → home",
-          ("q", "quit") in binds, str(sorted(binds)))
+    check("结果屏挂了 R → stage_list（回选关页，博士 2026-09-18 要的）",
+          ("r", "stage_list") in binds, str(sorted(binds)))
+    check("出口是退出程序 / 回主界面 / 回选关页：Q、H、R 三个都在",
+          ("q", "quit") in binds and ("h", "home") in binds
+          and ("r", "stage_list") in binds, str(sorted(binds)))
     check("结果屏**不挂** Esc（博士 2026-09-17 裁定：这两屏不给 esc）",
           not any(k == "escape" for k, _ in binds), str(sorted(binds)))
-    check("结果屏真的有 action_home / action_quit 两个方法",
+    check("结果屏真的有 action_home / action_quit / action_stage_list 三个方法",
           callable(getattr(ResultScreen, "action_home", None))
-          and callable(getattr(ResultScreen, "action_quit", None)))
+          and callable(getattr(ResultScreen, "action_quit", None))
+          and callable(getattr(ResultScreen, "action_stage_list", None)))
     check("结果屏不残留 action_finish（它只会退出程序，已由 action_quit 取代）",
           not any(n == "action_finish" for n in vars(ResultScreen)))
 
@@ -827,6 +831,122 @@ def check_home() -> None:
           f"{got['roster_before']} 人")
     check("解算失败（没有结果）时也能回主界面",
           got["at_home"], "这条用的是没解出方案的假结果")
+
+
+def check_result_back_to_stage() -> None:
+    """[9b] 结果屏按 `R` 回**选关页**（关卡列表），章/分部/环境的选择留着。
+
+    与「回主界面」的区别全在**退到哪一层**，所以这一节必须走真向导：从 [1] 一路
+    点到关卡列表、再点一关、进解算屏、压一张结果屏，然后按 `R`，逐条量：
+
+    * 落点是不是 `StagePickScreen`（不是 [0]、也不是它上面的编队屏）；
+    * 路径有没有被截到关卡列表那一格（再按 `Esc` 应当回到**分部/环境**那一层，
+      而不是掉回主界面）；
+    * 这一轮的关卡/结果/错误清没清，**编队有没有留着**（换一关通常还是同一队）。
+    """
+    print("\n[9b] 结果屏回选关页（R）")
+    try:
+        import textual                                              # noqa: F401
+    except ImportError as exc:
+        skip("回选关页", f"textual 没装（{exc}）")
+        return
+
+    from ak_tactic.tui import app as A
+    from ak_tactic.tui import data as D
+
+    rows = D.chapter_rows()
+    if not rows:
+        skip("回选关页", "本地库没有章节数据（`db stage-fetch` 之后才有）")
+        return
+
+    real_run = A.SolveScreen._run
+
+    async def flow() -> dict:
+        got: dict = {}
+        app = A.RiosApp(skip_login=True)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            # 挑一个**有分部**的章/活动，才走得出「分部」那一层
+            row = next((r for r in rows if len(r["parts"]) > 1), rows[0])
+            app.screen.dismiss(row)
+            await pilot.pause()
+            if type(app.screen).__name__ == "PartPickScreen":
+                app.screen.dismiss(row["parts"][0])
+                await pilot.pause()
+            if type(app.screen).__name__ == "EnvPickScreen":
+                app.screen.dismiss(D.zone_envs(row["parts"][0]["zone_id"])[0])
+                await pilot.pause()
+            got["at_stage"] = type(app.screen).__name__
+            got["path_at_stage"] = len(app._path)
+            stage_row = next(iter(app.screen._rows), None)
+            if stage_row is None:
+                return got
+            got["stage_code"] = stage_row["code"]
+            app.screen.dismiss(stage_row)
+            await pilot.pause()
+            if type(app.screen).__name__ == "SquadAskScreen":
+                app.screen.dismiss({"manual": True})
+                await pilot.pause()
+            if type(app.screen).__name__ == "SquadPickScreen":
+                names = [o.name for o in app.state.roster.top(2)]
+                app.screen._picked = set(names)
+                app.screen.dismiss(names)
+                await pilot.pause()
+            got["at_solve"] = type(app.screen).__name__
+            got["squad_used"] = list(app.state.squad)
+            # 结果屏照原样压上去（真实路径里由 `_done` 推）；解算不真跑
+            app.push_screen(A.ResultScreen())
+            await pilot.pause()
+            got["before"] = type(app.screen).__name__
+            await pilot.press("R")                    # 按 Footer 上印的那个键
+            await pilot.pause()
+            got["after"] = type(app.screen).__name__
+            got["path_after"] = len(app._path)
+            got["stack_after"] = [type(s).__name__ for s in app.screen_stack]
+            got["stage_cleared"] = app.state.stage is None
+            got["result_cleared"] = app.state.result is None
+            got["error_cleared"] = app.state.error == ""
+            got["squad_after"] = list(app.state.squad)
+            got["roster_kept"] = app.state.roster is not None
+            # 从选关页再按 Esc：应当回**上一层（分部/环境/章）**，不是回主界面
+            await pilot.press("escape")
+            await pilot.pause()
+            got["after_esc"] = type(app.screen).__name__
+        return got
+
+    A.SolveScreen._run = lambda self: None
+    try:
+        got = asyncio.run(flow())
+    finally:
+        A.SolveScreen._run = real_run
+
+    if got.get("at_stage") != "StagePickScreen":
+        check("回选关页：能走到关卡列表", False, str(got))
+        return
+    check("按 R 之前停在结果屏（不然下面几条测的不是这件事）",
+          got.get("before") == "ResultScreen", str(got.get("before")))
+    check("**按 R 落到关卡列表**（不是 [0]、也不是编队屏）",
+          got.get("after") == "StagePickScreen", str(got.get("after")))
+    check("路径被截到关卡列表那一格（同一层的屏数不变）",
+          got.get("path_after") == got.get("path_at_stage"),
+          f"{got.get('path_at_stage')} → {got.get('path_after')}")
+    check("解算屏与结果屏都被弹掉（屏幕栈里不留旧屏）",
+          "SolveScreen" not in (got.get("stack_after") or [])
+          and "ResultScreen" not in (got.get("stack_after") or []),
+          str(got.get("stack_after")))
+    check("这一轮的关卡被清掉（下一次点的那一关才算数）",
+          got.get("stage_cleared") is True, str(got.get("stage_cleared")))
+    check("这一轮的结果与错误被清掉",
+          got.get("result_cleared") is True and got.get("error_cleared") is True,
+          f"result={got.get('result_cleared')} error={got.get('error_cleared')}")
+    check("**编队留着**（换一关通常还是同一队，不必重勾）",
+          got.get("squad_after") == got.get("squad_used")
+          and bool(got.get("squad_used")), str(got.get("squad_after")))
+    check("名册留着（它和算哪一关无关）", got.get("roster_kept") is True)
+    check("从选关页按 Esc 退回**上一层**（分部/环境/章），不是回主界面",
+          got.get("after_esc") in ("PartPickScreen", "EnvPickScreen",
+                                   "ChapterPickScreen"),
+          str(got.get("after_esc")))
 
 
 def check_stage_layers() -> None:
@@ -2121,6 +2241,7 @@ def main() -> int:
         check_squad_keys()
         check_maa_export()
         check_home()
+        check_result_back_to_stage()
         check_stage_layers()
         check_completion()
         check_squad_grouping()
