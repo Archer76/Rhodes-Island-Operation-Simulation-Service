@@ -835,6 +835,11 @@ func (c *simCtx) HitOperator(index int, raw float64, damageType string) float64 
 	}
 	dealt := op.take(resolveDamage(raw, damageType, 1.0,
 		op.defense(), op.res(), op.dodgeVs(damageType)))
+	if traceOn {
+		// 机制打干员的**唯一**入口（含怀黍离技能「污」与全场总攻击装置）。
+		trace("HITOP t=%.4f op=%s raw=%.3f type=%s dealt=%.3f",
+			*c.time, op.spec.Name, raw, damageType, dealt)
+	}
 	spOnHit(op, dealt)
 	return dealt
 }
@@ -1516,6 +1521,13 @@ func enemiesAttack(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec,
 		if e.hp <= 0 || e.leaked || e.offMap {
 			continue
 		}
+		// 天赋「不进行远程普通攻击」（玷 / 勿玷）：普攻这一整条路关掉，
+		// 它的伤害全部走技能（原版 `_enemies_attack` 的
+		// `if e.skill_atk_no_normal: continue`）。漏掉这条闸门，这只敌人会
+		// **技能与普攻双份出手**——HS-EX-8 第 2 手多出的两笔 192 就是这么来的。
+		if e.spec.SkillAtkNoNormal {
+			continue
+		}
 		op := enemyTarget(e, ops, spec.RangedEnemies)
 		if op == nil || !op.alive() {
 			continue
@@ -1540,6 +1552,10 @@ func enemiesAttack(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec,
 			dmg := resolveDamage(e.spec.ATK, e.spec.DamageType, 1.0,
 				op.defense(), op.res(), op.dodgeVs(e.spec.DamageType))
 			dealt += op.take(dmg)
+			if traceOn {
+				trace("ENEMYATK t=%.4f enemy=%s atk=%.1f target=%s seg=%d/%d dmg=%.3f",
+					t, e.spec.Name, e.spec.ATK, op.spec.Name, seg+1, times, dmg)
+			}
 			if !op.alive() {
 				op.deathTime = t
 				verdict.Events = append(verdict.Events,
@@ -1560,6 +1576,10 @@ func enemiesAttack(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec,
 			extra := resolveDamage(bonus, "MAGIC", 1.0, op.defense(), op.res(),
 				op.dodgeVs("MAGIC"))
 			dmg := op.take(extra)
+			if traceOn {
+				trace("ENEMYATK-BONUS t=%.4f enemy=%s target=%s bonus=%.3f dmg=%.3f",
+					t, e.spec.Name, op.spec.Name, bonus, dmg)
+			}
 			spOnHit(op, dmg)
 			if !op.alive() {
 				op.deathTime = t
