@@ -384,6 +384,83 @@ WIRED_WHY: dict[str, str] = {
         "`control_test.go:56 TestFlagListsAreNotNested`（`:57-59` 断言阻止移动**不是**阻止攻击的子集——束缚/自缚只住在移动那张表里）。"
         "锚点指向的是哪个量：`flagBind` 是「阻止移动」清单里束缚那一位（自缚是紧邻的另一位）；"
         "本行判的是「这两位在不在移动清单里」，不判「引擎有没有真的拦住谁」。",
+
+    # ---- 批次三：近地悬浮／战栗／屏障·层数护盾／元素损伤／闪避·伤害抵挡（2026-09-20）----
+    "近地悬浮":
+        "定义位 `rios-sim/control.go:248`（`func airStateAfterStack(originallyFlying bool, levitateBuffs, groundBuffs int) airKind`）；"
+        "同族纯函数 `levitateBuffApplies` `control.go:191`、`groundBuffApplies` `:205`、`heavyDuration` `:226`。"
+        "**消费点：零**（复核：这四个符号在 `control.go` **之外全空**）。"
+        "**守卫**：`control_test.go:235 TestAirStateAfterStack`（6 组输入，`:237-254`）、"
+        "`control_test.go:154 TestLevitateBuffAppliesThreeConditions`。"
+        "锚点指向的是哪个量：`airStateAfterStack` 回答「浮空／缚地叠加之后这只单位**最终**是空中还是地面」（返回 `airKind`）"
+        "——即「近地悬浮／浮空／缚地三者叠加」这条纯判据；**它没有调用方**，引擎里没有任何单位状态由它决定。"
+        "⚠ 族名拆法：本行＝**叠加后的行动方式**，与「浮空」行（那是清单位图的成员位）**不是同一个量**，两行别互相顶替。",
+    "战栗":
+        "定义位 `rios-sim/control.go:83`（`func trembleBlocksAttack(trembling, blocking bool) bool`），语义写在 `:81-84`："
+        "只回答「这一击能不能出手」，**不负责取消已经出手的那一击**。"
+        "**消费点：零**（`trembleBlocksAttack(` 在 `control.go` 之外全空）。"
+        "**守卫**：`control_test.go:95 TestTrembleBlocksAttackOnlyWhileBlocking`（三组合：`:96` 无战栗被阻挡照样打、"
+        "`:99` 有战栗没被阻挡照常打、`:102` 战栗＋被阻挡 ⇒ 禁普攻）。"
+        "⚠ **守卫错位（登记，不改）**：`control_test.go:85 TestTrembleNotInTheAttackList` **名字说战栗、断言却全打在 `flagStun` 上**"
+        "（`:87` 前置、`:90 blocksAttack(flagStun, …)`）——战栗位（`flagPalsyShake`）的清单归属其实由 "
+        "`control_test.go:15`（正向 `:22-23` ＋ 反向 `:39-41`）覆盖；按「判据改动归 PM」的约定只登记。"
+        "⚠ 相邻实现的同名风险：`rios-sim/palsy.go` 有整套「麻痹震颤」（守卫 `palsy_test.go` 8 例，`:19/:37/:60/:99/:116/:128/:160`），"
+        "但**它不引用 `flagPalsyShake`**（该 flag 在非测试代码里只出现在 `control.go:45`／`:48` 的清单里）⇒ 两套并存；"
+        "**它们是不是同一个量，我不判**（只登记坐标，请 PM／博士裁）。"
+        "锚点指向的是哪个量：`trembleBlocksAttack` 是「战栗＋被阻挡 ⇒ 禁普攻」这条纯函数判据。",
+    "屏障／层数护盾":
+        "锚点 `rios-sim/sim.go::take` 是**干员掉血的唯一入口**（`func (o *operator) take` `sim.go:2984`）。"
+        "**本行是族名，按可独立取证拆两半**："
+        "**① 层数护盾（次数制，已接线）**：字段 `sim.go:398-404`（`shieldLayers`／`shieldMaxLayers`／`shieldBreaks`／"
+        "`shieldTimer`／`shieldInterval`／`shieldBreakHeal`／`shieldBreakSP`）；部署清零与取规格 `sim.go:600-611`、"
+        "每 N 秒加层 `sim.go:615-618`；**另一个授予点 `skill.go:75`**；**伤判消费点 `sim.go:2992-2994`**"
+        "（`if o.shieldLayers > 0 && amount > 0 { o.shieldLayers--; o.shieldBreaks++ }`）。"
+        "规格 `wire.go:365-377 ShieldSpec`（5 键；`:361-364` 说明**送比例不送绝对值**的理由）。"
+        "Python 侧（我自己 grep 核过，不用 Go 注释里的引用）：`battle/sim.py:3127-3168`（`shield_layers_on_deploy` `:3137`／"
+        "`shield_interval` `:3140`／`shield_break_heal = ratio × max_hp` `:3142`／`shield_break_sp` `:3143`／加层 `:3150-3152`／"
+        "节拍 `:3167-3168`）、`sim.py:3207`（⚠ `shield_layers` 是**一个**字段、不分来源）、另一改写点 `sim.py:3229-3233`、伤判侧 `unit.py:437`。"
+        "**② 屏障（按生命上限比例吸收、可衰减）**：Python 有——`battle/sim.py:1672`（按最大生命折算、在血量之前被消耗）、"
+        "`_grant_barrier` `sim.py:2073`、`_grant_decay_barrier` `sim.py:2087-2104`、`_barrier_decay_tick` `sim.py:2106-2114`"
+        "（每秒衰减＝初始量/30）、授予调用点 `sim.py:1788-1790`／`:2496-2498`、节拍 `sim.py:2787`、字段 `unit.py:379`、"
+        "语义边界 `unit.py:388`（衰减到 0 不算破裂）。**Go 侧：零**——`grep -i barrier` 于全 `rios-sim/**/*.go`（含测试）"
+        "**命中 0 处** ⇒ 族里这一条在 Go 侧**不存在**（不是「没接线」，是**没有这个量**）。"
+        "**守卫**：Go 侧**零**（`^func Test\\w*Shield\\w*` 零命中）⇒ 与本行 KINDS「守卫缺失」相符；"
+        "Python 侧判据在 `tools/check_battle.py` 那一套，本行未逐条核。"
+        "锚点指向的是哪个量：`take` 是护盾扣层的那个入口；而「屏障」在 Go 侧没有对应量。",
+    "元素损伤（族）":
+        "定义位 `rios-sim/element.go:236`（`type elementState`），构造 `element.go:248 newElementState(max)`。"
+        "**消费点：零（引擎里）**——穷举 `elementState`（全 `rios-sim/**/*.go` 含测试）**26 处命中，全部落在 `element.go` "
+        "与 `element_test.go`／`element_blackboard_test.go`**；没有任何其他文件持有它或调用 `newElementState`。"
+        "⚠ `element.go:45` 的自述「敌人的构造处 `newElementState(maxEP)`，并把 `damage()` 挂到『攻击附带的元素损伤』上」"
+        "是**目标形态不是现状**（构造处没有这一行）⇒ 与本行 KINDS「调用点缺失」相符。"
+        "**族按可独立取证拆七支**：① EP 累积与归满 `damage` `:287`、`elementDamage` `:90`、`resolveElementDamage` `:106`；"
+        "② 爆发 `elementBurst` `:117` ＋ 两张表 `burstOnEnemy` `:141`／`burstOnOperator` `:187` ＋ `burstDuration` `:472`／`startBurst` `:480`；"
+        "③ 冷却 `cooling` `:266`／`anyCooling` `:270`；④ 黑板键族 `epKeyKinds` `:328`／`keyHasEpSuffix` `:334`／"
+        "`EpCandidates` `:346`／`ResolveEpAmount` `:368`；⑤ 痕迹 `ElementHit` `:411`／`TraceElement` `:456`；"
+        "⑥ 节拍 `tick` `:491`／`current` `:512`；⑦ 入口 `ApplyFromBlackboard` `:431`（内部 `:445 s.damage(k, raw)`）。"
+        "**守卫**：`element_test.go:17/:44/:64/:100/:116/:149/:166`（7 例）＋ `element_blackboard_test.go:180`"
+        "（另有 5 处直接构造 `:144/:158/:181/:195/:215`）。"
+        "⚠ 依据的边界（记忆 `7f782586` 的教训）：**字段清单不能从消费端反推**（抗性是标量、数值是黑板键族 40+ 前缀），"
+        "本条只登记已核到的 Go 侧坐标，**不据此推数据侧列名／键名**。"
+        "锚点指向的是哪个量：`elementState` 指「**一个实体**的元素值状态」——每种元素一份 EP ＋ 一份爆发冷却。",
+    "闪避／伤害抵挡":
+        "锚点 `rios-sim/sim.go::dodgeVs`（`sim.go:239`）**只是族里的一半**，按可独立取证拆三支："
+        "**① 敌人侧闪避**：定义位 `sim.go:239 func (e *enemy) dodgeVs(string) float64 { return 0 }`——**恒 0**；"
+        "**消费点有**：`sim.go:1238`（敌人 take）、`:1483`、`:1969`（我方打敌方那一侧）。"
+        "⚠ 恒 0 的理由写在 `sim.go:233-238`：原版 `battle/sim.py:3921` 读 `target.dodge_phys + target.talent_dodge_phys`，"
+        "而 `EnemyUnit.dodge_phys` 是个**没有任何地方写过**的字段、敌人侧也没有天赋抵挡那一对字段 ⇒ **恒 0 与原版同值**"
+        "——这是「两边一致的零」，**必须与「零调用点」分开写**。"
+        "**② 我方闪避**：定义位 `rios-sim/skill.go:327 func (o *operator) dodgeVs(damageType string) float64`；"
+        "消费点 `sim.go:1319`（机制直伤那一路把 `op.dodgeVs(damageType)` 传进结算）。"
+        "规格侧对应 `ak_tactic/simgo/spec.py::_talent_dodge`（本表另一行「天赋闪避／伤害抵挡」的锚点）。"
+        "**③ 伤害抵挡（期望值法）**：定义位 `sim.go:3133-3134 func resolveDamage(atk float64, damageType string, scale, defense, res, dodge float64) float64`，"
+        "语义 `sim.go:3126`（`dodge` 是受击方针对该伤害类型的闪避比例，**原版把它当期望值**）。"
+        "**守卫**：`damage_test.go:13 TestResolveDamageDodge` 四支俱全——`:16` 物理折扣、`:20` 法术各取各的、"
+        "`:25` **保底与闪避的次序**（先保底后闪避）、`:30` **真伤不吃闪避**（原版 `damage.py:144`）。"
+        "⚠ 本行我表里 KINDS 写的是「概念未建模」，与实测**不符**（有定义位、有消费点、有守卫；敌人侧只是恒 0 且与原版同值）"
+        "——**登记冲突、上报 PM 裁**（与批次二 `WIRED` 里「晕眩」那一件同类，我不擅自改那一栏）。"
+        "锚点指向的是哪个量：`dodgeVs` 是「这只**敌人**针对某伤害类型的闪避比例」——族名里「闪避」的那一半；"
+        "「伤害抵挡」落在 `resolveDamage` 的 `dodge` 参数上，**不在锚点里**。",
 }
 
 
