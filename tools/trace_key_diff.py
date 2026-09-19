@@ -73,7 +73,13 @@ def run_exe(exe: Path, spec: dict, trace_env: dict, window: float | None = None,
             dump: Path | None = None) -> dict:
     """跑一枚 exe，按**全部键**计数；`window` 给定时另出一份"只算 `t <= window`"的计数。
 
-    ⚠ **为什么必须有同窗那一栏**：两次运行的**时长不同**（814.03 s ↔ 221.67 s），
+    ⚠ **袋语义（bag semantics）**：同一 `(标签, t)` **可以有多行**（同帧多段伤害），
+`(t, enemy, idx, src)` **也不是唯一键**（实测 A 有 224 组重复、B 有 188 组，且组内行不全同）。
+⇒ 逐帧值对必须比"该键下 `dealt` 的**多重集**"，**不许拿 `t` 当行键**（`dict.setdefault(t,{})`
+会把多行静默合并 ⇒ 造假点＋漏点）。本工具按 `(标签,键)` 计数＝袋计数，并在开头打印
+每个 exe 的"同 t 多行"组数，使这件事在读数里可见。
+
+⚠ **为什么必须有同窗那一栏**：两次运行的**时长不同**（814.03 s ↔ 221.67 s），
     所以**原始总数不可比**——实测 `SNOWTICKT` A=24422 / B=6651，看着像"雪变少了"，
     除下来**两边都是 30.0 次/秒**。这类差是**时长差**，不是机制差。
     """
@@ -97,6 +103,13 @@ def run_exe(exe: Path, spec: dict, trace_env: dict, window: float | None = None,
     keys: Counter = Counter()
     keys_w: Counter = Counter()          #: 只算 t <= window（同窗可比的那一栏）
     tags: Counter = Counter()
+    #: ★ **袋语义的可见化**（UI_2b 2026-09-20 00:53 报的同族假信号）：同一 `(标签, t)` **可以有多行**
+    #: （同帧多段伤害）。若拿 `t` 当行键做逐帧值对，`dict.setdefault(t,{})` 会把多行**静默合并**
+    #: ⇒ **造假点 ＋ 漏点**（实测他那版：得 9 处不同，其中 1 处是假点、另漏 3 处）。
+    #: 本工具按 `(标签,键)` **计数**，计数本身就是袋计数（所以躲过了这一枪）；
+    #: 但**一旦做逐帧值对就会撞上** ⇒ 这里把"每 t 有多少行"量出来打印，
+    #: 让"我在做袋比较"这件事**在读数里看得见**，而不是靠读代码才知道。
+    rows_per_t: Counter = Counter()
     unparsed: list[str] = []
     n_lines = n_notrace = 0
     for ln in (p.stderr or "").splitlines():
@@ -111,6 +124,7 @@ def run_exe(exe: Path, spec: dict, trace_env: dict, window: float | None = None,
             continue
         tag, d = got
         tags[tag] += 1
+        rows_per_t[(tag, str(d.get("t", "?")))] += 1
         inwin = True
         if window is not None:
             try:
@@ -121,7 +135,12 @@ def run_exe(exe: Path, spec: dict, trace_env: dict, window: float | None = None,
             keys[(tag, k)] += 1
             if inwin:
                 keys_w[(tag, k)] += 1
-    return {"verdict": {k: verdict.get(k) for k in
+    _dup = [c for c in rows_per_t.values() if c > 1]
+    return {"bag": {"groups": len(rows_per_t), "multi_row_groups": len(_dup),
+                    "max_rows_in_one_t": max(rows_per_t.values()) if rows_per_t else 0,
+                    "rows_in_multi": sum(_dup),
+                    "note": "同 (标签,t) 多行 ⇒ 逐帧值对必须比多重集（袋），不可拿 t 当行键"},
+            "verdict": {k: verdict.get(k) for k in
                         ("kills", "leaks", "elapsed", "damage", "won", "deployed", "timed_out")},
             "stderr_lines": n_lines, "unparsed_n": n_notrace,
             "unparsed_sample": unparsed, "tags": dict(tags),
@@ -196,6 +215,12 @@ def main() -> int:
                   key=lambda kv: -abs(kv[1] - kv[2]))
     el_a, el_b = float(ra["verdict"]["elapsed"]), float(rb["verdict"]["elapsed"])
     win = min(el_a, el_b)
+    for _lab, _rec in (("A", ra), ("B", rb)):
+        _b = _rec.get("bag") or {}
+        print(f"  [袋语义 {_lab}] {_b.get('groups')} 个 (标签,t) 组，其中**同 t 多行** "
+              f"{_b.get('multi_row_groups')} 组（最多 {_b.get('max_rows_in_one_t')} 行，"
+              f"共 {_b.get('rows_in_multi')} 行）"
+              f" ⇒ {'⚠ 有同帧多行：做逐帧值对必须比多重集' if _b.get('multi_row_groups') else '无同帧多行'}")
     print(f"\n=== 同窗表（t <= {win:.4f}s ＝ 两次运行里较短的那一次全程）===")
     print("  ⚠ 这一栏才是**可比**的：两次运行时长不同，全程总数会把时长差读成机制差")
     print(f"  {'键':<34}{'A同窗':>9}{'B同窗':>9}{'Δ':>9}　{'A/秒':>9}{'B/秒':>9}")
