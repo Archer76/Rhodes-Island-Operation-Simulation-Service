@@ -22,6 +22,7 @@ import contextlib
 import hashlib
 import importlib.util
 import io
+import os
 import re
 import shutil
 import subprocess
@@ -31,7 +32,8 @@ HERE = Path(__file__).resolve()
 ROOT = next(p for p in HERE.parents if (p / "rios-sim" / "go.mod").exists())
 SRC = ROOT / "rios-sim"
 PROBE = ROOT / "out" / "acceptance" / "probe"
-ORIG = ROOT / "tools" / "chain_judge_independence.py"
+ORIG = (Path(os.environ["CHAIN_INDEP_PIN"]) if os.environ.get("CHAIN_INDEP_PIN")
+        else ROOT / "tools" / "chain_judge_independence.py")
 assert (SRC / "go.mod").exists(), f"产品树定位错：{SRC}"
 
 M2_OLD = "\t\t} else {\n\t\t\tseq[k-1] = base * scale\n\t\t}"
@@ -98,7 +100,7 @@ def run_probe(tree: Path, tag: str, tweak=None) -> tuple[int, str]:
 
 
 NEEDLES = ["实现未过判据：", "时必须返回 ErrJumpUndetermined", "没抓住「", "读法判别器红：",
-           "n=3 的 ", "future 新断言", "P5 间接接收者", "P6 外文件的红"]
+           "n=3 的 ", "future 新断言", "P5 间接接收者", "P6 外文件的红", "P7b 同行被吞的红"]
 
 
 def real_failures(tree: Path, tag: str, mut: tuple[str, ...]):
@@ -155,6 +157,9 @@ def hashes() -> dict[str, str]:
 
 
 PROBE.mkdir(parents=True, exist_ok=True)
+_b = ORIG.read_bytes()
+print(f"[仪器] 被审文件 = {ORIG}")
+print(f"        sha256[:16] = {hashlib.sha256(_b).hexdigest()[:16]}、行数 = {_b.decode('utf-8').count(chr(10))}")
 H0 = hashes()
 
 # ── C：判词改名（区间内、表外）
@@ -214,6 +219,18 @@ def break_anchor(m):
 
 rcH, outH = run_probe(make_tree(PROBE / "h" / "rios-sim"), "h", tweak=break_anchor)
 
+
+# ── P7：★ 同行两个调用、Logf 在前 ⇒ 整行被标成「日志」⇒ 同行的 Errorf 红被丢弃（G6 修不掉的那一半）
+#        另记一条本轮实测：我先前那版（Logf 消息里含未配平的 ASCII 左括号）会造成跨度外溢，
+#        但**被它自己后面那个 t.Errorf( 重新标回「判词」**（marking 后写覆盖前写）⇒ 外溢单独不致命。
+tP7 = make_tree(PROBE / "p7" / "rios-sim")
+f = tP7 / "mech" / "chain_test.go"
+_p7 = ('\t\tif seqs[2][1] != chainBase*chainScale { t.Logf("P7b 同行日志"); '
+       't.Errorf("P7b 同行被吞的红：%v", seqs[2][1]) }\n')
+f.write_text(sub1(f.read_text(encoding="utf-8"), P2_ANCHOR, _p7 + P2_ANCHOR, "P7"), encoding="utf-8")
+rcP7, outP7 = run_probe(tP7, "p7")
+pP7 = precheck(tP7, "p7")
+rcP7r, hitsP7, filesP7, nP7, lP7 = real_failures(tP7, "p7", M2_MUT)
 H1 = hashes()
 
 
@@ -246,6 +263,10 @@ for tag, rcS, outS, pre, real, why in [
     print(f"      · 出现过的 _test.go：{files}")
     print(f"      · 输出总行数 {nlines}（★ 含被 dump 的 Logf，**不等于**红行数）")
     print(f"      · 本探针要找的那条红（{why}）出现：{hits.get(why, 0)} 次")
+show("P7 ★同行 Logf+Errorf（整行被标成日志 ⇒ 红被丢弃）", rcP7, outP7,
+     ["P7", "认不出", "判定：", "✓ M2", "✗ M2"])
+print(f"   [对照·前置] 未变异树 rc={pP7[0]}、`_test.go:` 行 {pP7[1]} 条")
+print(f"   [对照·真值] 手工 M2 后 rc={rcP7r}、针命中 {hitsP7}、文件 {filesP7}")
 show("G G3 反向守卫（两锚点改成相同）", rcG, outG, ["锚点", "重复", "判定：", "✗"])
 show("H P3 锚点坏", rcH, outH, ["锚点", "SystemExit"])
 print("   " + f"含「矩阵」：{'矩阵' in outH}｜含「判定：」：{'判定：' in outH}")
