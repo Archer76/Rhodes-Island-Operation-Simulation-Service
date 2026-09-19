@@ -400,6 +400,74 @@ func ResolveEpAmount(bb map[string]float64, base float64) (float64, []string, er
 	return 0, keys, nil // 不可达：byClass 非空时必在上面 switch 里返回
 }
 
+// ---- 调用方适配层：一次元素损伤的可观测量 ----
+//
+// 为什么要有这一层：`elementState.damage` 只吃一个**已经算好的量**，而"这个量从哪来"
+// 在原来的接口上**看不见**——接线之后若量算错（取空键 ⇒ 0），机制会被静默关掉，
+// 对拍照样全绿（记忆 9b14e2c4 / 68a8a308 那一类）。所以适配层把**来源**与
+// **结算前后的元素值**一起交出来，由调用方打痕迹。
+
+// ElementHit 是**一次**元素损伤的可观测量。它不参与结算，只负责"说清楚发生了什么"。
+type ElementHit struct {
+	Target  string      //: 目标名（痕迹用）
+	Kind    elementKind //: 元素种类（由正文给，不由黑板给——黑板只给量）
+	Raw     float64     //: 黑板算出来的原始损伤量（过抵抗之前）
+	Dealt   float64     //: **实扣**（过损伤抵抗、且冷却期间为 0）
+	EP      float64     //: 扣完之后的元素值
+	Burst   bool        //: 是否因此爆条
+	Cooling bool        //: 当时是否处于爆发冷却（冷却期间所有元素值无法损失）
+	Keys    []string    //: 供量的黑板键（原样，含拼写错误）；空＝没有候选，即这一处本来没有元素损伤
+}
+
+// ApplyFromBlackboard 把"一处元素损伤"从黑板一路走到结算，返回可观测量。
+//
+// 语义分三种，都**不静默**：
+//   - 黑板里没有候选键 ⇒ 返回 (Hit{Kind:k}, nil)：这一处本来就没有元素损伤，不是错；
+//   - 候选键有歧义（同类值不同／混类）⇒ 返回 error，**绝不挑一条**；
+//   - 正常 ⇒ 走 `damage()`，并如实报出实扣量与结算后的元素值。
+//
+// `base` 由调用方给：它乘的是什么（面板 ATK 还是当次伤害）**仍未裁定**
+// （原版没有元素损伤结算层，见 `docs/spec-element-fields.md`），本层不替它决定。
+func (s *elementState) ApplyFromBlackboard(
+	bb map[string]float64, base float64, k elementKind, target string,
+) (ElementHit, error) {
+	h := ElementHit{Target: target, Kind: k, EP: s.ep[k], Cooling: s.anyCooling()}
+	raw, keys, err := ResolveEpAmount(bb, base)
+	if err != nil {
+		return h, err
+	}
+	h.Keys = keys
+	if keys == nil {
+		return h, nil // 没有候选：这一处没有元素损伤
+	}
+	h.Raw = raw
+	before := s.ep[k]
+	h.Burst = s.damage(k, raw)
+	h.EP = s.ep[k]
+	h.Dealt = before - h.EP // 实扣由**结算本身**给出，不在这一层重算公式
+	return h, nil
+}
+
+// TraceElement 打一行 `ELEM` 痕迹。
+//
+// 键值形状与其它痕迹一致（`<TAG> t=%.4f k=v …`），`tools/trace_kv.py` 是唯一解析入口。
+// 刻意把 `src`（供量的黑板键）打出来：这是"损伤值从哪来"的唯一可查处，
+// 也是"键名对不上就静默取空"这一类缺陷唯一能留下的证据。多条键用逗号连起来打。
+func TraceElement(t float64, h ElementHit) {
+	src := ""
+	for i, k := range h.Keys {
+		if i > 0 {
+			src += ","
+		}
+		src += k
+	}
+	if src == "" {
+		src = "-"
+	}
+	trace("ELEM t=%.4f who=%s kind=%s raw=%.3f dealt=%.3f ep=%.1f burst=%t cool=%t src=%s",
+		t, h.Target, elementName(h.Kind), h.Raw, h.Dealt, h.EP, h.Burst, h.Cooling, src)
+}
+
 // burstDuration 返回该元素爆发的持续秒数（对敌列；对干员列由调用方按阵营取表）。
 func burstDuration(k elementKind, onEnemy bool) float64 {
 	if onEnemy {
