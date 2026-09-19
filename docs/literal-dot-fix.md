@@ -148,4 +148,32 @@ python tools/audit_coverage.py --select --batch 10 --only-port --from-cache out/
 python tools/audit_coverage.py --all --top 3
 ```
 
+**★ 两条不变量，缺一不可（PM 补强 `msg-mu8x41vn-et`）**
+
+1. **值的不变量**：加列**只该加列**——第一道/第二道逐位不变（412/842、228/270）。
+2. **档的不变量**：**加了开关之后，每一档都要真跑一次**，**默认档（不带开关）最危险**。
+   ⇒ 这条不是假设：`data_all` 只绑在 `--only-port` 分支里 ⇒ **默认档 `UnboundLocalError`**，而我两轮自测**全绕开了默认档**（一次带开关、一次跑 `--all` 走的是普查路径），由验收抓到（`af1e8a6`）。
+   ⇒ **「值不变」这条即使全绿也拦不住这次的崩：它查的是数，崩的是路。**
+
+**档矩阵（五档，2026-09-20 修后逐档真跑，逐档看 rc）**
+
+| 档 | rc | 第一道 | 第二道 | 第二态 |
+| --- | --- | --- | --- | --- |
+| 普查·默认（**E2 名册**） | **0** | 175 种键/266 次 | 49 种键/52 次 | 68 种键/289 位次 |
+| 普查·`--all` | **0** | 412 种键/842 次 | 228 种键/270 次 | 116 种键/1153 位次 |
+| `--select`·默认（无开关） | **0** | — | — | 全库 **185**/2210；过闸 **95**/802 |
+| `--select --only-port` | **0** | — | — | 全库 **185**/2210；过闸 **95**/802 |
+| `--select --no-port` | **0** | — | — | 全库 **185**/2210；过闸 **95**/802 |
+
+* 普查那两行**不是同一个分母**（默认档只数 E2 名册、`--all` 数全体名册）⇒ **不许并列比较**；select 三档的第二态读数**逐位一致**，说明这一列**不随覆盖行空间漂移**（这与设计一致：第二态按收窄前的全库快照算）。
+* 命令矩阵（可复制执行，逐条看 rc）：
+
+```powershell
+python tools/audit_coverage.py                      # 普查·默认
+python tools/audit_coverage.py --all                # 普查·全体
+python tools/audit_coverage.py --select --batch 10 --from-cache <cache>              # 默认档
+python tools/audit_coverage.py --select --batch 10 --only-port --from-cache <cache>  # 过闸档
+python tools/audit_coverage.py --select --batch 10 --no-port   --from-cache <cache>  # 关闸档
+```
+
 **协作留痕**：`96a4e1c` 这一笔**同时带上了验收**在同一文件里的未提交补丁（`ident_of()` 加 `head` + `src_dirty`、`import subprocess`）——正是「来源三件套缺树身份」的补法，属他同意下的合并；提交后该文件工作区干净。验收 05:02 报我「文件 RC=1、`:719 IndentationError`」**属实**，那是我改到一半的中间态（已修），他的文档重生成用的是坏之前的落盘产物，读数不受影响。
