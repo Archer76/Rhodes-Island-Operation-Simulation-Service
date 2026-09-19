@@ -94,9 +94,74 @@ FAMILIES: dict[str, tuple[str, str]] = {
     "治疗": ("-", "同上"),
 }
 
+#: `-` 档（登记为"我们没有这个字段族"）的**反证锚**。
+#:
+#: ## 为什么必须有它
+#:
+#: `-` 曾经是四档里**唯一一个不需要证据就能通过的档**：旧版 `verify_target("-")`
+#: 直接 `return True, "登记为未建模"`。于是"我们**没做**"与"我们**做了却没登记**"
+#: 被压成了同一个值——而后者**无处安放**，只能被读成前者。
+#: 2026-09-20 实测：该档 6 条里 **3 条是错账**（闪避／治疗／回复 其实两侧都已实现），
+#: 且因为这一档不会翻红，**错了也没人知道**。
+#:
+#: ## 口径
+#:
+#: 每条形如 `(文件, 必须不存在的符号, 这条声明凭什么这么说)`：
+#:
+#: * 符号在文件里**被找到了** ⇒ 声明被证伪 ⇒ **BAD**（"表说没有，可是找到了"）；
+#: * 载体文件不在 ⇒ **UNKNOWN**（不含糊地当通过）；
+#: * 都没找到 ⇒ 声明**还活着**——⚠ 这只是"没被证伪"，**不等于已证实**。
+#:
+#: 没登记反证锚的 `-` 条目**直接判 BAD**：`不可证伪`本身就是要报出来的病。
+ABSENT_ANCHORS: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "闪避": (("ak_tactic/battle/unit.py", "dodge_phys",
+              "原声明：干员侧**没有**闪避字段族"),),
+    "治疗": (("ak_tactic/battle/unit.py", "def heal",
+              "原声明：治疗量口径分散，无统一字段族/入口"),),
+    "回复": (("rios-sim/sim.go", "func (o *operator) heal",
+              "原声明：同「治疗」，无统一字段族"),),
+    "庇护": (("ak_tactic/battle/sim.py", "庇护",
+              "原声明：减伤型庇护不在现模型里"),),
+    "沉默": (("rios-sim/control.go", "Silence",
+              "原声明：Go 侧没有对应标志位（`SILENCED` 异常效果）"),),
+    "冷却": (("ak_tactic/operator/skill.py", "cooldown",
+              "原声明：技能冷却另有口径，未建字段族"),),
+}
+
+#: 落点验证的**三态**。⚠ 不许把 UNKNOWN 并进 OK 或 BAD：
+#: "验了成立"/"验了不成立"/"**根本验不了**"是三件事。
+#: 库是 0 字节时，把每一条面板落点都报成"列找不到"，读到的是一片**假红**——
+#: 而假红比没有红更坏，因为它看起来像"查过了"（PM 2026-09-20 裁定）。
+OK, BAD, UNKNOWN = "ok", "bad", "unknown"
+
+
+def _akdb_usable() -> tuple[bool, str]:
+    """干员库当前**能不能用来验落点**（问的不是"落点对不对"）。"""
+    if not AKDB.exists():
+        return False, f"{AKDB.name} 不存在"
+    if AKDB.stat().st_size == 0:
+        return False, f"{AKDB.name} 是 0 字节"
+    try:
+        c = sqlite3.connect(f"file:{AKDB}?mode=ro", uri=True)
+        try:
+            n = c.execute(
+                "select count(*) from sqlite_master where type='table'").fetchone()[0]
+        finally:
+            c.close()
+    except sqlite3.Error as e:                                   # noqa: BLE001
+        return False, f"{AKDB.name} 打不开：{e}"
+    if n == 0:
+        return False, f"{AKDB.name} 里没有任何表"
+    return True, f"可用（{n} 张表）"
+
 
 def _columns(db: Path, table: str) -> set[str]:
-    c = sqlite3.connect(db)
+    """⚠ 用**只读 URI** 打开。
+
+    默认的 `sqlite3.connect(path)` 在文件**不存在时会当场凭空建一枚 0 字节的**——
+    一个"读"动作把工作树改了，是最难查的一类副作用（2026-09-20 实测踩过）。
+    """
+    c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
         return {r[1] for r in c.execute(f"pragma table_info({table})")}
     finally:
@@ -113,22 +178,48 @@ def _has_symbol(spec: str) -> bool:
     return re.search(rf"\b{re.escape(sym)}\b", txt) is not None
 
 
-def verify_target(target: str) -> tuple[bool, str]:
-    """验证一个落点是否真的存在。返回 (通过?, 说明)。"""
+def verify_target(target: str, keyword: str = "") -> tuple[str, str]:
+    """验证一个落点声明。返回 (OK|BAD|UNKNOWN, 说明)。
+
+    `keyword` 只有 `-` 档用得上（要靠它去 `ABSENT_ANCHORS` 取反证锚）。
+    """
     if target == "-":
-        return True, "登记为未建模"
+        anchors = ABSENT_ANCHORS.get(keyword, ())
+        if not anchors:
+            return BAD, ("`-` 档**没有登记反证锚**（`ABSENT_ANCHORS`）"
+                         "⇒ 这条声明不可证伪，等同于没断言")
+        dead = []
+        for rel, needle, _why in anchors:
+            p = ROOT / rel
+            if not p.exists():
+                return UNKNOWN, f"反证锚的载体文件不在：{rel}"
+            txt = p.read_text(encoding="utf-8", errors="ignore")
+            if re.search(rf"\b{re.escape(needle)}\b", txt):
+                dead.append(f"{rel} 里有 `{needle}`")
+        if dead:
+            return BAD, ("登记为未建模，但反证锚命中：" + "；".join(dead)
+                         + " ⇒ **表说没有，可是找到了**")
+        return OK, (f"已过 {len(anchors)} 个反证锚、均未命中"
+                    "（只是没被证伪，不等于已证实）")
     if "::" in target:
-        ok = _has_symbol(target)
-        return ok, "符号存在" if ok else f"符号找不到：{target}"
+        path, _, sym = target.partition("::")
+        p = ROOT / path
+        if not p.exists():
+            return UNKNOWN, f"符号载体文件不在：{path}"
+        txt = p.read_text(encoding="utf-8", errors="ignore")
+        ok = re.search(rf"\b{re.escape(sym)}\b", txt) is not None
+        return (OK, "符号存在") if ok else (BAD, f"符号找不到：{target}")
     table, _, col = target.partition(".")
     if not table or not col:
-        return False, f"落点写法不认识：{target}"
-    if not AKDB.exists():
-        return False, f"{AKDB} 不存在"
+        return BAD, f"落点写法不认识：{target}"
+    usable, why = _akdb_usable()
+    if not usable:
+        # ★ 这里是③：**库不可用 ⇒ 判不了**，绝不许落到 BAD。
+        return UNKNOWN, f"验不了：{why}"
     cols = _columns(AKDB, table)
     if not cols:
-        return False, f"表不存在：{table}"
-    return (col in cols), ("列存在" if col in cols else f"列找不到：{table}.{col}")
+        return BAD, f"表不存在：{table}（库可用，所以这是表名写错了）"
+    return (OK, "列存在") if col in cols else (BAD, f"列找不到：{table}.{col}")
 
 
 def keywords_in(text: str) -> list[str]:
@@ -136,42 +227,89 @@ def keywords_in(text: str) -> list[str]:
 
 
 def classify(text: str) -> tuple[str, list[str], list[str]]:
-    """返回 (档位, 命中词, 红档说明)。"""
+    """返回 (档位, 命中词, 说明)。
+
+    档位：`LINKED` / `UNMODELED` / `PARSE` / `BROKEN` / `UNDECIDABLE`。
+
+    ⚠ `UNMODELED`（未实现）与 `UNDECIDABLE`（判不了）**必须分列**：
+    前者是"我们验过了，确实没有"，后者是"我们**根本验不了**"。
+    把两者并成一个值，就是本工具旧版最大的假信号来源。
+    """
     hits = keywords_in(text)
     if not hits:
         return "PARSE", [], []
-    broken = []
-    unmodeled = []
+    broken: list[str] = []
+    unknown: list[str] = []
+    unmodeled: list[str] = []
     for k in hits:
         target, _note = FAMILIES[k]
+        state, why = verify_target(target, k)
+        if state == BAD:
+            broken.append(f"{k}→{target}（{why}）")
+        elif state == UNKNOWN:
+            unknown.append(f"{k}→{target}（{why}）")
         if target == "-":
             unmodeled.append(k)
-            continue
-        ok, why = verify_target(target)
-        if not ok:
-            broken.append(f"{k}→{target}（{why}）")
     if broken:
         return "BROKEN", hits, broken
+    if unknown:
+        return "UNDECIDABLE", hits, unknown
     if len(unmodeled) == len(hits):
         return "UNMODELED", hits, []
     return "LINKED", hits, []
 
 
 def self_test() -> int:
-    """自证：三档各造一条 fact，必须各归其位（判据红得起来吗）。"""
+    """自证：每一档都要能落到自己那一档（判据红得起来吗）。"""
+    global AKDB
     cases = [
         ("攻击力提升至130%", "LINKED"),
-        ("闪避+30", "UNMODELED"),
+        ("庇护+30", "UNMODELED"),
         ("这是一句没有任何机制词的描述文字而已", "PARSE"),
     ]
     bad = 0
     print("== 自证：每档都要能落到自己那一档 ==")
     for text, want in cases:
-        got, hits, _ = classify(text)
+        got, hits, why = classify(text)
         ok = got == want
         bad += 0 if ok else 1
         print(f"  {'✅' if ok else '⛔'} 期望 {want}／得到 {got}  命中词={hits}  「{text[:24]}」")
-    # 反向：故意把一条词的落点改成一个不存在的符号 ⇒ 必须翻红
+        if got == "BROKEN" and why:
+            print(f"       {why[0]}")
+
+    # ① `-` 档守卫：反证锚命中 ⇒ 必须翻红（旧版这里恒为 UNMODELED 且永不翻红）
+    print("== ① `-` 档守卫：反证锚命中时必须变红 ==")
+    for text, want in (("闪避+30", "BROKEN"), ("回复生命值", "BROKEN"), ("治疗自身", "BROKEN")):
+        got, hits, why = classify(text)
+        ok = got == want
+        bad += 0 if ok else 1
+        print(f"  {'✅' if ok else '⛔'} 期望 {want}／得到 {got}  命中词={hits}")
+        for w in why:
+            print(f"       {w}")
+
+    # ① 反向：**没有反证锚**的 `-` 档也必须红——"不可证伪"本身就是要报的病
+    print("== ① 反向：`-` 档缺反证锚时必须变红 ==")
+    saved_anchor = ABSENT_ANCHORS.pop("庇护")
+    got, _, why = classify("庇护+30")
+    ABSENT_ANCHORS["庇护"] = saved_anchor
+    ok = got == "BROKEN"
+    bad += 0 if ok else 1
+    print(f"  {'✅' if ok else '⛔'} 期望 BROKEN／得到 {got}  {why}")
+
+    # ③ 库不可用 ⇒ 判不了，**不许**报 BROKEN
+    print("== ③ 库不可用 ⇒ UNDECIDABLE，不许报 BROKEN ==")
+    saved_db = AKDB
+    AKDB = ROOT / "data" / "__no_such_akdb__.sqlite"
+    try:
+        got, _, why = classify("攻击力提升至130%")
+    finally:
+        AKDB = saved_db
+    ok = got == "UNDECIDABLE"
+    bad += 0 if ok else 1
+    print(f"  {'✅' if ok else '⛔'} 期望 UNDECIDABLE／得到 {got}  {why}")
+    print(f"      （库恢复后同一条：{classify('攻击力提升至130%')[0]}）")
+
+    # 反向守卫：落点声明错时必须变红
     print("== 反向守卫：落点声明错时必须变红 ==")
     saved = FAMILIES["攻击力"]
     FAMILIES["攻击力"] = ("operator_attr.atk_nonexistent", "自证用")
@@ -255,22 +393,35 @@ def main() -> int:
         print(f"已写 {args.dump_parse}（{len(parses)} 条待核；表头 {len(head)} 行）")
         return 0
 
-    if not NOTES_DB.exists():
-        print(f"⛔ 找不到 {NOTES_DB}（本地工作库，不入仓库）", file=sys.stderr)
-        return 2
-
     # 落点先整体验一遍：表写错了要在汇总里立刻看到，而不是散在每条 fact 上。
+    # ⚠ 这一段**只依赖干员库、不依赖 fact 语料**，所以放在 NOTES_DB 检查**之前**：
+    #   语料缺了也必须能看见"表本身对不对"——否则 `-` 档守卫红没红根本无从观察，
+    #   而"看不见的守卫"就等于没有守卫。
     print("== 落点验证（声明即断言） ==")
-    bad_targets = []
+    bad_targets: list[tuple[str, str, str]] = []
+    unknown_targets: list[tuple[str, str, str]] = []
     for k, (target, _n) in sorted(FAMILIES.items()):
-        ok, why = verify_target(target)
-        if not ok:
+        state, why = verify_target(target, k)
+        if state == BAD:
             bad_targets.append((k, target, why))
-    print(f"  声明 {len(FAMILIES)} 个机制词，落点不成立 {len(bad_targets)} 个")
+        elif state == UNKNOWN:
+            unknown_targets.append((k, target, why))
+    print(f"  声明 {len(FAMILIES)} 个机制词："
+          f"落点不成立 {len(bad_targets)} 个、判不了 {len(unknown_targets)} 个")
     for k, target, why in bad_targets:
         print(f"    ⛔ {k} → {target}：{why}")
+    for k, target, why in unknown_targets:
+        print(f"    ❓ {k} → {target}：{why}")
 
-    c = sqlite3.connect(NOTES_DB)
+    if not NOTES_DB.exists():
+        print()
+        print(f"== 汇总：判不了 ==")
+        print(f"  ⛔ 找不到 {NOTES_DB.name}（本地工作库，不入仓库）⇒ "
+              "**fact 级核对整段判不了**，上面那段落点验证仍然有效。")
+        print("  重建：python tools/fetch_prts_notes.py（要联网，按名册逐页抓 PRTS 干员页）")
+        return 2
+
+    c = sqlite3.connect(f"file:{NOTES_DB}?mode=ro", uri=True)
     c.row_factory = sqlite3.Row
     where, params = "", []
     if args.only:
@@ -278,7 +429,8 @@ def main() -> int:
         params = [f"%{args.only}%", f"%{args.only}%"]
     rows = c.execute(f"select char_id, kind, value from fact{where}", params).fetchall()
 
-    tiers: dict[str, int] = {"LINKED": 0, "UNMODELED": 0, "PARSE": 0, "BROKEN": 0}
+    tiers: dict[str, int] = {
+        "LINKED": 0, "UNMODELED": 0, "PARSE": 0, "BROKEN": 0, "UNDECIDABLE": 0}
     kw_hits: dict[str, int] = {}
     kw_un: dict[str, int] = {}
     parse_examples: list[tuple[str, str]] = []
@@ -294,10 +446,12 @@ def main() -> int:
 
     print()
     print(f"== 汇总（{len(rows)} 条 fact） ==")
-    for t in ("LINKED", "UNMODELED", "PARSE", "BROKEN"):
+    for t in ("LINKED", "UNMODELED", "PARSE", "BROKEN", "UNDECIDABLE"):
         share = tiers[t] / len(rows) if rows else 0
-        print(f"  {t:<10} {tiers[t]:>5}  {share:>6.1%}")
+        print(f"  {t:<12} {tiers[t]:>5}  {share:>6.1%}")
     print("  ⚠ LINKED 读作「**有这个字段族**」，不是「已核对」——本工具不做数值对账。")
+    print("  ⚠ UNMODELED（验过了，确实没有）与 UNDECIDABLE（**根本验不了**）"
+          "是两件事，见 `verify_target` 的三态说明。")
 
     print()
     print(f"== 命中最多的机制词（前 {args.top}） ==")
