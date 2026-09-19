@@ -42,6 +42,65 @@ from ak_tactic.verify import Verifier                           # noqa: E402
 
 FIXTURES = ROOT / "out"
 
+#: 五个列表的名字，与 `Schedule.__init__` 逐字相同。
+NAMES = ("deployments", "device_deployments", "summon_deployments",
+         "retreats", "skill_uses")
+
+
+def _probe_samples(sched):
+    """按排程**现有内容**造 5 个合成条目——每条都用排程里已有的真实对象**形态**。
+
+    ⚠ 只用"真实作业也可能出现的输入"（PM 转述的守则 / 记忆 `6e20b44e`：
+    断言不许喂不可能的输入）。所以：
+    * 部署：复用排程里第一条部署**本身**；
+    * 撤退：复用该干员的坐标，时刻取它落地后 1 秒；
+    * 开技：同坐标、同后 1 秒（`SkillUse` 的形状由 `Schedule.use_skill` 给出）；
+    * 装置 / 召唤：排程里没有样本可借（本树无用例），用一个**最小的占位对象**——
+      它们只被 `diff` 拿去比 `list` 相等，不参与任何机制结算。
+    """
+    from ak_tactic.frontend.schedule import Schedule as _S
+
+    dep = sched.deployments[0] if sched.deployments else None
+    pos = tuple(getattr(dep, "position", (0, 0))) if dep is not None else (0, 0)
+    t0 = float(getattr(dep, "time", 0.0)) if dep is not None else 0.0
+
+    #: `retreats` 两侧都是 `(时刻, 坐标)` 元组（`schedule.py:134`）。
+    #: `skill_uses` 两侧都是 `SkillUse`——用排程自己的构造路径造，不手搓形状。
+    probe = _S()
+    probe.retreat(pos, t0 + 1.0)
+    probe.use_skill(pos, t0 + 1.0)
+    return {
+        "deployments": dep,
+        "retreats": probe.retreats[0],
+        "skill_uses": probe.skill_uses[0],
+        #: ⚠ 装置 / 召唤本树无任何样本，只能用最小占位。**它证明的是"这一列比得到"**，
+        #: 不是"这条业务路对"——后者本树无法验收，已按 `act31side_07` 先例登记。
+        "device_deployments": ("<合成:装置>",),
+        "summon_deployments": ("<合成:召唤>",),
+    }
+
+
+def _inject_all(sched, sim, *, only: str | None = None) -> dict[str, int]:
+    """把 5 个合成条目填进两边。`only` 给了就**只填一边**——那是反向守卫。
+
+    ⚠ **同一个对象塞两侧**才是绿：`verify.py:454` 的原文口径就是
+    "两边拿到同一批对象，`diff` 比出来的才是**排程**的差"。
+    ⇒ 只塞一侧 ⇒ `diff` 必须报差 ⇒ 这就是"这一列红得起来"的证据。
+    """
+    samples = _probe_samples(sched)
+    counts: dict[str, int] = {}
+    for name in NAMES:
+        obj = samples[name]
+        if obj is None:
+            continue
+        if only != "sim":
+            getattr(sched, name).append(obj)
+        if only != "sched":
+            getattr(sim, name).append(obj)
+    for name in NAMES:
+        counts[name] = len(getattr(sched, name, ()))
+    return counts
+
 
 def _inject_retreat(path: pathlib.Path) -> pathlib.Path:
     """把一份计划复制到 `out/_synth_*.json`，**加一条撤退**后再返回新路径。
@@ -70,11 +129,18 @@ def main() -> int:
     if "--plan" in args:
         only = pathlib.Path(args[args.index("--plan") + 1]).resolve()
     synth = "--synthetic-retreat" in args
+    synth_all = "--synthetic-all" in args
+    #: `--negative-skip sched|sim|<列名>`：只填一边 / 只少填一列 —— 判据**必须**变红。
+    neg = None
+    if "--negative-skip" in args:
+        neg = args[args.index("--negative-skip") + 1]
+    elif "--negative-control" in args:
+        neg = "deployments"
 
     plans = sorted(FIXTURES.glob("plan-*.json"))
     if only is not None:
         plans = [only]
-    if synth:
+    if synth or synth_all:
         #: ⚠ **反例**：本树 25 个作业**没有一个用 retreats**（全是 `deploys` 键），
         #: 于是 `撤退` 那一列永远是 `[] == []`——**空洞的绿**。
         #: 主用例全绿不等于对（记忆 `f58dace9`：须配第二组反例）。
@@ -84,10 +150,9 @@ def main() -> int:
         print("  ⚠ out/ 里没有 plan-*.json")
         return 1
 
-    if "--negative-control" in args:
-        #: ⚠ **反向守卫**：判据必须能变红，否则"17/17 绿"什么都没证明。
-        #: 手法：让 `Schedule.plan()` 故意少记一条 ⇒ `sched` 比 `sim` 少一笔部署，
-        #: 这个工具**必须**报出来。看不到红，就说明比的是别的东西（或根本没比）。
+    if neg == "deployments" or (neg is not None and neg.startswith("dep")):
+        #: ⚠ **反向守卫（部署列）**：让 `Schedule.plan()` 故意少记一条 ⇒
+        #: `sched` 比 `sim` 少一笔部署，这个工具**必须**报出来。
         from ak_tactic.frontend.schedule import Schedule as _S
         _orig_plan = _S.plan
 
@@ -123,6 +188,16 @@ def main() -> int:
             diffs = ["排程对象是 None（这条路径没填排程）"]
             counts: dict[str, int] = {}
         else:
+            #: (b)：合成用例。`synth_all` 时给**五列**各填一条（同对象塞两侧 ⇒ 应当绿）；
+            #: `neg` 指向某一列时**只填一边** ⇒ 那一列必须红（这就是"红得起来"的证据）。
+            if synth_all or neg in ("sim", "sched") or neg in NAMES:
+                only_side = neg if neg in ("sim", "sched") else None
+                if neg in NAMES:
+                    #: 只少填一列：把那一条从**排程侧**拿掉。
+                    _inject_all(schedule, sim, only=None)
+                    setattr(schedule, neg, [x for x in getattr(schedule, neg)][:-1])
+                else:
+                    _inject_all(schedule, sim, only=only_side)
             diffs = schedule.diff(sim)
             #: ⚠ **必须记条数**：五个列表若两边都是空的，`[] == []` 也报"一致"，
             #: 那是**空洞的绿**。这个重构里我已经栽过一次同型（判据看不见所断言之物）。
@@ -168,6 +243,16 @@ def main() -> int:
     if n_total_entries == 0:
         print("  ⛔ **空洞的绿**：一条排程都没比到，这个 17/17 什么都证明不了。")
         return 1
+
+    #: ⚠ **每一列都要计数可见**（PM 转述的守则）：合成模式下某列若还是 0 条，
+    #: 说明那一条**根本没被比到**——"没比到"与"一致"在输出上长得一样，必须分开判。
+    if synth_all and neg is None:
+        zero_cols = [k for k, v in (rows[-1][2] if rows else {}).items() if v == 0]
+        if zero_cols:
+            print(f"  ⛔ **空洞的绿**：这些列一条都没比到 ⇒ {zero_cols}")
+            print("     （合成模式下仍为 0 = 注入没生效 / 列名不对，不是'一致'。）")
+            return 1
+
     if n_ok != len(rows):
         print("  ⛔ **切过去之前**必须先把这些差补齐——"
               "否则切换当天才会发现排程少写了一处。")
