@@ -197,7 +197,23 @@ def _load_facts(only: str | None = None) -> list[sqlite3.Row]:
     return c.execute("select char_id, kind, value from fact").fetchall()
 
 
+def _force_utf8_stdout() -> None:
+    """把 stdout/stderr 显式设成 UTF-8。
+
+    ⚠ 实测 `python tools/audit_op_notes.py > out.txt`（Windows、未设 PYTHONIOENCODING）
+    在打印 `⚠` 时 rc=1：`UnicodeEncodeError: 'gbk' codec can't encode character '\\u26a0'`。
+    这不是表里有红项，是**编码**——两者在 rc 上同形，所以必须从工具内部消掉。
+    口径（2026-09-19）：**凡打印非 ASCII 符号的工具，输出重定向时必须 rc=0。**
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")     # type: ignore[union-attr]
+        except Exception:                            # noqa: BLE001  （非 TextIOWrapper 时跳过）
+            pass
+
+
 def main() -> int:
+    _force_utf8_stdout()
     ap = argparse.ArgumentParser(description="干员 wiki 备注逐条核查（覆盖率视角）")
     ap.add_argument("--only", help="只看名字/char_id 含该子串的干员")
     ap.add_argument("--top", type=int, default=10, help="各档列出前 N 个关键词族")
