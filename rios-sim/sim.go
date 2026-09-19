@@ -484,9 +484,24 @@ func runSim(spec *Spec) (*Verdict, error) {
 		}
 
 		// ---- 3. 推进与计时器递减（1767-1806）
+		//
+		// ⚠ **先递减、再判能不能走**，三根计时器（出手停帧 / 停顿 / 冻结）都是。
+		// 原版这一段（`sim.py:2720-2761`）就是"先把所有时限状态各减一次 `dt`，
+		// 然后 `e.advance(dt, ...)`"，而 `advance()` 里读到的是**减过之后**的值。
+		//
+		// 顺序反过来（先判后减）症状是"每段停顿/冻结都多挡一帧"：停帧设 0.5 秒
+		// 本该挡 15 帧，反着写会挡到 16 帧——**不报错、只有坐标看得出**。HS-EX-8
+		// 单手作业上它与原版整整差一帧的位移，就是这么来的（停帧相位差一帧，
+		// 见 `docs/` 里那条对拍水位）。
 		for _, e := range enemies {
 			if e.attackPause > 0 {
 				e.attackPause = math.Max(0.0, e.attackPause-dt)
+			}
+			if e.sluggishTimer > 0 {
+				e.sluggishTimer = math.Max(0.0, e.sluggishTimer-dt)
+			}
+			if e.freezeTimer > 0 {
+				e.freezeTimer = math.Max(0.0, e.freezeTimer-dt)
 			}
 			if e.alive() && !e.leaked && !e.offMap && e.blockedBy == nil &&
 				e.attackPause <= 0 && e.sluggishTimer <= 0 && e.freezeTimer <= 0 {
@@ -504,16 +519,6 @@ func runSim(spec *Spec) (*Verdict, error) {
 					*ctx.time, e.index, e.spec.Name, e.position[0], e.position[1], e.hp,
 					e.blockedBy != nil, e.attackPause, e.sluggishTimer, e.freezeTimer,
 					e.legIndex, e.legU)
-			}
-		}
-		// 停顿按原版在**推进之后**递减（`sim.py:2721-2722` 在 push 那一步里）：
-		// 同一帧内先判"能不能走"再扣时间，挪到前面去会让每段停顿短一帧。
-		for _, e := range enemies {
-			if e.sluggishTimer > 0 {
-				e.sluggishTimer = math.Max(0.0, e.sluggishTimer-dt)
-			}
-			if e.freezeTimer > 0 {
-				e.freezeTimer = math.Max(0.0, e.freezeTimer-dt)
 			}
 		}
 
@@ -1587,6 +1592,16 @@ func enemiesAttack(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec,
 		e.hits++
 		// 出手占用一段动作时间，这期间它不走路（但动作一结束就继续推进）
 		e.attackPause = math.Max(e.attackPause, spec.EnemyWindup)
+		if traceOn {
+			// 出手那一帧的**计时器与停帧值**：对拍"前摇停帧的相位差"时，
+			// 光看坐标只能知道"有一帧不一样"，看不出是谁在什么时候出手的。
+			// 与 POS 痕迹同一族（`RIOS_TRACE` 总开关）。
+			cx, cy := e.cell()
+			trace("ATK t=%.4f enemy=%s idx=%d ecell=%d,%d interval=%.4f "+
+				"pause=%.4f hits=%d",
+				t, e.spec.Name, e.index, cx, cy, e.spec.Interval,
+				e.attackPause, e.hits)
+		}
 		times := e.spec.AttackTimes
 		if times < 1 {
 			times = 1

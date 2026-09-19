@@ -1,0 +1,404 @@
+# -*- coding: utf-8 -*-
+"""前摇停帧相位探针（交接文档 §4 的下一刀）。
+
+病根假设：两台引擎都为「出手动作」停一帧，但**停在不同的帧**。本探针把两边
+在同一时间线上的逐帧状态摊开，做两件事：
+
+1. **按帧列出「谁在停」**：原版侧钩 `_environment_tick`（帧首，与 Go 的痕迹点
+   同一时刻），记 `attack_pause` / `attack_timer` / `skill_atk_timer` / 坐标；
+   Go 侧跑同一份规格（POS 痕迹本来就带 pause/legu）。
+2. **对齐「停」的区间**：把每一帧的位移取出来，比"这一帧走了多少"。
+
+用法：
+    python tools/probe_windup_phase.py --k 1
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+sys.stdout.reconfigure(encoding="utf-8")
+
+from ak_tactic.battle import sim as simmod                       # noqa: E402
+from ak_tactic.plan import Plan, Roster                          # noqa: E402
+from ak_tactic.simgo import build_spec, find_binary              # noqa: E402
+from ak_tactic.simgo.verifier import GoVerifier                  # noqa: E402
+
+#: 目标敌人（用户给的原始数据里那只「多停一帧 / 多走一帧」的敌人）。
+TARGET = "去蚀"
+#: 窗口（秒）——原始数据是 17–42。
+WIN = (17.0, 42.0)
+
+POS_RE = re.compile(
+    r"POS t=(?P<t>[\d.]+) idx=(?P<idx>\d+) name=(?P<name>\S+) "
+    r"x=(?P<x>-?[\d.]+) y=(?P<y>-?[\d.]+) hp=(?P<hp>[\d.]+) "
+    r"blocked=(?P<blocked>\w+) pause=(?P<pause>[\d.]+) "
+    r"sluggish=(?P<sluggish>[\d.]+) freeze=(?P<freeze>[\d.]+) "
+    r"leg=(?P<leg>\d+) legu=(?P<legu>[\d.]+)")
+
+ATK_RE = re.compile(
+    r"ATK t=(?P<t>[\d.]+) enemy=(?P<name>\S+) idx=(?P<idx>\d+) "
+    r"ecell=\d+,\d+ interval=(?P<interval>[\d.]+) pause=(?P<pause>[\d.]+) "
+    r"hits=(?P<hits>\d+)")
+
+
+#: 夹具与名册住在**验证工作树**里（`out/` 不进仓库）；先看本仓库，再退到 head 树。
+HEAD = ROOT.parent / "ak-tactic-head"
+
+
+def _fixture(name: str) -> pathlib.Path:
+    for base in (ROOT, HEAD):
+        p = base / "out" / name
+        if p.exists():
+            return p
+    raise FileNotFoundError(f"out/{name} 在 {ROOT} 与 {HEAD} 都没有")
+
+
+def load_plan(k: int) -> Plan:
+    raw = json.loads(_fixture("hsex8_max.json").read_text(encoding="utf-8"))
+    if k:
+        raw = dict(raw, deploys=raw["deploys"][:k])
+    return Plan.from_dict(raw)
+
+
+def load_roster() -> Roster:
+    try:
+        return Roster.from_json(_fixture("roster_max_modelled.json"))
+    except FileNotFoundError:
+        return Roster.empty()
+
+
+# ------------------------------------------------------------------ 原版
+
+def run_python(plan: Plan, roster: Roster, *, max_time: float | None = None
+               ) -> tuple[list[dict], object]:
+    """跑原版，逐帧记目标敌人的状态（帧首，与 Go 痕迹同一时刻）。
+
+    ⚠ 同一关里**同名敌人同时有好几只**（HS-EX-8 上「去蚀」一度六只同时在跑），
+    所以帧记录里带下标，比对时按 (名字, 出怪时刻/下标) 成组——见 §5.2 那两个坑。
+    """
+    frames: list[dict] = []
+    attacks: list[dict] = []
+    orig = simmod.BattleSimulator._environment_tick
+
+    def scan(self, t, src):
+        for e in self.enemies:
+            if e.name != TARGET:
+                continue
+            # ⚠ 比对键只能是 **(名字, 出怪时刻)**：原版列表下标与 Go 的
+            # `spec.Spawns` 序**不是一回事**（重生会插到列表里），实测错位两位。
+            frames.append(dict(
+                key=(e.name, round(float(e.spawn_time), 3)), t=t, name=e.name,
+                x=e.position[0], y=e.position[1],
+                hp=e.hp, pause=e.attack_pause, atk_timer=e.attack_timer,
+                interval=float(e.attack_interval),
+                sk_timer=getattr(e, "skill_atk_timer", 0.0),
+                sk_first=bool(getattr(e, "skill_atk_first", False)),
+                sluggish=e.sluggish_timer, frozen=bool(e.frozen),
+                blocked=e.blocked_by is not None, src=src,
+            ))
+
+    def env(self, dt, t):
+        # 帧首（与 Go 的痕迹点同一时刻）：计时器是**上一帧出手之后**的状态。
+        scan(self, t, "loop")
+        return orig(self, dt, t)
+
+    orig_atk = simmod.BattleSimulator._enemies_attack
+
+    def atk(self, dt, t):
+        before = {id(e): e.attack_timer for e in self.enemies if e.name == TARGET}
+        r = orig_atk(self, dt, t)
+        for e in self.enemies:
+            if e.name != TARGET:
+                continue
+            was = before.get(id(e))
+            if was is not None and e.attack_timer < was - 1e-12:
+                # 计时器归零了 = 这一帧出手了（`_enemies_attack` 的唯一一处）。
+                attacks.append(dict(
+                    key=(e.name, round(float(e.spawn_time), 3)), t=t,
+                    timer_at_fire=was, interval=float(e.attack_interval),
+                    pause_after=e.attack_pause,
+                ))
+        return r
+
+    simmod.BattleSimulator._environment_tick = env
+    simmod.BattleSimulator._enemies_attack = atk
+    try:
+        from ak_tactic.verify import Verifier
+        v = Verifier().run(plan, roster=roster)
+    finally:
+        simmod.BattleSimulator._environment_tick = orig
+        simmod.BattleSimulator._enemies_attack = orig_atk
+    print(f"[python] {v.kills}杀 {v.leaks}漏 {v.elapsed:.6f}s "
+          f"帧记录={len(frames)} 出手={len(attacks)}")
+    return frames, v, attacks
+
+
+# ------------------------------------------------------------------ Go
+
+class SpecThief(GoVerifier):
+    """在跑之前把规格偷出来（`build_spec` 读的是运行期状态）。"""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.spec: dict | None = None
+
+    def _run_other_engine(self, *, sim, plan, stage, deployed, title):
+        self.spec = build_spec(sim, allow_devices=True)
+        raise SystemExit(0)
+
+
+def run_go(plan: Plan, roster: Roster) -> tuple[dict, list[dict], list[dict]]:
+    exe = find_binary()
+    thief = SpecThief()
+    try:
+        thief.run(plan, roster=roster)
+    except SystemExit:
+        pass
+    spec = thief.spec
+    assert spec is not None, "没偷到规格"
+
+    env = dict(os.environ, RIOS_TRACE="1", RIOS_TRACE_POS=TARGET)
+    p = subprocess.run([str(exe)], input=json.dumps({"id": 1, "cmd": "sim", "spec": spec}),
+                       capture_output=True, text=True, encoding="utf-8", env=env)
+    resp = json.loads(p.stdout.strip().splitlines()[-1])
+    if not resp.get("ok"):
+        raise RuntimeError(resp.get("error"))
+    got = resp["verdict"]
+    # 出怪时刻从规格里取：痕迹给的是 `idx`（= `spec.Spawns` 序），把它翻成
+    # **(名字, 出怪时刻)**，与原版侧的键同义——下标两边不同义，不能当键。
+    spawn_at = {i: round(float(sp.get("time", 0.0)), 3)
+                for i, sp in enumerate(spec.get("spawns") or [])}
+    frames = []
+    attacks = []
+    for line in (p.stderr or "").splitlines():
+        m = POS_RE.search(line)
+        if m:
+            d = m.groupdict()
+            frames.append(dict(
+                key=(d["name"], spawn_at.get(int(d["idx"]), -1.0)),
+                idx=int(d["idx"]),
+                t=float(d["t"]), name=d["name"], x=float(d["x"]), y=float(d["y"]),
+                hp=float(d["hp"]), pause=float(d["pause"]),
+                sluggish=float(d["sluggish"]), frozen=float(d["freeze"]) > 0,
+                blocked=d["blocked"] == "true", leg=int(d["leg"]),
+                legu=float(d["legu"]),
+            ))
+            continue
+        m = ATK_RE.search(line)
+        if m:
+            d = m.groupdict()
+            attacks.append(dict(
+                key=(d["name"], spawn_at.get(int(d["idx"]), -1.0)),
+                t=float(d["t"]), interval=float(d["interval"]),
+                pause_after=float(d["pause"]), hits=int(d["hits"]),
+            ))
+    print(f"[go]     {got['kills']}杀 {got['leaks']}漏 {got['elapsed']:.6f}s "
+          f"帧记录={len(frames)} 出手={len(attacks)}")
+    return got, frames, attacks
+
+
+# ------------------------------------------------------------------ 比对
+
+def dx(frames: list[dict]) -> dict[tuple, float]:
+    """每一帧走了多少（用 (x,y) 的欧氏步长——路线拐弯时单看 x 会骗人）。
+
+    键 = (敌人身份键, 帧时刻)：同一关里同名敌人有多只，按名字或按时刻当键
+    都会把它们**并成一只**（这正是 §5.2 的坑）。
+    """
+    out: dict[tuple, float] = {}
+    prev: dict[tuple, dict] = {}
+    for f in frames:
+        k = f["key"]
+        p = prev.get(k)
+        if p is not None:
+            out[(k, round(f["t"], 4))] = round(
+                ((f["x"] - p["x"]) ** 2 + (f["y"] - p["y"]) ** 2) ** 0.5, 7)
+        prev[k] = f
+    return out
+
+
+def table() -> int:
+    """逐手对拍水位表（交接文档 §3 那张）。
+
+    ⚠ 每一行都要先确认 **Go 真跑**：`GoVerifier` 在闸门非空时静默退回原版，
+    回退出来的"一致"毫无意义（见过一次假绿，写进了坑表）。
+    """
+    roster = load_roster()
+    print(f"{'手数':>4} {'原版':>26} {'Go':>26} {'判决':>8} {'引擎':>12}")
+    for k in range(1, 9):
+        plan = load_plan(k)
+        _py, pv, _pa = run_python(plan, roster)
+        got, _gf, _ga = run_go(plan, roster)
+        same = (int(pv.kills) == int(got["kills"]) and int(pv.leaks) == int(got["leaks"])
+                and abs(float(pv.elapsed) - float(got["elapsed"])) < 1e-6)
+        py_s = f"{pv.kills}杀{pv.leaks}漏 {pv.elapsed:.3f}s"
+        go_s = f"{got['kills']}杀{got['leaks']}漏 {got['elapsed']:.3f}s"
+        print(f"{k:>4} {py_s:>26} {go_s:>26} "
+              f"{'一致' if same else '不一致':>8} {'go 真跑':>12}")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--k", type=int, default=1)
+    ap.add_argument("--lo", type=float, default=WIN[0])
+    ap.add_argument("--hi", type=float, default=WIN[1])
+    ap.add_argument("--tol", type=float, default=1e-6,
+                    help="逐帧位移的容差（默认 1e-6：一帧位移 0.0133 的千分之一）")
+    ap.add_argument("--spans", action="store_true", help="打印全部停帧区间（很长）")
+    ap.add_argument("--tail", type=int, default=0, help="打印末尾 N 帧")
+    ap.add_argument("--enemy", default="", help="只摊开这一只敌人的逐帧表（键形如 去蚀@22.0）")
+    ap.add_argument("--table", action="store_true",
+                    help="逐手对拍水位表（k=1..8，只打判决）")
+    args = ap.parse_args()
+
+    if args.table:
+        return table()
+
+    plan = load_plan(args.k)
+    roster = load_roster()
+    py, _v, py_atk = run_python(plan, roster)
+    _got, go, go_atk = run_go(plan, roster)
+
+    pyx = dx(py)
+    gox = dx(go)
+    keys = sorted(set(pyx) | set(gox), key=lambda k: (k[1], k[0][1]))
+    keys = [k for k in keys if args.lo <= k[1] <= args.hi]
+    pyat = {(f["key"], round(f["t"], 4)): f for f in py}
+    goat = {(f["key"], round(f["t"], 4)): f for f in go}
+
+    # ⚠ 比对位移要**带容差**：一帧位移 0.0133，而 0.4/30 在两边各算一次会差
+    # 最后一位（1e-7）。拿逐位相等当判据，750 帧里会有 11 帧"不同"——那全是
+    # 仪器精度，正是 §5.3 那条纪律说的假差异。
+    rows = []
+    for k in keys:
+        a, b = pyx.get(k), gox.get(k)
+        if a is None or b is None:
+            rows.append((k, a, b))
+        elif abs(a - b) > args.tol:
+            rows.append((k, a, b))
+    print(f"\n窗口 {args.lo}-{args.hi}s，{len(keys)} 条 (敌人,帧) 记录；"
+          f"位移差 > {args.tol:g} 的有 {len(rows)} 条")
+    for (ident, t), a, b in rows:
+        pa = pyat.get((ident, t), {}).get("pause")
+        pb = goat.get(((ident), t), {}).get("pause")
+        print(f"{ident[0]}@{ident[1]} t={t:9.4f} "
+              f"py Δ={a if a is not None else -1:10.7f} "
+              f"go Δ={b if b is not None else -1:10.7f}   "
+              f"pause py={pa if pa is not None else -1:.3f} "
+              f"go={pb if pb is not None else -1:.3f}   "
+              f"x py={pyat.get((ident, t), {}).get('x', float('nan')):.7f} "
+              f"go={goat.get((ident, t), {}).get('x', float('nan')):.7f}")
+
+    # 停帧区间（pause > 0 的**连续**帧），逐只敌人各自成组。
+    def spans(frames):
+        out: dict[tuple, list] = {}
+        cur: dict[tuple, float] = {}
+        prev_t: dict[tuple, float] = {}
+        for f in frames:
+            k = f["key"]
+            stop = f.get("pause", 0.0) > 0
+            if stop and k not in cur:
+                cur[k] = f["t"]
+            elif not stop and k in cur:
+                out.setdefault(k, []).append(
+                    (round(cur.pop(k), 4), round(prev_t[k], 4)))
+            prev_t[k] = f["t"]
+        for k, start in cur.items():
+            out.setdefault(k, []).append((round(start, 4), round(prev_t[k], 4)))
+        return out
+
+    sp, sg = spans(py), spans(go)
+    np_ = sum(len(v) for v in sp.values())
+    ng = sum(len(v) for v in sg.values())
+    print(f"\n停帧区间（pause>0 连续段） 原版 {np_} 段 / Go {ng} 段")
+    for k in sorted(set(sp) | set(sg), key=lambda x: x[1]):
+        a, b = sp.get(k, []), sg.get(k, [])
+        if a == b:
+            continue
+        print(f"  {k[0]}@{k[1]} 段数 原版 {len(a)} / Go {len(b)}")
+        n = max(len(a), len(b))
+        for j in range(n):
+            x = a[j] if j < len(a) else None
+            y = b[j] if j < len(b) else None
+            flag = "" if x == y else "   ← 不同"
+            print(f"     {j:2d} 原版 {x}   Go {y}{flag}")
+
+    if args.tail:
+        print(f"\n末 {args.tail} 帧（看收场差在哪一帧）")
+        for tag, fs in (("原版", py), ("Go  ", go)):
+            last: dict[tuple, list] = {}
+            for f in fs[-args.tail * 8:]:
+                last.setdefault(f["key"], []).append(f)
+            print(f"   {tag}：")
+            for k, lst in sorted(last.items(), key=lambda x: x[0][1]):
+                print(f"     {k[0]}@{k[1]} " + " ".join(
+                    f"{g['t']:.4f}(x={g['x']:.4f},hp={g['hp']:.0f})"
+                    for g in lst[-args.tail:]))
+
+    # ---- 出手帧逐笔对：停帧的相位差只能从"谁在哪一帧出手"上看出来
+    byk_py: dict[tuple, list] = {}
+    byk_go: dict[tuple, list] = {}
+    for a in py_atk:
+        byk_py.setdefault(a["key"], []).append(a)
+    for a in go_atk:
+        byk_go.setdefault(a["key"], []).append(a)
+    print(f"\n出手逐笔对（原版 {len(py_atk)} 笔 / Go {len(go_atk)} 笔）")
+    shown = 0
+    for k in sorted(set(byk_py) | set(byk_go), key=lambda x: x[1]):
+        a = byk_py.get(k, [])
+        b = byk_go.get(k, [])
+        if args.lo > 0:
+            a = [x for x in a if args.lo <= x["t"] <= args.hi]
+            b = [x for x in b if args.lo <= x["t"] <= args.hi]
+        if len(a) == len(b) and all(
+                abs(x["t"] - y["t"]) < 1e-9 for x, y in zip(a, b)):
+            continue
+        shown += 1
+        print(f"  {k[0]}@{k[1]}  原版 {len(a)} 笔 / Go {len(b)} 笔")
+        n = max(len(a), len(b))
+        for j in range(n):
+            x = a[j] if j < len(a) else None
+            y = b[j] if j < len(b) else None
+            xt = f"t={x['t']:.4f} (timer@fire={x['timer_at_fire']:.7f}, itv={x['interval']:.4f})" if x else "—"
+            yt = f"t={y['t']:.4f} (itv={y['interval']:.4f}, hits={y.get('hits')})" if y else "—"
+            flag = ""
+            if x and y and abs(x["t"] - y["t"]) > 1e-9:
+                flag = "   ← 时刻不同"
+            print(f"     {j:2d} 原版 {xt}   Go {yt}{flag}")
+    if not shown:
+        print("  这一段逐笔同刻（出手节奏一致）")
+
+    if args.enemy:
+        name, _, spawn = args.enemy.partition("@")
+        want = (name, float(spawn))
+        print(f"\n逐帧摊开 {want}（窗口 {args.lo}-{args.hi}s）")
+        # Go 侧没有 attack_timer（痕迹里没记），逐帧给的是 pause/坐标/legu；
+        # 原版多一列 atk_timer——两者并用才能看出"停"与"计时"谁先变。
+        print(f"{'t':>9} | {'py pause':>8} {'py atk_t':>9} {'py x':>11} | "
+              f"{'go pause':>8} {'go legu':>11} {'go x':>11}")
+        a = {round(f["t"], 4): f for f in py if f["key"] == want}
+        b = {round(f["t"], 4): f for f in go if f["key"] == want}
+        for t in sorted(set(a) | set(b)):
+            if not (args.lo <= t <= args.hi):
+                continue
+            x, y = a.get(t), b.get(t)
+            print(f"{t:9.4f} | {x['pause'] if x else -1:8.4f} "
+                  f"{x['atk_timer'] if x else -1:9.6f} "
+                  f"{x['x'] if x else float('nan'):11.7f} | "
+                  f"{y['pause'] if y else -1:8.4f} "
+                  f"{y['legu'] if y else -1:11.7f} "
+                  f"{y['x'] if y else float('nan'):11.7f}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
