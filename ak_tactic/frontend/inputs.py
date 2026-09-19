@@ -43,6 +43,34 @@ from typing import Any, Callable
 __all__ = ["SpecInputs"]
 
 
+#: 排程那五个列表（`frontend.schedule.Schedule` 的形状，见那里 `__init__`）。
+#: 名字**逐字照抄**，因为 `spec.py:141` 会把这份输入**当作排程用**
+#: （`sch = schedule if schedule is not None else inp`）——少一个就是 `AttributeError`。
+_SCHEDULE_LISTS = ("deployments", "device_deployments", "summon_deployments",
+                   "retreats", "skill_uses")
+
+
+def _schedule_lists(schedule: Any) -> dict[str, list]:
+    """从显式排程里取那五个列表；没有排程就给五个空表。
+
+    ⚠ 没有排程时**不能**返回 `None`：`spec.py` 会把这份输入当排程读，
+    五个属性一个都不能缺。给空表的效果是"这一局没有排程"，
+    与"属性不存在"是两件事（后者是 17 份作业一起红的那种错）。
+    """
+    out: dict[str, list] = {name: [] for name in _SCHEDULE_LISTS}
+    if schedule is None:
+        return out
+    for name in _SCHEDULE_LISTS:
+        got = getattr(schedule, name, None)
+        if got is None:
+            raise AttributeError(
+                f"排程对象 {type(schedule).__name__} 上没有 `{name}`。"
+                f"`spec.py` 会拿这份输入当排程读，缺一个就是 AttributeError。"
+                f"要么补齐排程，要么显式传 None 表示'这一局没有排程'。")
+        out[name] = list(got)
+    return out
+
+
 @dataclass
 class SpecInputs:
     """`build_spec` 的全部输入。字段名与它原先从模拟器上读的名字**逐字相同**，
@@ -138,3 +166,99 @@ class SpecInputs:
         )
         kw.update(overrides)
         return cls(**kw)
+
+    @classmethod
+    def from_stage(cls, stage: Any, *, env: Any = None,
+                   enemy_at: Callable[..., Any] | None = None,
+                   species_provider: Callable[..., Any] | None = None,
+                   range_provider: Callable[..., Any] | None = None,
+                   schedule: Any = None,
+                   **overrides: Any) -> "SpecInputs":
+        """**不碰模拟器**：从 `stage` + 关卡静态项 + 排程直接算出一份输入。
+
+        这是 `from_sim` 的**兄弟**，不是它的内部兜底——所以
+        `grep -c "SpecInputs.from_sim"` 始终是一个有意义的计数
+        （博士 2026-09-19 的批准里专门点了这一条）。
+
+        ## 它为什么能对
+
+        `build_spec` 要的是**开局那一刻的输入**。而在开局那一刻：
+
+        * `snow_fields` / `team_auras` 在原版构造里就是**空表**（`sim.py:573/578`）
+          ⇒ 直接给空表，**不是**"去问模拟器现在有几片雪"。这一条是**闸门盲区**的正解：
+          规格取的是开局态，部署时才建的机制本来就不该出现在规格里。
+        * `devices` / `farmland` / `total_attack` 是构造期**纯由 `stage` 造出来**的
+          （`sim.py:525 / 536-544 / 583`）⇒ 照抄同样三步即等价。
+        * 其余（`fps`/`speed_scale`/`ranged_enemies`/`enemy_windup`/
+          `environment_difficulty`/`max_time`）由调用方经 `env` 交进来——
+          它们**只有构造参数手上有**，反推不回去（见 `verify.py:399-409` 那段）。
+
+        ⚠ `goal_cells` **仍留着**：`simgo/spec.py:405` 现在还在读 `inp.goal_cells`，
+        而那个文件当前属于后端的工作窗口。**删它必须和那一行同批**，否则
+        中间态会 `AttributeError`。PM #5 §五 已定"要删"，此处只是把顺序记明白。
+
+        ## 判据
+
+        **与 `from_sim` 产出的 `spec_sha` 逐字节一致**（金标准 17/17 的 `spec_sha`
+        就是基线；见 `out/golden_go.json`）。**17/17 之前不许切**。
+        """
+        #: 关卡静态那 8 项。传进来就用，没传就现算——现算的那条与
+        #: `verify.py:410` 的 `stage_env(...)` 是**同一个函数**，不另写一份。
+        if env is None:
+            from ak_tactic.frontend.stage_env import stage_env
+            env = stage_env(stage)
+
+        # ---- 装置：构造期纯由 stage 造出（`sim.py:525`）----
+        from ak_tactic.battle.devices import BLOCKER_KEY, make_devices
+        devices = make_devices(stage)
+        blocker_cells = [d.cell for d in devices if d.key == BLOCKER_KEY]
+
+        # ---- 田地：与 `sim.py:534-544` 逐字同序，包括那一次 `sever` ----
+        #: ⚠ 预置阻流阀走装置技能 2（无持续时间）⇒ **开场即在位**，
+        #: 它们的格子从第 0 秒起就不算田地。漏掉这几句 `sever`，
+        #: 有田地的图会多算若干格田地（原版为这件事专门写过注释）。
+        farmland = None
+        from ak_tactic.battle.environment import FarmlandSystem, PolluteParams
+        params = PolluteParams.from_stage(
+            stage, getattr(env, "environment_difficulty", "NORMAL"))
+        if params is not None and params.valid:
+            farmland = FarmlandSystem(stage, params)
+            for cell in blocker_cells:
+                farmland.sever(*cell)
+
+        # ---- 全场总攻击装置（`sim.py:583`）----
+        #: ⚠ 它在 `battle.sim` 里（`:192`），**不在** `battle.p3r` 里——
+        #: `p3r` 只放 `TotalAttackDevice` 这个类。别按名字猜模块（这一处我猜错过一次）。
+        from ak_tactic.battle.sim import make_total_attack
+        total_attack = make_total_attack(stage)
+
+        # ---- 排程：`spec.py:141` 有 `sch = schedule if schedule is not None else inp` ----
+        #: 有显式排程时，这几个列表只是**兜底**（`build_spec` 不会读它们）；
+        #: 没有显式排程时它们必须齐——少一个就是 `AttributeError`，而且是 17 份一起红。
+        lists = _schedule_lists(schedule)
+
+        return cls(
+            stage=stage,
+            enemy_at=enemy_at, species_provider=species_provider,
+            range_provider=range_provider,
+            fps=getattr(env, "fps", 30),
+            speed_scale=getattr(env, "speed_scale", 1.0),
+            ranged_enemies=getattr(env, "ranged_enemies", True),
+            enemy_windup=getattr(env, "enemy_windup", 0.5),
+            environment_difficulty=getattr(env, "environment_difficulty", "NORMAL"),
+            max_time=getattr(env, "max_time", 0.0),
+            devices=list(devices),
+            snow_fields=[],          #: 开局恒空（`sim.py:573`）——不许改成"现在有几片"
+            farmland=farmland,
+            total_attack=total_attack,
+            deployments=lists["deployments"],
+            device_deployments=lists["device_deployments"],
+            skill_uses=lists["skill_uses"],
+            retreats=lists["retreats"],
+            summon_deployments=lists["summon_deployments"],
+            team_auras=[],           #: 开局恒空（`sim.py:578`）
+            goal_cells=None,         #: 见上文：与 `spec.py:405` 同批删
+            snow_freeze=getattr(env, "snow_freeze", True),
+            heal_mode=getattr(env, "heal_mode", "range"),
+            **overrides,
+        )
