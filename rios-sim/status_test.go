@@ -51,12 +51,14 @@ func TestFrozenLowersEnemyRes(t *testing.T) {
 	if got := e.res(); math.Abs(got-30) > near {
 		t.Fatalf("未冻结时法抗应为 30，得到 %v", got)
 	}
-	// 限时冻结（计时器那一半）
+	// 限时冻结（计时器那一半）——必须带**友方**形别才给 −15
 	e.freezeTimer = 4
+	e.freezeFriendly = true
 	if got := e.res(); math.Abs(got-15) > near {
-		t.Fatalf("冻结期间法抗应为 30−15 = 15，得到 %v", got)
+		t.Fatalf("友方冻结期间法抗应为 30−15 = 15，得到 %v", got)
 	}
 	e.freezeTimer = 0
+	e.freezeFriendly = false
 	// 积雪满层那一半（`frozenSnow` 是复合判据的另一半，漏了它这一路就静默）
 	e.frozenSnow = true
 	if got := e.res(); math.Abs(got-15) > near {
@@ -68,11 +70,39 @@ func TestFrozenLowersEnemyRes(t *testing.T) {
 	}
 }
 
+// TestHostileFreezeGivesNoResDown 是这条机制最关键的**反向守卫**。
+//
+// 判据出处（PRTS `可抵抗状态` 页）：「**仅友方冻结**会令目标法术抗性-15（直接加算），
+// **与被冻结的是否是敌方单位无关**；敌人施加的均为敌方冻结。」
+//
+// ⚠ 没有这条守卫，把 −15 写成"看目标是不是敌人"（tooltip 词典那句的读法）也能全绿——
+// 因为本项目现有的冻结来源恰好都是干员给的。**正例全绿证明不了判据对**。
+func TestHostileFreezeGivesNoResDown(t *testing.T) {
+	e := &enemy{spec: SpawnSpec{Interval: 1.0, RES: 30}}
+	e.applyFreeze(5, false) // 敌方冻结
+	if !e.frozen() {
+		t.Fatal("敌方冻结照样得冻住：不给 −15 不等于不冻")
+	}
+	if got := e.res(); math.Abs(got-30) > near {
+		t.Fatalf("敌方冻结不该降法抗：期望 30，得到 %v", got)
+	}
+	// 友方冻结续上之后才给 −15
+	e.applyFreeze(5, true)
+	if got := e.res(); math.Abs(got-15) > near {
+		t.Fatalf("友方冻结应降法抗到 15，得到 %v", got)
+	}
+	// 计时器归零后，陈旧的形别不得继续生效（判据是 `freezeTimer > 0 && 友方`）
+	e.freezeTimer = 0
+	if got := e.res(); math.Abs(got-30) > near {
+		t.Fatalf("冻结结束后法抗应回 30（形别不得滞留），得到 %v", got)
+	}
+}
+
 func TestApplyColdConvertsToFreeze(t *testing.T) {
 	e := &enemy{spec: SpawnSpec{Interval: 1.0, RES: 0}}
 
 	// 第一次：只上寒冷
-	e.applyCold(5)
+	e.applyCold(5, true)
 	if math.Abs(e.coldTimer-5) > near {
 		t.Fatalf("首次寒冷应为 5 秒，得到 %v", e.coldTimer)
 	}
@@ -81,7 +111,7 @@ func TestApplyColdConvertsToFreeze(t *testing.T) {
 	}
 
 	// 第二次（仍在寒冷中）：转为冻结，**时长按触发那一次**（假设，见下）
-	e.applyCold(3)
+	e.applyCold(3, true)
 	if math.Abs(e.freezeTimer-3) > near {
 		t.Fatalf("再次寒冷应转为 3 秒冻结，得到 %v", e.freezeTimer)
 	}
@@ -95,8 +125,8 @@ func TestApplyColdConvertsToFreeze(t *testing.T) {
 
 func TestApplyColdRejectsNonPositive(t *testing.T) {
 	e := &enemy{spec: SpawnSpec{Interval: 1.0, RES: 0}}
-	e.applyCold(0)
-	e.applyCold(-3)
+	e.applyCold(0, true)
+	e.applyCold(-3, true)
 	if e.coldTimer != 0 || e.freezeTimer != 0 {
 		t.Fatalf("非正秒数不该写进任何计时器，得到 cold=%v freeze=%v",
 			e.coldTimer, e.freezeTimer)
@@ -105,12 +135,12 @@ func TestApplyColdRejectsNonPositive(t *testing.T) {
 
 func TestApplyFreezeTakesMax(t *testing.T) {
 	e := &enemy{spec: SpawnSpec{Interval: 1.0, RES: 0}}
-	e.applyFreeze(5)
-	e.applyFreeze(2)
+	e.applyFreeze(5, true)
+	e.applyFreeze(2, true)
 	if math.Abs(e.freezeTimer-5) > near {
 		t.Fatalf("短冻结不该顶掉长冻结：期望 5，得到 %v", e.freezeTimer)
 	}
-	e.applyFreeze(8)
+	e.applyFreeze(8, true)
 	if math.Abs(e.freezeTimer-8) > near {
 		t.Fatalf("更长的冻结应当续上：期望 8，得到 %v", e.freezeTimer)
 	}
