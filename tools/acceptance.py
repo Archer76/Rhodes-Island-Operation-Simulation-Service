@@ -1260,6 +1260,21 @@ def write_report(items: list[dict], drops: list[dict], changes: list[dict],
              f"未跑另两口径仅供参考：全部 {len(_n_all)}／计入判定 {len(_n_cnt)}），"
              f"退出码 **{rc}**，总耗时 {seconds / 60:.1f} 分钟")
     L.append(f"- 测量对象：HEAD `{fp1['head']}`，脏文件 {fp1['dirty_n']} 条")
+    #: ★ PM 2026-09-20 裁定（自指）：报告自身入库会把 HEAD 推前一笔 ⇒ **产物恒落后一笔**，
+    #: 必须**在头部写明判读方法**，免得下一个人把「落后一笔」读成「没测到最新代码」。
+    #: 判据落在**产品路径**上：差异只在 `tools/`、`docs/` ⇒ 该轮判定仍成立，**不许为了对齐而重跑**
+    #: （那会变成「重跑→推一笔→又落后」的死循环）。严格自指要改工具记两个 sha，不是用重跑追。
+    _sig = next((i.get("measured", {}).get("source_sig") for i in items
+                 if isinstance(i.get("measured"), dict) and i["measured"].get("source_sig")), None)
+    L.append(f"- 判定所锚的产品路径身份：`rios-sim/**/*.go` → `source_sig={_sig}`"
+             f"（`ak_tactic/`、`rios-sim/`、`fixtures/` 的内容随 HEAD 走）")
+    L.append("")
+    L.append("> ⚠ **自指·必读（落后一笔是设计如此，不是漏测）**：本报告记的是**测量当时**的 HEAD；"
+             "报告自身入库必然把 HEAD 推前一笔 ⇒ **本产物恒落后一笔**。判读方法：拿本报告与当前 HEAD 比，"
+             "**差异若只落在 `tools/`、`docs/`（工具与文档），产品路径逐位未变 ⇒ 该轮判定对当前 HEAD "
+             "仍然成立，无须重跑**；**产品路径有差异 ⇒ 必须重跑**。"
+             "（严格自指的正确做法是改本工具、同时记「测量对象 sha」与「生成物自身 sha」，"
+             "**不是**用重跑去追。）")
     if drift:
         L.append("")
         L.append("> ⚠ **测量期间工作树被改动**：" + "；".join(drift)
