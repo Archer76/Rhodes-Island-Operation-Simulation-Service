@@ -1347,6 +1347,10 @@ def check_pile() -> None:
             # `target.talent_dodge_phys`，缺字段是 AttributeError，不是"没抵挡"。
             self.talent_dodge_phys = self.talent_dodge_arts = 0.0
             self.shield = 0.0
+            # 天赋列表：敌人打干员那条路会过 `sim._species_resist`（泥岩「手足相惜」
+            # 按**敌人种类**减伤），它取 `op.talents`。桩身上没有天赋，**但字段必须
+            # 在**——缺了是 AttributeError，那与"本来就没这条天赋"长得完全不同。
+            self.talents: list = []
 
         def take(self, amount):
             amount = max(0.0, amount)
@@ -1820,6 +1824,9 @@ class _ProbeOp:
         # AttributeError——那与"本来就没抵挡"长得完全不同，必须炸出来。
         self.talent_dodge_phys = self.talent_dodge_arts = 0.0
         self.shield = 0.0
+        # 同 `_OpStub`：敌人打干员那条路现在要过 `sim._species_resist`
+        # （泥岩「手足相惜」按**敌人种类**减伤），它取 `op.talents`——字段必须在。
+        self.talents: list = []
         self.block_cnt = block
         self.skill = None
         self.skill_active = False
