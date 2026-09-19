@@ -56,7 +56,10 @@ sys.stdout.reconfigure(encoding="utf-8")
 from ak_tactic.plan import Plan, Roster                      # noqa: E402
 from ak_tactic.simgo import build_spec                       # noqa: E402
 from ak_tactic.verify import Verifier                        # noqa: E402
-from ak_tactic.frontend.inputs import SpecInputs
+from ak_tactic.frontend.inputs import SpecInputs               # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from engine_pin import EngineBuildError, ensure_pinned        # noqa: E402
 
 OUT = ROOT / "out"
 #: 判据集与基线**必须在版本控制里**（通告 #6 四）：`out/` 是易失的临时目录
@@ -226,6 +229,13 @@ def main() -> int:
     if not (check or extend or rebless or args.write):
         check = True          #: 默认＝只检查（**不再默认写基线**）
     why = args.why.strip()
+    #: ⚠ **自建自钉**（`52c89a4` 之后 `find_binary()` 未设即抛）：本工具要跑 Go 引擎，
+    #: 就不许让读数落到一枚来源不明的 exe 上；没钉就自己构建一枚再钉住。
+    try:
+        _exe, _sha, _sig = ensure_pinned()
+    except EngineBuildError as e:
+        print(f"❌ {e}")
+        return 3
     print(f"仪器：{instrument_line()}")
     roster = _find("roster_max_modelled")
     roster = _find("roster_max_modelled")
