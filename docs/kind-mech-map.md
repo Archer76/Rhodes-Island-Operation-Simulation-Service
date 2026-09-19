@@ -1,10 +1,10 @@
 # kind ↔ Go 落点 映射表（C 档乙·第二版）
 
-> **生成物，不许手改**：由 `tools/kind_mech_map.py` 生成（`--md`）。生成时所在树 HEAD=`05dbeba`。
+> **生成物，不许手改**：由 `tools/kind_mech_map.py` 生成（`--md`）。生成时所在树 HEAD=`5dae546`。
 > **表不问「该不该建模」**——它只记「谁对应谁」；判据（先写后跑）见该文件头部。
 > **本版改动**（PM `msg-mu8yg0hb-f8` ＋ 验收对账）：新增第四态「待换尺子」（`regen` 改判）；M 列增「抽取方式」并加「逐格交代」节；「有落点」按 kind／distinct cand 两个口径分列；`go_index()` 剥掉**行尾注释**（词表 1508 → 1490）。
 
-左列＝`ak_tactic/formula.py` 的 `RULES` 里 `kind` 的**确切字面值**（共 **23 种**）；M 列＝该 kind 在 Python 落点写出的**字段名**（带行号与抽取方式）；R 列＝Go 生产代码 16 个 `.go`（排除 `*_test.go`、剥掉整行与行尾注释，词表 1506 个）里的整词命中。
+左列＝`ak_tactic/formula.py` 的 `RULES` 里 `kind` 的**确切字面值**（共 **23 种**）；M 列＝该 kind 在 Python 落点写出的**字段名**（带行号与抽取方式）；R 列＝Go 生产代码 16 个 `.go`（排除 `*_test.go`、剥掉整行与行尾注释，词表 1505 个）里的整词命中。
 
 ## 计数（**五个数各自独立，不许相加成一个数，也不许跨行并列**）
 
@@ -13,13 +13,28 @@
 | 有落点（**kind 计数**） | **3** | `damage`、`ep_damage`、`targets` |
 | 有落点（**distinct cand 字段**） | **3** | `atk_scale`、`damage_type`、`max_target` —— 口径＝**所有产生命中的 cand 名去重** |
 | 去重后**命中处数**（按 `文件:行` 去重） | **12** | `atk_scale` 3 处、`damage_type` 4 处、`max_target` 5 处 —— ★ 与上面两行**不是同一口径**：这行数的是 Go 侧的**行** |
-| 　└ **不含本轮新增文件**（`rios-sim/mech/chain.go`） | **6** | `atk_scale` 1 处、`damage_type` 4 处、`max_target` 1 处 —— ★ **这一行才与验收那一版可比**（它量时该文件还不存在） |
+| 　└ **不含本轮新增文件**（＝**下面「本轮新增文件清单」里的那些**） | **6** | `atk_scale` 1 处、`damage_type` 4 处、`max_target` 1 处 —— ★ **这一行才与验收那一版可比**（它量时那种文件还不存在）；**「排除清单」在下面单独一节，连首次入库 sha 与时间一起印** |
 | 共用字段（**只在「有落点」范围内**） | **1** | `damage_type` |
 | 共用字段（**全表范围**） | **2** | `damage_type`、`heal_scale` —— ★ 多出的 `heal_scale`（`heal`／`regen`）不在有落点范围内，**而它正是 `regen` 那格缺陷的本体** |
 
+### 本轮新增文件清单（**「不含本轮新增」那一列的口径来源**）
+
+划界规则：**手工枚举的路径集合（不是 tag、不是起点 sha）：本轮新增且会被同一把尺子算成落点的文件**。★ 为什么必须印这一节（PM `msg-mu8zychr-fp` 把验收的建议升格为硬要求）：**「本轮」是随时间漂移的词**——同一个 `6`，在这一轮与下一轮的意思不同（下一轮若又新增了带 `json:"atk_scale"` 的文件，`6` 就变了）。**只印 `6`，读者无法判断它是否可比；印出清单，`6` 才有身份**（同族 `515530a8`：表的身份先于数值）。
+
+| 路径 | 首次入库 sha | 入库时间 |
+| --- | --- | --- |
+| `rios-sim/mech/chain.go` | `136e617` | 2026-09-20 06:32:18 |
+
+★ **被排除的命中处**（现算，故行号会随该文件改动而漂移——**这正是不能写死行号的理由**；验收 07:05 独立算的是 `atk_scale` ← `chain.go:34,70`、`max_target` ← `:33,67,111,114`，**本轮重生成后行号已经变了**，因为我随后又改过那个文件）：
+
+| cand | 被排除的 `文件:行` |
+| --- | --- |
+| `atk_scale` | `rios-sim/mech/chain.go:35`、`rios-sim/mech/chain.go:81` |
+| `max_target` | `rios-sim/mech/chain.go:34`、`rios-sim/mech/chain.go:78`、`rios-sim/mech/chain.go:124`、`rios-sim/mech/chain.go:127` |
+
 ★ **四个量分开写，因为它们回答的是四个不同的问题**（`6dd6739c`／`fd544d68`）：kind 计数（几个**机制种类**有落点）／distinct 字段（几个**字段名**命中）／共用字段（一个字段名被几个 kind 抽到）／命中处数（Go 侧几个**行**命中）。**跨行不可比、不许相加。**
 
-★ **「净字段 2 vs 3」这一场争议的结论是两边各错一半**（对账 `msg-mu8xg2iz-f4`／`msg-mu8ymgmc-ff`）：验收量到 2，**是它自己打印时 `hits[:3]` 截掉了排第 4 的 `atk_scale`**（**与我的主表显示无关**——这一点是它自己查出来并自纠的）；而我的**命中处数**把同一个 Go 行数了三遍（按**抽取次数**计数，不是按**对象**计数，**与幽灵 kind 同源**）。**现在的口径**：处数按 `文件:行` 去重，`atk_scale` **1 处**／`max_target` **1 处**／`damage_type` **4 处**。
+★ **「净字段 2 vs 3」这一场争议的结论是两边各错一半——并且它的署名要写三方槽**（对账 `msg-mu8xg2iz-f4`／`msg-mu8ymgmc-ff`／署名更正 `msg-mu8zychr-fp`）：**① 归因源头＝PM 的广播推断**（它从我的汇报里推出「v1 主表把 `atk_scale` 藏了」，**且当时没标『这是我推的』**）；**② 写入产物＝我**（把这句推断当结论写进了 v2 表）；**③ 引用方＝验收**（它按产物署名归给了我，并在对账里查明源头另有其人）。★ 通则：**「产物里写着」与「这是谁说的」是两个槽**。**另外两边各错一半**：验收量到 2，是它自己打印时 `hits[:3]` 截掉了排第 4 的 `atk_scale`（**与我的主表显示无关**——这一点是它自己查出来并自纠的）；而我的**命中处数**把同一个 Go 行数了三遍（按**抽取次数**计数，不是按**对象**计数，**与幽灵 kind 同源**）。**现在的口径**：处数按 `文件:行` 去重，`atk_scale` **1 处**／`max_target` **1 处**／`damage_type` **4 处**。
 | 待换尺子 | **1** | cand 与 kind 名不同源 ⇒ 先换尺子 |
 | 未核·**Python 侧无可抽字段名** | **15** | 这把尺子量不到，不是「Go 侧没有」 |
 | 未核·**同源 cand 但 Go 0 命中** | **4** | 要读 Go 确认 |
@@ -33,7 +48,7 @@
 | `control` | 10 | `self_control`＠1718·out、`enemy_control`＠1718·out、`control`＠1720·note | ✓ | — | **未核** |
 | `cost` | 3 | — | — | — | **未核** |
 | `count` | 6 | — | — | — | **未核** |
-| `damage` | 17 | `damage_type`＠1660·out、`max_of`＠1665·out、`max_of`＠1666·note、`atk_scale`＠1669·out、`atk_scale`＠1670·out、`atk_scale`＠1671·note、`true_damage`＠1677·out | （不适用：已命中） | `damage_type`（4 处）→ `rios-sim/mech/huai_shu_li.go:369`、`rios-sim/wire.go:165`（与 `ep_damage` 共用 ⇒ **归属未核**）<br>`atk_scale`（3 处）→ `rios-sim/wire.go:273`、`rios-sim/mech/chain.go:34`（**本轮新增**） | **有落点** |
+| `damage` | 17 | `damage_type`＠1660·out、`max_of`＠1665·out、`max_of`＠1666·note、`atk_scale`＠1669·out、`atk_scale`＠1670·out、`atk_scale`＠1671·note、`true_damage`＠1677·out | （不适用：已命中） | `damage_type`（4 处）→ `rios-sim/mech/huai_shu_li.go:369`、`rios-sim/wire.go:165`（与 `ep_damage` 共用 ⇒ **归属未核**）<br>`atk_scale`（3 处）→ `rios-sim/wire.go:273`、`rios-sim/mech/chain.go:35`（**本轮新增**） | **有落点** |
 | `debuff` | 9 | — | — | — | **未核** |
 | `dodge` | 3 | — | — | — | **未核** |
 | `ep_burst` | 4 | `ep_burst`＠1705·out、`ep_burst`＠1706·note | ✓ | — | **未核** |
@@ -50,7 +65,7 @@
 | `shield` | 3 | — | — | — | **未核** |
 | `sp` | 3 | — | — | — | **未核** |
 | `summon` | 2 | — | — | — | **未核** |
-| `targets` | 9 | `max_target`＠1686·out、`max_target`＠1687·out、`max_target`＠1688·note | （不适用：已命中） | `max_target`（5 处）→ `rios-sim/wire.go:271`、`rios-sim/mech/chain.go:33`（**本轮新增**） | **有落点** |
+| `targets` | 9 | `max_target`＠1686·out、`max_target`＠1687·out、`max_target`＠1688·note | （不适用：已命中） | `max_target`（5 处）→ `rios-sim/wire.go:271`、`rios-sim/mech/chain.go:34`（**本轮新增**） | **有落点** |
 | `trait` | 8 | — | — | — | **未核** |
 
 ## 逐格交代：20 格「未核／待换尺子」的 cand 给的是什么、凭什么
@@ -133,11 +148,11 @@
   ```go
   DamageType string  `json:"damage_type"`
   ```
-* `atk_scale` @ `rios-sim/mech/chain.go:34`
+* `atk_scale` @ `rios-sim/mech/chain.go:35`
   ```go
   AtkScale  float64 `json:"atk_scale"`
   ```
-* `atk_scale` @ `rios-sim/mech/chain.go:70`
+* `atk_scale` @ `rios-sim/mech/chain.go:81`
   ```go
   return nil, fmt.Errorf("chain: atk_scale 必须 >0，收到 %v", s.AtkScale)
   ```
@@ -161,19 +176,19 @@
   ```
 
 ### `targets`
-* `max_target` @ `rios-sim/mech/chain.go:33`
+* `max_target` @ `rios-sim/mech/chain.go:34`
   ```go
   MaxTarget int     `json:"max_target"`
   ```
-* `max_target` @ `rios-sim/mech/chain.go:67`
+* `max_target` @ `rios-sim/mech/chain.go:78`
   ```go
   return nil, fmt.Errorf("chain: max_target 必须 ≥1，收到 %d", s.MaxTarget)
   ```
-* `max_target` @ `rios-sim/mech/chain.go:111`
+* `max_target` @ `rios-sim/mech/chain.go:124`
   ```go
   return nil, fmt.Errorf("chain: max_target 必须 ≥1，收到 %d", maxTarget)
   ```
-* `max_target` @ `rios-sim/mech/chain.go:114`
+* `max_target` @ `rios-sim/mech/chain.go:127`
   ```go
   return nil, fmt.Errorf("chain: max_target=%d：%w", maxTarget, ErrJumpUndetermined)
   ```

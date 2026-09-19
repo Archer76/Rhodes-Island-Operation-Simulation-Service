@@ -76,7 +76,40 @@ _NOT_A_LANDING = frozenset("append other value len make range min max sum print"
 #: 我新写的 `rios-sim/mech/chain.go` 里带着 `json:"atk_scale"` 等标签，会让 `targets`／`damage`
 #: 的「有落点」多出落在我自己文件上的那几处。验收那一版是**没有这个文件**的树，
 #: 两个读数不可比（`515530a8`：比对树是否相同要写死两个 sha）。
+#:
+#: ★★ 但这个集合**本身有身份问题**（PM `msg-mu8zychr-fp` 把验收的建议升格为硬要求）：
+#: **「本轮」是随时间漂移的词**——只印 6，读者无法判断它是否可比。所以：
+#: ① 表里必须印**被排除文件清单**（路径 ＋ 首次入库 sha ＋ 时间），② 那一列的表头要写明
+#: 「排除的是清单里这些」，③ **划界规则也写出来**：本集合＝**手工列出的路径**（不是 tag、不是起点 sha），
+#: 每加一个文件都要在这里补一行——**清单要能被人拿去复核，而不是只能被相信**。
 _NEW_THIS_ROUND = frozenset({"rios-sim/mech/chain.go"})
+
+#: 划界规则（写进表里，供复核）
+_NEW_THIS_ROUND_RULE = ("手工枚举的路径集合（不是 tag、不是起点 sha）："
+                        "本轮新增且会被同一把尺子算成落点的文件")
+
+
+def new_file_provenance() -> list[tuple[str, str, str]]:
+    """每个「本轮新增文件」的**首次入库 sha 与时间**（现算，不写死）。
+
+    返回 [(相对路径, sha 或「未入库」, 时间或「—」)]。
+    ★ 用 `--diff-filter=A`（Added）取**最早一次**入库那条；未入库的文件如实写「未入库」，
+    不许留空——留空会被读成「已入库但我懒得写」（同族 `bd07345f`：找不到会被读成通过）。
+    """
+    out: list[tuple[str, str, str]] = []
+    for rel in sorted(_NEW_THIS_ROUND):
+        p = subprocess.run(
+            ["git", "log", "--diff-filter=A", "--format=%h|%ad", "--date=format:%Y-%m-%d %H:%M:%S",
+             "--", rel], cwd=ROOT, capture_output=True, text=True, encoding="utf-8")
+        lines = [ln for ln in (p.stdout or "").splitlines() if ln.strip()]
+        if p.returncode != 0:
+            out.append((rel, "取不到（git 报错）", "—"))
+        elif not lines:
+            out.append((rel, "未入库", "—"))
+        else:
+            sha, _, when = lines[-1].partition("|")
+            out.append((rel, sha, when))
+    return out
 
 _GO_KEYWORDS = frozenset("""func return struct interface package import range string int
 bool error make append len nil true false type var const for if else switch case default
@@ -324,6 +357,14 @@ def build(strip_comments: bool = True) -> dict:
             by_cand_lines.setdefault(h["cand"], set()).add((h["file"], h["line"]))
     #: 不含本轮新增文件的命中处数（逐 cand）
     by_cand_lines_x: dict[str, set[tuple[str, int]]] = {}
+    #: ★ 验收建议（`msg-mu8zxdwu-fo`）：**把被排除的文件清单印出来，连它们贡献了哪几处一起**。
+    #: 理由：只印树 HEAD 拦不住这件事——下一个人看到 12 与 6 两个数时，
+    #: 不知道差的是**哪几个文件**；印清单就等于把分母消掉。
+    excluded_by_cand: dict[str, set[tuple[str, int]]] = {}
+    for r in landed:
+        for name, rel, ln, _t in hits_of(fields.get(r["kind"], []), idx):
+            if rel in _NEW_THIS_ROUND:
+                excluded_by_cand.setdefault(name, set()).add((rel, ln))
     for r in landed:
         for name, rel, ln, _t in hits_of(fields.get(r["kind"], []), idx_x):
             by_cand_lines_x.setdefault(name, set()).add((rel, ln))
@@ -332,6 +373,7 @@ def build(strip_comments: bool = True) -> dict:
             "go_words_x": len(idx_x) - 1,
             "go_files_x": idx_x.get("__files__", [("", 0, "")])[0][1],
             "new_files": sorted(_NEW_THIS_ROUND),
+            "excluded_by_cand": {c: sorted(v) for c, v in sorted(excluded_by_cand.items())},
             "distinct_cands": distinct, "shared_cands": shared_landed,
             "shared_cands_all": shared_all, "used": {n: sorted(set(k)) for n, k in used.items()},
             "hit_lines_by_cand": {c: len(v) for c, v in sorted(by_cand_lines.items())},
@@ -438,10 +480,11 @@ def md(d: dict) -> str:
              f"**{sum(d['hit_lines_by_cand'].values())}** | "
              + "、".join(f"`{c}` {n} 处" for c, n in d['hit_lines_by_cand'].items())
              + " —— ★ 与上面两行**不是同一口径**：这行数的是 Go 侧的**行** |")
-    L.append(f"| 　└ **不含本轮新增文件**（`{'`／`'.join(d['new_files'])}`） | "
+    L.append(f"| 　└ **不含本轮新增文件**（＝**下面「本轮新增文件清单」里的那些**） | "
              f"**{sum(d['hit_lines_by_cand_x'].values())}** | "
              + "、".join(f"`{c}` {n} 处" for c, n in d['hit_lines_by_cand_x'].items())
-             + " —— ★ **这一行才与验收那一版可比**（它量时该文件还不存在） |")
+             + " —— ★ **这一行才与验收那一版可比**（它量时那种文件还不存在）；"
+               "**「排除清单」在下面单独一节，连首次入库 sha 与时间一起印** |")
     L.append(f"| 共用字段（**只在「有落点」范围内**） | **{len(d['shared_cands'])}** | "
              f"{'、'.join('`' + c + '`' for c in d['shared_cands']) or '—'} |")
     L.append(f"| 共用字段（**全表范围**） | **{len(d['shared_cands_all'])}** | "
@@ -449,13 +492,40 @@ def md(d: dict) -> str:
              f"★ 多出的 `heal_scale`（`heal`／`regen`）不在有落点范围内，"
              f"**而它正是 `regen` 那格缺陷的本体** |")
     L.append("")
+    L.append("### 本轮新增文件清单（**「不含本轮新增」那一列的口径来源**）")
+    L.append("")
+    L.append(f"划界规则：**{_NEW_THIS_ROUND_RULE}**。★ 为什么必须印这一节（PM `msg-mu8zychr-fp` "
+             "把验收的建议升格为硬要求）：**「本轮」是随时间漂移的词**——同一个 `6`，"
+             "在这一轮与下一轮的意思不同（下一轮若又新增了带 `json:\"atk_scale\"` 的文件，`6` 就变了）。"
+             "**只印 `6`，读者无法判断它是否可比；印出清单，`6` 才有身份**（同族 `515530a8`："
+             "表的身份先于数值）。")
+    L.append("")
+    L.append("| 路径 | 首次入库 sha | 入库时间 |")
+    L.append("| --- | --- | --- |")
+    for rel, sha, when in new_file_provenance():
+        L.append(f"| `{rel}` | `{sha}` | {when} |")
+    L.append("")
+    L.append("★ **被排除的命中处**（现算，故行号会随该文件改动而漂移——**这正是不能写死行号的理由**；"
+             "验收 07:05 独立算的是 `atk_scale` ← `chain.go:34,70`、`max_target` ← `:33,67,111,114`，"
+             "**本轮重生成后行号已经变了**，因为我随后又改过那个文件）：")
+    L.append("")
+    L.append("| cand | 被排除的 `文件:行` |")
+    L.append("| --- | --- |")
+    for cand, locs in d["excluded_by_cand"].items():
+        L.append(f"| `{cand}` | " + "、".join(f"`{f}:{n}`" for f, n in locs) + " |")
+    L.append("")
     L.append("★ **四个量分开写，因为它们回答的是四个不同的问题**（`6dd6739c`／`fd544d68`）："
              "kind 计数（几个**机制种类**有落点）／distinct 字段（几个**字段名**命中）／"
              "共用字段（一个字段名被几个 kind 抽到）／命中处数（Go 侧几个**行**命中）。"
              "**跨行不可比、不许相加。**")
     L.append("")
-    L.append("★ **「净字段 2 vs 3」这一场争议的结论是两边各错一半**（对账 `msg-mu8xg2iz-f4`／"
-             "`msg-mu8ymgmc-ff`）：验收量到 2，**是它自己打印时 `hits[:3]` 截掉了排第 4 的 `atk_scale`**"
+    L.append("★ **「净字段 2 vs 3」这一场争议的结论是两边各错一半——并且它的署名要写三方槽**"
+             "（对账 `msg-mu8xg2iz-f4`／`msg-mu8ymgmc-ff`／署名更正 `msg-mu8zychr-fp`）："
+             "**① 归因源头＝PM 的广播推断**（它从我的汇报里推出「v1 主表把 `atk_scale` 藏了」，"
+             "**且当时没标『这是我推的』**）；**② 写入产物＝我**（把这句推断当结论写进了 v2 表）；"
+             "**③ 引用方＝验收**（它按产物署名归给了我，并在对账里查明源头另有其人）。"
+             "★ 通则：**「产物里写着」与「这是谁说的」是两个槽**。"
+             "**另外两边各错一半**：验收量到 2，是它自己打印时 `hits[:3]` 截掉了排第 4 的 `atk_scale`"
              "（**与我的主表显示无关**——这一点是它自己查出来并自纠的）；而我的**命中处数**把同一个 Go 行"
              "数了三遍（按**抽取次数**计数，不是按**对象**计数，**与幽灵 kind 同源**）。"
              "**现在的口径**：处数按 `文件:行` 去重，`atk_scale` **1 处**／`max_target` **1 处**／"

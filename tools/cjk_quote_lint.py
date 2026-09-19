@@ -78,6 +78,7 @@ def _show(p: Path) -> str:
 def main(argv: list[str]) -> int:
     args = [a for a in argv[1:] if a != "--"]
     quiet = "--quiet" in args
+    fix = "--fix" in args
     args = [a for a in args if not a.startswith("--")]
     if args:
         files = [Path(a) if Path(a).is_absolute() else ROOT / a for a in args]
@@ -95,8 +96,16 @@ def main(argv: list[str]) -> int:
         if not quiet:
             for n, text in v:
                 print(f"  {_show(p)}:{n}: {text[:96]}")
+        if fix:
+            #: ★ 「能变检查的变检查」的下一步：**规则机械化了，修法也机械化**
+            #: （人眼看 9 处、手改 9 处，就会漏 —— 实测我写新段落时又漏了 9 处，是这道检查抓住的）
+            lines = p.read_text(encoding="utf-8").splitlines(keepends=False)
+            for n, _t in v:
+                lines[n - 1] = PROSE_QUOTE.sub(lambda m: "「" + m.group(0)[1:-1] + "」", lines[n - 1])
+            p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            print(f"  ✎ 已修 {_show(p)} 的 {len(v)} 行")
     print(f"  ⇒ 扫 {len(files)} 个文件：{hit_files} 个文件有违规、共 {total} 处"
-          f"（散文行半角引号；围栏代码与行内代码已排除）")
+          f"（散文行半角引号；围栏代码与行内代码已排除）{'【已 --fix】' if fix else ''}")
     return 0 if total == 0 else 1
 
 
