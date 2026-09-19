@@ -191,6 +191,62 @@ WIRED: dict[str, str] = {
     "寒冷": "未接线", "脆弱": "未接线", "折射": "未接线", "元素损伤（族）": "未接线",
     "闪避／伤害抵挡": "未接线（概念未建模）",
     "天赋闪避／伤害抵挡": "未接线", "关卡机制解析": "已接线",
+    # ── 2026-09-19 补：干员／关卡平面的 10 行（此前是「—（未人工判定）」）──
+    "规格构造（主干）": "已接线",
+    "出怪规格序列化": "已接线",
+    "相性抗性（消费端）": "已接线（仅 Python 老引擎／Go 侧无效）",
+    "技能倍率（公式层）": "已接线",
+    "攻速链": "已接线",
+    "天赋（属性加成）": "已接线",
+    "装置（干员侧构造）": "已接线",
+    "关卡装载": "已接线",
+    "终点格（goal_cells）": "已接线（兜底路径恒被执行）",
+    "装置层（devices 门）": "未接线（零调用点）",
+}
+
+#: **人判依据**——每条结论必须能追回"哪一行、哪个符号"（PM 2026-09-19 三态口径）。
+#:
+#: 为什么单独一栏而不是塞进 `WIRED` 的字符串里：状态要能被程序读（可枚举），依据要能被
+#: 人复核（可追回）——两者混在一格里，早晚会有人只写状态。**留白本身也要显式**：
+#: 没登记依据的行会打印「⚠ 未登记」，而不是安静地空着（空着与"已核对"在输出上同形）。
+WIRED_WHY: dict[str, str] = {
+    # 本轮（2026-09-19）逐行取证：这 10 行每条都指到具体行号。
+    "规格构造（主干）":
+        "生产入口直呼：`ak_tactic/simgo/verifier.py:93` spec = build_spec(SpecInputs.from_sim(sim), "
+        "allow_devices=True, schedule=schedule, env=env)（同文件 :89 注明「规格必须在跑之前取」）",
+    "出怪规格序列化":
+        "同文件调用**落在生产调用树里**：`ak_tactic/simgo/spec.py:1190` "
+        "spawns = [_spawn_spec(inp, t, sp, routes) for t, sp in inp.stage.timeline()]，"
+        "而它就在 build_spec（:1117 起）体内 —— 与「停顿」同型：定义文件正是消费它的那一层",
+    "相性抗性（消费端）":
+        "唯一消费点在 **Python 老引擎**：`ak_tactic/battle/sim.py:3186` tal = find_species_resistance(op.talents)"
+        "（:95 处 import）；Go 侧无消费点（§3.66 实测：哨兵 provider 被调 149 次、species 仍未进规格 dict）"
+        "⇒ 对当前 Go 引擎无效",
+    "技能倍率（公式层）":
+        "`ak_tactic/operator/skill.py:1465` terms = _formula.parse(self.raw_description, self.blackboard)"
+        "（技能正文按公式解析）；同族 consumer 还有 enemy_formula.py:880、mechanics.py:441/468。"
+        "⚠ 本行「引用数 238」是**子串匹配**的产物（parse 是 argparse／parse_devices 的子串）⇒ 只当上界读",
+    "攻速链":
+        "`ak_tactic/verify.py:309` aspd = attack_speed_bonus(（verify.py 是生产入口；:32 处 import）",
+    "天赋（属性加成）":
+        "`ak_tactic/operator/attack_speed.py:83` for t in resolve_talents(char, elite=…, level=…, potential=…)，"
+        "该函数被 verify.py:309 调用 ⇒ **攻速那一路**接通。⚠ 本行只判接线；属性加成那一路是否接通未在本轮复核"
+        "（「后果」栏那条是前轮断言，不是本行的依据）",
+    "装置（干员侧构造）":
+        "`ak_tactic/battle/sim.py:525` self._devices = make_devices(stage) → "
+        "`ak_tactic/frontend/inputs.py:153` devices=list(_get(\"_devices\", None) or []) → 进规格；"
+        "另一条同源路径 `frontend/inputs.py:213`（from_stage，当前只有判据工具在调）",
+    "关卡装载":
+        "`ak_tactic/verify.py:190` self._stages[stage_id] = load_stage(stage_id, source=self.source)"
+        "（:30 处 import）；CLI 另在 `ak_tactic/cli.py:278` 调",
+    "终点格（goal_cells）":
+        "同文件调用、在 build_spec 体内：`ak_tactic/simgo/spec.py:405` (inp.goal_cells or _find_goals(inp))、"
+        ":1220 写进规格 goal_cells。⚠ §3.66：from_sim 永远传 None ⇒ 左边恒假、**兜底恒被执行**"
+        "（这是「恒走兜底」，不是「没接线」）",
+    "装置层（devices 门）":
+        "⛔ **零调用点**：全仓对 devices_of 的提及只有它自己的定义行（`ak_tactic/frontend/devices.py:236`）"
+        "与 `__all__` 导出清单（:41）。⚠ 自动列把这个读成「本文件内使用」，而那个「使用」只是把名字列进"
+        "导出表 —— **引用 ≠ 消费**的又一例（与折射那条同为假阳性，方向相反）",
 }
 
 
@@ -297,6 +353,7 @@ def assess(row: tuple[str, str, str, str]) -> dict:
     return {"plane": plane, "name": name, "anchor": anchor, "consequence": consequence,
             "ok": ok, "why": why, "hits": hits, "outside": outside, "how": how,
             "guards": g, "status": status, "measured": measured,
+            "wired_why": WIRED_WHY.get(name, ""),
             "severity": SEVERITY.get(name, "—"), "kind": KINDS.get(name, "—")}
 
 
@@ -398,6 +455,23 @@ def self_test() -> int:
     bad += 0 if good6 else 1
     print(f"  {'✅' if good6 else '⛔'} 控制组：不打注入时现有 {len(ROWS)} 行必须没有红行："
           f"{clean or '（0 行）'}")
+    # ★ 人判列的两条**结构**守卫（不是水位）：
+    #   ① 每行都必须有人判结论——「—（未人工判定）」这种留白会让整张表看起来"填完了"；
+    #   ② WIRED 里不许残留已不存在的行名——改一次行名就会**静默孤立**一条判定。
+    missing = [r[1] for r in ROWS if r[1] not in WIRED]
+    good7 = not missing
+    bad += 0 if good7 else 1
+    print(f"  {'✅' if good7 else '⛔'} 每一行都要有人判结论（不许留白）：缺 {missing or '（0 行）'}")
+    orphan = sorted(set(WIRED) - {r[1] for r in ROWS})
+    good8 = not orphan
+    bad += 0 if good8 else 1
+    print(f"  {'✅' if good8 else '⛔'} WIRED 不许有已不存在的行名（改名会静默孤立判定）："
+          f"{orphan or '（0 条）'}")
+    # ⚠ 依据缺失**不判失败**（那会让自检一上来就红、逼人放宽它），但必须逐条点名：
+    #   没登记依据的行在输出里会与"已核对"同形，这正是本项目最贵的那类错。
+    noev = [r[1] for r in ROWS if r[1] in WIRED and not WIRED_WHY.get(r[1])]
+    print(f"  {'⚠' if noev else '✅'} 已登记可追回依据 {len(ROWS) - len(noev)}/{len(ROWS)} 行"
+          f"{('；未登记（前轮判定，本轮未复核）：' + '、'.join(noev)) if noev else ''}")
     return 1 if bad else 0
 
 
@@ -441,6 +515,7 @@ def main() -> int:
         print(f"    守卫     {len(a['guards'])} 条"
               f"{('：' + '、'.join(a['guards'][:3])) if a['guards'] else '（无）'}")
         print(f"    接线状态 {a['status']}（**人判**）／ 引用形态 {a['measured']}（量出来的）")
+        print(f"    人判依据 {a['wired_why'] or '⚠ 未登记（前轮判定，本轮未复核）'}")
         print(f"    病型     {a['kind']}    严重度 {a['severity']}")
         print(f"    若未接线 {a['consequence']}")
         print()
