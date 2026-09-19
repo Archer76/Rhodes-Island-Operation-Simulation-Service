@@ -600,13 +600,42 @@ def write_md(recs: list[dict], path: Path, exe, exe_sha: str = "?", exe_size: in
     L.append("")
     L.append("| # | 事项 | 账面事实（本轮取证） | 状态 |")
     L.append("| --- | --- | --- | --- |")
-    L.append("| 1 | `act31side_07` 关卡 | 本树判据集中**无该关夹具**（旁支树有，"
-             "按通告 #5 二不得拿来凑数） | **本关当前无法验收** |")
+    #: ⚠ **2026-09-20 修（硬编码一族，PM 转后端2 登记）**：本行原来**写死**「本树判据集中
+    #: **无**该关夹具，本关当前无法验收」——HS-7 夹具（`fixtures/plan-hs07.json`）入库后
+    #: 已不再是事实。现在**由本轮实跑数据决定**：该 `stage` 在不在 `recs` 里。
+    #: 同族纪律：`45fab0e7`（一个量只能有一个口径来源）、`4178a996`（事实栏不许写死）、
+    #: `fac4b7de`（全称量词要么有穷举证据要么不写——所以下面只对**本台账真跑到的**下结论）。
+    _hs07 = [r for r in recs if r.get("stage") == "act31side_07"]
+    if _hs07:
+        _p07 = "、".join(f"`{Path(str(r.get('plan_path'))).name}`" for r in _hs07)
+        L.append(f"| 1 | `act31side_07` 关卡 | ✅ **已收**（2026-09-20）：本树判据集中**有**"
+                 f"该关夹具（{_p07}），本轮已跑、读数见 §二该关那一节 | "
+                 f"**本关已可验收**（`act31side_07` 先例关闭） |")
+    else:
+        L.append("| 1 | `act31side_07` 关卡 | 本树判据集中**无该关夹具**（旁支树有，"
+                 "按通告 #5 二不得拿来凑数） | **本关当前无法验收** |")
     L.append("| 2 | `Schedule.diff`（`verify.py` 同时写两份排程） | 全仓**零调用点**，"
              "只有三处注释提到它 ⇒ 这件事**至今从未被证明过** | **已裁定「不接线」**（见下） |")
-    L.append("| 3 | `Plan` 的 `retreats` / `skill_uses` / 装置 / 召唤 | `Plan` 支持 `retreats`，"
-             "但两棵树 **25 个作业全部只有 `deploys` 键** ⇒ `Schedule` 五个列表里"
-             "**有三个今天没有任何计划格式能填上** | **本树无用例，当前无法验收** |")
+    #: ⚠ **2026-09-20 修（同一个病根第三次出现）**：本行原来**写死**「两棵树 **25 个作业**
+    #: 全部只有 `deploys` 键」。两个毛病：① 25 这个数**写死**；② 那个 25 数的是 `out/`
+    #: 草稿（易失目录，实测此刻 27 份）**而不是判据集** ⇒ 违 `a4039136`（`fixtures/` 才是
+    #: 唯一判据集、`out/` 易失）。现在**按本轮实跑到的作业逐份读键**，并把口径写进同一句里。
+    _plan_keys: dict = {}
+    for _r in recs:
+        _pp = _r.get("plan_path")
+        try:
+            _plan_keys[str(_pp)] = sorted(
+                k for k in json.loads(Path(str(_pp)).read_text(encoding="utf-8")).keys()
+                if not k.startswith("_"))
+        except Exception:  # noqa: BLE001 —— 读不到就**不进分母**（不拿没读到的当证据）
+            _plan_keys[str(_pp)] = None
+    _pk_ok = [k for k, v in _plan_keys.items() if v is not None]
+    _pk_ret = [k for k, v in _plan_keys.items() if v is not None and "retreats" in v]
+    L.append(f"| 3 | `Plan` 的 `retreats` / `skill_uses` / 装置 / 召唤 | `Plan` 支持 `retreats`，"
+             f"但**本台账实跑的 {len(_pk_ok)} 份作业里，{len(_pk_ok) - len(_pk_ret)} 份只有 "
+             f"`deploys` 键**（口径＝判据集 `fixtures/`，**不含易失的 `out/` 草稿**；"
+             f"读不到键的 {len(_plan_keys) - len(_pk_ok)} 份不计入） ⇒ `Schedule` 五个列表里"
+             f"**有三个今天没有任何计划格式能填上** | **本树无用例，当前无法验收** |")
     L.append("| 3b | `Schedule.diff` 的**裁定结论**（承上表第 2 行） | 生产路径**不接**；"
              "`Schedule` 类保留；`sched_parity_check.py` 保留为**诊断工具形态**"
              "（零运行期代价、零 `sim` 依赖） | **已决（不是待办）** |")
