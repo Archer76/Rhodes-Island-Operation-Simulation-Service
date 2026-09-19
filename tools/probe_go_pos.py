@@ -41,8 +41,10 @@ def _fixture(name: str) -> Path:
 class Thief(GoVerifier):
     spec = None
 
-    def _run_other_engine(self, *, sim, plan, stage, deployed, title):
-        Thief.spec = build_spec(SpecInputs.from_sim(sim), allow_devices=True)
+    def _run_other_engine(self, *, sim, plan, stage, deployed, title,
+                          schedule=None, env=None):
+        Thief.spec = build_spec(SpecInputs.from_sim(sim), allow_devices=True,
+                                     schedule=schedule, env=env)
         raise SystemExit(0)
 
 

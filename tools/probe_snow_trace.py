@@ -46,8 +46,10 @@ class Thief(GoVerifier):
         super().__init__(*a, **kw)
         self.spec = None
 
-    def _run_other_engine(self, *, sim, plan, stage, deployed, title):
-        self.spec = build_spec(SpecInputs.from_sim(sim), allow_devices=True)
+    def _run_other_engine(self, *, sim, plan, stage, deployed, title,
+                          schedule=None, env=None):
+        self.spec = build_spec(SpecInputs.from_sim(sim), allow_devices=True,
+                                     schedule=schedule, env=env)
         raise SystemExit(0)
 
 
