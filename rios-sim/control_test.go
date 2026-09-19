@@ -147,26 +147,111 @@ func TestCanDamageSleepingTarget(t *testing.T) {
 	}
 }
 
-func TestLevitateAppliesAndWeightHalving(t *testing.T) {
-	// 取消条件：**单位数据上为飞行单位** 且 **不持有缚地**
-	if levitateApplies(true, false) {
-		t.Fatal("飞行单位且无缚地 ⇒ 浮空 Buff 取消")
+// ★ 这一组是**订正**第 6 轮那版写的守卫用的。旧版三条守卫当时全绿，但相对
+// `行动方式` 整页原文漏了三处：遗漏"已持有浮空也不能再施加"、遗漏缚地镜像、
+// 重量减半只做一次（原文两样都有要累乘到四分之一）。
+// 保留此注释是为了记住：**正例守卫全绿不等于实现对。**
+func TestLevitateBuffAppliesThreeConditions(t *testing.T) {
+	// 地面、既无浮空也无缚地 ⇒ 可施加
+	if !levitateBuffApplies(false, false, false, false) {
+		t.Fatal("地面单位、无浮空无缚地 ⇒ 浮空 Buff 可施加")
 	}
-	if !levitateApplies(true, true) {
-		t.Fatal("飞行单位但持有缚地 ⇒ 可以浮空")
+	// ① 行动类型（数据）为飞行 ⇒ 不可施加
+	if levitateBuffApplies(true, false, false, false) {
+		t.Fatal("行动类型为飞行的单位无法被施加浮空Buff")
 	}
-	if !levitateApplies(false, false) {
-		t.Fatal("地面单位 ⇒ 可以浮空")
+	// ①的例外：持有缚地异常 ⇒ 可施加（允许"抵消"）
+	if !levitateBuffApplies(true, false, true, false) {
+		t.Fatal("飞行单位但持有缚地 ⇒ 可无视，允许施加浮空")
 	}
+	// ★② 已持有浮空异常 ⇒ 不可施加（旧版漏了这条）
+	if levitateBuffApplies(false, true, false, false) {
+		t.Fatal("已持有浮空异常的单位无法被施加浮空Buff")
+	}
+	// ②的例外一：持有缚地 ⇒ 可施加
+	if !levitateBuffApplies(false, true, true, false) {
+		t.Fatal("已持有浮空但持有缚地 ⇒ 允许「抵消」式施加")
+	}
+	// ②的例外二：本 Buff 携带浮空强化 ⇒ 可无视"已持有浮空"这一条
+	if !levitateBuffApplies(false, true, false, true) {
+		t.Fatal("携带浮空强化的 Buff 可无视「已持有浮空」这一条限制")
+	}
+	// ★ 但浮空强化**只**免那一条，不免"行动类型为飞行"
+	if levitateBuffApplies(true, false, false, true) {
+		t.Fatal("浮空强化不免「行动类型为飞行」这一条——原文那句限制只点了后一条")
+	}
+}
 
-	// 重量**大于 3** 才减半；恰好 3 不减
-	if got := levitateDuration(10, 3); math.Abs(got-10) > 1e-12 {
-		t.Fatalf("重量恰好 3 不减半（阈值是「大于3」），得到 %v", got)
+func TestGroundBuffAppliesIsTheMirror(t *testing.T) {
+	// 「行动类型（数据）不为飞行的单位……无法被施加缚地Buff」
+	if groundBuffApplies(false, false, false, false) {
+		t.Fatal("地面单位无法被施加缚地Buff")
 	}
-	if got := levitateDuration(10, 3.0001); math.Abs(got-5) > 1e-12 {
-		t.Fatalf("重量大于 3 应减半，得到 %v", got)
+	// 例外：持有浮空异常 ⇒ 可施加
+	if !groundBuffApplies(false, true, false, false) {
+		t.Fatal("地面单位但持有浮空 ⇒ 允许施加缚地以「抵消」")
 	}
-	if got := levitateDuration(10, 4); math.Abs(got-5) > 1e-12 {
-		t.Fatalf("重量大于 3 应减半，得到 %v", got)
+	// 飞行单位 ⇒ 可施加
+	if !groundBuffApplies(true, false, false, false) {
+		t.Fatal("飞行单位可被施加缚地Buff")
+	}
+	// 「已持有缚地异常的单位无法被施加缚地Buff」
+	if groundBuffApplies(true, false, true, false) {
+		t.Fatal("已持有缚地异常的单位无法被再施加缚地Buff")
+	}
+	// ⚠ 「缚地强化」这一项在 `行动方式` 页**未见记载**（页里只写了浮空强化），
+	// 所以这里只钉"传了也要走已持有缚地那一条"以外的取证过的行为，不臆造镜像条款。
+	if !groundBuffApplies(true, true, true, false) {
+		t.Fatal("飞行＋持有浮空与缚地 ⇒ 允许（浮空那条例外仍在）")
+	}
+}
+
+func TestHeavyDurationIsMultiplicative(t *testing.T) {
+	// 重量**高于 3** 才减半：恰好 3 不减
+	if got := heavyDuration(10, 3, true, false); math.Abs(got-10) > 1e-12 {
+		t.Fatalf("重量恰好 3 不减半（阈值是「高于3」），得到 %v", got)
+	}
+	if got := heavyDuration(10, 3.0001, true, false); math.Abs(got-5) > 1e-12 {
+		t.Fatalf("重量高于 3 且带浮空 ⇒ 减半，得到 %v", got)
+	}
+	// ★ 两个异常都有 ⇒ 累乘至**四分之一**（旧版只减半一次，正是漏在这）
+	if got := heavyDuration(10, 4, true, true); math.Abs(got-2.5) > 1e-12 {
+		t.Fatalf("浮空与缚地都有 ⇒ 累乘至四分之一，得到 %v", got)
+	}
+	// 带缚地单独也减半
+	if got := heavyDuration(10, 4, false, true); math.Abs(got-5) > 1e-12 {
+		t.Fatalf("只带缚地 ⇒ 减半，得到 %v", got)
+	}
+	// 两个都不带 ⇒ 不减（原文限于"当施加的Buff中包含浮空或缚地异常效果时"）
+	if got := heavyDuration(10, 4, false, false); math.Abs(got-10) > 1e-12 {
+		t.Fatalf("不带浮空也不带缚地 ⇒ 不减，得到 %v", got)
+	}
+	// 低重量即使两个都有也不减
+	if got := heavyDuration(10, 2, true, true); math.Abs(got-10) > 1e-12 {
+		t.Fatalf("重量不高于 3 ⇒ 不减，得到 %v", got)
+	}
+}
+
+func TestAirStateAfterStack(t *testing.T) {
+	// 比数量
+	if airStateAfterStack(false, 2, 1) != airFlying {
+		t.Fatal("浮空Buff数多 ⇒ 浮空状态")
+	}
+	if airStateAfterStack(true, 1, 2) != airGround {
+		t.Fatal("缚地Buff数多 ⇒ 缚地状态")
+	}
+	// ★ 数量相等时看**原本**是什么单位
+	if airStateAfterStack(true, 1, 1) != airFlying {
+		t.Fatal("数量相等且原本是飞行单位 ⇒ 浮空")
+	}
+	if airStateAfterStack(false, 1, 1) != airGround {
+		t.Fatal("数量相等且原本是地面单位 ⇒ 缚地")
+	}
+	// 一个都没有时也走"相等"那一支 ⇒ 保持原本
+	if airStateAfterStack(true, 0, 0) != airFlying {
+		t.Fatal("没有任何浮空/缚地Buff的飞行单位应保持飞行")
+	}
+	if airStateAfterStack(false, 0, 0) != airGround {
+		t.Fatal("没有任何浮空/缚地Buff的地面单位应保持地面")
 	}
 }
