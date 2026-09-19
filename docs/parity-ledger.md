@@ -1,13 +1,13 @@
 # 怀黍离逐关台账（判据＝**Go 自身基线漂移**）
 
-- 生成时间：2026-09-19 23:50:19；执行者：验收与守卫会话 `session-1a45cfee-9a65-4830-a327-03ac84285bfb`
+- 生成时间：2026-09-20 01:48:19；执行者：后端2（会话 session-37b2c3e2-6993-4a98-a7d2-5f09d62088a2）
 - 工具：`tools/parity_ledger.py`（通告 #3 派工；**不复用跑不起来的** `parity_plan.py`，见 `docs/acceptance-claims.md`）
 - Go 二进制：`D:\home\DSH\ak-tactic\out\acceptance\rios-sim-9b81f2d5.exe`（私有构建，`RIOS_SIM_BIN` 指定，不写回共享树）
   - **仪器身份**：`RIOS_SIM_BIN` 已显式设上，其 sha256 前 16 位 **`98fe111bce6c4ff0`**、3,599,360 字节（未设变量的轮次一律标「二进制身份未知」，不得与本表混用）
   - **来源三件套**：每条带 `plan_path`（绝对）／所属检出树／该树 HEAD，见下一节
   - **基线自身记着的那枚仪器**：`fixtures/golden_go.json` 每条都带 `engine_bin` / `engine_bin_sha16` / `engine_bin_mtime` / `roster_sha16`（**与基线记录不同时只报不判**：那是仪器差，不是模型漂移；同一份源码两次构建哈希就不同 ⇒ `sha16` 只能证明「是不是那一次构建」，源码身份要看 `source_sig`）
   - **留证仪器（历史读数用）**：身份与它复现的读数**唯一登记处**＝`tools/guard_engine_bin.py::LEGACY_INSTRUMENTS`（入库、可 diff、随守卫逐位核对）；本表**只放指针不复制数字**——两处各写一份，一改就对不上
-  - **`source_dirty`**：本轮 **43** 条未提交改动（实测同一棵树在两次运行之间从 60 变 61 ⇒ **本表只对当时那份工作树成立，不对任何提交成立**）
+  - **`source_dirty`**：本轮 **40** 条未提交改动（实测同一棵树在两次运行之间从 60 变 61 ⇒ **本表只对当时那份工作树成立，不对任何提交成立**）
 - 本轮实测（**新判据**）：**与 Go 基线一致 19 / Go 漂移 0 / 闸门拒跑 0 / 未跑 0**（共 19 份作业）
 - 旧读法留档（**已退出判据**）：vs 原版归零 18 / 真差 1——变更前的数字原样留在 git 历史（`eae2fc1`），此处只作对照
 
@@ -63,7 +63,7 @@
 | `fps` 同型 | 同「这一关用不到」 | `59748cd` |
 | `goal_cells` | **字段是活的，但 `from_sim` 永远传 `None`**——「从来没被填过」≠「不会被消费」 | `59748cd` |
 
-> ⚠ 配套判据（一并入账）：**凡「某字段改了没反应」，第一问是「它被读了吗」，第二问才是「读了有用吗」；而 `sha` 只能回答第二问。**分辨法＝**给消费者装计数器＋哨兵返回值**（只喂哨兵：被调用了多少次、送出去的规格里有没有它）。另：`cost_init`/`cost_max`/`cost_time`/`life` **根本不是 `SpecInputs` 的字段**（23 项里没有）⇒ 从来不在这个讨论范围内——原先把「静态 8 项走 `env`」写成 8 是错的，**实测只有 5 项**（`enemy_windup`/`fps`/`ranged_enemies`/`speed_scale`/`environment_difficulty`）。
+> ⚠ 配套判据（一并入账）：**凡「某字段改了没反应」，第一问是「它被读了吗」，第二问才是「读了有用吗」；而 `sha` 只能回答第二问。**分辨法＝**给消费者装计数器＋哨兵返回值**（只喂哨兵：被调用了多少次、送出去的规格里有没有它）。另：`cost_init`/`cost_max`/`cost_time`/`life` **根本不是 `SpecInputs` 的字段**（23 项里没有）⇒ 从来不在**这一段所讲的**范围内——这一段讲的是「**`env` 缺席时**由 `inp` 供上的那几项」，**实测 5 项**（`enemy_windup`/`fps`/`ranged_enemies`/`speed_scale`/`environment_difficulty`）。⚠ **别把这 5 项读成「`env` 里只有 5 项」**：`env` 承载并被 `spec.py` 消费的是 **8 项**（`stage_env.ENV_KEYS`；取用点 `spec.py:1197`／`:1206-1212`）——「8」与「5」量的是**两个不同的量**（2026-09-20 后端2 复核：本条原措辞「写成 8 是错的」按 8 项那一读是假的，账已撤回、措辞按此收窄）。
 
 ### 〇之六、措辞更正：`goal_cells` **不是「死字段」**
 
@@ -88,25 +88,25 @@
 
 | 关卡 | 计划 | 作业人数 | 标题 | 检出树 HEAD | 绝对路径 |
 |---|---|---|---|---|---|
-| act31side_ex08 | `hsex8.json` | 3 | 3 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\hsex8.json` |
-| act31side_ex08 | `hsex8_max.json` | 8 | 8 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\hsex8_max.json` |
-| act31side_01 | `plan-hs01.json` | 2 | 2 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hs01.json` |
-| act31side_02 | `plan-hs02.json` | 2 | 2 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hs02.json` |
-| act31side_03 | `plan-hs03.json` | 2 | 2 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hs03.json` |
-| act31side_04 | `plan-hs04.json` | 2 | 2 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hs04.json` |
-| act31side_05 | `plan-hs05.json` | 2 | 2 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hs05.json` |
-| act31side_06 | `plan-hs06.json` | 2 | 2 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hs06.json` |
-| act31side_09 | `plan-hs09.json` | 4 | 4 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hs09.json` |
-| act31side_ex01 | `plan-hsex01.json` | 4 | 4 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex01.json` |
-| act31side_ex02 | `plan-hsex02.json` | 3 | 3 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex02.json` |
-| act31side_ex03 | `plan-hsex03.json` | 4 | 4 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex03.json` |
-| act31side_ex04 | `plan-hsex04.json` | 4 | 4 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex04.json` |
-| act31side_ex05 | `plan-hsex05.json` | 4 | 4 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex05.json` |
-| act31side_ex06 | `plan-hsex06.json` | 4 | 4 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex06.json` |
-| act31side_ex07 | `plan-hsex07.json` | 4 | 4 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex07.json` |
-| act31side_ex08 | `plan-hsex08.json` | 1 | 勿玷对照 1 人（只求敌方技能出手落地，不求是好解） | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex08.json` |
-| act31side_tr01 | `plan-hstr01.json` | 1 | 1 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hstr01.json` |
-| act31side_tr02 | `plan-hstr02.json` | 1 | 1 人 | `598e710` | `D:\home\DSH\ak-tactic\fixtures\plan-hstr02.json` |
+| act31side_ex08 | `hsex8.json` | 3 | 3 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\hsex8.json` |
+| act31side_ex08 | `hsex8_max.json` | 8 | 8 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\hsex8_max.json` |
+| act31side_01 | `plan-hs01.json` | 2 | 2 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hs01.json` |
+| act31side_02 | `plan-hs02.json` | 2 | 2 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hs02.json` |
+| act31side_03 | `plan-hs03.json` | 2 | 2 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hs03.json` |
+| act31side_04 | `plan-hs04.json` | 2 | 2 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hs04.json` |
+| act31side_05 | `plan-hs05.json` | 2 | 2 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hs05.json` |
+| act31side_06 | `plan-hs06.json` | 2 | 2 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hs06.json` |
+| act31side_09 | `plan-hs09.json` | 4 | 4 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hs09.json` |
+| act31side_ex01 | `plan-hsex01.json` | 4 | 4 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex01.json` |
+| act31side_ex02 | `plan-hsex02.json` | 3 | 3 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex02.json` |
+| act31side_ex03 | `plan-hsex03.json` | 4 | 4 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex03.json` |
+| act31side_ex04 | `plan-hsex04.json` | 4 | 4 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex04.json` |
+| act31side_ex05 | `plan-hsex05.json` | 4 | 4 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex05.json` |
+| act31side_ex06 | `plan-hsex06.json` | 4 | 4 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex06.json` |
+| act31side_ex07 | `plan-hsex07.json` | 4 | 4 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex07.json` |
+| act31side_ex08 | `plan-hsex08.json` | 1 | 勿玷对照 1 人（只求敌方技能出手落地，不求是好解） | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hsex08.json` |
+| act31side_tr01 | `plan-hstr01.json` | 1 | 1 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hstr01.json` |
+| act31side_tr02 | `plan-hstr02.json` | 1 | 1 人 | `31bb439` | `D:\home\DSH\ak-tactic\fixtures\plan-hstr02.json` |
 
 ## 一之三、总表
 

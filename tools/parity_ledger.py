@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -393,7 +394,15 @@ def main() -> int:
                          "此时台账里必须带出处）")
     ap.add_argument("--out", default=str(LEDGER_MD))
     ap.add_argument("--json", default=str(LEDGER_JSON))
+    #: ⚠ 2026-09-20 后端2：本产物的「执行者」栏原先把「验收与守卫会话」**写死在题源里**，
+    #: 于是**谁跑都署那个名**——实测我跑了一次，产物第 3 行照样写着那个会话（**假署名**）。
+    #: 谁跑的就写谁：跑的人自己传，题源不许再写死某个会话。
+    ap.add_argument("--actor", default="",
+                    help="本次运行的署名（会话名／角色）；缺省读环境变量 AK_LEDGER_ACTOR，"
+                         "两者都没有则产物写「未署名」")
     args = ap.parse_args()
+    if args.actor and not os.environ.get("AK_LEDGER_ACTOR"):
+        os.environ["AK_LEDGER_ACTOR"] = args.actor
 
     from ak_tactic.plan import Plan, Roster
     from ak_tactic.verify import Verifier
@@ -506,13 +515,13 @@ def main() -> int:
                     "old_zero_vs_py": len([r for r in recs if str(r.get("state_py_ref", "")).startswith("归零")]),
                     "old_real_vs_py": len([r for r in recs if str(r.get("state_py_ref", "")).startswith("真差")])},
          "records": recs}, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    write_md(recs, Path(args.out), exe_path, exe_sha, exe_size, dirty)
+    write_md(recs, Path(args.out), exe_path, exe_sha, exe_size, dirty, args.actor)
     print(f"台账：{Path(args.out)}")
     return 0
 
 
 def write_md(recs: list[dict], path: Path, exe, exe_sha: str = "?", exe_size: int = 0,
-             dirty: int = -1) -> None:
+             dirty: int = -1, actor: str = "") -> None:
     zero = [r for r in recs if str(r.get("state_py_ref", "")).startswith("归零")]
     gate = [r for r in recs if r["state"] == "闸门拒跑"]
     real = [r for r in recs if str(r.get("state_py_ref", "")).startswith("真差")]
@@ -522,8 +531,11 @@ def write_md(recs: list[dict], path: Path, exe, exe_sha: str = "?", exe_size: in
     L: list[str] = []
     L.append("# 怀黍离逐关台账（判据＝**Go 自身基线漂移**）")
     L.append("")
-    L.append(f"- 生成时间：{time.strftime('%Y-%m-%d %H:%M:%S')}；"
-             f"执行者：验收与守卫会话 `session-1a45cfee-9a65-4830-a327-03ac84285bfb`")
+    _actor = (actor or os.environ.get("AK_LEDGER_ACTOR", "")).strip()
+    _actor_txt = _actor or ("**未署名**（跑的人请传 `--actor` 或设 `AK_LEDGER_ACTOR`；"
+                            "本栏 2026-09-20 之前把某个会话写死在题源里，已去掉——"
+                            "写死等于给别人的运行签假名）")
+    L.append(f"- 生成时间：{time.strftime('%Y-%m-%d %H:%M:%S')}；执行者：{_actor_txt}")
     L.append(f"- 工具：`tools/parity_ledger.py`（通告 #3 派工；**不复用跑不起来的** "
              f"`parity_plan.py`，见 `docs/acceptance-claims.md`）")
     L.append(f"- Go 二进制：`{exe}`（私有构建，`RIOS_SIM_BIN` 指定，不写回共享树）")
