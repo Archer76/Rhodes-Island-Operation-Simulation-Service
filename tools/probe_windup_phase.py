@@ -127,14 +127,39 @@ def run_python(plan: Plan, roster: Roster, *, max_time: float | None = 900.0,
     orig = simmod.BattleSimulator._environment_tick
     want = TARGET if target is None else target
 
+    #: 每只敌人一个**稳定序号**，用来补上比对键缺的那一半。
+    #:
+    #: ⚠ 为什么必须有它：比对键只按 **(名字, 出怪时刻)** 分组，而**同名同刻的敌人真的存在**
+    #: ——「天桩-乙」在 `sim._spawns` 里有 57 条出怪行、其中 16 个时刻是重复的。
+    #: 键一撞车，`{(key,t): frame}` 这种字典后写覆盖先写，"两台引擎的差"里就混进了
+    #: **「拿甲跟乙比」**，而报告长得和真分歧**一模一样**（记忆 `6c101989`）。
+    #: 实测 `hsex8_max`：原版侧 **32430** 个 (键, 帧) 上有不止一条记录、Go 侧 0 ——
+    #: 也就是说修之前那份「9375 条坐标分开」**不可信**。
+    #:
+    #: 序号按**首次见到该对象的先后**分配（同一个 `(name, spawn_time)` 组内从 0 起）。
+    #: 两台引擎都按确定的出怪顺序处理，所以首次见到的次序应当一致；
+    #: 若一边根本没见到某只，序号会错开——而那**正是我们要找的分歧**，不是噪声。
+    seq_of: dict[int, int] = {}
+    seen: dict[tuple, int] = {}
+
+    def seq_for(e, key):
+        i = seq_of.get(id(e))
+        if i is None:
+            i = seen.get(key, 0)
+            seen[key] = i + 1
+            seq_of[id(e)] = i
+        return i
+
     def scan(self, t, src):
         for e in self.enemies:
             if not (want(e) if callable(want) else e.name == want):
                 continue
-            # ⚠ 比对键只能是 **(名字, 出怪时刻)**：原版列表下标与 Go 的
+            # ⚠ 比对键是 **(名字, 出怪时刻, 第几只)**：原版列表下标与 Go 的
             # `spec.Spawns` 序**不是一回事**（重生会插到列表里），实测错位两位。
+            base = (e.name, round(float(e.spawn_time), 3))
+            k3 = (base[0], base[1], seq_for(e, base))
             frames.append(dict(
-                key=(e.name, round(float(e.spawn_time), 3)), t=t, name=e.name,
+                key=k3, seq=k3[2], t=t, name=e.name,
                 x=e.position[0], y=e.position[1],
                 hp=e.hp, pause=e.attack_pause, atk_timer=e.attack_timer,
                 interval=float(e.attack_interval),
@@ -242,6 +267,22 @@ def run_go(plan: Plan, roster: Roster) -> tuple[dict, list[dict], list[dict]]:
     frames = []
     attacks = []
     raw_pos: list[str] = []
+
+    #: Go 侧的序号：与 Python 侧**同一条规则**——按**首次见到**分配，
+    #: 组内从 0 起。这里用 `idx`（= `spec.Spawns` 下标，Go 侧本来就有的稳定身份）
+    #: 当"见过没见过"的依据；Python 侧没有这个字段，只能按对象身份判。
+    #: ⚠ 两侧规则一致是刻意的：规则不同会**制造**差，而不是揭示差。
+    _seq_seen: dict[tuple, int] = {}
+    _seq_of_idx: dict[int, int] = {}
+
+    def _go_seq(idx: int, name: str, at: float) -> int:
+        i = _seq_of_idx.get(idx)
+        if i is None:
+            base = (name, at)
+            i = _seq_seen.get(base, 0)
+            _seq_seen[base] = i + 1
+            _seq_of_idx[idx] = i
+        return i
     for line in (p.stderr or "").splitlines():
         parsed = parse_trace(line)
         if parsed is None:
@@ -261,7 +302,9 @@ def run_go(plan: Plan, roster: Roster) -> tuple[dict, list[dict], list[dict]]:
             #: 只做参考，不要拿它当"谁先冻"的判据。
             lat = d.get("latch")
             frames.append(dict(
-                key=(d["name"], spawn_at.get(int(d["idx"]), -1.0)),
+                key=(d["name"], spawn_at.get(int(d["idx"]), -1.0),
+                     _go_seq(int(d["idx"]), d["name"],
+                             spawn_at.get(int(d["idx"]), -1.0))),
                 idx=int(d["idx"]),
                 t=float(d["t"]), name=d["name"], x=float(d["x"]), y=float(d["y"]),
                 hp=float(d.get("hp", 0.0)), pause=float(d.get("pause", 0.0)),
