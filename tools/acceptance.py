@@ -766,6 +766,42 @@ def register_roster_identity() -> int:
     return 0
 
 
+#: **判据纪律的机器可读出口**：每条判据的**三层守卫**（敏感性／反例／控制组）。
+#:
+#: 为什么要有它（PM 2026-09-20 00:51 指派）：**"永久假红＝没有判据"**——一条永远红的判据会把真正的红淹掉，
+#: 而**唯一能逮住"永远红／永远绿"这两类空判据的，是控制组那一层**（敏感性问"能不能红"，
+#: 反例问"红得对不对"，控制组问"该绿的时候绿不绿"）。
+#: ⇒ 不能只写在注释里：**要让它出现在同一次运行的输出里**，让下一个人跑一次门就能看见。
+#: `coverage_table.py` 读这份矩阵并打印同样的纪律（见那里的"判据纪律"一节）。
+GUARD_MATRIX = OUT / "guard-matrix.json"
+_GUARDS: dict = {}
+
+
+def _guard_rec(crit: str, *, sens=None, cex=None, ctl=None, line: str = "") -> None:
+    """记一层守卫结论。`line` 只对控制组有意义——它就是"该绿就绿"那一行原话。"""
+    d = _GUARDS.setdefault(crit, {})
+    if sens is not None:
+        d["sensitivity"] = bool(sens)
+    if cex is not None:
+        d["counterexample"] = bool(cex)
+    if ctl is not None:
+        d["control"] = bool(ctl)
+    if line:
+        d["control_line"] = line
+    d["verdict"] = ("✅ 三层齐备：恒红可辨" if d.get("control") is True else
+                    "⚠ 控制组未测／未绿 ⇒ **恒红与恒绿都不可辨**")
+
+
+def write_guard_matrix() -> dict:
+    """把矩阵落盘（`out/` 易失件，纪律本身写在各工具的文档与判据文字里）。"""
+    out = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "criteria": _GUARDS,
+           "summary": {"criteria": len(_GUARDS),
+                       "control_green": sum(1 for v in _GUARDS.values() if v.get("control") is True),
+                       "control_measured": sum(1 for v in _GUARDS.values() if "control" in v)}}
+    GUARD_MATRIX.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
+
+
 def guard_new_items(exe: str | None = None) -> int:
     """两条新判据的**反向守卫**：逐条人为破坏 ⇒ **必须红，且红得指得准**。
 
@@ -782,6 +818,14 @@ def guard_new_items(exe: str | None = None) -> int:
     print(f"  {it['status']}　build rc={it['measured'].get('build_rc')}　"
           f"拿掉行数={it['measured'].get('guard_removed_lines')}")
     print(f"  ⇒ {'✅ 红得起来' if ok1 else '❌ **没红**——这条判据是空的'}")
+    _it_ctl1 = fresh_checkout_item()          #: **控制组**：不破坏时必须绿
+    _ok_ctl1 = _it_ctl1["status"] == PASS
+    bad += 0 if _ok_ctl1 else 1
+    print(f"  [控制组] 不破坏 ⇒ {_it_ctl1['status']}"
+          f"（build rc={_it_ctl1['measured'].get('build_rc')}）"
+          f"　⇒ {'✅ 该绿就绿' if _ok_ctl1 else '❌ 控制组没绿：判据可能恒红'}")
+    _guard_rec("fresh_checkout_build", sens=ok1, ctl=_ok_ctl1,
+               line=f"不破坏 ⇒ {_it_ctl1['status']}（build rc={_it_ctl1['measured'].get('build_rc')}）")
     if it["note"]:
         print(f"  错误首行：{[ln for ln in it['note'].split('；') if ln][:2]}")
 
@@ -846,6 +890,12 @@ def guard_new_items(exe: str | None = None) -> int:
               f"{'✅ 与起始一致' if abs(back - st.st_mtime) < 1e-6 else '❌ 不一致'}")
         it3 = exe_staleness_item(exe)
         print(f"  [还原后复跑] {it3['status']}（应与破坏前一致）")
+        _ok_ctl2 = it3["status"] == PASS
+        bad += 0 if _ok_ctl2 else 1
+        print(f"  [控制组] 还原后（无做旧、无 touch）⇒ {it3['status']}"
+              f"　⇒ {'✅ 该绿就绿' if _ok_ctl2 else '❌ 控制组没绿：判据可能恒红'}")
+        _guard_rec("exe_staleness", sens=ok_s, cex=ok_st, ctl=_ok_ctl2,
+                   line=f"还原后复跑 ⇒ {it3['status']}")
     print("【反向守卫 3/3】roster_identity：**注入式**三态——控制组必须绿、改名册必须红、删名册也必须红")
     #: PM 2026-09-20 00:21 的硬要求：**"名册不在"与"名册不对"要分开报**（前者缺口、后者结论），
     #: 且**实物缺失不许判"跳过"**（"找不到"会被读成"通过"）。
@@ -882,6 +932,9 @@ def guard_new_items(exe: str | None = None) -> int:
                        ("不在场" not in it_bad["note"])
             bad += 0 if distinct else 1
             print(f"  [两态可分] 「不在」与「不对」措辞不同：{'✅ 分开报' if distinct else '❌ 混成一态'}")
+        _guard_rec("roster_identity", sens=ok_bad, cex=ok_miss and distinct, ctl=ok_ctl,
+                   line=f"真名册 ⇒ {it_ctl['status']}　sha16={it_ctl['measured'].get('got_sha16')}"
+                        f"　记录值={it_ctl['measured'].get('expected_sha16')}")
     finally:
         _sh.rmtree(tmpd2, ignore_errors=True)
     print("【反向守卫 4/4】skland_identity：三态**全测**——在场且对⇒绿／在场但换了⇒红／不在⇒未跑（≠通过）")
@@ -915,8 +968,25 @@ def guard_new_items(exe: str | None = None) -> int:
         bad += 0 if ok_reg else 1
         print(f"  [在场但登记缺失] ⇒ {it_reg['status']}　{it_reg['note'][:66]}")
         print(f"      ⇒ {'✅ 红得起来（登记处是我方文件）' if ok_reg else '❌ 没红'}")
+        _guard_rec("skland_identity", sens=ok_ch, cex=ok_no, ctl=ok_ok,
+                   line=f"在场且对 ⇒ {it_ok['status']}　sha16={own}")
     finally:
         _sh.rmtree(tmpd3, ignore_errors=True)
+    print("=" * 88)
+    m = write_guard_matrix()
+    print("【判据纪律 · 三层守卫矩阵】（落盘 " + str(GUARD_MATRIX) + "）")
+    print("  ⚠ **永久假红＝没有判据**：一条永远红的判据会把真正的红淹掉。")
+    print("  ⚠ 三层各问一件事：敏感性＝能不能红；反例＝红得对不对；**控制组＝该绿的时候绿不绿**。")
+    for k, v in _GUARDS.items():
+        print(f"    {k:<24} 敏感性={'✅' if v.get('sensitivity') else '❌'}"
+              f"　反例={'✅' if v.get('counterexample') else '—'}"
+              f"　控制组={'✅ 该绿就绿' if v.get('control') else '❌ 没绿/未测'}")
+        if v.get("control_line"):
+            print(f"      └ 控制组那一行：{v['control_line']}")
+    sm = m["summary"]
+    print(f"  控制组：{sm['control_green']}/{sm['criteria']} 该绿就绿"
+          f"（{sm['control_measured']} 条测过）⇒ "
+          + ("**恒红可辨**" if sm["control_green"] == sm["criteria"] else "⚠ 有判据的恒红不可辨"))
     print("=" * 88)
     print("✅ 四条守卫都成立" if bad == 0 else f"❌ {bad} 条不成立")
     return 0 if bad == 0 else 1
@@ -1410,6 +1480,19 @@ def main() -> int:
     exe = ins.get("exe")
     print(f"[0] 仪器：私有构建 {'✅ ' + Path(exe).name if exe else '❌ 失败'}"
           f"；共享二进制落后于源码={ins['measured'].get('shared_stale')}")
+    #: **判据纪律**：把"控制组那一行"放进**每一次门运行**的输出里（PM 2026-09-20 00:51 指派）。
+    #: 只在 `--guard-new-items` 里打印是不够的——**要跑一次门就能看见**，
+    #: 否则"永久假红／永久假绿"仍然只在注释里，不在读数里。
+    _gm = json.loads(GUARD_MATRIX.read_text(encoding="utf-8")) if GUARD_MATRIX.exists() else None
+    if _gm is None:
+        print("[0b] 判据纪律：⚠ **控制组未测**（跑 `python tools/acceptance.py --guard-new-items` 取得"
+              "「该绿就绿」那一行）——**没有控制组，就分不出「真的红」与「永远红」**")
+    else:
+        _sm = _gm.get("summary") or {}
+        _ok = _sm.get("control_green") == _sm.get("criteria") and _sm.get("criteria")
+        print(f"[0b] 判据纪律：控制组 {_sm.get('control_green')}/{_sm.get('criteria')} 该绿就绿"
+              f"（矩阵 {_gm.get('at')}）⇒ "
+              + ("**恒红可辨**" if _ok else "⚠ **有判据的恒红不可辨**（控制组没绿/没测）"))
     _m0 = ins.get("measured") or {}
     print(f"      源码身份：disk={_m0.get('src_sig')}（glob rios-sim/**/*.go，"
           f"dirty {_m0.get('src_dirty_n')} 条{(': ' + str(_m0.get('src_dirty_files'))) if _m0.get('src_dirty_files') else ''}）"

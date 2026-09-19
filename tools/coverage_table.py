@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -448,7 +449,8 @@ WIRED_WHY: dict[str, str] = {
         "`control_test.go:15`（正向 `:22-23` ＋ 反向 `:39-41`）覆盖；按「判据改动归 PM」的约定只登记。"
         "⚠ 相邻实现的同名风险：`rios-sim/palsy.go` 有整套「麻痹震颤」（守卫 `palsy_test.go` 8 例，`:19/:37/:60/:99/:116/:128/:160`），"
         "但**它不引用 `flagPalsyShake`**（该 flag 在非测试代码里只出现在 `control.go:45`／`:48` 的清单里）⇒ 两套并存；"
-        "**它们是不是同一个量，我不判**（只登记坐标，请 PM／博士裁）。"
+        "**它们是不是同一个量，我不判**——**登记状态：未裁**（只登记坐标，请 PM／博士裁；⚠ **不许读成「已知无害」**，"
+        "PM 2026-09-20 明确要求这一条按「未裁」登记——「两套并存是不是同一个量」正是待裁的那件事）。"
         "锚点指向的是哪个量：`trembleBlocksAttack` 是「战栗＋被阻挡 ⇒ 禁普攻」这条纯函数判据。",
     "屏障／层数护盾":
         "锚点 `rios-sim/sim.go::take` 是**干员掉血的唯一入口**（`func (o *operator) take` `sim.go:2984`）。"
@@ -484,7 +486,30 @@ WIRED_WHY: dict[str, str] = {
         "（另有 5 处直接构造 `:144/:158/:181/:195/:215`）。"
         "⚠ 依据的边界（记忆 `7f782586` 的教训）：**字段清单不能从消费端反推**（抗性是标量、数值是黑板键族 40+ 前缀），"
         "本条只登记已核到的 Go 侧坐标，**不据此推数据侧列名／键名**。"
-        "锚点指向的是哪个量：`elementState` 指「**一个实体**的元素值状态」——每种元素一份 EP ＋ 一份爆发冷却。",
+        "锚点指向的是哪个量：`elementState` 指「**一个实体**的元素值状态」——每种元素一份 EP ＋ 一份爆发冷却。"
+        "★ **数据侧取证（按 PM 要求先取数据侧列名／键名／量纲，不从消费端反推；2026-09-20 补）**："
+        "数据在 `data/gamedata/raw.githubusercontent.com/excel/`（`skill_table.json` **11,447,137 字节**、"
+        "`character_table.json` 14,963,727、`battle_equip_table.json` 5,710,707——三份都在；此前我说的「skill_table.json 缺失」是**搜错了目录**，在此更正）。"
+        "键名是**黑板条目的值**（形如 key＝`ep_damage_ratio`、value＝0.1 的条目），**不是字典键**——按字典键遍历会得到 0 个，这是我实测踩到的第一种假空。"
+        "实测：`skill_table.json` 命中 **477 条／28 个不同键名**、`character_table.json` **92 条／21 个**、`battle_equip_table.json` **151 条／15 个**；"
+        "**值类型全部是 float**（477／92／151 无例外）。量纲实测三态并存：比例型 `ep_damage_ratio`＝0.1、倍率型 `ep_damage_scale`＝1.2、"
+        "绝对值型 `ep_damage_value`／`element_damage`＝20.0；抗性是**标量** `ep_damage_resistance`＝0.15；"
+        "另有 `ep_heal`（30~60，绝对值）／`ep_recovery_per_sec`（25／75）等非损伤键混在同一前缀族里。"
+        "⚠ **键名带宿主限定**（这正是 `7f782586` 说的「两套词表须显式映射」的落点）：实测到 `attack@ep_damage_ratio`（81 条）、"
+        "`attack@extra_ep_damage_scale`（30）、`ep_damage_ratio[trigger]`（20）、`ep_damage_ratio_token`（20）、"
+        "`botany_s1_extra.ep_damage_ratio`（10）、`sea_drown[ally].ep_damage_ratio`（4）、`ep_damage_ratio_boss`（3）、"
+        "`attack@ep_damage_ratio_talent`（4）等。**而 Go 侧只认三种后缀**：`element.go:328 epKeyKinds`＝"
+        "`ep_damage_ratio`／`ep_damage_value`／`ep_damage_scale`，匹配规则在 `element.go:334-341 keyHasEpSuffix`"
+        "（只认「键名等于后缀」「以 `.后缀` 结尾」「以 `@后缀` 结尾」三种形状）。"
+        "⇒ **差集已量出**：`ep_damage_ratio[trigger]`／`[damage]`、`attack@extra_ep_damage_scale`、`ep_damage_ratio_token`／`_m`／`_boss`、"
+        "`attack@ep_damage_ratio_talent`／`_win`／`_normal`，以及整个 `element_*` 命名族（`element_atk_scale`／`element_damage_scale`／"
+        "`element_multiplier`／`element_type`）**都不在 Go 的候选里**（`EpCandidates` 会静默地看不见它们）。"
+        "⚠ **未核（不许读成「已出问题」）**：这些未匹配键**在已放行关卡里是否会真的出现在某次元素损伤的黑板上**，本批没查；"
+        "且该族在引擎里本来就零消费点（见上），所以这个差集目前**没有可观测量**——登记为未核 + 上报；不擅自改引擎、不改 `docs/spec-element-fields.md`。"
+        "★ **痕迹侧（消费 验收 的 `out/acceptance/trace-key-diff.json`，没另起一套）**：该差集共 **131 个去重键**，"
+        "按 `ELEMENT`／`EP.`／`BURST`／`NERVOUS`／`EROSION`／`元素`／`损伤`／`爆发` 八种搜法（中英各搜一遍）"
+        "在 `only_a`／`only_b`／`count_diff`／`count_diff_in_window` 四个清单里**命中 0 个** ⇒ 同窗痕迹里**没有任何元素损伤键**。"
+        "⚠ 按 `dbee841c`：痕迹没有键**不等于**元素损伤没发生，只说明**痕迹覆盖不到这一族**（两引擎都无键）。",
     "闪避／伤害抵挡":
         "锚点 `rios-sim/sim.go::dodgeVs`（`sim.go:239`）**只是族里的一半**，按可独立取证拆三支："
         "**① 敌人侧闪避**：定义位 `sim.go:239 func (e *enemy) dodgeVs(string) float64 { return 0 }`——**恒 0**；"
@@ -699,11 +724,73 @@ def mutation_precheck(kind: str) -> tuple[bool, str]:
     return True, f"{anchor} 现在真是零调用点（0 处）且零守卫提及"
 
 
+#: ★★ **判据纪律的可执行出口**（PM 2026-09-20 00:51 指派）。
+#:
+#: 两条纪律，**必须能从一次运行的输出里读到**，而不是读注释才知道：
+#:   ① **「永久假红＝没有判据」**——一条永远红的判据会把真正的红淹掉
+#:      （实例：本工具曾经 `rc` 结构性恒 0；另一例：验收入口的 `roster_identity` 判据
+#:      第一版把记录值读成了水位基线 ⇒ `记录值=None` ⇒ **控制组当场没绿**，判据会永久假红）。
+#:   ② **控制组是三层守卫里唯一能逮住"空判据"的一层**——敏感性问"能不能红"，
+#:      反例问"红得对不对"，**控制组问"该绿的时候绿不绿"**。前两层都可能是空判据，
+#:      只有控制组能把"永远红／永远绿"这两类**同时**照出来。
+#:
+#: 数据来源：`tools/acceptance.py --guard-new-items` 写出的 `out/acceptance/guard-matrix.json`
+#: （每条判据三层结论 ＋ 控制组"该绿就绿"那一行原话）。
+#: ⚠ **矩阵不在场 ⇒ ⚠ 未测，不翻红**：否则我自己就成了"永久假红"。
+#:   **只有"控制组测了但没绿"才计入退出码**——那才是"这个判据可能恒红/恒绿"的硬信号。
+GUARD_MATRIX = ROOT / "out" / "acceptance" / "guard-matrix.json"
+
+
+def guard_discipline(matrix: Path | None = None) -> tuple[list[str], list[str], bool | None]:
+    """返回 (要打印的行, 计入退出码的红行, 控制组是否全绿)。`None` ＝ 未测（不翻红）。"""
+    path = matrix if matrix is not None else GUARD_MATRIX
+    L: list[str] = []
+    if not path.exists():
+        L.append("  ⚠ **控制组未测**（矩阵不在场：" + str(path) + "）")
+        L.append("    ⇒ 取得方式：`python tools/acceptance.py --guard-new-items`"
+                 "（它会打印每条判据「该绿就绿」那一行并落盘本矩阵）")
+        L.append("    ⇒ **没有控制组，就分不出「真的红」与「永远红」**——本行是 **⚠ 不是 ⛔**："
+                 "「我还没测控制组」与「控制组没绿」是两件事，把前者判红，就是新的永久假红。")
+        return L, [], None
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:                                   # noqa: BLE001
+        L.append(f"  ⛔ 矩阵读不出来（{e}）⇒ **有矩阵却读不了**与「没有矩阵」不同：判据在这一层失明")
+        return L, [f"guard-matrix 读不出：{e}"], False
+    crit = d.get("criteria") or {}
+    L.append(f"  矩阵：{path.name}　生成于 {d.get('at')}　判据 {len(crit)} 条")
+    reds: list[str] = []
+    for k, v in crit.items():
+        sens = "✅" if v.get("sensitivity") else "❌"
+        cex = "✅" if v.get("counterexample") else "—"
+        ctl = "✅ 该绿就绿" if v.get("control") else "❌ **没绿/未测**"
+        L.append(f"    {k:<24} 敏感性={sens}　反例={cex}　控制组={ctl}")
+        if v.get("control_line"):
+            L.append(f"      └ 控制组那一行：{v['control_line']}")
+        if not v.get("control"):
+            reds.append(f"{k}：控制组没绿/未测 ⇒ **该判据可能恒红或恒绿（空判据）**")
+    allgreen = bool(crit) and not reds
+    L.append(f"  ⇒ " + ("**恒红可辨**（每条判据的控制组都该绿就绿）" if allgreen else
+                        "⛔ **有判据的恒红/恒绿不可辨**——控制组没绿，这条判据不许当成判据用"))
+    if not crit:
+        L.append("  ⚠ 矩阵为空（一条判据都没有）⇒ 本层没有可判之物，**不是通过**")
+    return L, reds, allgreen
+
+
 def red_names(assessed: list[dict]) -> list[tuple[str, str, str]]:
     """**退出码只认这一列**：量出列（`measured`）为 `⛔` 的行。
 
     ⚠ 不要改回去数 `status`（人判列）：`WIRED` 里没有以 `⛔` 开头的值，
     数它就等于 rc 恒 0 —— 那正是本次修掉的 bug。
+
+    ★★ **已知边界（PM 2026-09-20 要求留档，不许写成"改值无副作用"）**：
+    「本次改值不影响 rc。这说明 `WIRED` 栏的校验目前**不参与退出码判决**；因此"改了值 rc 没变"
+    不能读成"改对了"，只能读成"这一栏还没进判决面"。」
+    实测出处：2026-09-20 把 `WIRED` 里四位（晕眩／沉睡／浮空／束缚／自缚）由「已接线」改成
+    「未接线」后，`--self-test` 的 rc 与判决位 ⛔ 均未变化 —— 只认 `measured` 列是**故意的**
+    （人判列混进退出码会让 rc 变成"人有没有填字"，不是"接线对不对"），但**边界必须留档**：
+    `WIRED` 的校验目前在自检里是 ⚠ 级（未登记背离），**不是** rc 级。**要不要把它纳入 rc 是设计决定，
+    归 PM；在它进判决面之前，任何"改了栏位但 rc 没动"的读数都只证明"这一栏还没进判决面"。**
     """
     return [(a["name"], a["measured"], a["why"]) for a in assessed
             if str(a["measured"]).startswith("⛔")]
@@ -968,14 +1055,48 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="干员／敌人／关卡覆盖表")
     ap.add_argument("--plane", choices=["敌人", "干员", "关卡"], help="只看一个平面")
     ap.add_argument("--self-test", action="store_true", help="自证：坏锚点与零调用点必须翻红")
-    ap.add_argument("--mutate", choices=sorted(MUTATIONS),
-                    help="反向守卫：注入一条量出列必定为 ⛔ 的行，退出码必须变非 0 并点名")
+    ap.add_argument("--mutate", choices=sorted(MUTATIONS) + ["guardctl"],
+                    help="反向守卫：注入一条量出列必定为 ⛔ 的行，退出码必须变非 0 并点名；"
+                         "`guardctl` 注入一份**控制组没绿**的守卫矩阵，判据纪律那一节必须翻红")
+    ap.add_argument("--guard-matrix", help="判据纪律用的三层守卫矩阵路径（缺省读 out/acceptance/guard-matrix.json）")
     args = ap.parse_args()
 
     if args.self_test:
         return self_test()
 
     rows = [r for r in ROWS if not args.plane or r[0] == args.plane]
+    if args.mutate == "guardctl":
+        # ★★ 判据纪律的反向守卫（PM 2026-09-20 00:51 指派的那一条）：**"控制组没绿"必须翻红**，
+        #    否则"永久假红"这层纪律自己就是空的（它只会永远打 ⚠ 或永远打 ✅）。
+        #    做法与 --mutate 同型：在**内存副本**上把矩阵改坏（控制组翻 false），断言那一节翻 ⛔。
+        import copy as _copy
+        _src = Path(args.guard_matrix) if args.guard_matrix else GUARD_MATRIX
+        if not _src.exists():
+            print(f"== 反向守卫注入 --mutate guardctl ==")
+            print(f"  ⛔ 控制组挑错输入：矩阵不在场（{_src}）⇒ 无法注入。"
+                  f"先跑 `python tools/acceptance.py --guard-new-items` 取一份真矩阵。")
+            return 1
+        _bad = json.loads(_src.read_text(encoding="utf-8"))
+        _n = 0
+        for _v in (_bad.get("criteria") or {}).values():
+            _v["control"] = False                              # 人为把"该绿就绿"改坏
+            _v["control_line"] = "[注入] 控制组被人为改坏"
+            _n += 1
+        _tmp = ROOT / "out" / "acceptance" / "guard-matrix-injected.json"
+        _tmp.parent.mkdir(parents=True, exist_ok=True)
+        _tmp.write_text(json.dumps(_bad, ensure_ascii=False, indent=2), encoding="utf-8")
+        _lines, _reds, _allgreen = guard_discipline(_tmp)
+        print("== 反向守卫注入 --mutate guardctl（把控制组改坏） ==")
+        print(f"  注入了 {_n} 条判据的控制组")
+        for _l in _lines:
+            print(_l)
+        print()
+        if _reds:
+            print(f"  ✅ 红得起来：{len(_reds)} 条判据被点名（这一层不是空的）")
+            return 1                                          # ⛔ 注入成功 ⇒ 非 0 才算守卫成立
+        print("  ⛔ **没红**：把控制组改坏了这一节还是绿的 ⇒ 「永久假红」这层纪律是空判据")
+        return 0
+
     if args.mutate:
         # ★ 先验控制组再注入：挑错输入的"绿"与判据坏掉的"绿"长得一模一样。
         ok, why = mutation_precheck(args.mutate)
@@ -1032,11 +1153,23 @@ def main() -> int:
             print(f"      {why}")
 
     print()
+    print("== 判据纪律：三层守卫（敏感性／反例／控制组）——**永久假红＝没有判据** ==")
+    disc_lines, disc_reds, disc_green = guard_discipline(
+        Path(args.guard_matrix) if args.guard_matrix else None)
+    for _l in disc_lines:
+        print(_l)
+    if disc_reds:
+        print(f"  ⛔ 控制组没绿的判据（{len(disc_reds)} 条，**计入退出码**）：")
+        for _r in disc_reds:
+            print(f"    {_r}")
+
+    print()
     print(f"== 小结：{len(rows)} 行，红 {len(reds)} 行；"
-          f"「我们没有」{len(UNMODELED_BY_SEVERITY)} 项 ==")
+          f"「我们没有」{len(UNMODELED_BY_SEVERITY)} 项；"
+          f"判据纪律 {'⚠ 未测' if disc_green is None else ('✅ 恒红可辨' if disc_green else '⛔ 控制组没绿')} ==")
     print("  ⚠ 「已接线」≠「已验证」；「零调用点」读作「这个符号没有生产调用者」，"
           "不读作「机制没落地」。")
-    return 1 if reds else 0
+    return 1 if (reds or disc_reds) else 0
 
 
 if __name__ == "__main__":
