@@ -36,8 +36,41 @@ from ak_tactic.frontend.inputs import SpecInputs                # noqa: E402
 from ak_tactic.plan import Plan, Roster                         # noqa: E402
 from ak_tactic.simgo.spec import build_spec                     # noqa: E402
 
-FIXTURES = ROOT / "out"
+def _fixture_root() -> pathlib.Path:
+    """判据集目录：**`fixtures/` 优先，`out/` 回退**（PM 2026-09-19 裁定）。
+
+    ⚠ `fixtures/` 是纪律指定的**唯一判据集**（按 schema 认夹具、不按文件名），
+    `out/` 是易失目录。实测两份 `golden_go.json` 在 17 个共有键上**逐字相同**、
+    17 份 `plan-*.json` 也**逐字节相同** ⇒ 换源**不改变任何结论**；
+    但**"碰巧一致"不是判据**——判据要能自己证明它比对的是它声称的那一批，
+    所以 `main()` 把"用的哪一份、覆盖几份"打印在外面。
+    """
+    fix = ROOT / "fixtures"
+    if (fix / "golden_go.json").exists() and list(fix.glob("plan-*.json")):
+        return fix
+    return ROOT / "out"
+
+
+FIXTURES = _fixture_root()
 GOLDEN = FIXTURES / "golden_go.json"
+
+
+def _print_coverage(all_plans: list[pathlib.Path]) -> None:
+    """把**覆盖数露在外面**（PM 2026-09-19：「看不到」与「一致」在输出上长得一模一样）。
+
+    分母取**唯一判据集** `fixtures/golden_go.json` 的键数；本工具跑的 `plan-*.json`
+    是它的子集，**差集就是本工具一份都看不到的用例**——那几份的绿不是本工具给的。
+    """
+    canon = ROOT / "fixtures" / "golden_go.json"
+    keys = sorted(json.loads(canon.read_text(encoding="utf-8"))) if canon.exists() else []
+    names = sorted(p.name for p in all_plans)
+    print(f"  判据集   {FIXTURES.name}/（{len(names)} 份：{', '.join(names)}）")
+    if keys:
+        unseen = [k for k in keys if k not in set(names)]
+        print(f"  本工具覆盖 {len(keys) - len(unseen)}/{len(keys)}"
+              f"（金标准里本工具看不到的：{'、'.join(unseen) if unseen else '无'}）")
+        if unseen:
+            print("           ⚠ 「看不到」与「一致」长得一样 —— 这几份的绿不是本工具给的。")
 
 
 class Probe:
@@ -164,16 +197,18 @@ def main() -> int:
         only = pathlib.Path(args[args.index("--plan") + 1]).resolve()
 
     golden = json.loads(GOLDEN.read_text(encoding="utf-8")) if GOLDEN.exists() else {}
-    plans = sorted(FIXTURES.glob("plan-*.json"))
+    all_plans = sorted(FIXTURES.glob("plan-*.json"))
+    plans = all_plans
     if only is not None:
         plans = [only]
+    _print_coverage(all_plans)
     #: (c) 逐字段敏感性：⚠ **至少跑两份夹具**（项目经理 2026-09-19 升为全员纪律）——
     #: 一份最小、一份**有大出怪表**的。同一套代码下 `snow_freeze` 在无敌人的夹具上判
     #: "不变"、在有 72 个出怪的夹具上判"会变"；`goal_cells` 更是从"不变"翻成"抛异常"。
     #: ⇒ **一张只跑了一份夹具的敏感性表，它的"不变"里混着"这个夹具没走到"，两者长得一模一样。**
     if "--sensitivity" in args and only is None:
         if not plans:
-            print("  ⚠ out/ 里没有 plan-*.json")
+            print(f"  ⚠ {FIXTURES.name}/ 里没有 plan-*.json")
             return 1
         small = min(plans, key=lambda p: p.stat().st_size)
         big = max(plans, key=lambda p: p.stat().st_size)
@@ -181,17 +216,19 @@ def main() -> int:
         print(f"  ⚠ 敏感性至少跑两份夹具：最小 {small.name} + 最大 {big.name}"
               "（只跑一份时「不变」会与「没走到」混淆）")
     if not plans:
-        print("  ⚠ out/ 里没有 plan-*.json")
+        print(f"  ⚠ {FIXTURES.name}/ 里没有 plan-*.json")
         return 1
 
     from ak_tactic.simgo.verifier import ensure_go_engine
     from ak_tactic.verify import Verifier
 
     roster = Roster.empty()
-    for extra in ("roster_max_modelled.json",):
-        p = FIXTURES / extra
-        if p.exists():
-            roster = Roster.from_json(p)
+    #: 名册按"判据集优先、旧目录回退"找——换源不该悄悄把一份本来在用的名册丢掉。
+    for base in (FIXTURES, ROOT / "out"):
+        for extra in ("roster_max_modelled.json",):
+            p = base / extra
+            if p.exists():
+                roster = Roster.from_json(p)
 
     n_same = n_gold = n_tot = 0
     bad: list[str] = []
