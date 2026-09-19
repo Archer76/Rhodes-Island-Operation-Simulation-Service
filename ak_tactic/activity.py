@@ -74,12 +74,12 @@ DEVICE_REGISTRY: dict[str, Entry] = {
         "trap_139_dhtl", "阻流阀", DONE,
         "3 秒建成，自身地块不再是田地、连片由此重划",
         source="prts.wiki 阻流阀 / 关卡 predefines.tokenInsts",
-        anchor="ak_tactic.battle.devices:BLOCKER_KEY"),
+        anchor="ak_tactic.frontend.devices:BLOCKER_KEY"),
     "trap_140_dhsb": Entry(
         "trap_140_dhsb", "泵站", DONE,
         "泵水；清澈降【最大】、受污两者都抬，范围按前方格数",
         source="prts.wiki 泵站 / 装置机制字段",
-        anchor="ak_tactic.battle.devices:PUMP_KEY"),
+        anchor="ak_tactic.frontend.devices:PUMP_KEY"),
     "trap_146_dhdcr": Entry(
         "trap_146_dhdcr", "天桩（装置）", DONE,
         "**登场时在自身位置召唤一名天桩-甲**，且**于所在地块的甲退场时死亡**"
@@ -220,14 +220,14 @@ RUNES_REGISTRY: dict[str, Entry] = {
         "env_system_new", "环境系统：田地 / 病害值", DONE,
         "五个结算参数；按 difficultyMask 消歧",
         source="关卡 runes[].blackboard",
-        anchor="ak_tactic.battle.environment:RUNES_KEY"),
+        anchor="ak_tactic.frontend.environment:RUNES_KEY"),
     "enemy_attribute_mul": Entry(
         "enemy_attribute_mul", "敌人属性乘数", DONE,
         "按难度缩放敌人属性（atk / def / max_hp），可另带 `enemy` 键点名一批敌人；"
         "同键多条**依次相乘**。作用在 `enemy_at` 的出口上、**改副本不改库**。"
         "老活动的同一机制叫 `ebuff_attribute`（黑板结构相同），两个名字都认",
         source="关卡 runes[].blackboard（act31side_ex01~ex08 的四星档）",
-        anchor="ak_tactic.battle.stage_mul:ATTR_MUL_KEY"),
+        anchor="ak_tactic.frontend.stage_mul:ATTR_MUL_KEY"),
     "global_lifepoint": Entry(
         "global_lifepoint", "全局生命点改写", DONE,
         "**覆写关卡生命数**（八关 EX 的四星档都改成 1，而关卡文件自己的 "
@@ -235,14 +235,14 @@ RUNES_REGISTRY: dict[str, Entry] = {
         "老活动的同一机制叫 `gbuff_lifepoint`（黑板结构相同），两个名字都认。"
         "⚠ 先前这条标着 DONE 却**没有任何消费者**",
         source="关卡 runes[].blackboard",
-        anchor="ak_tactic.battle.stage_mul:LIFEPOINT_KEY"),
+        anchor="ak_tactic.frontend.stage_mul:LIFEPOINT_KEY"),
     "cbuff_cost_recovery": Entry(
         "cbuff_cost_recovery", "费用回复速度乘数", DONE,
         "`scale` = 回复速度倍率（四星档常见 2），它改的是**每点费用几秒**，故实现里是**除**。"
         "⚠ 这一条**不在怀黍离的 runes 里**（1-7 的四星档才用），登记在此是因为"
         "本模块的乘数层一并收它；`audit_activity('act31side')` 不会枚举到它",
         source="关卡 runes[].blackboard（main_01-07 的四星档）",
-        anchor="ak_tactic.battle.stage_mul:COST_MUL_KEY"),
+        anchor="ak_tactic.frontend.stage_mul:COST_MUL_KEY"),
     "global_token_cnt_add": Entry(
         "global_token_cnt_add", "装置数量上限增量", NONE,
         "只影响部署计数上限，不改变战斗结算",
@@ -278,7 +278,7 @@ RUNES_REGISTRY: dict[str, Entry] = {
         "⚠ 乘完**必须重算派生字段**（`derive_blackboard_fields`）——否则乘数只落在一张"
         "没人再读的黑板表上，机制实际没变",
         source="关卡 runes[].blackboard",
-        anchor="ak_tactic.battle.stage_mul:TALENT_MUL_KEY"),
+        anchor="ak_tactic.frontend.stage_mul:TALENT_MUL_KEY"),
 }
 
 
