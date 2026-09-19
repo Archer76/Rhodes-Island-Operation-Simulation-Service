@@ -1303,3 +1303,82 @@ spec.py:794       out["talent_dodge_phys"] = ...    ← 两个键静默消失
 | `battle/sim.py` | 只要 3 个常量（`PILE_SUMMON_DELAY` 等） |
 
 下一阶段：这 6 个常量先搬；之后再动 `environment`，最后才是 `build_spec` 收 `SpecInputs`。
+
+### 3.47 摘除 battle/ round 17：6 个机制常量搬进 frontend/，**导入面 5 处 → 1 处**（提交 5e73e31）
+
+#### 一、做了什么
+
+| 处 | 改动 |
+|---|---|
+| `frontend/mech_consts.py` | **新增**：3 个装置键 + 3 条天桩时间常数 |
+| `battle/devices.py` | 三个装置键改为转出（同一对象） |
+| `battle/sim.py` | 三条时间常数改为转出（同一对象） |
+| `simgo/mech.py` | 改从新家取，并去掉 `getattr` 兜底 |
+
+**为什么单独一份**：`spec.py`/`mech.py` 送规格需要这几个值，
+而它们原本住在 `battle/devices.py`（413 行）与 `battle/sim.py`（5069 行）里——
+**为了三个字符串去 import 一个 413 行的模块**，就是把 `battle/` 钉在依赖图上。
+
+⚠ 搬常量前**逐条读了原文的实际内容**（项目铁律 `ba47512d`）：
+`unit.py` 与 `devices.py` 各有一张**同名不同义**的 `DIRECTIONS`，
+合并会让 `dict.get` 静默落默认值、把方向弄反。这六条读过，没有重名冲突。
+
+#### 二、本轮抓到的真缺陷：**默认值恰好等于真值的 `getattr` 兜底**
+
+`mech.py` 里读这三条常数用的是：
+
+```python
+getattr(_sim_mod, "PILE_SUMMON_DELAY", 1.25)
+```
+
+那个默认值 **1.25 恰好就是真值**。⇒「取不到」**永远看不出来**：
+把那行 import 整个删掉，行为一模一样，**任何判据都不会响**。
+
+这与 round 16 的 `_talent_dodge` 是同一类，但更隐蔽：
+
+| | 表现 |
+|---|---|
+| round 16 `_talent_dodge` | 默认值 `(0.0, 0.0)` **错得看不出来**（表现为"这名干员没有闪避"） |
+| round 17 `getattr(..., 1.25)` | 默认值 `1.25` **对得看不出来**（多一个字符都不会变） |
+
+后者更值得记：**它的失败模式是"什么都没发生"**。
+已全部改成直取、取不到就炸。
+
+#### 三、验证
+
+```
+① 导入面：battle/ 导入 10 处 → 5 处 → **1 处**
+② 常量同一对象：devices 转出 3/3 True、sim 转出 3/3 True
+③ 残留 _sim_mod：代码 0 处（只剩注释里两行说明）
+④ 金标准：✅ 17 份与基线逐项一致，spec_sha 逐字不变
+⑤ 全仓自检：通过 816 项，无失败
+⑥ 摘除面：可达闭包 0 个函数；闸门审计：没有未登记的盲区
+```
+
+#### 四、最后一里：`battle/environment.py`
+
+已量清路径：
+
+* `mech.py` 从 `env` 用 **14 个名字**：10 个常数
+  （`CACHE_*` / `ACTUAL_*` / `POLLUT_*` / `PUMP_*`）+ 4 个类函数
+  （`FarmlandSystem` / `Field` / `PolluteParams` / `farmland_groups`）。
+* **依赖方向干净**：`environment.py` 只依赖 `battle/devices.py`，
+  而 `devices.py` **只依赖 `frontend/mech_consts`**（没有任何 `battle/` 内部依赖）。
+  ⇒ 两个可以整体搬，原件留转出壳。
+
+⚠ **一条必须先摆平的约束**：`activity.py`（**不是本会话的文件**）里有三个锚点：
+
+```
+anchor="ak_tactic.battle.environment:RUNES_KEY"
+anchor="ak_tactic.battle.devices:BLOCKER_KEY"
+anchor="ak_tactic.battle.devices:PUMP_KEY"
+activity.py:376  from .battle.devices import parse_devices
+```
+
+留转出壳能让这些锚点与导入**继续解析**，但这件事必须显式验证，
+不能靠"反正转出了"推断——`activity.py` 属于别人，我不改它。
+
+#### 下一轮
+
+搬 `devices` + `environment`（一起，一步）→ 导入面归零 → 然后才是
+`build_spec` 收 `SpecInputs`。
