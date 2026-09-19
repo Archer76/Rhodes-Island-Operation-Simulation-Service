@@ -29,7 +29,7 @@
 | 6 | **wxhwwla/calc-framework** | GitHub：`framework/adapters/arknights/...`、`skill_parser.py` | 公式结构交叉验证 | 方舟部分较新、细节少于 #5 | —（对照用） | 同上 |
 | 7 | **MAA OperBox 导出 / 森空岛名册** | 本地导出文件 | 玩家"有什么干员、什么练度"（名册） | MAA 不带专精与模组 ⇒ 模组信息必须走森空岛；模组编号取 `typeName2` 字母（`X/Y/A/D/B`→1-5，`Z` 是死项） | `data/operbox/`、`data/skland/` | `ak_tactic` 名册三来源按可信度退（见项目记忆） |
 | 8 | **游戏本体 `enemy_database.json`** | 随 #2 / #3 一起下载 | 与 PRTS 解析结果**跨源对账**（两侧独立来源，一起错的概率远低于单侧错） | 字段是 Unity 序列化包装（`{"Key":…,"Value":…}`，`{"m_defined":…,"m_value":…}`） | `data/gamedata/*/levels/enemydata/` | `ak_tactic.gamedata.EnemyLibrary` |
-| 9 | **prts.wiki `Widget:Range/*`** | 攻击范围 SVG（如 `Widget:Range/3-1`） | 攻击范围真图（`#1` 站位格、`#2` 覆盖格） | 坐标步长 26 px，描边有 1 px 补偿 ⇒ 用"除以步长四舍五入"吸附 | `data/ranges.json` | `ak_tactic/prts/`（两条取数路并存，见 `docs/prts-wiki.md`） |
+| 9 | **prts.wiki `Widget:Range/*`** | 攻击范围 SVG（如 `Widget:Range/3-1`） | 攻击范围真图（**站位格有两种画法**：`#1` 的 `<use>`，或内联蓝色 `<path fill:#27a6f3>`；`#2` 灰格 = 覆盖格） | 坐标步长 26 px，描边有 1 px 补偿 ⇒ 用"除以步长四舍五入"吸附。★ **判定信号是颜色，不是序号 `#1`** | `data/ranges.json` | `ak_tactic/prts/`（两条取数路并存，见 `docs/prts-wiki.md`） |
 
 ## 三、抓取纪律（所有来源通用）
 
@@ -48,7 +48,7 @@ data/akdb.sqlite          25.3 MB  干员库（源 #3 的 excel/，建库不联�
 data/enemydb.sqlite       20.8 MB  敌人库（源 #1 的「分类:敌人」，建库要联网）
 data/prts-notes.sqlite    0.9 MB   干员备注库（源 #1，459 页 / 948 条 / fact 3247 条）
 data/op-briefs.txt        561 KB   备注语料展平（3249 行）
-data/ranges.json          5.9 KB   攻击范围（源 #9）
+data/ranges.json          30.5 KB  攻击范围索引（源 #9，72/73 个代号；**可重建，大小会变**）
 data/gamedata/                     关卡与敌人本体（源 #2 / #3，按域名分目录缓存）
 data/cache/{prts,prts_calc,theresa}/ 各来源的原始响应缓存
 ```
@@ -79,7 +79,7 @@ python tools/rebuild_data.py --list     # 逐项列出来源 / 耗时 / 是否�
 | `data/enemydb.sqlite` | prts.wiki 的「分类:敌人」（约 1800 页） | **是** | 否 | 冷启约 53 秒 | 库建得出但 `enemy` 行数远小于预期；或 403 |
 | `data/prts-notes.sqlite` | prts.wiki 干员页的 `\|备注=` / `\|特性备注=`（460 页） | **是** | 否 | 约 10~15 分钟 | **失败页会被逐页列出**；正常约 `fact` 3247 条 / `page` 459 页 |
 | `data/op-briefs.txt` | 从 `prts-notes.sqlite` 展平（人读用） | 否 | 否 | <1 秒 | 备注库不在 ⇒ 本步跳过（不算失败） |
-| `data/ranges.json` | prts.wiki 的 `Widget:Range/<代号>`（代号取自 akdb 的 `attack_range.range_id`） | **是** | 否 | 约 1~2 分钟 | 个别代号取不到 ⇒ 逐个报出来 |
+| `data/ranges.json` | prts.wiki 的 `Widget:Range/<代号>`（代号取自 akdb 的 `attack_range.range_id`） | **是** | 否 | 约 1~2 分钟 | **两档分开**：「源上没有」记 `not_on_source`、**不进失败计数**（等上游补）；「解析不出」才算失败（我们改解析）。两类都**逐条列出、不截断** |
 | `data/operbox/` | **玩家自己从 MAA 导出的文件** | — | — | — | **不可重建**。缺了名册退档，但不是错误 |
 | `data/skland/` | 森空岛 API（练度＋模组） | 是 | **要登录态** | — | **不可离线重建**。见本文件 §二 第 7 条 |
 | `data/gamedata/` | 镜像 `Kengxxiao/ArknightsGameData`（`excel/` 只有这个镜像有）；关卡地图/路线/波次走 map.ark-nights.com | 是 | 否 | 首次几十 MB | ★ **它不是一个"要抓取脚本重建"的东西**，而是**按需缓存**——访问哪个键就落哪一份（`ak_tactic/gamedata/source.py` 的 `level()` → `fetch_json` → `_write_cache`）。**没有重建命令**，但它**会因被访问而增长**，而增长会改变"按目录枚举"的判据口径。⇒ **重建报告里要报它当前有多少份**，别写"共 N 份"当成不变量 |
@@ -107,6 +107,28 @@ python tools/rebuild_data.py --list     # 逐项列出来源 / 耗时 / 是否�
   而 `db/enemy_schema.py`、`db/enemy_api.py` 写 `python -m ak_tactic enemydb build`。
   **以 CLI 实际注册的为准：`enemydb`**（`python -m ak_tactic --help` 里顶层是 `enemydb`，
   `enemy` 是"取敌人图鉴与数值"的查询命令，不是建库）。前两处 docstring 是**旧的、错的**。
+* ★ **`Widget:Range/<代号>` 的站位格有两套画法**（2026-09-20 查明并已修）：
+  63 个用 `#1` 的 `<use>`（画法 A）；**9 个**（`1-5` `2-7` `3-16` `4-3` `4-4` `4-5` `4-6` `4-7` `4-13`）
+  **`<defs>` 里压根没有 `#1`**，站位格被**内联画成蓝色 `<path fill:#27a6f3>`**（画法 B），
+  位置由 `transform="translate(x,y)"` 给出。旧解析器只认 A ⇒ 这 9 个必然报
+  「期望恰好 1 个站位格，实得 0」，**并被误读成"prts 上没有"**（其实是**我们没认**）。
+  ★ **判据是颜色（`#27a6f3` = 站位格 / `fill:none`+`stroke:gray` = 覆盖格），不是序号。**
+  自检：`python tools/check_prts_grid.py`。
+* ★ **`<use>` 的属性之间可以没有空格**：`4-13` 有
+  `<use xlink:href="#2"x="28"y="54"id="use10"/>`，旧正则要求 `\s+` ⇒ **漏 5 个覆盖格**。
+  ★ **它与上一条会耦合**：**只修站位格那一半，`4-13` 就会从"响亮的失败"
+  变成"成功的静默少 5 格"**——两半必须一起改。
+* ★ **prts 与 gamedata 的攻击范围口径差一格**：`AttackRange.cells` 按定义
+  **不含站位格本身**；gamedata `range_table.json` 的 `grids` **在攻击范围覆盖自身格时把它算进去**。
+  2026-09-20 全量对账 72 个代号：**逐格一致 9 个、只差自身格 `(0,0)` 63 个、其它差异 0 个**。
+  **对账时别把这一格读成"不一致"。**
+* ★ **`RangeRegistry` 默认会先读旧索引**（`_load()` 装进内存，`get()` 直接返回）。
+  ⇒ **重建 ranges 时必须 `RangeRegistry(fresh=True)`**，否则**改了解析器也传不到
+  已在盘上的代号身上**——那不是重建，是**把自己的输出当权威**。
+  （2026-09-20 实测：改了站位格解析后重跑，63 个老代号原样不动。）
+  ★ 重建是否真的重解析了，**看 `ranges.json` 里每个代号的 `self_source`**：
+  它记着这一格是从哪条路径取到的（`use#1` / `path#27a6f3` / `unknown`）。
+  **`unknown` = 旧文件没记，不代表"不是回退取到的"。**
 
 ### 5.4 两条通则（2026-09-20 立，比本节的任何一行都重要）
 
