@@ -75,7 +75,8 @@ python tools/audit_coverage.py --select --cross --batch 10 --from-cache out/acce
 - **分层里没有"本层可做性"这一维**：后端2 拆过予愿安洁莉娜的 10 键（6 个要**跨语言**、
   2 个第二写法、1 个别名、1 个要裁定）。在我的规则下她仍是 **类 1 = 8**：
   `buff_duration_levitate`、`atk_scale_hi/lo`、`aglna2_s_3[blocked|unblocked].attack_speed` 全算"该做的"。
-  ⇒ **第 1 类的 773 位次里混着需要跨语言（白名单＋机制层）的项，覆盖收益会高估。**
+  ⇒ **第 1 类的 773 位次里混着需要跨语言（白名单＋机制层）的项，覆盖收益会高估**：
+  **773 是上界，不是"待做清单的准确长度"。**
 
 ---
 
