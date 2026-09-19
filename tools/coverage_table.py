@@ -249,6 +249,55 @@ WIRED_WHY: dict[str, str] = {
         "⛔ **零调用点**：全仓对 devices_of 的提及只有它自己的定义行（`ak_tactic/frontend/devices.py:236`）"
         "与 `__all__` 导出清单（:41）。⚠ 自动列把这个读成「本文件内使用」，而那个「使用」只是把名字列进"
         "导出表 —— **引用 ≠ 消费**的又一例（与折射那条同为假阳性，方向相反）",
+    # ── 批次一（2026-09-19 夜，PM 裁定「一次 3~5 条、逐行取证」）──────────────
+    #: 写法：**定义位 + 消费点 + 守卫用例名**，三段都要点出行号；某段查不到**就写查不到**，
+    #: 绝不写「我读了觉得是这条」。**这一栏只报不判**：写错一条依据比留 ⚠ 更贵——⚠ 至少诚实，
+    #: 写错的依据长得像「已核对」。
+    "折射":
+        "定义位 `rios-sim/refraction.go:54` type refractionState struct（判据原文抄在文件头：深池术师"
+        "「法术抗性增加70（可被沉默）」）；**消费点：零**——全仓非测试 `.go` 里 refractionState／"
+        "ApplyResistance／Effective 的出现只落在 `refraction.go` 自身（:54/:66/:80/:88/:97/:111），"
+        "**没有第二个文件伸手来拿** ⇒ 与本行登记的「调用点缺失」相符；"
+        "守卫：`rios-sim/refraction_test.go` 6 例（:11 InactiveAddsNothing、:22 ActiveAddsCallerDelta、"
+        ":37 DeltaIsNotHardcoded、:56 SilencedStopsWorking、:71 RecoversWhenModeSaysSo、:90 LatchesWhenModeSaysSo）",
+    "脆弱":
+        "定义位 `rios-sim/fragile.go:39` type fragileState struct（:44 Add／:52 Tick／:72 Ratio／:100 Apply）；"
+        "**消费点：零**——非测试 `.go` 里 fragileState 只出现在 `fragile.go` 自身。"
+        "⚠ 有一条**同名假信号**必须在此点明：`rios-sim/mech/snow.go:597/:617` 的 `f.add(cell)` 是"
+        "**积雪的田地集合**，与 fragileState 毫无关系——照名字 grep 会把它读成「脆弱已经被消费」"
+        "（记忆 1bd38acb 那一族：同名不同义）；"
+        "守卫：`rios-sim/fragile_test.go` 6 例（:18 SameNameTakesMaxNotSum、:31 SameNameOrderIndependent、"
+        ":44 DistinctNamesAdd、:55 TimersAreIndependent、:74 IgnoresNonPositiveInput、"
+        ":86 ApplyLeavesNonPositiveDamageAlone）",
+    "恐惧（含自惧）":
+        "定义位 `rios-sim/fear.go:103` fearCells（同文件 :134 fearTargets／:162 pick／:199 fearOffset／"
+        ":219 activeLure）；**消费点：零**——非测试 `.go` 里这些符号只出现在 `fear.go` 自身 "
+        "⇒ 与本行登记的「调用点缺失」相符；"
+        "守卫：`rios-sim/fear_test.go` 6 例（:14 SectorIsAwayFromSource、:41 SectorCenterIsTheHitPosition、"
+        ":58 NoCellsWhenSourceMeetsHitOrIsSelf、:69 CellsApplyAllFourConditions、"
+        ":104 TargetsPickLocalThenFallbackAndPermanentRemoval、:139 OffsetIsASquareNotACircle）",
+    "寒冷":
+        "定义位 `rios-sim/sim.go:2683` func (e *enemy) applyCold(secs float64, friendly bool)"
+        "（判据见 :2675「施加【寒冷】秒数；已在寒冷中则转为【冻结】」）；"
+        "**消费点：零——而且不是「被门挡住」的那种零**：全仓 `applyCold` 的出现只有定义 :2683、"
+        "两处注释（:198/:2675）与 `status_test.go:105/:114/:128/:129`，**生产路径没有任何调用者**；"
+        "机制层的 Ctx 接口（`rios-sim/mech/mech.go`）里有 SetEnemyFrozen(:311)、"
+        "**没有任何 Cold/ApplyCold** ⇒ 连「机制施加寒冷」的那道门都还不存在；"
+        "守卫：`rios-sim/status_test.go` 3 例（:24 ColdSlowsEnemyAttack、:101 ApplyColdConvertsToFreeze、"
+        ":126 ApplyColdRejectsNonPositive），另 `res_frozen_test.go:23` 记的是冻结那条复合判据的另一半"
+        "（`frozenSnow` 无条件算友方）",
+    "停顿":
+        "⚠ **本行的锚点指的是邻居；我没改**（锚点属判据结构，改动要 PM 裁，见本轮汇报）："
+        "锚点 `rios-sim/sim.go::speedFor`(:1087) 读的是 `speedReq`，而 `speedReq` 的**唯一写入者**是 "
+        "`rios-sim/mech/snow.go:442` ctx.ScaleEnemySpeed（接口 `mech/mech.go:290`）——"
+        "那是**积雪的移速倍率**通道，`snow.go:441` 自己也注明「grep ScaleEnemySpeed 只有这里」，"
+        "我独立 grep 复核：**只有这一处**。"
+        "引擎里的【停顿】是**另一个量**：字段 `sim.go:174 sluggishTimer`（判据原文与「少走 秒数×移速 格」"
+        "的解释写在 :167-174），**消费点 `sim.go:736`**（advance 里 `if e.sluggishTimer > 0` 先递减再挡推进；"
+        ":761 也参与「这一帧能不能动」的判据），**唯一写入点 `sim.go:2143`**"
+        "（干员高台溅射 HighlandSplashSluggish 取 max）。"
+        "守卫：**零覆盖**——`*_test.go` 里 `speedFor`／`speedReq` 无命中，`sluggish` 只有 "
+        "`status_test.go:40` 一句「与 sluggishTimer 同一类」的注释 ⇒ 与本行登记的「守卫缺失」相符",
 }
 
 
@@ -573,6 +622,27 @@ def self_test() -> int:
               f"{ne_inj[:1] or '（没红）'}")
     else:
         print("  ⚠ 依据缺失那条没有可注入的样本（0 行登记了依据）——注入不了，别把它当验过")
+    # ★ 已登记的依据必须带**证据坐标**（`file:line`）——这是「可追回」的最低机械判据：
+    #   一条写着"我核对过"的依据与一条指向 `rios-sim/fragile.go:39` 的依据在输出上同形，
+    #   只有坐标能让人按图索骥。**未登记的行不参与这条**（那是上面那条 ⚠ 的职责，
+    #   两者分工＝「有没有人判」与「判了有没有出处」）。
+    coord_re = re.compile(r"[A-Za-z0-9_./\\-]+\.(?:py|go|md):\d+")
+    registered = {n: w for n, w in WIRED_WHY.items() if n in {r[1] for r in ROWS}}
+    no_coord = sorted(n for n, w in registered.items() if not coord_re.search(w))
+    good12 = not no_coord
+    bad += 0 if good12 else 1
+    print(f"  {'✅' if good12 else '⛔'} 已登记的依据必须带证据坐标（file:line）："
+          f"{len(registered) - len(no_coord)}/{len(registered)} 条"
+          f"{('；缺坐标：' + '、'.join(no_coord)) if no_coord else ''}")
+    if registered:
+        who = sorted(registered)[0]
+        inj_coord = dict(registered)
+        inj_coord[who] = "这条依据只有结论、没有坐标"
+        nc = sorted(n for n, w in inj_coord.items() if not coord_re.search(w))
+        good12b = who in nc
+        bad += 0 if good12b else 1
+        print(f"  {'✅' if good12b else '⛔'} 反向守卫：抽掉坐标后「必须带坐标」必须点名："
+              f"{nc[:1] or '（没红 ⇒ 这条判据红不起来）'}")
     # ★ 来源三件套：**两边都要试**——只试一边的话，"提示恒出现"与"提示恒不出现"都算过。
     clean_txt = "\n".join(provenance_lines((0, []), "abc1234", "main"))
     good9 = ("source_dirty=0" in clean_txt) and ("⚠" not in clean_txt)
