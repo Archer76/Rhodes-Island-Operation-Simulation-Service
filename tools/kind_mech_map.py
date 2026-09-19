@@ -72,6 +72,12 @@ _WORD = re.compile(r"""[A-Za-z_][A-Za-z0-9_]*""")
 #: 这些名字**不是落点**：Go/Python 内建或纯占位（实测 `append` 会把 `control` 骗成「有落点」）
 _NOT_A_LANDING = frozenset("append other value len make range min max sum print".split())
 
+#: ★ **本轮新增的 Go 文件**——表里要把「含它／不含它」两个读数分开印，否则会**自指**：
+#: 我新写的 `rios-sim/mech/chain.go` 里带着 `json:"atk_scale"` 等标签，会让 `targets`／`damage`
+#: 的「有落点」多出落在我自己文件上的那几处。验收那一版是**没有这个文件**的树，
+#: 两个读数不可比（`515530a8`：比对树是否相同要写死两个 sha）。
+_NEW_THIS_ROUND = frozenset({"rios-sim/mech/chain.go"})
+
 _GO_KEYWORDS = frozenset("""func return struct interface package import range string int
 bool error make append len nil true false type var const for if else switch case default
 byte rune uint64 int64 uint32 int32 float64 float32 defer go chan map""".split())
@@ -158,11 +164,15 @@ def _strip_go_comment(line: str) -> str:
     return "".join(out)
 
 
-def go_index(strip_comments: bool = True) -> dict[str, list[tuple[str, int, str]]]:
+def go_index(strip_comments: bool = True, exclude: frozenset = frozenset()) -> dict[str, list[tuple[str, int, str]]]:
     """Go 生产代码的词 → [(文件, 行, 原文行)]（排除 `*_test.go`、跳过整行注释）。
 
     `strip_comments=False` 保留行尾注释（v1 口径）——**只用于守卫里做两种口径对拍**，
     判决一律用 `True`。
+    `exclude` ＝**本轮新增的文件**（相对仓库根的 posix 路径）——用于把「不含本轮新增」的
+    读数与验收那一版对齐。★ 不加这一项就会**自指**：我本轮新写的 `rios-sim/mech/chain.go`
+    里有 `json:"atk_scale"` 等标签，于是 `targets` 的「有落点」会有一条落在我自己刚写的文件上
+    （同族 `35c2d66d` ②：文档里写名字去证明「它不在仓库里」⇒ grep 命中命令自己）。
     """
     idx: dict[str, list[tuple[str, int, str]]] = {}
     if not GO_ROOT.exists():
@@ -171,8 +181,10 @@ def go_index(strip_comments: bool = True) -> dict[str, list[tuple[str, int, str]
     for p in sorted(GO_ROOT.rglob("*.go")):
         if p.name.endswith("_test.go"):
             continue
-        n_files += 1
         rel = p.relative_to(ROOT).as_posix()
+        if rel in exclude:
+            continue
+        n_files += 1
         for i, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
             if line.lstrip().startswith("//"):
                 continue          #: ★ 整行注释不算落点
@@ -212,9 +224,21 @@ def _same_source(kind: str, cand: str) -> bool:
 
 
 def hits_of(cands: list[tuple[str, int, str]], idx: dict) -> list[tuple[str, str, int, str]]:
+    """命中清单：**按 `文件:行` 去重**。
+
+    ★ 验收对账顶回的第一处（`msg-mu8ymgmc-ff`）：v2 曾把同一个 Go 行数了三遍——
+    cand 抽取按 `formula.py` 行逐条出候选（`atk_scale＠1669·out`／`＠1670·out`／`＠1671·note`），
+    命中表又按**候选项**展开 ⇒ 「处数」随 Python 侧抽取次数变化（0～N 倍）。
+    **这与幽灵 kind 同源：都是按「抽取次数」计数，不是按「对象」计数。**
+    修法＝同名 cand 先合并，命中行再按 `(文件, 行)` 去重。
+    """
     out: list[tuple[str, str, int, str]] = []
-    for name, _l, _h in cands:
-        for rel, ln, text in idx.get(name, [])[:3]:
+    for name in dict.fromkeys(c for c, _l, _h in cands):
+        seen: set[tuple[str, int]] = set()
+        for rel, ln, text in idx.get(name, []):
+            if (rel, ln) in seen:
+                continue
+            seen.add((rel, ln))
             out.append((name, rel, ln, text))
     return out
 
@@ -264,6 +288,8 @@ def build(strip_comments: bool = True) -> dict:
     rules = kinds_and_rules()
     fields = landing_fields()
     idx = go_index(strip_comments=strip_comments)
+    #: ★ 本轮新增的文件：把「不含本轮新增」的读数也算出来（与验收那一版对齐）
+    idx_x = go_index(strip_comments=strip_comments, exclude=_NEW_THIS_ROUND)
     #: 共用 cand：同一个字段名被多个 kind 抽到（damage 与 ep_damage 共用 damage_type）
     used: dict[str, list[str]] = {}
     for k, cs in fields.items():
@@ -288,11 +314,28 @@ def build(strip_comments: bool = True) -> dict:
         })
     landed = [r for r in rows if r["state"] == "有落点"]
     distinct = sorted({h["cand"] for r in landed for h in r["hits"]})
-    shared_cands = sorted({h["cand"] for r in landed for h in r["hits"]
-                           if any(c["name"] == h["cand"] and c["shared_with"] for c in r["cands"])})
+    #: ★ 两个 scope 分开（`6dd6739c`：两套分母不许并列）
+    shared_landed = sorted({h["cand"] for r in landed for h in r["hits"]
+                            if len(set(used.get(h["cand"], []))) > 1})
+    shared_all = sorted(n for n, ks in used.items() if len(set(ks)) > 1)
+    by_cand_lines: dict[str, set[tuple[str, int]]] = {}
+    for r in landed:
+        for h in r["hits"]:
+            by_cand_lines.setdefault(h["cand"], set()).add((h["file"], h["line"]))
+    #: 不含本轮新增文件的命中处数（逐 cand）
+    by_cand_lines_x: dict[str, set[tuple[str, int]]] = {}
+    for r in landed:
+        for name, rel, ln, _t in hits_of(fields.get(r["kind"], []), idx_x):
+            by_cand_lines_x.setdefault(name, set()).add((rel, ln))
     return {"rows": rows, "go_words": len(idx) - 1,
             "go_files": idx.get("__files__", [("", 0, "")])[0][1],
-            "distinct_cands": distinct, "shared_cands": shared_cands}
+            "go_words_x": len(idx_x) - 1,
+            "go_files_x": idx_x.get("__files__", [("", 0, "")])[0][1],
+            "new_files": sorted(_NEW_THIS_ROUND),
+            "distinct_cands": distinct, "shared_cands": shared_landed,
+            "shared_cands_all": shared_all, "used": {n: sorted(set(k)) for n, k in used.items()},
+            "hit_lines_by_cand": {c: len(v) for c, v in sorted(by_cand_lines.items())},
+            "hit_lines_by_cand_x": {c: len(v) for c, v in sorted(by_cand_lines_x.items())}}
 
 
 def check() -> int:
@@ -391,14 +434,32 @@ def md(d: dict) -> str:
              f"{'、'.join('`' + r['kind'] + '`' for r in st['有落点'])} |")
     L.append(f"| 有落点（**distinct cand 字段**） | **{len(d['distinct_cands'])}** | "
              f"{'、'.join('`' + c + '`' for c in d['distinct_cands'])} —— 口径＝**所有产生命中的 cand 名去重** |")
-    L.append(f"| 　└ 其中被**多个 kind 共用**的 | **{len(d['shared_cands'])}** | "
-             f"{'、'.join('`' + c + '`' for c in d['shared_cands']) or '—'} ⇒ **kind 计数 > 净字段计数** |")
+    L.append(f"| 去重后**命中处数**（按 `文件:行` 去重） | "
+             f"**{sum(d['hit_lines_by_cand'].values())}** | "
+             + "、".join(f"`{c}` {n} 处" for c, n in d['hit_lines_by_cand'].items())
+             + " —— ★ 与上面两行**不是同一口径**：这行数的是 Go 侧的**行** |")
+    L.append(f"| 　└ **不含本轮新增文件**（`{'`／`'.join(d['new_files'])}`） | "
+             f"**{sum(d['hit_lines_by_cand_x'].values())}** | "
+             + "、".join(f"`{c}` {n} 处" for c, n in d['hit_lines_by_cand_x'].items())
+             + " —— ★ **这一行才与验收那一版可比**（它量时该文件还不存在） |")
+    L.append(f"| 共用字段（**只在「有落点」范围内**） | **{len(d['shared_cands'])}** | "
+             f"{'、'.join('`' + c + '`' for c in d['shared_cands']) or '—'} |")
+    L.append(f"| 共用字段（**全表范围**） | **{len(d['shared_cands_all'])}** | "
+             f"{'、'.join('`' + c + '`' for c in d['shared_cands_all']) or '—'} —— "
+             f"★ 多出的 `heal_scale`（`heal`／`regen`）不在有落点范围内，"
+             f"**而它正是 `regen` 那格缺陷的本体** |")
     L.append("")
-    L.append("★ **两个口径都印出来，是因为它们曾被并列过**：验收对账时量到「净字段 2」（`damage_type`、`max_target`），"
-             "而本表量到 **3**（多一个 `atk_scale`）。**不是谁错**——v1 主表每行只显前 2 处命中，"
-             "把 `atk_scale`＠`rios-sim/wire.go:273`（`AtkScale float64 \\`json:\"atk_scale\"\\``）挤进了「另有 N 处」，"
-             "于是「主表可见口径」＝2、「全部命中口径」＝3。**v2 已把主表改成按 cand 分组全列，两个口径同为 3**"
-             "（`6dd6739c`：两套分母的数不许并列 ⇒ 要么分开写、要么把分母消掉）。")
+    L.append("★ **四个量分开写，因为它们回答的是四个不同的问题**（`6dd6739c`／`fd544d68`）："
+             "kind 计数（几个**机制种类**有落点）／distinct 字段（几个**字段名**命中）／"
+             "共用字段（一个字段名被几个 kind 抽到）／命中处数（Go 侧几个**行**命中）。"
+             "**跨行不可比、不许相加。**")
+    L.append("")
+    L.append("★ **「净字段 2 vs 3」这一场争议的结论是两边各错一半**（对账 `msg-mu8xg2iz-f4`／"
+             "`msg-mu8ymgmc-ff`）：验收量到 2，**是它自己打印时 `hits[:3]` 截掉了排第 4 的 `atk_scale`**"
+             "（**与我的主表显示无关**——这一点是它自己查出来并自纠的）；而我的**命中处数**把同一个 Go 行"
+             "数了三遍（按**抽取次数**计数，不是按**对象**计数，**与幽灵 kind 同源**）。"
+             "**现在的口径**：处数按 `文件:行` 去重，`atk_scale` **1 处**／`max_target` **1 处**／"
+             "`damage_type` **4 处**。")
     L.append(f"| 待换尺子 | **{len(st['待换尺子'])}** | cand 与 kind 名不同源 ⇒ 先换尺子 |")
     L.append(f"| 未核·**Python 侧无可抽字段名** | **{n_nocand}** | 这把尺子量不到，不是「Go 侧没有」 |")
     L.append(f"| 未核·**同源 cand 但 Go 0 命中** | **{n_nohit}** | 要读 Go 确认 |")
@@ -427,7 +488,13 @@ def md(d: dict) -> str:
                            if c["name"] == cand and c["shared_with"]), [])
                 tag = ("（与 " + "、".join("`" + s + "`" for s in sw)
                        + " 共用 ⇒ **归属未核**）") if sw else ""
-                cells.append(f"{mark}`{cand}`（{len(hs)} 处）→ `{hs[0]['file']}:{hs[0]['line']}`{tag}")
+                #: ★ 本轮新增的文件排在后面并标出来，否则读表的人会以为落点在引擎里
+                hs = sorted(hs, key=lambda h: (h["file"] in _NEW_THIS_ROUND, h["file"], h["line"]))
+                locs = []
+                for h in hs[:2]:
+                    nf = "（**本轮新增**）" if h["file"] in _NEW_THIS_ROUND else ""
+                    locs.append(f"`{h['file']}:{h['line']}`{nf}")
+                cells.append(f"{mark}`{cand}`（{len(hs)} 处）→ " + "、".join(locs) + tag)
             go = "<br>".join(cells)
         elif r["state"] == "待换尺子" and r["diag"]:
             go = "**先换尺子**（0 命中）"
@@ -456,19 +523,26 @@ def md(d: dict) -> str:
     L.append("")
     L.append("★ 每格都能**报出自己来自哪一块、哪一行**（PM 对「串块」那条的判据）——报不出来就是解析器串了块。")
     L.append("")
-    L.append("## 共用 cand（一个字段名被多个 kind 抽到）")
+    L.append("## 共用 cand（一个字段名被多个 kind 抽到）——**这类缺陷的探测器**")
     L.append("")
-    L.append("| cand | 被哪些 kind 抽到 | 影响 |")
-    L.append("| --- | --- | --- |")
-    for r in rows:
-        for c in r["cands"]:
-            if c["shared_with"]:
-                L.append(f"| `{c['name']}` | `{r['kind']}`、{'、'.join('`' + s + '`' for s in c['shared_with'])} | "
-                         f"「净落点字段」口径下只算 **1** 个字段 |")
+    L.append("★ 验收对账的原话：**「共用表不是附注，是这类缺陷的探测器」**——"
+             "若共用表一开始就列 `heal_scale`，`regen → heal_scale` 那格**当场显形**。"
+             "所以本节**按 cand 去重、每行一个 cand**（v2 曾把 `damage_type` 印两遍、且漏了 `heal_scale`）。")
+    L.append("")
+    L.append("| cand | 被哪些 kind 抽到 | 其中有落点? | 与「待换尺子」的关系 |")
+    L.append("| --- | --- | --- | --- |")
+    swap = {r["kind"] for r in rows if r["state"] == "待换尺子"}
+    for cand in d["shared_cands_all"]:
+        kinds = d["used"].get(cand, [])
+        landed_kinds = [r["kind"] for r in st["有落点"] if any(c["name"] == cand for c in r["cands"])]
+        rel = ("★ **就是 `" + "`／`".join(sorted(k for k in kinds if k in swap))
+               + "` 那格的 cand**：它抽到这个名字，而 Go 侧落点叫别的名字") if any(k in swap for k in kinds) else "—"
+        L.append(f"| `{cand}` | {'、'.join('`' + k + '`' for k in kinds)} | "
+                 f"{'、'.join('`' + k + '`' for k in landed_kinds) or '都不是'} | {rel} |")
     L.append("")
     L.append("★ **归属未核**：`ep_damage` 现在这一态是**靠共用 cand `damage_type` 撑起来的**——"
-             "「一个字段名同时清两个键」是 `180eab0c` 的同族问题，**`damage_type` 是不是 ep 的落点，本表不当既成事实**："
-             "要么补证据，要么标未核。**本轮标未核。**")
+             "「一个字段名同时清两个键」是 `180eab0c` 的同族问题，**`damage_type` 是不是 ep 的落点，"
+             "本表不当既成事实**：要么补证据，要么标未核。**本轮标未核。**")
     L.append("")
     L.append("## 脚注：四态各是怎么定出来的")
     L.append("")
