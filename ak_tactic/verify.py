@@ -331,6 +331,11 @@ class Verifier:
 
         sim = BattleSimulator(
             stage, enemy_at=lib.get, range_provider=provider,
+            # 敌人**种类**（PRTS 的「种类」列，住在 enemydb 的 `enemy.category`）。
+            # 按种类判的机制（泥岩天赋「手足相惜」：受到来自【萨卡兹】敌人的伤害
+            # 降低 30%）靠它。库里没有这个敌人的种类时返回空串 ⇒ 机制不生效——
+            # 宁可不动，不许把敌人一概当成萨卡兹。
+            species_provider=lib.species_of,
             skill_book=self.skill_book, verbose=self.verbose,
             effect_source=self.effect_source, **switches)
 

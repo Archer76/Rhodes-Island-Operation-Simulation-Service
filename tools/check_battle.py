@@ -5202,14 +5202,58 @@ def check_species_resistance(stage, lib, calc, book_t) -> None:
           abs(_s2._species_resist(other_op, e, 1000.0) - 1000.0) < 1e-9,
           "0 折扣")
 
-    # ⚠️ 本守卫**只到单元级**，没有端到端（真跑攻击循环）。
-    # 试过两种夹具都不成立：`_dummy` 那条 0 长度路线一推进就算走到终点漏出场
-    # （它自己的 docstring 就写着"不要跑 run()"）；自己造一只 (4,3)→(2,3) 的
-    # 走位敌人，`run(30)` 之后 `blocked_by` 仍是 None、两局血量一模一样——
-    # 也就是说**它根本没走进被挡下那一步**，这种守卫测不到东西，留着比没有更坏。
-    # 于是如实记在这里：减伤**已接在五处现场**（敌人普攻 4286、复燃 4304、
-    # 敌方技能物/法 4382/4390、附加伤害 4824），但"真打起来血量确实不同"这一条
-    # 尚未验证。要补得先做出一个稳定的"走进来—被挡下—出手"夹具。
+    # 生产路径：这条天赋在**真实入口**里生效，靠的是 `EnemyLibrary.species_of`
+    # （`verifier.run` 把 `species_provider=lib.species_of` 递给模拟器）。
+    # ⚠️ `data/enemydb.sqlite` 是**本地构建产物**（`data/*.sqlite` 在 .gitignore 里），
+    # 干净检出上没有它——所以两种世界都要断言：库在就验真取到种类，库不在就验
+    # "退化成空串、机制不生效"，绝不写成"没库就假红"。
+    from pathlib import Path                                    # noqa: PLC0415
+    db_present = (Path(__file__).resolve().parent.parent
+                  / "data" / "enemydb.sqlite").exists()
+    if db_present:
+        check("  生产路径：`species_of` 按**名字** join 敌人库真取到种类",
+              lib.species_of("enemy_1010_demon") == "萨卡兹"
+              and lib.species_of("enemy_10001_trslim") == "感染生物",
+              f"demon={lib.species_of('enemy_1010_demon')!r}、"
+              f"trslim={lib.species_of('enemy_10001_trslim')!r}")
+    else:
+        print("     （本地没有 data/enemydb.sqlite，改验退化路径）")
+        check("  敌人库不在 ⇒ `species_of` 退化成空串（机制不生效，而不是崩）",
+              lib.species_of("enemy_1010_demon") == "", "空串")
+    check("  反向：库里查不到的敌人一律空串（不猜种类）",
+          lib.species_of("enemy_0000_nobody") == "", "空串")
+
+    # 接线证据：跑一次**真的攻击循环**，只换 `species_provider`，看掉血差。
+    # 两个坑都踩过，写在这里免得下次再踩：
+    # ① 不能用 `_dummy`——它那条路线长度是 0，一推进就算走到终点漏出场；
+    # ② 走位敌人的**路线长度必须够**：第一版给了 1.0，而 (4,3)→(2,3) 这条线段
+    #    实际长两格，于是它在被挡下之前就"走到终点"漏出场了，`blocked_by` 一路
+    #    是 None、两局血量一模一样——看着像"机制没生效"，其实是敌人早没了。
+    def spawn_walker(sim, eid, src, dst):
+        pts = [(float(src[0]), float(src[1])), (float(dst[0]), float(dst[1]))]
+        w = sim._build_enemy(eid, 1, pts,
+                             [RouteLeg(kind="walk", points=pts, length=2.0)],
+                             0.0, 0.0)
+        w.position = pts[0]
+        w.max_hp = w.hp = 1_000_000.0
+        sim.enemies.append(w)
+        return w
+
+    hits, full = {}, 0.0
+    for label, species in (("萨卡兹", "萨卡兹"), ("机械", "机械")):
+        s3, op3 = build(species)
+        full = op3.max_hp
+        spawn_walker(s3, _enemy_ids(stage)[0], (4, 3), (2, 3))
+        s3.run(60.0)
+        hits[label] = op3.hp
+    loss_s = full - hits["萨卡兹"]
+    loss_m = full - hits["机械"]
+    check("  端到端：敌人真的把泥岩打掉了血（否则这条测不到东西）",
+          loss_m > 0.0, f"机械局掉 {loss_m:.0f}/{full:.0f}")
+    check("  端到端：只换敌人**种类**，掉血就变成 70%（萨卡兹局明显少掉）",
+          loss_m > 0.0 and 0.60 < loss_s / loss_m < 0.80,
+          f"萨卡兹局掉 {loss_s:.0f}、机械局掉 {loss_m:.0f}，"
+          f"比值 {loss_s / loss_m:.3f}（期望 ≈0.70）")
 
 
 def check_closur_shield_cnt(stage, lib, calc, book_t) -> None:
