@@ -1,6 +1,11 @@
 package main
 
-import "math"
+import (
+	"fmt"
+	"math"
+	"sort"
+	"strings"
+)
 
 // 元素损伤（ElementBreak）——元素值／爆条／爆发冷却的状态机与五行爆发表。
 //
@@ -296,6 +301,103 @@ func (s *elementState) damage(k elementKind, amount float64) bool {
 	}
 	s.ep[k] = 0
 	return true
+}
+
+// ============================================================ 黑板取值层（B 组）
+//
+// 元素损伤的**数值不在正文里**。原版敌人侧公式编译器写明：
+// 「prts.wiki 手写的敌人正文不写数值（「造成一定侵蚀损伤」），真值在敌人同档黑板上」
+// （`ak_tactic/enemy_formula.py:547-557`），所以正文只给**种类**，数值必须从黑板取。
+//
+// 黑板键的真实形状是 **`<前缀>[.attack]@ep_damage_ratio`**，前缀由该敌人的机制决定，
+// 实测 40+ 种（`EpDamage.` / `aura.` / `Wake2Sleep.` / `GetEnmey.` / 纯数字 `1.` …）。
+// 所以这一层**不解释前缀、不改写键名**，只按**后缀**找出候选：
+//   - `*ep_damage_ratio`  比例式（乘数基由调用方给，见下）
+//   - `*ep_damage_value`  绝对值
+//   - `*ep_damage_scale`  倍率式
+//
+// ⚠ **拼写错误原样保留**：`GetEnmey.` 原文如此，不许顺手改成 `GetEnemy.`
+// ——键名对不上的后果是**静默取空**，比报错难查得多（通告 #7 二）。
+//
+// ⚠ **命中多个不同值 = 歧义 = 报错，不许挑一个**：同一敌人可以有多条路带元素损伤
+// （`Attack.` 与 `Attack2.` 就是两次攻击各一条），值相同 ⇒ 同机制的两条路，可用；
+// 值不同 ⇒ **不止一处施加点**，必须由调用方逐处送，不能在这一层猜一条。
+// 这是本层唯一会出错的地方，所以它必须吵。
+
+// epKeyKinds 是本层认识的三种元素损伤键后缀。
+var epKeyKinds = []string{"ep_damage_ratio", "ep_damage_value", "ep_damage_scale"}
+
+// keyHasEpSuffix 判一个黑板键是否属于元素损伤键族，并给出它的后缀类别。
+//
+// 判据是**后缀**，不是子串：`xep_damage_ratio2` 不算，
+// `GetEnmey.attack@ep_damage_ratio` 与 `1.ep_damage_value` 算。
+func keyHasEpSuffix(key string) (string, bool) {
+	for _, suf := range epKeyKinds {
+		if key == suf || strings.HasSuffix(key, "."+suf) || strings.HasSuffix(key, "@"+suf) {
+			return suf, true
+		}
+	}
+	return "", false
+}
+
+// EpCandidates 返回黑板里所有元素损伤候选键（**按键名排序**，便于复现）。
+//
+// 返回值只用于**登记与报错**，不用于"挑一条来用"——见 `ResolveEpAmount` 的歧义规则。
+func EpCandidates(bb map[string]float64) []string {
+	out := []string{}
+	for k := range bb {
+		if _, ok := keyHasEpSuffix(k); ok {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ResolveEpAmount 把黑板解析成"这一处元素损伤的量"。
+//
+// base 是比例式与倍率式的乘数基。**调用方给什么就是什么**：本层不假定它一定是面板 ATK
+// ——那个口径在原版里**没有对照物**（原版根本没有元素损伤的结算层，全树检索见
+// `docs/spec-element-fields.md` §四.1），属于**未裁定项**，本层不许替它做决定。
+//
+// 语义：
+//   - 一条候选都没有 ⇒ (0, nil, nil)：这一处本来就没有元素损伤，**不是错**；
+//   - 只有一种**语义类别**（比例/绝对值/倍率各算一类）⇒ 取它。同类多条键时
+//     值全相同 ⇒ 同机制的多条路，取值；值不同 ⇒ **报错**；
+//   - 混了两种以上类别 ⇒ **报错**：送进来的不是"一处损伤"，调用方该逐处送。
+func ResolveEpAmount(bb map[string]float64, base float64) (float64, []string, error) {
+	keys := EpCandidates(bb)
+	if len(keys) == 0 {
+		return 0, nil, nil
+	}
+	byClass := map[string][]string{}
+	for _, k := range keys {
+		suf, _ := keyHasEpSuffix(k)
+		byClass[suf] = append(byClass[suf], k)
+	}
+	if len(byClass) > 1 {
+		return 0, keys, fmt.Errorf(
+			"元素损伤：黑板里同时出现 %d 类候选键（%s）——本层只解析「一处」损伤，请调用方逐处送",
+			len(byClass), strings.Join(keys, ", "))
+	}
+	for suf, ks := range byClass {
+		sort.Strings(ks)
+		first := bb[ks[0]]
+		for _, k := range ks[1:] {
+			if bb[k] != first {
+				return 0, ks, fmt.Errorf(
+					"元素损伤：同类键取值不一致（%s）—— %s=%v 与 %s=%v：这不是同机制的两条路，是不止一处施加点",
+					suf, ks[0], first, k, bb[k])
+			}
+		}
+		switch suf {
+		case "ep_damage_value":
+			return first, ks, nil // 绝对值：**不乘** base
+		case "ep_damage_ratio", "ep_damage_scale":
+			return base * first, ks, nil
+		}
+	}
+	return 0, keys, nil // 不可达：byClass 非空时必在上面 switch 里返回
 }
 
 // burstDuration 返回该元素爆发的持续秒数（对敌列；对干员列由调用方按阵营取表）。
