@@ -687,10 +687,22 @@ def select_mode(a, lits: set[str], det: str) -> int:
     if a.from_cache:
         blob = json.loads(Path(a.from_cache).read_text(encoding="utf-8"))
         print(f"（复用扫描缓存 `{a.from_cache}`，生成于 {blob.get('generated_at')}）")
-        print(f"  缓存身份：{blob.get('ident')}")
-        print(f"  本轮身份：{ident}")
-        if blob.get("ident") != ident:
-            print("  ⚠ 身份不一致：库／范围表／名册有变，读数不可与缓存同日而语")
+        cid_in = blob.get("ident") or {}
+        #: ★ 只拿**输入三件套**判可比性（验收 2026-09-20 修）：
+        #: 整份 ident 相等会连 `head`/`src_dirty` 一起比 ⇒ 加了这两个字段后，
+        #: **所有**旧缓存都会被判「身份不一致」（假红，且它根本不是输入变了）。
+        #: 树身份单列成**三态**（相同／不同／未记录）：它不决定输入可比性，
+        #: 但**跨提交比较必须注明**——尺子改了就是动在这一维（599→594 那一次）。
+        IN_FIELDS = ("akdb", "ranges", "roster")
+        print("  缓存输入身份：" + "／".join(f"{kk} `{cid_in.get(kk, '未记录')}`" for kk in IN_FIELDS))
+        print("  本轮输入身份：" + "／".join(f"{kk} `{ident[kk]}`" for kk in IN_FIELDS))
+        if any(cid_in.get(kk) != ident[kk] for kk in IN_FIELDS):
+            print("  ⚠ 输入身份不一致：库／范围表／名册有变，读数不可与缓存同日而语")
+        head_c, head_n = cid_in.get("head", "未记录"), ident["head"]
+        tree_same = "相同" if head_c == head_n else ("未记录" if head_c == "未记录" else "不同")
+        print(f"  树身份：缓存 `{head_c}` ／ 本轮 `{head_n}` ⇒ **{tree_same}**"
+              + ("" if tree_same == "相同" else
+                 "——**不影响输入可比性，但跨提交比较必须把这一维写出来**（工具／尺子改了就在这）"))
         data = {cid: {"keys": set(d["keys"]), "talents": set(d["talents"]),
                       "n_allk": d["n_allk"], "port": d["port"],
                       "kv": [tuple(x) for x in d["kv"]]}
@@ -709,6 +721,10 @@ def select_mode(a, lits: set[str], det: str) -> int:
         print(f"扫描缓存已落盘：{a.cache}")
     needs = {cid: d["keys1"] for cid, d in data.items()}
     needs_raw = {cid: d["keys"] for cid, d in data.items()}
+    data_all = data          #: ★ 收窄**前**的全库快照（非 `--only-port` 档下就等于全库本身）。
+    #: 必须在这里绑定：第二态报表（本函数后段「仅名字表提到」）**两种模式都要用**它，
+    #: 只在 `--only-port` 分支里赋值 ⇒ 不带该开关时 `UnboundLocalError`、整跑 RC=1
+    #: （2026-09-20 验收实测：`--from-cache` 无开关时崩在 `gate_all = {...data_all...}`）。
     if a.only_port and not a.no_port:
         #: ★ 第二道闸当**前提**：白名单过不了的干员，键族补齐了他也进不了 Go
         #: （实测批次内 10 位只有 2 位过闸）⇒ 这一档的读数才是"做完就能用"的口径。
