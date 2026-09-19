@@ -40,7 +40,39 @@ sys.stdout.reconfigure(encoding="utf-8")
 from ak_tactic.plan import Plan, Roster                         # noqa: E402
 from ak_tactic.verify import Verifier                           # noqa: E402
 
-FIXTURES = ROOT / "out"
+def _fixture_root() -> pathlib.Path:
+    """判据集目录：**`fixtures/` 优先，`out/` 回退**（PM 2026-09-19 裁定）。
+
+    ⚠ `fixtures/` 是纪律指定的**唯一判据集**（按 schema 认夹具），`out/` 是易失目录。
+    实测两份 golden 在 17 个共有键上**逐字相同**、17 份 `plan-*.json` 也**逐字节相同**
+    ⇒ 换源**不改变任何结论**；但**"碰巧一致"不是判据**——判据要能自己证明
+    它比对的是它声称的那一批，所以 `main()` 把"用的哪一份、覆盖几份"打印在外面。
+    """
+    fix = ROOT / "fixtures"
+    if (fix / "golden_go.json").exists() and list(fix.glob("plan-*.json")):
+        return fix
+    return ROOT / "out"
+
+
+FIXTURES = _fixture_root()
+
+
+def _print_coverage(all_plans: list[pathlib.Path]) -> None:
+    """把**覆盖数露在外面**（PM 2026-09-19：「看不到」与「一致」在输出上长得一模一样）。
+
+    分母取**唯一判据集** `fixtures/golden_go.json` 的键数；本工具跑的 `plan-*.json`
+    是它的子集，**差集就是本工具一份都看不到的用例**——那几份的绿不是本工具给的。
+    """
+    canon = ROOT / "fixtures" / "golden_go.json"
+    keys = sorted(json.loads(canon.read_text(encoding="utf-8"))) if canon.exists() else []
+    names = sorted(p.name for p in all_plans)
+    print(f"  判据集   {FIXTURES.name}/（{len(names)} 份：{', '.join(names)}）")
+    if keys:
+        unseen = [k for k in keys if k not in set(names)]
+        print(f"  本工具覆盖 {len(keys) - len(unseen)}/{len(keys)}"
+              f"（金标准里本工具看不到的：{'、'.join(unseen) if unseen else '无'}）")
+        if unseen:
+            print("           ⚠ 「看不到」与「一致」长得一样 —— 这几份的绿不是本工具给的。")
 
 #: 五个列表的名字，与 `Schedule.__init__` 逐字相同。
 NAMES = ("deployments", "device_deployments", "summon_deployments",
@@ -137,9 +169,11 @@ def main() -> int:
     elif "--negative-control" in args:
         neg = "deployments"
 
-    plans = sorted(FIXTURES.glob("plan-*.json"))
+    all_plans = sorted(FIXTURES.glob("plan-*.json"))
+    plans = all_plans
     if only is not None:
         plans = [only]
+    _print_coverage(all_plans)
     if synth or synth_all:
         #: ⚠ **反例**：本树 25 个作业**没有一个用 retreats**（全是 `deploys` 键），
         #: 于是 `撤退` 那一列永远是 `[] == []`——**空洞的绿**。
@@ -147,7 +181,7 @@ def main() -> int:
         #: 这里把每份计划**就地加一条撤退**再比：只有真被填过，那一列才算检过。
         plans = [_inject_retreat(p) for p in plans]
     if not plans:
-        print("  ⚠ out/ 里没有 plan-*.json")
+        print(f"  ⚠ {FIXTURES.name}/ 里没有 plan-*.json")
         return 1
 
     if neg == "deployments" or (neg is not None and neg.startswith("dep")):
@@ -165,9 +199,12 @@ def main() -> int:
         _S.plan = _drop
 
     roster = Roster.empty()
-    p = FIXTURES / "roster_max_modelled.json"
-    if p.exists():
-        roster = Roster.from_json(p)
+    #: 名册按"判据集优先、旧目录回退"找——换源不该悄悄把一份本来在用的名册丢掉。
+    for _base in (FIXTURES, ROOT / "out"):
+        p = _base / "roster_max_modelled.json"
+        if p.exists():
+            roster = Roster.from_json(p)
+            break
 
     rows: list[tuple[str, list[str], dict[str, int]]] = []
     orig = Verifier._run_other_engine
