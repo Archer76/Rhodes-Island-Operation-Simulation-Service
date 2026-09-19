@@ -71,7 +71,7 @@ ROWS: list[tuple[str, str, str, str]] = [
     # ── 敌人平面：控制与状态链
     ("敌人", "晕眩", "rios-sim/control.go::flagStun",
      "无法行动链断：敌人照常行动与攻击（内核有守卫，但守卫只证内核、证不到接线）"),
-    ("敌人", "冻结", "rios-sim/control.go::flagFrozen",
+    ("敌人", "冻结", "rios-sim/sim.go::runSim",
      "冻结不生效，连带法抗 −15 那条修正也不发生 ⇒ 法术伤害静默偏低"),
     ("敌人", "沉睡", "rios-sim/control.go::flagSleeping",
      "沉睡单位仍被当作可行动：既能打人也能被打，两侧都错"),
@@ -186,8 +186,14 @@ UNMODELED_BY_SEVERITY: list[tuple[str, str, str, str]] = [
 #:   工具仍然把量出来的形态并排打出来——**声明与测量同时可见**，谁都不许把另一个盖掉。
 WIRED: dict[str, str] = {
     # 真的接上了（消费点不在定义文件里，或定义文件本身就是消费它的那一层）
-    "晕眩": "已接线", "冻结": "已接线", "沉睡": "已接线", "浮空": "已接线",
-    "束缚／自缚": "已接线", "停顿": "已接线", "屏障／层数护盾": "已接线",
+    # ⚠ 2026-09-20 改值（PM 裁定）：这四位是 `control.go` 位图族成员，穷举证据是**整族零消费点**
+    #   （见下方 `ZERO_CONSUMER_FAMILY`）。原值「已接线」是**自己知道是假的栏位**——
+    #   PM：假栏位比没栏位更糟，它会对下一个人持续撒谎 ⇒ 一律改成「未接线」。
+    #   ⚠ 「冻结」**不在此列**：它的**行级**量是 `sim.go:175 freezeTimer`（秒），有真实消费点
+    #   （`:732`/`:739`/`:761`，写方 `mech/mech.go:311`），所以该行仍判「已接线」；
+    #   位图那一位 `control.go:31` 归入下面那条**独立事实**，不折进行级判定。
+    "晕眩": "未接线", "沉睡": "未接线", "浮空": "未接线", "束缚／自缚": "未接线",
+    "冻结": "已接线", "停顿": "已接线", "屏障／层数护盾": "已接线",
     # 内核齐备、主线未接（本轮之前已登记的那批，加本轮新落地的三条）
     "近地悬浮": "未接线", "战栗": "未接线", "恐惧（含自惧）": "未接线",
     "寒冷": "未接线", "脆弱": "未接线", "折射": "未接线", "元素损伤（族）": "未接线",
@@ -204,6 +210,37 @@ WIRED: dict[str, str] = {
     "关卡装载": "已接线",
     "终点格（goal_cells）": "已接线（兜底路径恒被执行）",
     "装置层（devices 门）": "未接线（零调用点）",
+}
+
+#: ★ **独立事实（不是某一行名的一部分）**：`rios-sim/control.go` 的异常效果**位图族**
+#: （`abnormalFlag`：`:28 flagStun`／`:30 flagLevitate`／`:31 flagFrozen`／`:35 flagAsleep`／
+#: `:36 flagSleeping`／`:37 flagBind`／`:38 flagSelfBind`）在引擎里**整族零消费点**。
+#: 取证四源（互相独立，逐条可追到坐标）：
+#:   ① `grep abnormalFlag`（全 `rios-sim/**/*.go` 含测试）**17 处，无一例外落在 `control.go`／`control_test.go`**；
+#:   ② `grep '^\s*\w+\s+abnormalFlag'` 只命中 `control_test.go:18` 的局部变量 ⇒ **无任何结构体持有该类型字段**；
+#:   ③ 谓词（`blocksAttack:57`／`blocksAbility:66`／`blocksMove:69`／`trembleBlocksAttack:83`／
+#:      `canDamageSleepingTarget:111`／`damageVsInvincible:123`／`levitateBuffApplies:191`／
+#:      `groundBuffApplies:205`／`heavyDuration:226`／`airStateAfterStack:248`）在非测试代码里
+#:      **除自身定义外零调用点**，反向 grep（`flags` 一词／对 `flag*` 的位运算）**全空**；
+#:   ④ 引擎自述：`sim.go:1865`（晕眩 `stun_timer` 与闭锁 `locked_timer` 仍未移植）、
+#:      `mech/huai_shu_li.go:1379`（只接了 `frozen`）。
+#: ⚠ **对照（证明"零"不是扫错了范围）**：`sim.go:174 sluggishTimer`／`:175 freezeTimer` 同族位置
+#:   **有真实消费点**（`:732`／`:736-739`／`:760-769`）——同一套方法在有消费点的符号上确实找得到。
+#: ⚠ **为什么不折进「冻结」那一行**：一行行名只能指一个量；冻结那行指 `freezeTimer`（秒），
+#:   而这条讲的是位图整族（PM 2026-09-20 裁定：「那 17 处零消费点是一个独立发现」）。
+ZERO_CONSUMER_FAMILY: tuple[str, ...] = ("晕眩", "冻结", "沉睡", "浮空", "束缚／自缚")
+
+#: ★ **自述栏与依据背离时的登记位**（PM 2026-09-20：「凡表里有自述／状态栏，就必须有判据校验它；
+#: 一个没有判据校验的自述栏，长期必然与证据背离」）。规则：`WIRED` 与人判依据在"有没有消费点"
+#: 上互相矛盾时——**登记在这里的打印成 ⚠（带出处），未登记的翻 ⛔**。
+#: ⚠ 登记不是免罪：登记的每一条都必须是**已上报、等裁定**的，裁定回来后要改值并从这里删掉。
+WIRED_PENDING_RULING: dict[str, str] = {
+    "闪避／伤害抵挡": "WIRED 写「未接线（概念未建模）」，而依据实测有定义位／消费点／守卫"
+                      "（敌人侧 `sim.go:239` 恒 0 且与原版同值）——已上报 PM 待裁（2026-09-20 批次三汇报）",
+    "天赋闪避／伤害抵挡": "WIRED 写「未接线」，而依据里有一条已存在的 Go 消费链"
+                          "（`wire.go:176-177`→`skill.go:327-338`）——规格侧是否发出非 0 值未核，已上报 PM 待裁",
+    "关卡机制解析": "WIRED 写「已接线」，而依据实测**引擎侧零消费**（只有 `cli.py:1686`／`:1691` 命令行通路）"
+                    "——「接线」在这一行指什么待 PM 说清（2026-09-20 批次四已报）",
 }
 
 #: **人判依据**——每条结论必须能追回"哪一行、哪个符号"（PM 2026-09-19 三态口径）。
@@ -335,10 +372,14 @@ WIRED_WHY: dict[str, str] = {
         "锚点指向的是哪个量：`flagStun` 是「晕眩」在**清单位图**里的那一位（成员身份），**不是**运行期状态量——"
         "本行判的是「这一位在不在清单里」，引擎有没有真的按它拦人，本行覆盖不到。",
     "冻结":
-        "定义位 `rios-sim/control.go:31`（`flagFrozen`）。"
-        "**消费点（就这一位而言）：零**——与晕眩同一次穷举：`abnormalFlag` 全仓 17 处、无字段持有、谓词零调用点。"
-        "⚠ **但「冻结状态」另有其量且已接线**（同名同义、不同符号）：字段 `rios-sim/sim.go:175 freezeTimer`（＋`:759 frozenSnow`），"
-        "消费 `sim.go:732`（`frozenLatched = e.freezeTimer > 0 || e.frozenSnow`）与 `:739`（递减）／`:761`（推进闸门）；"
+        "★ **这一行判的是哪个量（PM 2026-09-20 要求写明）：判的是 `rios-sim/sim.go:175 freezeTimer`（单位：秒）"
+        "——不是 `control.go` 的位图。** 下一批的人若只读锚点与行名，请从这句话起读。"
+        "定义位（位图那一位）`rios-sim/control.go:31`（`flagFrozen`）——**定义了、查无消费点**："
+        "与晕眩同一次穷举（`abnormalFlag` 全仓 17 处、无字段持有、谓词零调用点、反向 grep 全空）⇒ "
+        "该位本身零消费点，**归入独立事实 `ZERO_CONSUMER_FAMILY`，不参与本行的行级判定**（PM 裁定：一行行名只能指一个量）。"
+        "**本行的行级消费点（有）**：锚点函数 `rios-sim/sim.go::runSim` 体内——`sim.go:732`"
+        "（`frozenLatched = e.freezeTimer > 0 || e.frozenSnow`）、`:739`（递减）、`:761`（推进闸门 `frozenLatched`）；"
+        "字段 `sim.go:175 freezeTimer`（＋`:759 frozenSnow`）；"
         "写入入口 `rios-sim/mech/mech.go:311 SetEnemyFrozen`（积雪那一侧调用 `mech/snow.go:452-454`）；"
         "抗性下调那一支见 `sim.go` 的 `frozenResDown`（`d7d8319` 21:26）。"
         "★ **已接线的两个来源（各带坐标）**：① **积雪满层**：`mech/snow.go:420-423` 判据 → `:452-454 SetEnemyFrozen`；"
@@ -352,8 +393,9 @@ WIRED_WHY: dict[str, str] = {
         "**守卫**：`res_frozen_test.go:15 TestFrozenResistanceDownFifteen`、`:50 TestFrozenResistanceOnlyForFriendlyFreeze`；"
         "`status_test.go:48 TestFrozenLowersEnemyRes`、`:80 TestHostileFreezeGivesNoResDown`、`:136 TestApplyFreezeTakesMax`；"
         "位图那一侧 `control_test.go:15`。"
-        "锚点指向的是哪个量：本行锚点指的是**位图里的那一位**（无消费点），而这一行名字在引擎里真正被消费的量是 "
-        "`sim.go:175 freezeTimer`⇒ **两者不是同一个量**。按「不改锚点、锚点问题上报裁」的约定，本条**上报 PM 裁定**。",
+        "锚点指向的是哪个量：**锚点已按 PM 2026-09-20 裁定换成消费点所在的函数** `rios-sim/sim.go::runSim`"
+        "（消费点在它体内 `:732`／`:739`／`:761`）；而 `control.go:31 flagFrozen` 那一位**定义了、查无消费点**，"
+        "已移进本依据（并归入独立事实 `ZERO_CONSUMER_FAMILY`）——**改后锚点与行名指同一个量：`freezeTimer`（秒）**。",
     "沉睡":
         "定义位 `rios-sim/control.go:36`（`flagSleeping`）；⚠ 与 `control.go:35 flagAsleep`（小睡）是**两个位**。"
         "**消费点：零**（同穷举）：只出现在 `control.go:41-48` 的清单反向排除项与 `:93 const maskSleeping = flagUnableAction | flagSleeping`，"
@@ -461,6 +503,38 @@ WIRED_WHY: dict[str, str] = {
         "——**登记冲突、上报 PM 裁**（与批次二 `WIRED` 里「晕眩」那一件同类，我不擅自改那一栏）。"
         "锚点指向的是哪个量：`dodgeVs` 是「这只**敌人**针对某伤害类型的闪避比例」——族名里「闪避」的那一半；"
         "「伤害抵挡」落在 `resolveDamage` 的 `dodge` 参数上，**不在锚点里**。",
+
+    # ---- 批次四（收尾）：天赋闪避／伤害抵挡、关卡机制解析（2026-09-20）----
+    "天赋闪避／伤害抵挡":
+        "定义位 `ak_tactic/simgo/spec.py:523`（`def _talent_dodge(op, d) -> tuple[float, float]`），"
+        "调用点 `spec.py:792`（`talent_phys, talent_arts = _talent_dodge(op, d)`）⇒ 由它写出规格里那一对常驻闪避比例。"
+        "**Python 侧的同一个量**：字段 `ak_tactic/battle/unit.py:364-365`（`talent_dodge_phys`／`talent_dodge_arts`）、"
+        "写入 `battle/sim.py:3467-3468`、**消费（连乘进伤害）** `sim.py:4255-4256`／`4271-4272`／`4349-4350`／`4357-4358`"
+        "（我方出手那几路）与 `sim.py:4718-4719`（敌方打我方那一路），写法一律是 "
+        "`dodge_phys = op.dodge_phys + op.talent_dodge_phys`。"
+        "**Go 侧的消费链**：规格字段 `rios-sim/wire.go:176-177`（`TalentDodgePhys`／`TalentDodgeArts`，说明 `:170-175`）→ "
+        "`rios-sim/skill.go:327-338`（`func (o *operator) dodgeVs`：`:333 skillDodge = p.DodgePhys`、"
+        "`:336 talent := o.spec.TalentDodgePhys`、`:338 … TalentDodgeArts`）→ 结算 `sim.go:3133-3134 resolveDamage(…, dodge)`。"
+        "**守卫**：Python 侧 `tools/check_battle.py:880 def check_dodge(book)`；Go 侧 `damage_test.go:13 TestResolveDamageDodge`"
+        "（四支：`:16`／`:20`／`:25` 次序／`:30` 真伤不吃）。⚠ **Go 测试里 `Dodge` 只命中这一个用例** ⇒ 结算那一步有守卫，"
+        "**「天赋闪避这一路接上线」没有专门用例**（登记为守卫空缺，不据此改）。"
+        "锚点指向的是哪个量：`_talent_dodge` 是「从天赋取那一对**常驻**闪避比例并交给规格」的那段代码——本行族名拆法："
+        "**天赋闪避**＝这一对常驻比例（本题）；**伤害抵挡**＝`resolveDamage` 的 `dodge` 参数（坐标见「闪避／伤害抵挡」行）。"
+        "⚠ **未核**：规格侧到底会不会发出非 0 值（要看名册里哪些干员带这对天赋）、以及本表 `WIRED` 该行写的「未接线」"
+        "与上面这条已存在的消费链是什么关系——**登记未核 + 上报 PM**，不擅自改那一栏。",
+    "关卡机制解析":
+        "定义位 `ak_tactic/mechanics.py:280`（`def parse_stage_mechanics(title: str, text: str) -> StageMechanics`）；"
+        "同文件另一入口 `mechanics.py:296`（`return parse_stage_mechanics(title, client.wikitext(title))`）。"
+        "**消费点：引擎侧（`battle/`、`simgo/`）零**——全 `ak_tactic/**/*.py` 里除 `mechanics.py` 自身外，"
+        "只有 `cli.py:1686`（import `stage_mechanics`）与 `cli.py:1691`（`sm = stage_mechanics(args.stage)`）"
+        "两处**都是命令行通路**；而类型名 `StageMechanics` 在 `mechanics.py` 之外**零命中** ⇒ 引擎与规格都没有引用它。"
+        "**守卫**：`tools/check_mechanics.py`（418 行、7 个 check_：`check_parsing`／`check_glossary`／`check_anchors`／"
+        "`check_stage_fields`／`check_precision`／`check_non_effect`／`check_coverage`），其中三处**直接调被测函数**"
+        "（`:233`／`:238`／`:248`）。"
+        "锚点指向的是哪个量：`parse_stage_mechanics` 就是「把 PRTS 关卡页正文解析成 `StageMechanics`」这个解析器本身，"
+        "行名「关卡机制解析」指的就是它。"
+        "⚠ 本表 `WIRED` 该行写「已接线」，与上面「引擎侧零消费」并置时**含义不清**（是「解析器能跑且有守卫」还是"
+        "「引擎消费它」？两种情况结论相反）⇒ **登记冲突、上报 PM 说清并裁定**，我不擅自改那一栏。",
 }
 
 
@@ -822,6 +896,70 @@ def self_test() -> int:
     bad += 0 if good11 else 1
     print(f"  {'✅' if good11 else '⛔'} 脏污计数必须与点名清单一致："
           f"source_dirty={dn}，清单 {len(dnames)} 条")
+    # ★★ 独立事实：`control.go` 位图族**整族零消费点**（PM 2026-09-20 裁定「那 17 处零消费点是
+    #    一个独立发现，不要折进『冻结』这一行」）。判据落在**真实数据**上：族里除「冻结」外
+    #    都不许再写「已接线」，而「冻结」的依据必须写出它判的量是 `freezeTimer`。
+    fam_bad = [n for n in ZERO_CONSUMER_FAMILY
+               if n != "冻结" and WIRED.get(n, "").startswith("已接线")]
+    fam_why = "freezeTimer" in WIRED_WHY.get("冻结", "")
+    good14 = (not fam_bad) and fam_why
+    bad += 0 if good14 else 1
+    print(f"  {'✅' if good14 else '⛔'} 位图族零消费点（独立事实）必须与状态栏一致："
+          f"族 {len(ZERO_CONSUMER_FAMILY)} 位，仍写「已接线」的 {fam_bad or '（0 位）'}"
+          f"；「冻结」依据写明判 `freezeTimer`：{'有' if fam_why else '没有'}")
+    inj_fam = dict(WIRED)
+    inj_fam["晕眩"] = "已接线"
+    fam_bad_inj = [n for n in ZERO_CONSUMER_FAMILY
+                   if n != "冻结" and inj_fam.get(n, "").startswith("已接线")]
+    good14b = bool(fam_bad_inj)
+    bad += 0 if good14b else 1
+    print(f"  {'✅' if good14b else '⛔'} 反向守卫：把位图族某一位改回「已接线」必须翻红："
+          f"{fam_bad_inj[:1] or '（没红 ⇒ 这条判据红不起来）'}")
+
+    # ★★ 自述／状态栏的**双向**判据（PM 2026-09-20 定：「凡表里有自述／状态栏，就必须有判据
+    #    校验它——一个没有判据校验的自述栏，长期必然与证据背离」，起因就是本表的 `WIRED["晕眩"]`）。
+    #    ⚠ 用的是**行级用语**：`消费点：零` 表示"这一行指的那个量零消费"；位级／子项的零
+    #      （如冻结位 `control.go:31`、屏障在 Go 侧不存在）故意用别的词写，免得两件事混判。
+    #    ⚠ 已上报等裁定的背离登记在 `WIRED_PENDING_RULING`：那些打印成 ⚠（带出处）而不是 ⛔
+    #      ——登记不等于通过，裁定回来要改值并把它删掉。
+    row_zero = "消费点：零"
+    zero_marks = ("消费点：零", "零消费点", "零调用点", "跨文件零引用")
+
+    def desc_mismatch(table: dict[str, str]) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        for row in ROWS:
+            nm = row[1]
+            ev = WIRED_WHY.get(nm, "")
+            st = table.get(nm, "")
+            if not ev or not st:
+                continue
+            if st.startswith("已接线") and row_zero in ev:
+                out.append((nm, "状态写「已接线」而依据写「消费点：零」"))
+            elif st.startswith("未接线") and not any(m in ev for m in zero_marks):
+                out.append((nm, "状态写「未接线」而依据里没有零消费点的取证"))
+        return out
+
+    desc_mism = desc_mismatch(WIRED)
+    desc_unreg = [m for m in desc_mism if m[0] not in WIRED_PENDING_RULING]
+    good15 = not desc_unreg
+    bad += 0 if good15 else 1
+    print(f"  {'✅' if good15 else '⛔'} 自述栏与依据必须一致（双向）：未登记的背离 {len(desc_unreg)} 处"
+          f"{('；' + '；'.join(f'{n}（{w}）' for n, w in desc_unreg)) if desc_unreg else ''}")
+    if WIRED_PENDING_RULING:
+        print(f"    ⚠ 已上报等裁定 {len(WIRED_PENDING_RULING)} 处"
+              f"（**不算通过**，也不翻红）：{'、'.join(WIRED_PENDING_RULING)}")
+    inj_a = dict(WIRED)
+    inj_a["近地悬浮"] = "已接线"
+    got_a = [m for m in desc_mismatch(inj_a) if m[0] == "近地悬浮"]
+    bad += 0 if got_a else 1
+    print(f"  {'✅' if got_a else '⛔'} 反向守卫（方向一：状态说「已接线」／依据说零）必须翻红："
+          f"{got_a[:1] or '（没红 ⇒ 这条判据红不起来）'}")
+    inj_b = dict(WIRED)
+    inj_b["停顿"] = "未接线"
+    got_b = [m for m in desc_mismatch(inj_b) if m[0] == "停顿"]
+    bad += 0 if got_b else 1
+    print(f"  {'✅' if got_b else '⛔'} 反向守卫（方向二：状态说「未接线」／依据无零取证）必须翻红："
+          f"{got_b[:1] or '（没红 ⇒ 这条判据红不起来）'}")
     return 1 if bad else 0
 
 
