@@ -44,20 +44,24 @@ const (
 	positionTol2 = positionTol * positionTol
 )
 
-//: 攻速下限（`间隔 = 基础间隔 × 100 / max(攻速下限, 总攻速)`）。
-//: 与原版同一口径：`unit.py` / `operator/skill.py` 的 `ASPD_MIN = 20`
-//: （2026-09-16 博士裁定：wiki 写 20、akdata 写 10，取 20）。
+// : 攻速下限（`间隔 = 基础间隔 × 100 / max(攻速下限, 总攻速)`）。
+// : 与原版同一口径：`unit.py` / `operator/skill.py` 的 `ASPD_MIN = 20`
+// : （2026-09-16 博士裁定：wiki 写 20、akdata 写 10，取 20）。
 const aspdMin = 20.0
 
-//: 【寒冷】的攻击速度折减。出处：PRTS《敌人一览/数据》tooltip 词典——
-//: 「寒冷：攻击速度下降 30，如果在持续时间内再次受到寒冷效果则会变为冻结」。
-//: 这是项目此前**明确记为"拿不到"**的那个数（`异常效果`页不给数、
-//: `excel/buff_table.json` 两个公开镜像都 404），2026-09-19 由博士提供该页解开。
+// : 【寒冷】的攻击速度折减。出处：PRTS《敌人一览/数据》tooltip 词典——
+// : 「寒冷：攻击速度下降 30，如果在持续时间内再次受到寒冷效果则会变为冻结」。
+// : 这是项目此前**明确记为"拿不到"**的那个数（`异常效果`页不给数、
+// : `excel/buff_table.json` 两个公开镜像都 404），2026-09-19 由博士提供该页解开。
 const coldASPDDown = 30.0
 
-//: 【冻结】期间敌方法术抗性的降低值。与 `coldASPDDown` 同一条 tooltip：
-//: 「冻结：……敌方被冻结时，法术抗性-15」。**动态**生效（冻结一结束就恢复），
-//: 所以读法走 `enemy.res()` 而不是把 −15 写进 `spec.RES`。
+// : 【冻结】期间敌方法术抗性的降低值。与 `coldASPDDown` 同一条 tooltip：
+// : 「冻结：……敌方被冻结时，法术抗性-15」。**动态**生效（冻结一结束就恢复），
+// : 所以读法走 `enemy.res()` 而不是把 −15 写进 `spec.RES`。
+// : ⚠ 判据来源订正（2026-09-19）：上面那句 tooltip 读起来像"看**目标阵营**"，
+// : 但 PRTS `可抵抗状态` 页写明「**仅友方冻结**会令目标法术抗性-15（直接加算），
+// : **与被冻结的是否是敌方单位无关**……敌人施加的均为敌方冻结」——**看的是施加方**。
+// : 权威页更具体、且明确排除了目标阵营这条读法，故以它为准（见 `freezeFriendly`）。
 const frozenResDown = 15.0
 
 type enemy struct {
@@ -173,6 +177,19 @@ type enemy struct {
 	//: （`advance` 与 `_enemies_attack` 两处都拦）。目前唯一的来源是圣聆初雪的
 	//: 「圣山的祝福」免死那一下——她攻击范围内的敌人被冻 `c2e_freeze` 秒。
 	freezeTimer float64
+	//: 上面这段冻结是**友方冻结**还是**敌方冻结**。
+	//:
+	//: 判据出处（2026-09-19 抓到，PRTS `可抵抗状态` 页原文）：
+	//: 「游戏中存在两类冻结：敌方冻结与友方冻结（颜色偏绿）。**仅友方冻结**会令目标
+	//:   法术抗性-15（直接加算），**与被冻结的是否是敌方单位无关**。站内没有明确
+	//:   注明的情况下，干员与我方召唤物直接施加的均为友方冻结，敌人施加的均为敌方冻结。」
+	//:
+	//: ⚠ 这一条**推翻**了本文件 2026-09-19 早些时候按 tooltip 词典写的判据
+	//: （「敌方被冻结时，法术抗性-15」）。词典那句话读起来像"看目标是不是敌人"，
+	//: 而权威页明说"**与被冻结的是否是敌方单位无关**"——看的是**施加方**。
+	//: 本项目目前唯一的冻结来源（圣山的祝福、积雪）都是干员给的，所以既有行为不变；
+	//: 但这个字段必须在，否则哪天敌人之间互相冻结就会凭空多出 −15。
+	freezeFriendly bool
 	//: 【寒冷】剩余秒数（原版 `cold_timer`）。
 	//:
 	//: 数值效果出自 **PRTS《敌人一览/数据》** 的 tooltip 词典（2026-09-19 博士提供）：
@@ -721,6 +738,11 @@ func runSim(spec *Spec) (*Verdict, error) {
 			}
 			if e.freezeTimer > 0 {
 				e.freezeTimer = math.Max(0.0, e.freezeTimer-dt)
+				// 冻完了就把来源形别一起清掉：留着它，下一段"敌方冻结"会继承上一段的
+				// 友方形别，凭空多出 −15（这正是"改写类机制要单一入口"的那类坑）。
+				if e.freezeTimer == 0 {
+					e.freezeFriendly = false
+				}
 			}
 			// 【寒冷】与它们同一类：`interval()` 是**现读** coldTimer 的，
 			// 所以"先减再判"才是对的（别和 `frozenLatched` 那个锁存值混）。
@@ -2621,10 +2643,18 @@ func (e *enemy) interval() float64 {
 // `spec.RES` 是整局的静态规格（改写它会让同一只敌人"冻过一次就永久变脆"）。
 // 所有"敌人作为受击方"的结算都要走这里读，直接读 `spec.RES` 就是漏这条。
 func (e *enemy) res() float64 {
-	if e.frozen() {
+	if e.friendlyFrozen() {
 		return e.spec.RES - frozenResDown
 	}
 	return e.spec.RES
+}
+
+// friendlyFrozen 报告这一只**这一刻**是否处于【友方冻结】。
+//
+// 法抗 −15 只看这个，**不看目标是不是敌人**（见 `freezeFriendly` 与 `frozenResDown`
+// 的出处）。积雪那一半（`frozenSnow`）恒定是干员造成的，所以无条件算友方。
+func (e *enemy) friendlyFrozen() bool {
+	return (e.freezeTimer > 0 && e.freezeFriendly) || e.frozenSnow
 }
 
 // applyCold 施加【寒冷】秒数；**已在寒冷中则转为【冻结】**。
@@ -2635,12 +2665,13 @@ func (e *enemy) res() float64 {
 // ⚠ 转冻结之后的**时长**，tooltip 没有给数。本函数按"触发那一次的秒数"取——
 // 这是一条**假设**，不是查到的定论，已登记进 `docs/uncertainties.md`
 // （键：`寒冷转冻结后的时长`）。要改成别的口径，只改这一处。
-func (e *enemy) applyCold(secs float64) {
+func (e *enemy) applyCold(secs float64, friendly bool) {
 	if secs <= 0 {
 		return
 	}
 	if e.coldTimer > 0 {
-		e.applyFreeze(secs)
+		// 转为冻结时，冻结的来源形别跟着这次寒冷的来源走。
+		e.applyFreeze(secs, friendly)
 		return
 	}
 	e.coldTimer = math.Max(e.coldTimer, secs)
@@ -2648,10 +2679,18 @@ func (e *enemy) applyCold(secs float64) {
 
 // applyFreeze 施加【冻结】秒数。取较大值与既有那条来源（圣山的祝福 `blessingTick`）
 // 同款，免得"后到的短冻结把先到的长冻结顶掉"。
-func (e *enemy) applyFreeze(secs float64) {
-	if secs > 0 {
-		e.freezeTimer = math.Max(e.freezeTimer, secs)
+func (e *enemy) applyFreeze(secs float64, friendly bool) {
+	if secs <= 0 {
+		return
 	}
+	// 生效的是"剩得更久的那一笔"，所以来源形别也跟着那一笔走：
+	// 先挨一发 2 秒敌方冻结、再挨一发 5 秒友方冻结，这 5 秒里算友方冻结（吃 −15）。
+	// 这是**近似**：真正精确要按来源各记一份计时器，混合来源时 −15 应当随友方那一份
+	// 到期而结束。当前项目里没有混合来源的用法，先按"较长者定形别"实现并登记。
+	if secs >= e.freezeTimer {
+		e.freezeFriendly = friendly
+	}
+	e.freezeTimer = math.Max(e.freezeTimer, secs)
 }
 
 func (e *enemy) take(amount float64, src *operator) float64 {
@@ -3035,7 +3074,8 @@ func blessingTick(ops []*operator, enemies []*enemy, t float64, verdict *Verdict
 			}
 			// **取更大值**而不是覆盖：她已经冻着的敌人不该因为这次触发被缩短
 			// （原版注释原话，与 `sluggish_timer` 的写法一致）。
-			e.applyFreeze(secs)
+			// 来源形别 = **友方**：这是干员天赋直接施加的冻结（见 `freezeFriendly`）。
+			e.applyFreeze(secs, true)
 			hit++
 		}
 		verdict.Events = append(verdict.Events, Event{T: t, Kind: "mech",
