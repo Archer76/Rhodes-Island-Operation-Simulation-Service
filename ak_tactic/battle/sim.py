@@ -177,14 +177,12 @@ TOTAL_ATTACK_KEY = "trap_335_totalattack"
 #: 所以下面这行是**转出**，不是"改用法"。
 from ..frontend.enemy_rules import PILE_CHILD as PILE_CHILD     # noqa: E402
 from ..frontend.enemy_rules import PILE_MARK as PILE_MARK       # noqa: E402
-#: 甲激活后每损失一批生命，召唤的**延迟秒数**。原文是「1~1.5s 的随机延迟」，
-#: 模拟器必须可复现（同一份作业每次跑出同一结果），故取中值 1.25s，不掷骰。
-PILE_SUMMON_DELAY = 1.25
-#: 监测 / 激活状态判定的**病害值满量程**：原文「每 1% 生命值对应 1 点病害值」，
-#: 而病害值的量程是 0–100（见 `environment.MAX_POLLUT`），故除以 100。
-PILE_POLLUT_FULL = 100.0
-#: 天桩-乙登场时的自缚秒数（原文「登场时持有1秒自缚」）
-PILE_SELF_BIND = 1.0
+#: ⚠ 这三条天桩时间常数的**定义已搬到 `ak_tactic/frontend/mech_consts.py`**，
+#: 这里只做转出。理由同上：`mech.py` 送规格时要用，而它不该为了三个浮点数
+#: 去 import 这个 5069 行的原版模拟器。
+from ..frontend.mech_consts import PILE_POLLUT_FULL as PILE_POLLUT_FULL   # noqa: E402
+from ..frontend.mech_consts import PILE_SELF_BIND as PILE_SELF_BIND       # noqa: E402
+from ..frontend.mech_consts import PILE_SUMMON_DELAY as PILE_SUMMON_DELAY  # noqa: E402
 
 #: `POSITION_TOL` 的平方，供热路径用平方比较代替 `math.dist` 的开方。
 #: 两处必须同源，改 `unit.POSITION_TOL` 即自动生效。
