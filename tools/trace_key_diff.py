@@ -261,6 +261,55 @@ def table(title: str, rec: dict, window: float | None) -> None:
         print(f"    {k:<34} {rec['keys'][k]:>9}")
 
 
+def series_selftest() -> int:
+    """`--series` 的**合成反例**（PM 2026-09-20 01:27 要求：把它落成判据，不是说明）。
+
+    被测的那条坑：早先一版从 `run_exe` 取原始行（它只回汇总）⇒ 列表为空 ⇒ 输出变成
+    「0 处不同」——**长得和"两侧完全一致"一模一样**。**「我没看见」与「没有」，字面上是同一个零。**
+
+    判据（本函数真的断言这三条，不是打印说明）：
+    * **前置断言**：dump 在场 **且**两侧事件数 > 0；任一不成立 ⇒ **拒跑 rc=3**，
+      **绝不许输出"0 处不同"**（连"相同"这类字样都不许出现，免得被读成"比过了且相等"）；
+    * **合成反例**（必须红）：一侧 0 事件 ⇒ rc=3；dump 不在场 ⇒ rc=3；
+    * **控制组**（必须绿）：两侧同一份内容 ⇒ rc=0 且打印出"相同 N"。
+    """
+    import tempfile
+    cases: list[tuple[str, list[str], bool]] = []
+    head = "DMGENEMY t=1.0000 enemy=厌肮 idx=1 src=x amount=1.000 dealt=1.000 hp=10.000"
+    same = [head, "DMGENEMY t=2.0000 enemy=厌肮 idx=1 src=x amount=2.000 dealt=2.000 hp=8.000"]
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        (d / "ok.txt").write_text("\n".join(same) + "\n", encoding="utf-8")
+        (d / "empty.txt").write_text("", encoding="utf-8")
+        #: ① 合成反例：一侧 0 事件
+        cases.append(("一侧 0 事件 ⇒ 必须 rc=3 且不许出现「0 处不同/相同」",
+                      [str(d / "ok.txt"), str(d / "empty.txt")], True))
+        #: ② 合成反例：dump 不在场
+        cases.append(("dump 不在场 ⇒ 必须 rc=3",
+                      [str(d / "nope.txt"), str(d / "ok.txt")], True))
+        #: ③ 控制组：两侧同一份 ⇒ 必须 rc=0 且打印"相同"
+        cases.append(("控制组：两侧同一份 ⇒ 必须 rc=0 且打印「相同」",
+                      [str(d / "ok.txt"), str(d / "ok.txt")], False))
+        bad = 0
+        for why, (fa, fb), must_refuse in cases:
+            pr = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--series",
+                                 "--series-a", fa, "--series-b", fb],
+                                capture_output=True, text=True, encoding="utf-8",
+                                env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+            out = (pr.stdout or "") + (pr.stderr or "")
+            if must_refuse:
+                ok = pr.returncode == 3 and "拒跑" in out and "相同" not in out
+            else:
+                ok = pr.returncode == 0 and "相同" in out
+            print(f"  {'✅ PASS' if ok else '❌ FAIL'}　{why}"
+                  f"（rc={pr.returncode}，拒跑字样={'有' if '拒跑' in out else '无'}，"
+                  f"相同字样={'有' if '相同' in out else '无'}）")
+            bad += 0 if ok else 1
+        print(f"\n合成反例/控制组：{len(cases) - bad}/{len(cases)} PASS　"
+              f"⇒ {'判据成立' if not bad else '判据不成立'}")
+        return 0 if not bad else 1
+
+
 ROOT_DEFAULT = Path(__file__).resolve().parent.parent / "out" / "acceptance" / "trace-stderr"
 
 
@@ -273,6 +322,8 @@ def main() -> int:
     ap.add_argument("--series", action="store_true",
                     help="只做值序列（袋语义）逐点分类：截断/袋不可配对/因子族/换目标/未归类逐处列出")
     ap.add_argument("--series-tag", default="DMGENEMY", help="--series 用哪个标签（默认 DMGENEMY）")
+    ap.add_argument("--series-selftest", action="store_true",
+                    help="跑 --series 的合成反例与控制组（一侧 0 事件/dump 缺失必须 rc=3，不许输出『0 处不同』）")
     ap.add_argument("--series-a", help="--series：A 侧 dump 路径（缺省按 --dump-stderr 目录＋exe 名＋sha16 推导）")
     ap.add_argument("--series-b", help="--series：B 侧 dump 路径")
     ap.add_argument("--json", default="out/acceptance/trace-key-diff.json")
@@ -304,6 +355,9 @@ def main() -> int:
     print(f"**同一套环境**：{trace_env}")
     print(f"A＝{ident(a)}")
     print(f"B＝{ident(b)}")
+
+    if args.series_selftest:
+        return series_selftest()
 
     if args.series:
         #: ⚠ **只读 dump、不跑 exe**，而且**缺文件就拒跑**：
