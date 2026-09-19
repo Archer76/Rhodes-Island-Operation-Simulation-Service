@@ -130,35 +130,139 @@ func damageVsInvincible(sleeping, sourceIgnoresSleep, otherInvincibility bool) f
 	return 0
 }
 
-// ---- 浮空（LEVITATE）----
+// ---- 浮空（LEVITATE）／缚地（GROUNDED）／近地悬浮／轨地滑行 ----
 //
-// 原文：「敌人类单位状态机尝试切换至 LEVITATE（该状态机下持有
-// **不可阻挡＋失衡免疫＋缴械**异常效果，且**无法移动**），尝试让其他机制将单位视为
-// **飞行单位**。
-// 施加的Buff包含浮空异常将被视为浮空Buff：若单位数据上为**飞行单位**且**不持有缚地**
-// 异常则 Buff **取消**，而若其**重量大于3** 则 Buff **时间将减半**。」
+// 判据出处：PRTS **`行动方式` 页**（2026-09-19 抓取，原文存 tmp/prts/页-行动方式.txt）。
 //
-// ⚠ 所以"浮空"不是"飘起来"这么简单：它一次改三件事——阻挡关系（不可阻挡＋被视作飞行
-// 单位）、失衡免疫、以及缴械（禁普攻）。而作用面还要看**单位自身**是地面还是飞行。
+// ⚠ 这一节的**第一版只读了 `异常效果` 页里那一段**，结果写漏了三处——所以本轮把判据
+// 的引用从"一句话"升级成整页原文，并把三处漏项都变成守卫：
+//   ① 漏了「**已持有浮空异常**的单位也无法被施加浮空Buff」（只处理了"行动类型为飞行"）；
+//   ② 漏了**缚地的镜像条件**；
+//   ③ 重量减半只做了一次，而原文说**两样都有要累乘至四分之一**。
+// 旧版那两条守卫当时全绿——**正例守卫全绿不等于实现对**，这三处正是靠读整页才暴露的。
+//
+// 原文要点：
+//
+//	「单位具有行动方式，有两种：地面 WALK 与飞行 FLY……地面单位会在遇到不可通行地块时
+//	  绕道而行，而飞行单位通常不会。
+//	  **注意，起飞的干员仍然是地面单位，不是飞行单位。**
+//	  ===近地悬浮===
+//	  近地悬浮指的是一类让地面单位行动方式变为飞行，但**寻路方式不变**的效果，与官方
+//	  术语中所述的"无法阻挡或近战攻击"**没有任何关系**。处于近地悬浮状态的单位是真正的
+//	  飞行单位，唯一的区别是仍会以地面单位的方式寻路……
+//	  ===轨地滑行===
+//	  与近地悬浮类似……让飞行单位行动方式变为地面，但寻路方式不变……
+//	  ==浮空与缚地==
+//	  浮空异常依靠"让单位进入浮空状态机"来控制单位；期间，单位会被**浮空与缚地以外的
+//	  任何机制**视为飞行单位。缚地异常依靠"激活单位的缚地控制器"；期间，单位会被
+//	  **浮空与缚地以外的任何机制**视为地面单位。
+//	  行动类型（数据）为飞行的单位、以及**已持有浮空异常**的单位**无法被施加浮空Buff**。
+//	  **若其持有缚地异常**，将可以无视上述条件……**若本次施加的Buff还携带浮空强化异常**，
+//	  本次Buff将可以无视"已持有浮空异常"这一条限制。
+//	  ===对高重量单位时间减半===
+//	  当施加的Buff中包含浮空或缚地异常效果时，**不论目标是否持有相应免疫**，只要当前的
+//	  重量属性**高于3**，本Buff的持续时间都将减半（**如果两个异常效果都有则会累乘至
+//	  四分之一**）。由于直接对Buff的持续时间做手脚，**即使Buff期间单位的重量变化也无法
+//	  影响Buff的持续时间**。
+//	  ===浮空缚地叠加===
+//	  当尝试将浮空单位缚地、或将缚地单位浮空时，单位的具体状态会取决于单位的浮空Buff
+//	  数量与缚地Buff数量：> ⇒ 与只有浮空异常时一样变为浮空；< ⇒ 变为缚地；
+//	  = ⇒ **原本是飞行单位的会变为浮空，原本是地面单位的会变为缚地**。
+//	  一旦发生浮空缚地叠加，浮空与缚地的自不可叠加都会被"解除"来允许玩家进行"抵消"。」
 
-// : 浮空状态下单位持有的异常效果组合（原文那句括号）。
-const maskLevitateState = flagLevitate
+// airKind 是"别的机制怎么看这个单位"的行动方式。
+type airKind int
 
-// levitateApplies 报告"这一次浮空 Buff 能不能挂上"。
-//
-// 原文的取消条件是连着的两个：**单位数据上为飞行单位** 且 **不持有缚地异常**。
-// 缚地（GROUNDED）会"尝试让其他机制将单位视为地面单位"，正好与浮空相反，故能救回来。
-func levitateApplies(unitIsFlying, hasBindGround bool) bool {
-	return !(unitIsFlying && !hasBindGround)
-}
+const (
+	airGround airKind = iota //: 被当作地面单位
+	airFlying                //: 被当作飞行单位
+)
 
-// levitateDuration 给浮空 Buff 的时长：**重量大于 3 的减半**。
+// levitateBuffApplies 报告"这一次**浮空**Buff 能不能挂上"。
 //
-// ⚠ 阈值是**严格大于 3**（"重量大于3"），重量恰好为 3 的单位**不减半**——
-// 这种"边界差一个"的写法在本项目里已经栽过（攻速下限 10 对 20），故单列守卫。
-func levitateDuration(base float64, weight float64) float64 {
-	if weight > 3 {
-		return base * 0.5
+// 不可施加的两种情形（原文并列，**不是一种**）：
+//   - 行动类型（数据）为飞行；
+//   - **已持有浮空异常**。
+//
+// 两种例外：
+//   - 持有**缚地**异常 ⇒ 两条都可无视（允许玩家"抵消"）；
+//   - 本 Buff 携带**浮空强化** ⇒ **只**无视"已持有浮空异常"那一条，
+//     行动类型为飞行仍然挂不上（原文那句限制只点了后一条）。
+func levitateBuffApplies(unitIsFlying, hasLevitate, hasGround bool, carriesForce bool) bool {
+	if unitIsFlying && !hasGround {
+		return false
 	}
-	return base
+	if hasLevitate && !hasGround && !carriesForce {
+		return false
+	}
+	return true
 }
+
+// groundBuffApplies 是上面那条的**镜像**（缚地 Buff）。
+//
+// ⚠ 上一版就是漏了这个镜像。原文：「行动类型（数据）**不为飞行**的单位、以及已持有
+// 缚地异常的单位无法被施加缚地Buff；若其持有浮空异常，将可以无视上述条件」。
+func groundBuffApplies(unitIsFlying, hasLevitate, hasGround bool, carriesForce bool) bool {
+	if !unitIsFlying && !hasLevitate {
+		return false
+	}
+	if hasGround && !hasLevitate && !carriesForce {
+		return false
+	}
+	return true
+}
+
+// heavyDuration 实现「对高重量单位时间减半」。
+//
+// 规则：只要**当前重量高于 3**，且本次 Buff 带浮空和/或缚地，就**各减半一次**——
+// 两个异常都有 ⇒ ×0.5×0.5 = **四分之一**。没带这两个异常则不减。
+//
+// ⚠ 两处容易写错：
+//  1. 是**累乘**不是"减半一次"。上一版只减半一次，等于漏掉了四分之一那一档。
+//  2. 判定用的是**施加时刻**的重量：原文「即使Buff期间单位的重量变化也无法影响Buff的
+//     持续时间」——所以这个函数只在施加时调一次，之后不许按当前重量重算。
+//     （这一点与"可抵抗状态生效时间倍率"相反：那个是逐帧乘进流逝速度的。）
+//  3. 「不论目标是否持有相应免疫」——本函数**不看免疫**。
+func heavyDuration(base, weight float64, carriesLevitate, carriesGround bool) float64 {
+	if weight <= 3 {
+		return base
+	}
+	out := base
+	if carriesLevitate {
+		out *= 0.5
+	}
+	if carriesGround {
+		out *= 0.5
+	}
+	return out
+}
+
+// airStateAfterStack 实现「浮空缚地叠加」时单位最终是什么状态。
+//
+// 比数量：浮空多 ⇒ 浮空；缚地多 ⇒ 缚地；**相等** ⇒ 看单位**原本**是飞行还是地面
+// （原本飞行取浮空，原本地面取缚地）。
+//
+// ⚠ 原文最后一句「当任意浮空Buff与缚地Buff结束时，单位的状态都会根据双方的数量发生
+// 更新」被该页自己标了**（存疑）**。本函数给的是"按数量重算"这一读法，
+// 调用方在实现"某个 Buff 结束"时请照这句存疑标注处理，不要当成已确证口径。
+func airStateAfterStack(originallyFlying bool, levitateBuffs, groundBuffs int) airKind {
+	switch {
+	case levitateBuffs > groundBuffs:
+		return airFlying
+	case levitateBuffs < groundBuffs:
+		return airGround
+	default:
+		if originallyFlying {
+			return airFlying
+		}
+		return airGround
+	}
+}
+
+// ⚠ 本文件**不含**近地悬浮／轨地滑行与起飞：三者口径已取证（原文存
+// tmp/prts/页-行动方式.txt），但按项目经理通告 #2 三.1「停止新增内核」，
+// P4 剩余条目挂起，等接线清零到一半再续。取证结论已写进
+// `docs/mechanics-dictionary.md`，续做时不必重新抓页。
+//
+// ⚠ 那句「**注意，起飞的干员仍然是地面单位，不是飞行单位**」也一并登记在文档里：
+// 起飞**不改行动方式**，它只改阻挡与被攻击关系，别把它当成浮空的一种。
