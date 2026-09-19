@@ -183,15 +183,52 @@ def self_test() -> int:
     return 1 if bad else 0
 
 
+def _load_facts(only: str | None = None) -> list[sqlite3.Row]:
+    """读 fact 表。`only` 按 char_id 或页面名子串过滤。"""
+    if not NOTES_DB.exists():
+        raise SystemExit(f"⛔ 找不到 {NOTES_DB}（本地工作库，不入仓库）")
+    c = sqlite3.connect(NOTES_DB)
+    c.row_factory = sqlite3.Row
+    if only:
+        return c.execute(
+            "select char_id, kind, value from fact"
+            " where char_id like ? or char_id in (select char_id from page where name like ?)",
+            [f"%{only}%", f"%{only}%"]).fetchall()
+    return c.execute("select char_id, kind, value from fact").fetchall()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="干员 wiki 备注逐条核查（覆盖率视角）")
     ap.add_argument("--only", help="只看名字/char_id 含该子串的干员")
     ap.add_argument("--top", type=int, default=10, help="各档列出前 N 个关键词族")
     ap.add_argument("--self-test", action="store_true", help="自证三档可红")
+    ap.add_argument("--dump-parse", metavar="PATH",
+                    help="把 PARSE 那批（没有普查词的 fact）落盘成待核清单，供下一轮扩充普查表")
     args = ap.parse_args()
 
     if args.self_test:
         return self_test()
+
+    if args.dump_parse:
+        # ⚠ 这是**生成物**：题源是本文件的 FAMILIES 表，改词表请改这里，别手改落盘文件
+        #   （记忆 eff36235：生成物的问题改题源不手改正文）。
+        # 为什么要落盘：它是下一轮的**输入**，只留在工具输出里丢了就要重跑。
+        rows = _load_facts()
+        out = [f"{args.dump_parse} 由 tools/audit_op_notes.py --dump-parse 生成；"
+               "题源是本文件的 FAMILIES 表，请勿手改本文件。", "",
+               "# PARSE 待核清单：这些 fact 里没有任何普查词", "",
+               f"共 {sum(1 for r in rows if classify(r['value'])[0] == 'PARSE')} 条。",
+               "每一行请填两栏：**拟新增的普查词**与**落点**（DB 列 / Go 符号 / 或「不建模」）。",
+               "填完把词并进 tools/audit_op_notes.py 的 FAMILIES，再重跑本工具。", "",
+               "| char_id | fact 正文 | 拟新增词（人填） | 落点（人填） |", "|---|---|---|---|"]
+        for r in rows:
+            if classify(r["value"])[0] != "PARSE":
+                continue
+            txt = r["value"].replace("|", "／").replace("\n", " ")[:160]
+            out.append(f"| {r['char_id']} | {txt} |  |  |")
+        Path(args.dump_parse).write_text("\n".join(out) + "\n", encoding="utf-8")
+        print(f"已写 {args.dump_parse}（{len(out) - 7} 条待核）")
+        return 0
 
     if not NOTES_DB.exists():
         print(f"⛔ 找不到 {NOTES_DB}（本地工作库，不入仓库）", file=sys.stderr)
