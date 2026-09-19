@@ -511,7 +511,7 @@ def write_md(rep: list[dict], lits: set[str], out: pathlib.Path, by: str,
              f"有干员行的家族只有 {sum(1 for d in rep if d['has_op'])} 个，其中 A 档 0 个，"
              "其余是 C（要新读点）或口径问题。\n")
 
-    L.append("## 二、A 档逐条（7 条全部判成假欠账／非干员行，证据在此）\n")
+    L.append(f"## 二、A 档逐条（本档 {len(a)} 条）——机械规则先报的 7 个已**逐条推翻**，各自归入 B（同值）／E（口径·后缀读法）／D（无干员行），证据在对应节里\n")
     if not a:
         L.append("（空）\n")
     for d in a:
