@@ -49,7 +49,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -421,6 +423,75 @@ def red_names(assessed: list[dict]) -> list[tuple[str, str, str]]:
             if str(a["measured"]).startswith("⛔")]
 
 
+def _git(*args: str) -> str:
+    """跑一条**只读** git 命令。⚠ 失败一律返回空串——调用方必须把它标成「未知」，
+    不许拿一个看起来正常的空白顶上去（身份未知是**可以写出来的状态**）。
+
+    ⚠ **只 rstrip 换行，绝不 strip**：`git status --porcelain` 的每行以两列状态码开头，
+    其中"已改未暂存"那一类**首行的第一个字符就是空格**（`" M path"`）。整体 strip 会把
+    它吃掉，下游按固定列位切路径时就少一个字符——实测第一版把 `docs/parity-ledger-deepwater.md`
+    打印成了 `ocs/parity-ledger-deepwater.md`：**只错第一条**，最容易看漏的那种错。
+    """
+    try:
+        p = subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return p.stdout.rstrip("\r\n") if p.returncode == 0 else ""
+
+
+def tree_head() -> str:
+    return _git("rev-parse", "--short", "HEAD") or "未知"
+
+
+def tree_branch() -> str:
+    return _git("rev-parse", "--abbrev-ref", "HEAD") or "未知"
+
+
+def source_dirty() -> tuple[int, list[str]]:
+    """工作区脏不脏——**这批数字是在哪棵树上量出来的**。
+
+    口径抄 `tools/parity_ledger.py::source_dirty()`（本仓约定：数 `git status --porcelain`
+    的行数），这里多带回文件名：只说"脏了 6 个文件"而不说是哪 6 个，读者没法判断要不要重跑，
+    也没法判断脏的是不是自己关心的那几个。
+    """
+    out = _git("status", "--porcelain")
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    #: 前两列是状态码（` M` = 已改未暂存、`??` = 未跟踪），从第 4 个字符起才是路径。
+    return len(lines), [ln[3:].strip() for ln in lines]
+
+
+def _sha16(p: Path) -> str:
+    return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+
+
+def provenance_lines(dirty: tuple[int, list[str]], head: str, branch: str) -> list[str]:
+    """来源三件套（仪器身份／来源树／脏污）。
+
+    ⚠ **做成纯函数**是为了能在自检里拿合成输入问它两句："干净时不许报警""脏时必须报警
+    并点名到文件"。做成一段直接读磁盘的打印代码，这两句就没人验得了——而"提示恒出现"
+    与"提示恒不出现"在输出上都不是错误，只会让读者当成噪音或者当成没事。
+    """
+    n, names = dirty
+    lines = [
+        "== 来源三件套（缺一即「身份未知」，不许与别的树混进同一张表） ==",
+        f"  仪器     {Path(__file__).name} sha256前16={_sha16(Path(__file__))}；"
+        f"测量函数在 {Path(ds.__file__).name} sha256前16={_sha16(Path(ds.__file__))}"
+        f"（本工具 import 它，不另写一遍 grep）",
+        f"  来源     {ROOT}（分支 {branch}）树 HEAD={head}",
+    ]
+    if n:
+        shown = "、".join(names[:6]) + ("…" if n > 6 else "")
+        lines.append(f"  脏污     source_dirty={n}（`git status --porcelain` 行数）"
+                     f"⇒ ⚠ 下面的数字是在**未提交的工作区**上量出来的：{shown}")
+        lines.append("           ⇒ 要读「入库版本」的数字，先 stash，或对上面每个路径按 "
+                     "`git show HEAD:<path>` 重数（本工具不做这件事：那会多出第二份测量实现，"
+                     "两份实现迟早各说各话）")
+    else:
+        lines.append("  脏污     source_dirty=0 ⇒ 下面的数字与树 HEAD 一致")
+    return lines
+
+
 def self_test() -> int:
     """自证：这张表红得起来吗。判据坏掉时必须翻红，而不是继续一片绿。"""
     print("== 自证：判据红得起来吗 ==")
@@ -472,6 +543,22 @@ def self_test() -> int:
     noev = [r[1] for r in ROWS if r[1] in WIRED and not WIRED_WHY.get(r[1])]
     print(f"  {'⚠' if noev else '✅'} 已登记可追回依据 {len(ROWS) - len(noev)}/{len(ROWS)} 行"
           f"{('；未登记（前轮判定，本轮未复核）：' + '、'.join(noev)) if noev else ''}")
+    # ★ 来源三件套：**两边都要试**——只试一边的话，"提示恒出现"与"提示恒不出现"都算过。
+    clean_txt = "\n".join(provenance_lines((0, []), "abc1234", "main"))
+    good9 = ("source_dirty=0" in clean_txt) and ("⚠" not in clean_txt)
+    bad += 0 if good9 else 1
+    print(f"  {'✅' if good9 else '⛔'} 来源三件套：干净树不许出现脏污警告")
+    dirty_txt = "\n".join(provenance_lines((2, ["rios-sim/a.go", "rios-sim/b.go"]), "abc1234", "main"))
+    good10 = (("source_dirty=2" in dirty_txt) and ("⚠" in dirty_txt)
+              and ("rios-sim/a.go" in dirty_txt))
+    bad += 0 if good10 else 1
+    print(f"  {'✅' if good10 else '⛔'} 来源三件套：脏树必须报警并点名到具体文件")
+    # ★ 计数的自洽：报了个数字就必须列得出对应的名字（数词与清单不一致＝最经典的假账）。
+    dn, dnames = source_dirty()
+    good11 = dn == len(dnames)
+    bad += 0 if good11 else 1
+    print(f"  {'✅' if good11 else '⛔'} 脏污计数必须与点名清单一致："
+          f"source_dirty={dn}，清单 {len(dnames)} 条")
     return 1 if bad else 0
 
 
@@ -499,6 +586,11 @@ def main() -> int:
         rows = rows + [MUTATIONS[args.mutate]]
 
     print(f"== 覆盖表（{len(rows)} 行；调用点与守卫是量出来的，「后果」一列是人写的断言） ==")
+    # ⚠ 来源三件套**是标注、不是判据**：脏树不让 rc 变红——否则正常干活（谁的工作区都是脏的）
+    #   时这个工具就永远红，人就学会忽略它。代价是"脏树的数字"与"入库的数字"看起来一样，
+    #   所以必须把身份打在**同一屏**上，让读的人自己判断——而不是指望他记得去看 git status。
+    for line in provenance_lines(source_dirty(), tree_head(), tree_branch()):
+        print(line)
     print()
     assessed = [assess(r) for r in rows]
     cur = None
