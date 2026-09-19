@@ -29,8 +29,9 @@
 排好程的 sim。子类在那个点上抄一份规格，再把活交回给基类走 Go。
 
 用法:
-    python tools\\golden_go.py                 # 跑 out/plan-*.json，写到 out/golden_go.json
+    python tools\\golden_go.py                 # 跑 fixtures/ 里的作业，写到 fixtures/golden_go.json
     python tools\\golden_go.py --check         # 与已有基线比对，有差则退出码 1
+    python tools\\golden_go.py --extend        # 判据集长大了：先验已有的一致，再并入新的
 """
 from __future__ import annotations
 
@@ -49,7 +50,12 @@ from ak_tactic.verify import Verifier                        # noqa: E402
 from ak_tactic.frontend.inputs import SpecInputs
 
 OUT = ROOT / "out"
-GOLDEN = OUT / "golden_go.json"
+#: 判据集与基线**必须在版本控制里**（通告 #6 四）：`out/` 是易失的临时目录
+#: （`.gitignore` 里有它），把门引用的夹具与金标准基线放在那儿，等于**门没有历史**
+#: ——有人重跑覆盖基线，没有任何人会发现。所以 `fixtures/` 优先，`out/` 只作后备
+#: （迁移期两处并存时以 `fixtures/` 为准）。
+FIXTURES = ROOT / "fixtures"
+GOLDEN = (FIXTURES / "golden_go.json") if FIXTURES.is_dir() else (OUT / "golden_go.json")
 
 
 def _find(name: str) -> Path:
@@ -58,7 +64,8 @@ def _find(name: str) -> Path:
     （`ak-tactic-head/out/`）里——对拍三件套删掉之后，原来那份查找逻辑没了。"""
     names = [name] if name.endswith(".json") else [name, f"{name}.json"]
     for n in names:
-        for cand in (ROOT / "out" / n, ROOT.parent / "ak-tactic-head" / "out" / n,
+        for cand in (FIXTURES / n, ROOT / "out" / n,
+                     ROOT.parent / "ak-tactic-head" / "out" / n,
                      ROOT / n, ROOT / "data" / "skland" / n):
             if cand.exists():
                 return cand
@@ -115,12 +122,33 @@ def run_one(plan_file: Path, roster_file: Path) -> dict:
     }
 
 
+def plan_files() -> list[Path]:
+    """判据集里的作业。**按 schema 认，不按文件名**：`deploys` + `stage` 两个键都在。
+
+    ⚠ 按 `plan-*.json` 认名字会漏掉 `hsex8_max.json`（八人满练度深水用例，本树唯一
+    能走到长线的那份）——据通告 #5 三迁入、#6 四随判据集一起进版本控制。
+    """
+    src = FIXTURES if FIXTURES.is_dir() else OUT
+    found: list[Path] = []
+    for p in sorted(src.glob("*.json")):
+        if p.name == "golden_go.json":
+            continue
+        try:
+            d = json.loads(p.read_text(encoding="utf-8-sig"))
+        except Exception:                                        # noqa: BLE001
+            continue
+        if isinstance(d, dict) and "deploys" in d and "stage" in d:
+            found.append(p)
+    return found
+
+
 def main() -> int:
     check = "--check" in sys.argv
+    extend = "--extend" in sys.argv
     roster = _find("roster_max_modelled")
-    plans = sorted(OUT.glob("plan-*.json"))
+    plans = plan_files()
     if not plans:
-        raise SystemExit("out/ 下没有 plan-*.json")
+        raise SystemExit(f"{FIXTURES if FIXTURES.is_dir() else OUT} 下没有作业（deploys+stage）")
 
     got: dict[str, dict] = {}
     for p in plans:
@@ -136,7 +164,7 @@ def main() -> int:
             got[p.name] = {"error": f"{type(e).__name__}: {e}"}
             print(f"  {p.name:<22} ❌ {type(e).__name__}: {e}")
 
-    if not check:
+    if not check and not extend:
         GOLDEN.write_text(json.dumps(got, ensure_ascii=False, indent=2,
                                      sort_keys=True), encoding="utf-8")
         print(f"\n基线已写入 {GOLDEN.relative_to(ROOT)}（{len(got)} 份计划）")
@@ -147,11 +175,19 @@ def main() -> int:
     base = json.loads(GOLDEN.read_text(encoding="utf-8"))
     bad = 0
     keys = ["kills", "leaks", "elapsed", "damage", "spec_sha"]
+    new_names: list[str] = []
     for name in sorted(set(base) | set(got)):
         b, g = base.get(name), got.get(name)
         if b is None or g is None:
-            bad += 1
-            print(f"  ❌ {name}：一边缺（{'新' if b is None else '基线'}里没有）")
+            #: `--extend`：**判据集长大**（迁入新夹具）与"某一份不见了"是两件事。
+            #: 新的一份照收；**丢了一份要报出来**——那通常意味着有人删了判据。
+            if b is None and extend and g is not None:
+                new_names.append(name)
+                print(f"  ＋ {name}：基线里没有，按 --extend 收下"
+                      f"（{g.get('kills')}杀 {g.get('leaks')}漏 {g.get('elapsed')}s）")
+            else:
+                bad += 1
+                print(f"  ❌ {name}：一边缺（{'新' if b is None else '基线'}里没有）")
             continue
         diff = [k for k in keys if b.get(k) != g.get(k)]
         if diff:
@@ -159,6 +195,17 @@ def main() -> int:
             print(f"  ❌ {name}：{'、'.join(diff)} 不一致")
             for k in diff:
                 print(f"        {k}: 基线={b.get(k)!r}  现在={g.get(k)!r}")
+    if extend:
+        if bad:
+            print(f"\n❌ 拒绝扩展：已有 {bad} 份与基线不一致——扩展**不许**顺手掩盖改动")
+            return 1
+        merged = dict(base)
+        merged.update({n: got[n] for n in new_names})
+        GOLDEN.write_text(json.dumps(merged, ensure_ascii=False, indent=2,
+                                     sort_keys=True), encoding="utf-8")
+        print(f"\n✅ 已有 {len(base)} 份逐项一致；新增 {len(new_names)} 份已并入 "
+              f"{GOLDEN.relative_to(ROOT)}（共 {len(merged)} 份）")
+        return 0
     print(f"\n{'❌ 有 %d 份不一致' % bad if bad else '✅ 全部 %d 份与基线逐项一致' % len(base)}")
     return 1 if bad else 0
 

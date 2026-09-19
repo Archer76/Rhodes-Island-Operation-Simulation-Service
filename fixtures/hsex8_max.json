@@ -1,0 +1,86 @@
+{
+  "stage": "act31side_ex08",
+  "title": "8 人",
+  "deploys": [
+    {
+      "operator": "怒潮凛冬",
+      "position": [10, 2],
+      "direction": "Right",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "机械师",
+      "position": [11, 3],
+      "direction": "Up",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "圣聆初雪",
+      "position": [9, 3],
+      "direction": "Right",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "凯尔希·思衡托",
+      "position": [10, 3],
+      "direction": "Right",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "可露希尔",
+      "position": [10, 1],
+      "direction": "Down",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "结城理",
+      "position": [11, 1],
+      "direction": "Right",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "提丰",
+      "position": [7, 2],
+      "direction": "Right",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "电弧",
+      "position": [3, 3],
+      "direction": "Right",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    }
+  ]
+}

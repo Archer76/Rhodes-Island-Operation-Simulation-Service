@@ -1,0 +1,26 @@
+{
+  "stage": "act31side_04",
+  "title": "2 人",
+  "deploys": [
+    {
+      "operator": "焰狐龙梓兰",
+      "position": [5, 4],
+      "direction": "Up",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "泥岩",
+      "position": [4, 2],
+      "direction": "Right",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    }
+  ]
+}

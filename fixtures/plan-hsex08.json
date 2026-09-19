@@ -1,0 +1,16 @@
+{
+  "stage": "act31side_ex08",
+  "title": "勿玷对照 1 人（只求敌方技能出手落地，不求是好解）",
+  "deploys": [
+    {
+      "operator": "泥岩",
+      "position": [9, 4],
+      "direction": "Left",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    }
+  ]
+}
