@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..battle import environment as env
+from ..frontend import environment as env
 from ..frontend.mech_consts import BLOCKER_KEY, PILE_KEY, PUMP_KEY
 
 __all__ = [
