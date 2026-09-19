@@ -169,9 +169,15 @@ def fingerprint_diff(a: dict, b: dict) -> list[str]:
 def instrument(fresh_exe: Path) -> dict:
     """仪器自检：用当前源码新构建私有 Go 二进制，并核共享二进制是否陈旧。"""
     src = sorted((ROOT / "rios-sim").glob("**/*.go"))
-    src_blob = "".join(f"{p.name}:{p.stat().st_size}:{int(p.stat().st_mtime)}"
-                       for p in src)
-    src_sig = hashlib.sha256(src_blob.encode()).hexdigest()[:8]
+    #: ⚠ **不许自己再算一份源码身份**（实测栽过）：这里原先用 `名字:大小:mtime` 摘要，
+    #: 而 `tools/engine_pin.py` 用**内容**摘要 ⇒ 同一棵树、同一时刻算出两个不同的值
+    #: （`2a9c381a` vs `9b81f2d5`），还把后者当成"别人复现不出来的数"查了半轮。
+    #: **两处各写一份，一改就对不上**——现在统一复用 `engine_pin`（它另分 disk/HEAD 两个身份）。
+    sys.path.insert(0, str(TOOLS))
+    from engine_pin import source_identity as _src_ident                 # noqa: PLC0415
+    _ident = _src_ident()
+    src_sig = _ident["disk"]            #: 磁盘此刻（＝本次构建实际摘到的那份内容）
+    head_sig = _ident["head"]           #: HEAD 那份（判"是不是 HEAD 的构建"只能用这个）
     target = fresh_exe.with_name(f"rios-sim-{src_sig}.exe")
     OUT.mkdir(parents=True, exist_ok=True)
 
@@ -180,7 +186,11 @@ def instrument(fresh_exe: Path) -> dict:
     r["cmd"] = ["go", "build", "-buildvcs=false", "-o", str(target), "."]
     log_raw("instrument-build", r)
 
-    measured: dict = {"src_sig": src_sig, "build_rc": r["rc"], "build_s": round(r["seconds"], 1)}
+    measured: dict = {"src_sig": src_sig, "head_src_sig": head_sig,
+                      "src_sig_same_as_head": src_sig == head_sig,
+                      "src_dirty_n": _ident["dirty_n"],
+                      "src_dirty_files": _ident["dirty_files"][:8],
+                      "build_rc": r["rc"], "build_s": round(r["seconds"], 1)}
     note_bits: list[str] = []
 
     if target.exists() and r["rc"] == 0:
@@ -1151,6 +1161,12 @@ def main() -> int:
     exe = ins.get("exe")
     print(f"[0] 仪器：私有构建 {'✅ ' + Path(exe).name if exe else '❌ 失败'}"
           f"；共享二进制落后于源码={ins['measured'].get('shared_stale')}")
+    _m0 = ins.get("measured") or {}
+    print(f"      源码身份：disk={_m0.get('src_sig')}（glob rios-sim/**/*.go，"
+          f"dirty {_m0.get('src_dirty_n')} 条{(': ' + str(_m0.get('src_dirty_files'))) if _m0.get('src_dirty_files') else ''}）"
+          f"　HEAD={_m0.get('head_src_sig')}"
+          + ("　✅ 两者相同" if _m0.get("src_sig_same_as_head") else
+             "　⚠ **磁盘 ≠ HEAD**：这份读数只对当时那份工作树成立、不对任何提交成立"))
 
     it = golden_check(exe)
     items.append(it)
