@@ -169,7 +169,8 @@ def discover(plan_dir: Path) -> list[str]:
 
 
 def run_stage(plan_file: Path, roster, plan_cls, verifier_cls,
-              spec_capture_cls, simgo_cls, find_binary, compare) -> dict:
+              spec_capture_cls, simgo_cls, find_binary, compare,
+              base: dict | None = None, canon=None) -> dict:
     raw = json.loads(plan_file.read_text(encoding="utf-8-sig"))
     plan = plan_cls.from_dict(raw)
     rec: dict = {"plan": plan_file.name,
@@ -186,7 +187,10 @@ def run_stage(plan_file: Path, roster, plan_cls, verifier_cls,
                  "title": raw.get("title"),
                  "deploys_n": len(raw.get("deploys") or [])}
 
-    # ---- 原版（权威参照）----
+    #: Go 自身基线（`fixtures/golden_go.json` 里钉住的那一份）——**新判据的参照物**。
+    entry = (base or {}).get(plan_file.name) or {}
+
+    # ---- 原版（**历史参考列**，博士 2026-09-19 裁定后不再作判据）----
     try:
         pv = verifier_cls(engine="python")
         pr = pv.run(plan, roster=roster)
@@ -217,7 +221,7 @@ def run_stage(plan_file: Path, roster, plan_cls, verifier_cls,
         rec["go_runs"] = getattr(v, "go_runs", None)
         rec["go_fallbacks"] = getattr(v, "go_fallbacks", None)
         rec["spec_error"] = v.spec_error
-        rec["spec_sha"] = None
+        rec["spec_sha"] = canon(v.spec) if (canon and v.spec is not None) else None
         spec = v.spec
         rec["go"] = {"kills": int(r.kills), "leaks": int(r.leaks),
                      "elapsed": round(float(r.elapsed), 4),
@@ -305,13 +309,38 @@ def run_stage(plan_file: Path, roster, plan_cls, verifier_cls,
                          else int(g["skill_events"]) - int(p["skill_activations"]))
 
     zero = all(v == 0 for v in rec["diff"].values())
+    #: ⚠ 博士 2026-09-19 裁定：**基线改用 Go**（「过往和未来会新增的基线全部用 go 重跑」）。
+    #: 于是「四项差 vs 原版」**退出判据**，降为**历史参考列**；判据换成
+    #: **Go 自身的基线漂移**——拿本次 Go 的观测量对比 `fixtures/golden_go.json` 里钉住的
+    #: Go 数，漂了才是红。原版那一列仍照跑、照留，但**不再定生死**。
     if unsupported:
         #: ⚠ 闸门开着时 Go 退回原版，四项差必然是 0 —— 那是**假绿**，不能说"归零"。
-        rec["state"] = "闸门拒跑"
+        rec["state_py_ref"] = "闸门拒跑"
     elif zero and cmp_out.get("ok"):
-        rec["state"] = "归零"
+        rec["state_py_ref"] = "归零（旧读法：vs 原版）"
     else:
-        rec["state"] = "真差"
+        rec["state_py_ref"] = "真差（旧读法：vs 原版）"
+    drift = {}
+    if entry:
+        for k in ("kills", "leaks", "elapsed", "damage", "spec_sha"):
+            now = (rec.get("spec_sha") if k == "spec_sha"
+                   else rec["go_verdict"].get(k))
+            if k == "elapsed" and isinstance(now, (int, float)) and isinstance(entry.get(k), (int, float)):
+                same = abs(float(now) - float(entry[k])) <= 1e-4
+            else:
+                same = entry.get(k) == now
+            if not same:
+                drift[k] = {"基线": entry.get(k), "现在": now}
+    rec["go_baseline_drift"] = drift
+    rec["go_baseline_present"] = bool(entry)
+    if unsupported:
+        rec["state"] = "闸门拒跑"
+    elif not entry:
+        rec["state"] = "无基线可比"
+    elif drift:
+        rec["state"] = "Go 漂移"
+    else:
+        rec["state"] = "正常（与 Go 基线一致）"
     return rec
 
 
@@ -384,8 +413,15 @@ def main() -> int:
     else:
         names = discover(plan_dir)
 
+    #: 判据的参照物＝**Go 自身基线**（`fixtures/golden_go.json`），博士 2026-09-19 裁定。
+    try:
+        B = json.loads(Path(G.GOLDEN).read_text(encoding="utf-8"))
+    except Exception:                                            # noqa: BLE001
+        B = {}
     print(f"口径：Go 二进制 {find_binary()}")
-    print(f"计划 {len(names)} 份；原版引擎 = python；闸门读 spec['unsupported']")
+    print(f"判据＝Go 自身基线漂移（{G.GOLDEN}，{len(B)} 份）；"
+          f"原版数字仅作**历史参考列**，不进判据（博士 2026-09-19 裁定）")
+    print(f"计划 {len(names)} 份；闸门读 spec['unsupported']")
     print("=" * 100)
 
     t0 = time.time()
@@ -400,27 +436,32 @@ def main() -> int:
         t1 = time.time()
         try:
             rec = run_stage(pf, roster, Plan, Verifier, G.SpecCapture, Simgo,
-                            find_binary, compare)
+                            find_binary, compare, base=B, canon=G.canonical_sha)
         except Exception as e:                                   # noqa: BLE001
             rec = {"plan": name, "stage": PLAN2STAGE.get(name, "?"), "state": "未跑",
                    "why": f"{type(e).__name__}: {e}",
                    "trace": traceback.format_exc()[-800:]}
         rec["seconds"] = round(time.time() - t1, 1)
         recs.append(rec)
-        mark = {"归零": "✅", "真差": "❌", "闸门拒跑": "⛔", "未跑": "⊘"}.get(rec["state"], "?")
+        mark = {"正常（与 Go 基线一致）": "✅", "Go 漂移": "❌", "闸门拒跑": "⛔",
+                "未跑": "⊘", "无基线可比": "◻"}.get(rec["state"], "?")
         detail = (", ".join(rec["unsupported"])[:80] if rec.get("unsupported")
                   else fingerprint_text(rec)[:80])
-        print(f"{rec['stage']:<18} {mark} {rec['state']:<6} "
+        print(f"{rec['stage']:<18} {mark} {rec['state']:<12} "
               f"{rec.get('diff') if rec.get('diff') else rec.get('why', '')}"
               f"  [{detail}]")
 
-    zero = [r for r in recs if r["state"] == "归零"]
+    okay = [r for r in recs if r["state"].startswith("正常")]
+    drift = [r for r in recs if r["state"] == "Go 漂移"]
     gate = [r for r in recs if r["state"] == "闸门拒跑"]
-    real = [r for r in recs if r["state"] == "真差"]
     norun = [r for r in recs if r["state"] == "未跑"]
     print("=" * 100)
-    print(f"归零 {len(zero)} / 闸门拒跑 {len(gate)} / 真差 {len(real)} / 未跑 {len(norun)}"
-          f"　耗时 {(time.time() - t0) / 60:.1f} 分钟")
+    print(f"【新判据】与 Go 基线一致 {len(okay)} / Go 漂移 {len(drift)} / "
+          f"闸门拒跑 {len(gate)} / 未跑 {len(norun)}　耗时 {(time.time() - t0) / 60:.1f} 分钟")
+    z = [r for r in recs if str(r.get("state_py_ref", "")).startswith("归零")]
+    print(f"【旧读法，仅留档】vs 原版归零 {len(z)} / 真差 "
+          f"{len([r for r in recs if str(r.get('state_py_ref', '')).startswith('真差')])}"
+          f"（此列已退出判据，博士 2026-09-19 裁定）")
 
     OUT.mkdir(parents=True, exist_ok=True)
     Path(args.json).parent.mkdir(parents=True, exist_ok=True)
@@ -437,8 +478,10 @@ def main() -> int:
          "engine_env_bin": str(exe_path), "engine_env_bin_sha16": exe_sha,
          "engine_env_bin_bytes": exe_size, "source_dirty": dirty,
          "tree": str(ROOT), "tree_head": tree_head(ROOT / "out" / "x.json"),
-         "counts": {"zero": len(zero), "gate": len(gate), "real": len(real),
-                    "norun": len(norun)},
+         "counts": {"ok": len(okay), "drift": len(drift), "gate": len(gate),
+                    "norun": len(norun),
+                    "old_zero_vs_py": len([r for r in recs if str(r.get("state_py_ref", "")).startswith("归零")]),
+                    "old_real_vs_py": len([r for r in recs if str(r.get("state_py_ref", "")).startswith("真差")])},
          "records": recs}, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     write_md(recs, Path(args.out), exe_path, exe_sha, exe_size, dirty)
     print(f"台账：{Path(args.out)}")
@@ -447,12 +490,14 @@ def main() -> int:
 
 def write_md(recs: list[dict], path: Path, exe, exe_sha: str = "?", exe_size: int = 0,
              dirty: int = -1) -> None:
-    zero = [r for r in recs if r["state"] == "归零"]
+    zero = [r for r in recs if str(r.get("state_py_ref", "")).startswith("归零")]
     gate = [r for r in recs if r["state"] == "闸门拒跑"]
-    real = [r for r in recs if r["state"] == "真差"]
+    real = [r for r in recs if str(r.get("state_py_ref", "")).startswith("真差")]
     norun = [r for r in recs if r["state"] == "未跑"]
+    okay = [r for r in recs if r["state"].startswith("正常")]
+    drift = [r for r in recs if r["state"] == "Go 漂移"]
     L: list[str] = []
-    L.append("# 怀黍离 11 关现状台账（Go vs 原版）")
+    L.append("# 怀黍离逐关台账（判据＝**Go 自身基线漂移**）")
     L.append("")
     L.append(f"- 生成时间：{time.strftime('%Y-%m-%d %H:%M:%S')}；"
              f"执行者：验收与守卫会话 `session-1a45cfee-9a65-4830-a327-03ac84285bfb`")
@@ -466,8 +511,90 @@ def write_md(recs: list[dict], path: Path, exe, exe_sha: str = "?", exe_size: in
     L.append(f"  - **`source_dirty`**：本轮 **{dirty}** 条未提交改动"
              f"（实测同一棵树在两次运行之间从 60 变 61 ⇒ **本表只对当时那份工作树成立，"
              f"不对任何提交成立**）")
-    L.append(f"- 本轮实测：**归零 {len(zero)} / 闸门拒跑 {len(gate)} / 真差 {len(real)} "
-             f"/ 未跑 {len(norun)}**（共 {len(recs)} 关）")
+    L.append(f"- 本轮实测（**新判据**）：**与 Go 基线一致 {len(okay)} / Go 漂移 {len(drift)} "
+             f"/ 闸门拒跑 {len(gate)} / 未跑 {len(norun)}**（共 {len(recs)} 份作业）")
+    L.append(f"- 旧读法留档（**已退出判据**）：vs 原版归零 {len(zero)} / 真差 {len(real)}"
+             f"——变更前的数字原样留在 git 历史（`eae2fc1`），此处只作对照")
+    L.append("")
+    L.append("## 〇、判据变更声明（博士 2026-09-19 裁定：**基线改用 Go 重跑**）")
+    L.append("")
+    L.append("> 裁定原文：「走第一项，**过往和未来会新增的基线全部用 go 重跑**」。"
+             "`frozenResDown`（冻结期间法抗 −15，原版标「未建模」、Go 实现了）**Go 保留**"
+             "⇒ 这是**修正基线**，不是越界。**基线从「原版输出」换成「Go 输出」"
+             "——原版退出基线地位。**")
+    L.append(">")
+    L.append("> 由此本表的判据换成：**Go 自身的基线漂移即红**（拿本轮 Go 的观测量对比 "
+             "`fixtures/golden_go.json` 里钉住的 Go 数）。原版数字仍照跑、照留，"
+             "但**只作历史参考列，不进判据**。")
+    L.append(">")
+    L.append("> ⚠ **深水 `hsex8_max` 那条「真差 1」随之作废**——它本就是 Go 对原版的差。"
+             "但要说清一句：**该差异只是退出判据，并没有被解释**。"
+             "`frozenResDown` 一条不足以解释「35 杀之差、8 名干员全灭」。"
+             "它现在是一条**已知但未归因的 Go 侧行为**，与终端UI_2 那条 `t=81.1333` 的定位"
+             "一样，保留为**独立说明**，不得读成「已确认正确」。")
+    L.append("")
+    L.append("### 〇之二、「与对方一致」类判据的逐列点名（参照物换人后必须重估）")
+    L.append("")
+    L.append("| 判据 | 原形态 | 参照物换人后 | 处置 |")
+    L.append("| --- | --- | --- | --- |")
+    L.append("| 本表「四项差」列 | Go 与原版逐项相等 | **原版已不是基线** | **降为历史参考列**；"
+             "新判据＝Go 与 `golden_go.json` 的漂移 |")
+    L.append("| `golden_go.py --check` | — | 它本就是 **Go 对 Go 金标准** | **保留为判据**"
+             "（换成 Go 基线后语义反而更纯） |")
+    L.append("| 门的第 2 项「闸门放行抽查」 | 问 Go 是否亲手跑（`go_fallbacks`） | "
+             "不涉及「与对方一致」 | **保留** |")
+    L.append("| 门的第 3 项 `check_battle`（816） | **直接 import `ak_tactic.battle` 断言原版的数**"
+             "（24 处 `Verifier()` 零 `.run()`） | 原版已退出产品路径 | ⚠ **点名**：它测的是"
+             "**原版引擎自身**，绿只说明「原版没退化」，**不说明 Go 如何**——"
+             "是留作历史水位还是撤下，**等裁定** |")
+    L.append("| 门的第 4 项 `check_verify`（71） | 裸 `Verifier().run()`，09-19 起主体已是 Go | "
+             "主体 Go = 产品默认引擎 | **正当主体**（不必再写「不替原版背书」免责句） |")
+    L.append("| `tools/parity_plan.py`（后端） | Go 对 Python 对拍 | 参照物没了 | **退出判据**，"
+             "复职为**修复期诊断工具**（博士裁定 `4b124070`） |")
+    L.append("| 门的第 5/6 项（盲区审计、能力清单） | 静态，不涉及参照物 | — | **保留** |")
+    L.append("")
+    L.append("### 〇之三、本树**无用例、当前无法验收**（照 `act31side_07` 先例逐条登记）")
+    L.append("")
+    L.append("| # | 事项 | 账面事实（本轮取证） | 状态 |")
+    L.append("| --- | --- | --- | --- |")
+    L.append("| 1 | `act31side_07` 关卡 | 本树判据集中**无该关夹具**（旁支树有，"
+             "按通告 #5 二不得拿来凑数） | **本关当前无法验收** |")
+    L.append("| 2 | `Schedule.diff`（`verify.py` 同时写两份排程） | 全仓**零调用点**，"
+             "只有三处注释提到它 ⇒ 这件事**至今从未被证明过** | **本树无用例，当前无法验收** |")
+    L.append("| 3 | `Plan` 的 `retreats` / `skill_uses` / 装置 / 召唤 | `Plan` 支持 `retreats`，"
+             "但两棵树 **25 个作业全部只有 `deploys` 键** ⇒ `Schedule` 五个列表里"
+             "**有三个今天没有任何计划格式能填上** | **本树无用例，当前无法验收** |")
+    L.append("")
+    L.append("> ⚠ **绝不把「四列全绿」读成「四条路没问题」**——那四列的绿是 `[] == []`。"
+             "上面第 2/3 条正是「有实现、有测试、零调用点」那一类（记忆 `68a8a308` 同型）："
+             "**判据集的缺口仍在**，工具修好了也不改变这一点。")
+    L.append("")
+    L.append("### 〇之四、**验过了、且证明确实是惰性**（与上面三条性质不同：不是「没验过」）")
+    L.append("")
+    L.append("| # | 事项 | 取证（终端UI_2 `cf5472b`） | 状态 |")
+    L.append("| --- | --- | --- | --- |")
+    L.append("| 4 | `devices`（规格输入字段） | **被读，但在一道门后面**：`simgo/spec.py:176` 的 "
+             "`if getattr(inp, \"devices\", None) and not allow_devices:` 只在 `allow_devices=False` "
+             "时才执行。实测：**门开时改 `inp.devices` ⇒ 规格 sha 不变；门关时改同一字段 ⇒ sha 变** | "
+             "**该字段的可观测性取决于调用方开的门；敏感性扫描必须把门两边都跑** |")
+    L.append("| 5 | `species_provider` | **上游喂得进、中游写了、下游没有，整链惰性**："
+             "① 带计数哨兵跑 `hsex8_max` ⇒ **被调用 149 次**；② 哨兵返回 `'SENTINEL'` 后"
+             "规格 sha 与真实值**完全相同**；③ 规格 JSON 里 `SENTINEL` 不存在，且 **`species` "
+             "字样在整份规格里一次都没出现**（72 个敌人 / 19 个顶层键）。"
+             "根因：`enemy_view.py:9` 把 `e.species` 写在**内存视图对象**上，"
+             "`_spawn_spec` 那条序列化路径**没抄进规格 dict** ⇒ Go 永远收不到"
+             "（Go 侧也无消费点） | **逐段都「被读过」，整链惰性** |")
+    L.append("")
+    L.append("> ⚠ 第 5 条钉死了一句方法论：**「字段被读了」与「字段送到了」第一次被分开证明**。"
+             "**「被读过」是过程的证据，「送到了」是结果的证据**；两者之间隔着序列化，"
+             "而**它不报错**。（同族：记忆 `af967c90` 闸门型规格字段、`9659644b` 注释被当证据。）")
+    L.append("")
+    L.append("### 〇之五、措辞更正：`goal_cells` **不是「死字段」**")
+    L.append("")
+    L.append("> 准确说法：**「字段是活的，但 `from_sim` 永远传 `None`」**"
+             "（`spec.py:405` 左边真会消费——传 truthy 对象会让 `build_spec` 抛异常）。"
+             "**「从来没有被填过」≠「不会被消费」**。本台账未按「死字段」记过；"
+             "迁移表 §三 里若有此措辞，按这一句更正。")
     L.append("")
     _stages = {r.get("stage") for r in recs}
     L.append(f"**计数口径（通告 #5 一）**：**作业数 = {len(recs)}**（按 `plan_path` 计，"
@@ -480,7 +607,9 @@ def write_md(recs: list[dict], path: Path, exe, exe_sha: str = "?", exe_size: in
              "「这些关没问题」。本树这套夹具里能走到长线的只有**后补的 `hsex8_max.json` "
              "（八人满练度、814 秒）**，其余大多是几十秒的浅用例；两者差着一整个深度维度。")
     L.append("")
-    L.append("> ⚠ **深水用例 `hsex8_max` 的差异＝「成立」**（三台仪器一致，含我这台）。"
+    L.append("> ⚠ **【留档】深水用例 `hsex8_max` 的差异＝「成立」**（三台仪器一致，含我这台）。"
+             "⚠ 这条记的是**裁定前**的认定过程；裁定后该差异**已退出判据**（见〇），"
+             "但它的读法仍有效：这是**已知但未归因的 Go 侧行为**。"
              "一度被写成「待重新确立」，起因是另一台工具的 Python 侧**没钉 `engine=`**："
              "09-19 引擎切换后裸 `Verifier()` 跑的是 **Go**，却照样打 `[python]` 前缀"
              "——**自己跟自己比**，静默假绿（记忆 ad36418f）。修好后它的 Python 侧复现出 "
@@ -520,31 +649,75 @@ def write_md(recs: list[dict], path: Path, exe, exe_sha: str = "?", exe_size: in
     L.append("")
     L.append("## 一之三、总表")
     L.append("")
-    L.append("| 关卡 | 计划 | 状态 | 杀 | 漏 | 用时(s) | 伤害 | ①闸门（unsupported 原文） | ④机制族 | ⑤机制咬到了吗 |")
+    L.append("| 关卡 | 计划 | **判据：与 Go 基线** | 杀 | 漏 | 用时(s) | 伤害 | ①闸门（unsupported 原文） | ④机制族 | ⑤机制咬到了吗 |")
     L.append("|---|---|---|---|---|---|---|---|---|---|")
     for r in recs:
         d = r.get("diff") or {}
         uns = "<br>".join(r.get("unsupported") or []) or "—"
         fam = "<br>".join(r.get("families") or []) or "—"
         fmt = (lambda v, n=0: "—" if v is None else f"{v:+.{n}f}")
-        L.append(f"| {r['stage']} | `{r['plan']}` | {r['state']} | {fmt(d.get('kills'))} | "
-                 f"{fmt(d.get('leaks'))} | {fmt(d.get('elapsed'), 4)} | "
-                 f"{fmt(d.get('damage'), 1)} | {uns} | {fam} | {r.get('touched', '—')} |")
+        gv = r.get("go_verdict") or {}
+        dr = r.get("go_baseline_drift")
+        judge = ("✅ 一致" if r["state"].startswith("正常")
+                 else ("❌ 漂移：" + ", ".join(f"{k} {v['基线']}→{v['现在']}"
+                                              for k, v in (dr or {}).items())[:60]
+                       if r["state"] == "Go 漂移" else r["state"]))
+        L.append(f"| {r['stage']} | `{r['plan']}` | {judge} | "
+                 f"{gv.get('kills', '—')} | {gv.get('leaks', '—')} | {gv.get('elapsed', '—')} | "
+                 f"{gv.get('damage', '—')} | {uns} | {fam} | {r.get('touched', '—')} |")
     L.append("")
-    zero_act = [r for r in zero if r.get("touched") == "有动作"]
-    zero_lay = [r for r in zero if str(r.get("touched", "")).startswith("只落位")]
-    zero_none = [r for r in zero if r.get("touched") == "无机制"]
-    L.append(f"**归零 {len(zero)} 关的构成**（为了记住记忆 8a1ec6d6「无回归 ≠ 已验证」）："
-             f"运行期有机制动作 **{len(zero_act)}**、只落位零事件 **{len(zero_lay)}**、"
-             f"规格里也没有机制 **{len(zero_none)}**。后两类只能说「两条路算得一样」，"
-             f"**不能**说「该踩的机制被验过了」。")
+    L.append("**说明**：上表四数是 **Go 自己的数**（判据量）；右边的 `①闸门`／`④机制族`／"
+             "`⑤机制咬到了吗` 三列都不依赖参照物，故**在换基线后依然成立**。"
+             "旧读法（Go − 原版）的差值挪到下一节明细里，**只作历史参考**。")
     L.append("")
-    L.append(f"**计数口径**：本台账按**作业（计划文件）**计，1 份计划 = 1 关（对照表见 "
-             f"`PLAN2STAGE`），故此处「作业数 = 关卡数 = {len(recs)}」。"
+    _ok_act = [r for r in okay if r.get("touched") == "有动作"]
+    _ok_lay = [r for r in okay if str(r.get("touched", "")).startswith("只落位")]
+    _ok_none = [r for r in okay if r.get("touched") == "无机制"]
+    L.append(f"**与 Go 基线一致的 {len(okay)} 份的构成**（为了记住记忆 8a1ec6d6"
+             f"「无回归 ≠ 已验证」）：运行期有机制动作 **{len(_ok_act)}**、"
+             f"只落位零事件 **{len(_ok_lay)}**、规格里也没有机制 **{len(_ok_none)}**。"
+             f"后两类只能说「两条路算得一样」，**不能**说「该踩的机制被验过了」；"
+             f"换成 Go 基线后这句话**更要紧**——因为「与基线一致」比「与两台引擎互等」更弱。")
+    L.append("")
+    L.append(f"**计数口径**：作业数按 `plan_path` 计、关卡数按 `stage` 去重"
+             f"（此处 {len(recs)} 份作业 / {len({r.get('stage') for r in recs})} 个关卡）；"
              f"⚠ 别的台账按**作业条数**计数会虚高（同一关可能挂多份作业，实测 "
              f"`act31side_08` 曾出现 4 次）——**门判据必须是去重后的关卡数**。")
     L.append("")
-    L.append("## 二、逐关明细（① 能不能跑 / ② 四项差 / ③ 差异指纹 / ④ 机制族）")
+    L.append("## 一之四、**改判据前后对照**（通告要求的「前后」两栏；变更前数字照旧留档）")
+    L.append("")
+    L.append("> 变更前判据＝「Go 与原版四项归零」（旧读法，留档于 `eae2fc1`）；"
+             "变更后判据＝「Go 与 `fixtures/golden_go.json` 一致（漂移即红）」。")
+    L.append("")
+    L.append("| 关卡 | 计划 | 变更前（vs 原版） | 变更后（vs Go 基线） | Go 四数（判据量） "
+             "| 原版四数（历史参考） | 判据换人后发生了什么 |")
+    L.append("|---|---|---|---|---|---|---|")
+    _flip = []
+    for r in recs:
+        old = str(r.get("state_py_ref") or "—")
+        new = ("✅ 一致" if r["state"].startswith("正常")
+               else ("❌ 漂移" if r["state"] == "Go 漂移" else r["state"]))
+        gv, py = r.get("go_verdict") or {}, r.get("py") or {}
+        if old.startswith("归零"):
+            what = "数没变，只是参照物从原版换成 Go"
+        elif old.startswith("真差"):
+            what = "⚠ **由红转绿——换的是参照物，不是修好了什么**"
+            _flip.append(r["plan"])
+        else:
+            what = f"（{old}）"
+        L.append(f"| {r['stage']} | `{r['plan']}` | {old} | {new} | "
+                 f"{gv.get('kills', '—')}/ {gv.get('leaks', '—')}/ {gv.get('elapsed', '—')}/"
+                 f"{gv.get('damage', '—')} | {py.get('kills', '—')}/ {py.get('leaks', '—')}/"
+                 f"{py.get('elapsed', '—')}/{py.get('damage', '—')} | {what} |")
+    L.append("")
+    if _flip:
+        L.append(f"> ⚠ **判据换人后由红转绿的共 {len(_flip)} 份：{', '.join('`' + n + '`' for n in _flip)}**。"
+                 "**它们一条也没有被修复**——变的只是「跟谁比」。"
+                 "按裁定，原版退出基线地位，所以绿灯本身成立；"
+                 "但**那条差异仍然存在、仍然未被归因**（见〇），"
+                 "凡引用这盏绿灯的人必须同时引用这一句。")
+        L.append("")
+    L.append("## 二、逐关明细（① 能不能跑 / ② 判据 / ③ 差异指纹 / ④ 机制族）")
     L.append("")
     for r in recs:
         L.append(f"### {r['stage']}（`{r['plan']}`）— **{r['state']}**")
@@ -559,8 +732,12 @@ def write_md(recs: list[dict], path: Path, exe, exe_sha: str = "?", exe_size: in
                  f"，闸门键 {len(r.get('unsupported') or [])} 条")
         for u in (r.get("unsupported") or []):
             L.append(f"    - `{u}` → {family_of(u)}")
-        L.append(f"- ② 四项差（Go − 原版）：杀 {r['diff']['kills']:+d}、漏 {r['diff']['leaks']:+d}、"
+        L.append(f"- ② **历史参考列**（Go − 原版，**已退出判据**）：杀 {r['diff']['kills']:+d}、漏 {r['diff']['leaks']:+d}、"
                  f"用时 {r['diff']['elapsed']:+.4f}s、伤害 {r['diff']['damage']:+,.1f}")
+        _dr = r.get("go_baseline_drift")
+        L.append(f"- ②' **判据：与 Go 基线（`fixtures/golden_go.json`）**："
+                 f"{'✅ 一致' if not _dr else '❌ 漂移 ' + str(_dr)}"
+                 f"（基线存在：{r.get('go_baseline_present')}）")
         L.append(f"    - 原版 {py.get('kills')}杀 {py.get('leaks')}漏 "
                  f"{py.get('elapsed')}s {py.get('damage')} 伤害；Go {gv.get('kills')}杀 "
                  f"{gv.get('leaks')}漏 {gv.get('elapsed')}s {gv.get('damage')} 伤害")
