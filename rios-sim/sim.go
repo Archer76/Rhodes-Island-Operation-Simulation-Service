@@ -44,6 +44,22 @@ const (
 	positionTol2 = positionTol * positionTol
 )
 
+//: 攻速下限（`间隔 = 基础间隔 × 100 / max(攻速下限, 总攻速)`）。
+//: 与原版同一口径：`unit.py` / `operator/skill.py` 的 `ASPD_MIN = 20`
+//: （2026-09-16 博士裁定：wiki 写 20、akdata 写 10，取 20）。
+const aspdMin = 20.0
+
+//: 【寒冷】的攻击速度折减。出处：PRTS《敌人一览/数据》tooltip 词典——
+//: 「寒冷：攻击速度下降 30，如果在持续时间内再次受到寒冷效果则会变为冻结」。
+//: 这是项目此前**明确记为"拿不到"**的那个数（`异常效果`页不给数、
+//: `excel/buff_table.json` 两个公开镜像都 404），2026-09-19 由博士提供该页解开。
+const coldASPDDown = 30.0
+
+//: 【冻结】期间敌方法术抗性的降低值。与 `coldASPDDown` 同一条 tooltip：
+//: 「冻结：……敌方被冻结时，法术抗性-15」。**动态**生效（冻结一结束就恢复），
+//: 所以读法走 `enemy.res()` 而不是把 −15 写进 `spec.RES`。
+const frozenResDown = 15.0
+
 type enemy struct {
 	spec SpawnSpec
 
@@ -54,6 +70,30 @@ type enemy struct {
 	legU      float64
 	offMap    bool
 	blockedBy *operator
+
+	//: ---- 天桩-乙（`spec.Diver`；原版 `_pile_diver_tick`，帧序 3.9）
+	//:
+	//: 三件状态缺一不可，少哪个都会让乙"已经贴上去了还在扑"或者"扑不完就自毁"：
+	//: `diverIdle`（登场自缚，剩余秒数；出怪表刷的乙是 0）、
+	//: `diverBitten`（已咬过一口，原版 `attacked_once`）、
+	//: `diverBoomAt`（自毁时刻，-1 = 还没排）。
+	diverIdle   float64
+	diverBitten bool
+	diverBoomAt float64
+
+	//: ---- 身上的天标（原版 `_pile_attach_mark` / `_pile_mark_tick`）
+	//:
+	//: 它**同时是两样东西**，缺哪一样都会差一次：① 每秒对附着对象结算一次
+	//: `attachDamage`（定额、不吃防御也不吃法抗）；② 它自己是一个 `hp=1.0`
+	//: 的**普通敌人**，会被我方索敌——`act31side_09` 的出手账里原版就有一笔
+	//: `t=47.1000 → 身上的天标 1.00`。所以它是**造一个敌人**，不是给干员挂 buff。
+	//:
+	//: `attached` 是**登场那一刻的快照**（原版 `mark.attached`），不是每帧现算：
+	//: 附着范围内的单位是"那一刻站在这一格的人"。
+	attachDamage float64
+	attachRadius float64
+	attachTimer  float64
+	attached     []*operator
 
 	//: 甲的监测态无敌：挨打掉 0 血，**但照旧会被索敌**——它会白吃干员的输出，
 	//: 这正是它在场上改变胜负的方式（原版 `always_invincible`，由 `spec.Invincible`
@@ -67,6 +107,21 @@ type enemy struct {
 	leakTime    float64
 	deathTime   float64
 	costAwarded bool
+
+	//: 积雪写的那一半冻结（原版 `sim.py:1156` 由 `_snow_tick` 置位；
+	//: 每帧先被重置成 false）。与 `freezeTimer` 合成原版的 `frozen`——
+	//: 读写都走 `frozen()` 这一个入口，见 `simCtx.SetEnemyFrozen`。
+	frozenSnow bool
+
+	//: **推进门控专用的锁存值**，每帧在递减计时器**之前**算一次
+	//: （`= freezeTimer > 0 || frozenSnow`）。
+	//:
+	//: ⚠ 它存在的唯一理由是原版的 `e.frozen` 是个**锁存字段**而非现算判据：
+	//: 它由上一帧的 `_snow_tick`（`sim.py:1139`）写，而 `advance()` 在本帧
+	//: 递减 `freeze_timer` **之后**才读它 → 读到的是**减之前**的值。
+	//: 详见主循环 3 那一段的长注释。除推进门控外一律用 `frozen()`（现算），
+	//: 因为 `_enemies_attack`（原版 :2851）跑在 `_snow_tick`（:2773）**之后**。
+	frozenLatched bool
 
 	// ---- 重生（原版 `_reborn_tick`，帧序 3.4）
 	//
@@ -118,6 +173,13 @@ type enemy struct {
 	//: （`advance` 与 `_enemies_attack` 两处都拦）。目前唯一的来源是圣聆初雪的
 	//: 「圣山的祝福」免死那一下——她攻击范围内的敌人被冻 `c2e_freeze` 秒。
 	freezeTimer float64
+	//: 【寒冷】剩余秒数（原版 `cold_timer`）。
+	//:
+	//: 数值效果出自 **PRTS《敌人一览/数据》** 的 tooltip 词典（2026-09-19 博士提供）：
+	//: 「寒冷：**攻击速度下降 30**，如果在持续时间内**再次**受到寒冷效果则会变为冻结」。
+	//: 折减落在 `interval()`（与干员侧同一条攻速公式），"再次中招转冻结"落在
+	//: `applyCold()`。此前这条数两台引擎都拿不到——见 `docs/mechanics-dictionary.md`。
+	coldTimer float64
 
 	//: 造它的那个模拟器——挨打效果（蜕皮加病害）要问机制层，机制层挂在
 	//: 模拟器上。之所以用反向指针而不是给 `take()` 加参数：`take()` 有多个
@@ -176,7 +238,8 @@ func (c *simCtx) Summon(template json.RawMessage, cell [2]float64) int {
 		panic(fmt.Sprintf("机制递来的召唤模板解不开：%v", err))
 	}
 	spec.Legs = []LegSpec{{Kind: "static", Points: [][2]float64{cell}}}
-	e := newEnemy(spec, len(*c.enemies), cell, c)
+	e := newEnemy(spec, c.nextEnemyIndex, cell, c)
+	c.nextEnemyIndex++
 	*c.enemies = append(*c.enemies, e)
 	return e.index
 }
@@ -211,6 +274,8 @@ func newEnemy(spec SpawnSpec, index int, position [2]float64, c *simCtx) *enemy 
 		invincibleUntil: -1.0,
 		haste:           1.0,
 		traceSpeed:      -1.0,
+		//: 天桩-乙的自毁时刻从 -1 起步（0 会被读成"开局就该自毁"）。
+		diverBoomAt: -1.0,
 	}
 	if n := len(spec.RebornSummons); n > 0 {
 		// 原版 `_build_enemy` 就给每只排好这一列（-1 = 不在窗口里，不排拍）
@@ -245,6 +310,40 @@ type operator struct {
 	cell        [2]float64
 	blocking    []*enemy
 	attackTimer float64
+	//: 【冻结】剩余秒数（原版 `OperatorUnit.freeze_timer`，`unit.py` 的
+	//: `Combatant` 字段）。干员侧的冻结 = **缴械**：`_operators_attack` 开头
+	//: 有一道 `if op.freeze_timer > 0: continue`（`sim.py:3978`），
+	//: **连出手计时器都不走**；但它**不动阻挡**（这是它与晕眩的区别，
+	//: 所以不能拿晕眩的字段顶替）。
+	//:
+	//: ⚠ 这个字段的消费点曾经**整条缺失**：`hurt` 里早就送了
+	//: `spec.BlessingSelfFreeze`，但没有任何地方读它——"没有消费点的字段
+	//: 就是假完成"，判决上只表现为"某一门干员比原版多出手几次"。
+	//: 来源：`hurt`（圣山祝福的自冻结）；递减：`skillTick`。
+	freezeTimer float64
+	//: 【增益治疗】（天赋「医者丰碑」）剩余秒数。**从吃到那一刻起算**，
+	//: 与光环主人是否还活着**无关**——原版把这句话写在 `RegenAura.tick` 里：
+	//: 「增益已经挂在身上了，就算光环本人倒掉也照样跳完」（`talents.py:811`）。
+	regenLeft float64
+	//: 这份增益的**每秒回复量**（已按势力翻过倍）。与 `regenLeft` 成对：
+	//: 归零时两个一起清。
+	regenPerSec float64
+	//: 已经吃过哪些光环主人的增益（按**光环主人在 `ops` 里的下标**）。
+	//: 「不可叠加」= 同一个人只触发一次；按主人分账是因为场上可能不止一位
+	//: 带这条天赋的干员，各自独立计数（原版 `granted` 是挂在 aura 上的集合）。
+	regenGrantedBy []int
+	//: 【全场光环】当前对这**一位**干员生效的攻击力 / 防御力比例（原版
+	//: `op.aura_atk_pct` / `op.aura_def_pct`，由 `_refresh_auras` 每帧刷）。
+	//:
+	//: 为什么每帧刷而不是部署时一次定死：「光环主人开技能期间效果加倍」是
+	//: 随时间变的。多条光环**相加**（不是连乘）。
+	//:
+	//: 怎么折进面板：原版是 `self.atk * (1 + … + aura_atk_pct)`，也就是光环
+	//: 的贡献 = `self.atk × aura_atk_pct`，其中 `self.atk` 是**底子**（不含技能
+	//: 增益）。Go 侧 `spec.ATK` 正是那个底子——所以加成是**加上去**、
+	//: 不是在技能面板上**乘上去**（两者在有技能时不等价）。
+	auraAtkPct  float64
+	auraDefPct  float64
 	retreated   bool
 	leftAt      float64
 	deathTime   float64
@@ -267,6 +366,26 @@ type operator struct {
 	//: 由下一帧的 `blessingTick` 兑现——差一帧，与原版同。
 	blessingFreeze float64
 
+	// ---- 层数护盾（原版 `OperatorUnit.shield_*`，`unit.py:412-421`）
+	//:
+	//: 语义是**次数制抵挡**、不是一条可以吸的血条：`interval` 秒加一层、上限
+	//: `maxLayers` 层、部署时给 `layers` 层，**任何一次受伤消耗一层并把这一下
+	//: 整笔归零**（`unit.py:613-620`）。破裂时按 `breakHeal` 回血、按 `breakSP`
+	//: 给技力——位置在屏障分支**之前**（伤判顺序：先裂、先回血，再把伤害归零）。
+	//:
+	//: 为什么单列一段而不是蹭 `blessingUsed` 之类的现成字段：它是**唯一会
+	//: 把伤害整笔吃掉**的干员侧机制，而这一族在 Go 里长期**一个字都没有**。
+	//: 代价实测（`tr02`，单人泥岩）：原版她前三下**一下都没挨**（`take(0)`），
+	//: Go 每下按 5% 保底扣 14.5 ⇒ 她在 Go 里提前阵亡、187.33s 三漏判负，
+	//: 而原版打到 430.13s、零漏。判决四项里**只看得到这个结果，看不到原因**。
+	shieldLayers    int     //: 当前层数
+	shieldMaxLayers int     //: 上限
+	shieldBreaks    int     //: 累计破裂几层（层数会被补回来，看它看不出发生过几次）
+	shieldTimer     float64 //: 「每 N 秒加一层」的计时
+	shieldInterval  float64
+	shieldBreakHeal float64 //: 破裂回血（原版是 `ratio × max_hp`，部署时算死）
+	shieldBreakSP   float64 //: 破裂给技力
+
 	// ---- 技能状态（`skill.go`；没有技能槽时这几个字段一直不动）
 	//:
 	//: 每次部署都**从零起**（原版每次部署都是一个全新的 `OperatorUnit` 对象，
@@ -278,6 +397,11 @@ type operator struct {
 	ammoLeft    int
 	skillReq    bool //: 手动开技能的请求，`skillTick` 里消费
 	autoSkill   bool //: 来自**这一次部署**的 `DeploySpec.AutoSkill`
+
+	//: 天赋「强击瓶专家」的剩余轮数。**部署后首次开技**时置为 `spec.PowerAttackCount`
+	//: （原版 `sim.py:2448` 读 `sp_charges == 0`，位置在它自增**之前**），
+	//: 之后每出一轮扣一层。每次部署都从 0 起——所以它和技能状态一起清。
+	powerAttackLeft float64
 }
 
 func (o *operator) alive() bool { return o.hp > 0 && !o.retreated }
@@ -362,7 +486,9 @@ func runSim(spec *Spec) (*Verdict, error) {
 	// 机制看到的世界：**读**用只读视图，**写**一律走效果请求，由主循环施加
 	// （帧内顺序的权威只有一处）。空机制时这一层不产生任何行为——`Empty()` 直接跳。
 	ctx := &simCtx{spec: spec, objs: &objs, enemies: &enemies, mechanisms: mechanisms,
-		time: &t, frame: &frameNo, verdict: verdict}
+		time: &t, frame: &frameNo, verdict: verdict,
+		//: 召唤物的下标发号从**出怪表之后**开始。见 `simCtx.nextEnemyIndex`。
+		nextEnemyIndex: len(spec.Spawns)}
 	// 干员在这里才拿得到 ctx（对象数组比 ctx 先建），所以回填一次。
 	for _, o := range objs {
 		if o != nil {
@@ -413,6 +539,18 @@ func runSim(spec *Spec) (*Verdict, error) {
 			op.blocking = nil
 			op.attackTimer = 0
 			op.damageTaken = 0
+			// 「医者丰碑」的增益是**跟着这一次部署**的：撤了再下等于换了一个人，
+			// 上一局吃到的那份不跟过来（原版每次部署都是全新的 OperatorUnit，
+			// 那几个字段自然从零起）。
+			//
+			// ⚠ `regenGrantedBy` **不在这里清**：原版那个"吃过没有"的集合是挂在
+			// **光环主人**身上的（`aura.granted`），友方重新部署**不会**把它抹掉
+			// （它按名字记）。Go 侧改用主人的 `deploySeq` 作键，语义等价：
+			// 主人每次部署都是新的一份光环、历史为空。
+			op.regenLeft = 0
+			op.regenPerSec = 0
+			op.auraAtkPct = 0
+			op.auraDefPct = 0
 			op.retreated = false
 			op.leftAt = -1
 			// 这一次部署的**身份号**：原版每次部署都是全新的 OperatorUnit 对象，
@@ -429,11 +567,70 @@ func runSim(spec *Spec) (*Verdict, error) {
 			op.skillTimer = 0
 			op.skillActive = false
 			op.sp = 0
+			// 「强击瓶专家」的剩余层数也从零起：它由**本局的首次开技**点亮，
+			// 上一局的余量带过来会让这一局开场就多打几十轮加成。
+			op.powerAttackLeft = 0
 			if sk := op.spec.Skill; sk != nil && !sk.Passive {
 				op.sp = sk.InitSP
 			}
+			// ---- 层数护盾（原版 `_attach_talent_shield`，`sim.py:3157-3182`，
+			// 在 `_do_deploy` 里、紧随部署时技能/天赋效果之后）
+			//
+			// ⚠ 破裂回血是**在这里定死的**：原版写的是
+			// `op.shield_break_heal = ratio × op.max_hp`，用的是**部署那一刻**的
+			// 生命上限。规格只送比例，正是为了让两边都用"此刻"的上限——
+			// 送绝对值就把那个时刻固化了，日后任何改上限的机制都会让两边对不上。
+			op.shieldLayers = 0
+			op.shieldMaxLayers = 0
+			op.shieldBreaks = 0
+			op.shieldTimer = 0
+			op.shieldInterval = 0
+			op.shieldBreakHeal = 0
+			op.shieldBreakSP = 0
+			if sh := op.spec.Shield; sh != nil && sh.MaxLayers > 0 {
+				op.shieldMaxLayers = sh.MaxLayers
+				op.shieldInterval = sh.Interval
+				op.shieldBreakHeal = sh.BreakHealRatio * op.maxHP()
+				op.shieldBreakSP = sh.BreakSP
+				//: 部署时那几层：原版是一层层调 `_grant_shield_layer`，
+				//: 到上限即作废——所以这里也夹一次，别直接赋 `sh.Layers`。
+				for i := 0; i < sh.Layers; i++ {
+					if op.shieldLayers >= op.shieldMaxLayers {
+						break
+					}
+					op.shieldLayers++
+				}
+				if traceOn {
+					ctx.Trace("SHIELD t=%.4f op=%s 部署授予 %d/%d interval=%.3f "+
+						"breakHeal=%.3f", t, op.spec.Name, op.shieldLayers,
+						op.shieldMaxLayers, op.shieldInterval, op.shieldBreakHeal)
+				}
+			}
 			ops = append(ops, op)
 			onField[d.CharID] = op
+			// 部署瞬间的**一次性**环境伤害（原版 `sim.py:3383-3394`，在 `_do_deploy`
+			// 里：技能/天赋的部署时效果之后，扣费用与建积雪之前）。
+			//
+			// ⚠ 这一下**额外于**每秒结算，不是它的第一次——原文是两句分开的话
+			//（「部署时立刻受到 …」与「每秒受到 …」），加起来才是落地那一秒的总量。
+			// 并进 `EnvTick` 会让"落地那一拍不整秒"的干员少挨一整下。
+			//
+			// 本来这条在机制层是**实现了、也有黄金测试、却一个调用点都没有**的：
+			// 规格在、算术在、单测绿，模拟里一次都没跑过。实测代价见 `DeployDamager`。
+			dmg := mechanisms.DeployDamage(op.spec.Cell)
+			// 打痕迹而不是只改数字：这一下没有别的可观测量，事后只能从承伤账
+			// 反推"是不是少挨了一整下"，而从下游猜是猜不是测。
+			// **无条件打**（含 dmg=0 的情形）：为 0 才是最需要看见的那种情况——
+			// 分不清"这一下不适用"与"落位格读错了"。
+			ctx.Trace("DEPLOYDMG t=%.4f name=%s cell=%d,%d dmg=%.3f",
+				t, op.spec.Name, op.spec.Cell[0], op.spec.Cell[1], dmg)
+			if dmg > 0 {
+				dealt := op.take(dmg)
+				ctx.Trace("DEPLOYDMG t=%.4f name=%s 扣血 dealt=%.3f 余=%.3f",
+					t, op.spec.Name, dealt, op.hp)
+				verdict.Events = append(verdict.Events, Event{
+					T: t, Kind: "env", Who: op.spec.Name})
+			}
 			cost = math.Max(0, cost-float64(d.Cost))
 			verdict.Events = append(verdict.Events,
 				Event{T: t, Kind: "deploy", Who: op.spec.Name})
@@ -494,6 +691,28 @@ func runSim(spec *Spec) (*Verdict, error) {
 		// 单手作业上它与原版整整差一帧的位移，就是这么来的（停帧相位差一帧，
 		// 见 `docs/` 里那条对拍水位）。
 		for _, e := range enemies {
+			// ⚠⚠ **必须先锁存 `frozen`，再递减计时器**——本文件里最容易写错的一处。
+			//
+			// 原版的 `e.frozen` **不是**一个现算的复合判据，而是一个**锁存字段**：
+			// 它只在两处被写——`_snow_tick` 的 `sim.py:1139`
+			// （`e.frozen = e.freeze_timer > 0.0`）和圣山祝福的 `:1088`。
+			// 而 `advance()` 读的就是这个字段。帧序于是是：
+			//
+			//	本帧 :2755  减 `freeze_timer`
+			//	本帧 :2761  `advance()` 读 `e.frozen` ← **上一帧锁的值**
+			//	本帧 :2773  `_snow_tick` 重新锁一次
+			//
+			// 所以推进门控用的是**减之前**的 `freeze_timer`：冻结在最后一帧仍然
+			// 生效，要再等一帧才动。
+			//
+			// Go 原来写成 `!e.frozen()`（现算、且在递减之后）＝把冻结算**晚**了一帧，
+			// 于是敌人**早一帧**解冻。HS-EX-8 第 3 手实测：厌肮@12.5 在 Go 侧
+			// t=71.3333 就开始走，原版要到 t=71.3667，差值恰好一帧位移（0.0064 格），
+			// 一路累出判决上的 −0.5 秒。
+			//
+			// 注意 `attackPause` / `sluggishTimer` **不是**这样：那两个是 `advance()`
+			// 现读的，所以它们"先减再判"才是对的（见下面那段注释）。别把三者一起改。
+			e.frozenLatched = e.freezeTimer > 0 || e.frozenSnow
 			if e.attackPause > 0 {
 				e.attackPause = math.Max(0.0, e.attackPause-dt)
 			}
@@ -503,21 +722,52 @@ func runSim(spec *Spec) (*Verdict, error) {
 			if e.freezeTimer > 0 {
 				e.freezeTimer = math.Max(0.0, e.freezeTimer-dt)
 			}
+			// 【寒冷】与它们同一类：`interval()` 是**现读** coldTimer 的，
+			// 所以"先减再判"才是对的（别和 `frozenLatched` 那个锁存值混）。
+			if e.coldTimer > 0 {
+				e.coldTimer = math.Max(0.0, e.coldTimer-dt)
+			}
+			// 积雪写的那一半冻结**每帧在这里重置**（原版 `sim.py:1139`
+			// `e.frozen = e.freeze_timer > 0`，写在推进那一段里）。本帧稍后的
+			// 帧序 3.5 由积雪重新置位。
+			//
+			// ⚠ 这一句**必须由主循环做**，不能只放在积雪那一层里：没有积雪的
+			// 关卡上"上一帧留下的 true"就永远没人清，而它会同时挡住推进与出手
+			// ——症状是"敌人莫名停住"，且只在挂过雪的那一局里出现。
+			e.frozenSnow = false
 			if e.alive() && !e.leaked && !e.offMap && e.blockedBy == nil &&
-				e.attackPause <= 0 && e.sluggishTimer <= 0 && e.freezeTimer <= 0 {
+				e.attackPause <= 0 && e.sluggishTimer <= 0 && !e.frozenLatched {
 				// 关卡特有机制可以改这一只的推进速度乘区（如田地/阻流阀）；
 				// 没挂机制时 `speedFor` 恒为 1.0，与最小版本逐位相同。
-				advance(e, dt, spec.SpeedScale*ctx.speedFor(e.index))
+				//
+				//: ⚠ 两个乘区**分开传**，不要在调用点先乘起来——原版是
+				//: `move_speed * speed_scale * speed_multiplier * …` 逐项连乘，
+				//: 提前合并会改末位，见 `advance` 的注释。
+				advance(e, dt, spec.SpeedScale, ctx.speedFor(e.index))
 			}
 			// 逐帧坐标（按名字门控，见 `tracePosName`）。`blocked/sluggish/freeze`
 			// 一起记：坐标不动有三种截然不同的原因，不写清楚就得分不出来。
 			if traceOn && tracePosName != "" && e.spec.Name == tracePosName {
-				// ⚠ `x`/`legu` 打到 **7 位**：一帧的滴漏量是 3e-5 量级（帧长
-				// 0.0333 与 1/30 之差），4 位精度下前半程完全看不出来，
-				// 要等几百帧累积到 1e-4 才显形——那就成了"突然差一格"。
-				trace("POS t=%.4f idx=%d name=%s x=%.7f y=%.7f hp=%.1f blocked=%t pause=%.2f sluggish=%.2f freeze=%.2f leg=%d legu=%.7f",
-					*ctx.time, e.index, e.spec.Name, e.position[0], e.position[1], e.hp,
+				// ⚠ `x`/`y`/`legu` 打到 **17 位有效数字**（`%.17g`，双精度的往返精度）。
+				// 4 位精度下前半程完全看不出滴漏；**7 位同样不够**——`hsex07`
+				// 那只除秽的 x 原版是 `7.4999999999999885`、Go 是 `7.5`，
+				// 差 1.15e-14，`%.7f` 两边都显示 `7.5000000`，等于没有痕迹。
+				// 而这一点点差正好把落格从 7 翻到 8、把主目标翻成溅射受害者
+				// （见 `AK-TACTIC-进度.md` §3.15）。
+				// `cell` 单列一项：判决只认落格，坐标只是通往落格的中间量。
+				// 冻结那一列**必须两半都打**：`freeze` 是计时器那一半，`snow` 是
+				// 积雪那一半，`latch` 才是推进门控真正读的值。
+				//
+				// ⚠ 更隐蔽的一点：痕迹跑在**本帧 `frozenSnow` 已被重置之后**，
+				// 所以"敌人明明被雪冻住"的那一刻，`snow=` 恰好显示 `false`、
+				// 而 `latch=true`。**这不是矛盾，是顺序**——只看 `freeze`/`snow`
+				// 会得出"没有原因却不动"，我为此白追了一轮。
+				trace("POS t=%.4f idx=%d name=%s x=%.17g y=%.17g cell=%d,%d hp=%.1f blocked=%t pause=%.2f sluggish=%.2f freeze=%.4f snow=%t latch=%t leg=%d legu=%.17g",
+					*ctx.time, e.index, e.spec.Name, e.position[0], e.position[1],
+					int(math.RoundToEven(e.position[0])), int(math.RoundToEven(e.position[1])),
+					e.hp,
 					e.blockedBy != nil, e.attackPause, e.sluggishTimer, e.freezeTimer,
+					e.frozenSnow, e.frozenLatched,
 					e.legIndex, e.legU)
 			}
 		}
@@ -621,6 +871,14 @@ func runSim(spec *Spec) (*Verdict, error) {
 		// `blessingTick` 排在这里是照原版 3.5（`sim.py:2775`，紧跟 `_snow_tick`
 		// 之后、`_qi_tick` 之前）：免死欠下的那次范围冻结要在**本帧出手之前**兑现，
 		// 否则被冻的敌人还会多打一帧。
+		//
+		// ⚠ **积雪排在 `blessingTick` 之前**（原版 `sim.py:2773` 在 2775 之前），
+		// 而且必须排在**这一帧的推进之后**：它要判"敌人这一帧踏进了哪一格"，
+		// 写下的减速给**下一帧**的 `advance` 用（见 `mech.SnowTicker`）。
+		// 挪到推进之前，踏入判定会晚一帧、减速也晚一帧生效。
+		if !mechanisms.Empty() {
+			mechanisms.SnowTick(ctx, dt)
+		}
 		blessingTick(ops, enemies, t, verdict)
 		if !mechanisms.Empty() {
 			mechanisms.EnvTick(ctx, dt)
@@ -632,6 +890,15 @@ func runSim(spec *Spec) (*Verdict, error) {
 			mechanisms.PileTick(ctx, dt)
 		}
 
+		// 出怪表刷出来的天桩-乙**不在** `mechanisms` 的记账里（那边只管装置
+		// 召唤的甲/乙/天标），但它们照样要跑 `_pile_diver_tick`——原版
+		// `_pile_tick` 的第 ② 段是**遍历全体敌人**按类型分派（`sim.py:4651`）。
+		pileDiverTick(enemies, ops, t, ctx)
+		// 天标的每秒结算。⚠ 与 `pileDiverTick` 的**帧内交错**同样没有对齐：
+		// 原版三种单位在同一次遍历里按敌人列表顺序分派（`sim.py:4651`），
+		// 这里是"甲/乙跑完再跑天标"。本关没有装置召唤的甲，所以先按这个顺序落。
+		pileMarkTick(enemies, t, dt)
+
 		// ---- 4. 阻挡（1846 → 2289）
 		updateBlocking(ops, enemies)
 
@@ -640,9 +907,22 @@ func runSim(spec *Spec) (*Verdict, error) {
 		// 位置是定的：刚攒满技力的那一帧就得算数，晚一帧会让每次开技都慢一个 dt。
 		skillTick(ops, dt, t, spec, &cost, verdict)
 
+		// ---- 5.4 全场光环（原版 2831-2832）
+		//
+		// 位置是定的：排在**技能之后**——「光环主人开技能期间效果加倍」是随
+		// 技能状态变的，本帧刚开的技能必须本帧就吃到加倍，不然会晚一帧。
+		if len(ops) > 0 {
+			teamAuraTick(ops)
+		}
+
+		// ---- 5.5 天赋「医者丰碑」的增益治疗（原版 2834-2840）
+		//
+		// 位置是定的：排在**技能之后**（本帧刚上场的干员当帧就能吃到），
+		// 又在**我方出手之前**（这一帧治回来的血，出手前就已经在身上）。
+		regenAuraTick(ops, dt)
+
 		// ---- 6. 我方出手（1870 → 2687）
 		operatorsAttack(ops, enemies, dt, t, spec, verdict)
-
 		// ---- 7. 敌方出手（1873 → 2882）
 		enemiesAttack(ops, enemies, dt, t, spec, verdict)
 
@@ -716,6 +996,14 @@ func runSim(spec *Spec) (*Verdict, error) {
 		if e.leaked {
 			verdict.Leaks++
 		}
+		//: **跑满上限时还剩谁**（原版 `BattleResult.leftover_units`，sim.py:2899）。
+		//: 判据与原版收尾那一段逐字一致：活着且没漏的。
+		//: 「清不掉」那一项就是结束判据里被忽略的那一类——它非空时这一局
+		//: **永远收不了场**，而杀/漏/伤害可以全对。
+		if e.alive() && !e.leaked {
+			verdict.Remnants = append(verdict.Remnants,
+				[2]any{e.spec.Name, e.cannotClear()})
+		}
 	}
 	for _, o := range ops {
 		if !o.alive() && !o.retreated {
@@ -753,6 +1041,20 @@ type simCtx struct {
 	//: 哪"生效的机制每帧重报一次即可；而"脱战就恢复"的实现者也只需在自己认
 	//: 为恢复时报回 1.0，不必依赖主循环替它清理。
 	speedReq map[int]float64
+
+	//: **召唤物的下标发号器**（见 `Summon`）。
+	//:
+	//: ⚠ 出怪表的敌人下标是它的**排期位置**（`0 … len(Spawns)-1`，主循环里就是
+	//: `cursor`），而召唤物曾经用 `len(*c.enemies)` 发号——那只是"**此刻已经上场
+	//: 几只**"，在出怪表跑完之前**恒小于** `len(Spawns)`。于是任何一次召唤都会
+	//: 与**还没出场的某只表内敌人**撞下标。
+	//:
+	//: 下标不是"编号"而是**身份**：`lastCell`/`firstOn`（积雪）、`speedReq`、
+	//: `frozenSnow`、天桩链的写血通道全按它记账。撞号之后两个实体轮流写同一个
+	//: 槽位，症状是"某格的首敌归属永远清不掉"——判决上看不出，机制上全错。
+	//:
+	//: 实测（HS-EX-8，k=3）：`idx=5` 同一帧同时属于「失控天桩-甲」与「除秽」。
+	nextEnemyIndex int
 }
 
 func (c *simCtx) Time() float64 { return *c.time }
@@ -781,6 +1083,9 @@ func (c *simCtx) Operators() []mech.OpView {
 			Cell: [2]int{int(op.cell[0]), int(op.cell[1])}, HP: op.hp,
 			MaxHP: op.spec.MaxHP,
 			Alive: op.alive(), BlockCnt: op.spec.BlockCnt,
+			// `atk()` 而不是 `op.spec.ATK`：后者是"无技能帧的定值"，
+			// 而积雪的踏入伤害读的是**当前**攻击力（会随技能开关变）。
+			ATK: op.atk(),
 		})
 	}
 	return out
@@ -794,7 +1099,7 @@ func (c *simCtx) Enemies() []mech.EnemyView {
 			Index: e.index, Name: e.spec.Name, Position: e.position,
 			Cell: [2]int{ex, ey},
 			HP:   e.hp, Alive: e.alive(), Blocked: e.blockedBy != nil,
-			Leaked: e.leaked, OffMap: e.offMap, Frozen: e.freezeTimer > 0,
+			Leaked: e.leaked, OffMap: e.offMap, Frozen: e.frozen(),
 			PollutOnDeath: e.spec.PassivePollut, PollutRadius: e.spec.PassiveRadius,
 			ATK: e.spec.ATK, AttackInterval: e.spec.Interval,
 			SkillAtkScalePhys:  e.spec.SkillAtkScalePhys,
@@ -834,9 +1139,25 @@ func (c *simCtx) DamageOperator(index int, raw float64, trueDamage bool) {
 	// 真伤不吃防御与法抗；否则按**物理**口径扣（机制自己说要哪种，这里不猜）。
 	dealt := raw
 	if !trueDamage {
-		dealt = math.Max(raw-op.spec.DEF, raw*0.05)
+		// `op.defense()` 而不是 `op.spec.DEF`：原版走的是 `current_defense()`，
+		// 含技能增益、固值加成与**全场光环**（`unit.py:851`）。读规格那个定值
+		// 会把光环给的防御整个漏掉，而且**不报错**。
+		dealt = math.Max(raw-op.defense(), raw*0.05)
 	}
-	op.hurt(dealt)
+	// ⚠ **必须走 `take`，不能直接 `hurt`。** 原版的机制直伤与敌方普攻是**同一个**
+	// 入口（`op.take(...)`，`sim.py` 的 `_environment_tick` 就是这么写的），
+	// 而「层数护盾」那道闸门就在 `take` 里（`unit.py:612-622`）：
+	// 有一层就把这一下**整笔吃掉**，并按 `shield_break_heal` 回血。
+	//
+	// 这里曾经写 `op.hurt(dealt)`，于是**机制直伤无视层数护盾**——
+	// `hsex07` 的泥岩上暴发成：t=81.0333 补的那一层没被 t=82.0 的田地病害
+	// （430）吃掉，一直留到 86.3333 才破，导致它在 t=82.0 白掉 430 血、
+	// 比原版早**一帧**阵亡（89.3333 vs 89.3667）。一帧之差让天桩甲改扑凯尔希，
+	// 4 枚天标的归属整体挪位，可露希尔少打 4 手——判决差出 伤害 −1,100.8。
+	//
+	// 层数护盾的**次数制**在这里特别容易漏：它不是"少减一点伤害"，
+	// 而是"这一笔完全不进血"，且会**回血**。走 `take` 才有这两件事。
+	op.take(dealt)
 }
 
 // HealOperator 施加机制请求的回血。
@@ -865,8 +1186,85 @@ func (c *simCtx) ScaleEnemySpeed(index int, scale float64) {
 	c.speedReq[index] = scale
 }
 
-// HitOperator 施加机制发起的一次**分类型**伤害（原版 `resolve_damage` 那一路）。
+// HitEnemy 施加机制发起的一次**分类型**伤害（原版 `_damage_enemy` 那一路）。
 //
+// 与 `HitOperator` 对称，方向相反：倍率由机制算好（`raw` = 攻击力 × 倍率），
+// 防御/法抗/闪避与 5% 保底由主循环按这一只**这一刻**的数值结算；
+// 无敌窗口、蜕皮叠层、加速、明识形态记名也一并走主循环那唯一的出口
+// （`enemy.take` → `simCtx.onEnemyHit`）。
+//
+// 第一个使用者是**积雪的踏入伤害**（原版 `_snow_hit`）：`magic_scale ×
+// 干员当前攻击力`，**走正规法抗结算、不吃物理的 5% 保底**——所以这里必须
+// 分类型，不能复用 `DamageEnemy(trueDamage)` 那种真伤通道。
+//
+// `src` 是伤害来源的干员下标；机制造成的伤害通常没有明确来源，传 -1
+// （原版 `_damage_enemy(..., source=None)`：明识形态的记名会因此跳过，
+// 而那正是原版的写法）。
+func (c *simCtx) HitEnemy(index int, raw float64, damageType string, src int) float64 {
+	e := c.enemyAt(index)
+	if e == nil || raw <= 0 {
+		return 0
+	}
+	var source *operator
+	if src >= 0 {
+		objs := *c.objs
+		if src < len(objs) {
+			source = objs[src]
+		}
+	}
+	dealt := e.take(resolveDamage(raw, damageType, 1.0,
+		e.spec.DEF, e.res(), e.dodgeVs(damageType)), source)
+	if dealt > 0 {
+		// 打向敌人的伤害在这里累计（原版 `_damage_enemy` 里的
+		// `result.damage_dealt += dealt`）。与 `splashHit` 同一口径。
+		c.verdict.DamageDealt += dealt
+		if !e.alive() && !e.pendingReborn() {
+			e.deathTime = *c.time
+			c.verdict.Events = append(c.verdict.Events,
+				Event{T: *c.time, Kind: "kill", Who: e.spec.Name})
+		}
+	}
+	if traceOn {
+		trace("HITENEMY t=%.4f enemy=%s raw=%.3f type=%s dealt=%.3f hp=%.3f",
+			*c.time, e.spec.Name, raw, damageType, dealt, e.hp)
+	}
+	return dealt
+}
+
+// IsGoalCell 回答"这一格是不是防守点"（原版 `_is_goal`：`tile_end`）。
+//
+// Go 没有地图（`wire.go` 文件头那条原则），所以这份几何由 Python 随规格送来
+// （`snow.go` 规格里的 `goal_cells`）。积雪的满层冻结要用它：**终点格豁免**——
+// 把已经踏到终点的敌人冻在离终点半格处，它永远到不了终点，等于白送一条命。
+//
+// ⚠ 与 `spec.HighlandCells` 同一个口径：**不在表里就当没有**。所以 Python 侧
+// 漏送 `goal_cells` 的症状是"终点格也被冻"——那会让漏怪数**变少**，
+// 是一眼能看出的那种偏差；反过来漏送高台格是"溅射少一段"，两者都不许静默。
+func (c *simCtx) IsGoalCell(cell [2]int) bool {
+	for _, g := range c.spec.GoalCells {
+		if g == cell {
+			return true
+		}
+	}
+	return false
+}
+
+// SetEnemyFrozen 把一只敌人标记为**被冻住**（原版 `e.frozen`）。
+//
+// ⚠ 原版的 `frozen` 是**复合判据**（`sim.py:1139`）：每帧重置成
+// `freeze_timer > 0`，然后由积雪在 1156 那一行补上"所站格满层"。守这个字段的
+// 是"不推进、不出手"两处闸门，所以少写一半的后果是**冻结静默失效**——
+// 敌人照走照打，而判决上看不出"是冻结没生效"还是"本来就没人冻它"。
+//
+// 于是实现上分成两个字段：`frozenSnow` 是机制写的那一半（本方法），
+// `freezeTimer` 是计时器那一半。读的地方一律用 `e.frozen()`（复合）。
+func (c *simCtx) SetEnemyFrozen(index int, on bool) {
+	if e := c.enemyAt(index); e != nil {
+		e.frozenSnow = on
+	}
+}
+
+// HitOperator 施加机制发起的一次**分类型**伤害（原版 `resolve_damage` 那一路）。
 // 与 `DamageOperator` 的分工：那个是真伤（田地每秒伤害就不吃减伤），这个要先过
 // 这名干员**这一刻**的防御/法抗/闪避与 5% 保底——那些数只有主循环有，机制不该
 // 自己抄一份（抄了就会随技能开关而漂）。受击回技力也在这里补上，与主循环自己
@@ -961,7 +1359,7 @@ func (c *simCtx) SetEnemyPosition(index int, position [2]float64) {
 // 制再把它钉住），也可能扑空走完、以漏怪收场——原版两件事都会发生。
 //
 // **只给一个点**时＝"钉在这一格"（换成自缚腿）：原版「贴到目标」那一步就是
-// `e.route = [op.position]` ＋ `e.legs = []`，一条单点路线永远走不完，于是它既不动
+// `e.route = [op.cell]` ＋ `e.legs = []`，一条单点路线永远走不完，于是它既不动
 // 也不会漏怪。⚠ 只改位置而不换路线是个真错：旧的那条飞行路线还挂着，下一帧
 // `advance` 会沿着它继续往前挪（实测 HS-S-1 就是这么让一只乙在自毁前多挨了一下）。
 func (c *simCtx) SetEnemyRoute(index int, points [][2]float64) {
@@ -969,6 +1367,15 @@ func (c *simCtx) SetEnemyRoute(index int, points [][2]float64) {
 	if e == nil || len(points) == 0 {
 		return
 	}
+	setRoute(e, points)
+}
+
+// setRoute 把一名敌人的路线**整个换掉**（原版就是直接写 `e.route` / `e.legs`）。
+//
+// 天桩-乙每帧都会调它（`_pile_diver_tick` 的两支：扑向目标 / 贴上去后钉住），
+// 所以它与 `SetEnemyRoute` 必须是**同一段实现**——两份的话，"钉住"那一支
+// 迟早只在一边改对。单点路线给 `static`（不动，也不会被判成走到终点）。
+func setRoute(e *enemy, points [][2]float64) {
 	e.progress = 0
 	e.legU = 0
 	e.legIndex = 0
@@ -985,12 +1392,196 @@ func (c *simCtx) SetEnemyRoute(index int, points [][2]float64) {
 	e.spec.Legs = []LegSpec{{Kind: "walk", Points: points, Length: length}}
 }
 
+// pileDiverTick 是**出怪表刷出来的**天桩-乙的行为（原版 `_pile_diver_tick`，
+// `sim.py:4734-4785`，帧位 3.9）。
+//
+// 为什么它不在机制层：原版跑这段的 `_pile_tick` 第 ② 段是**遍历全体敌人**
+// 按类型分派（`sim.py:4651-4659`），`_pile_mark_key` 认的是**所有**乙，
+// 不区分"装置召唤的"还是"出怪表刷的"。机制层的 `PileTick` 只管它自己的
+// `m.units`（`huai_shu_li.go:192`）——本关一个天桩装置都没有，那边的记账是空的，
+// 于是这些乙在 Go 里**没人推**，只会沿出怪表的腿一路走出图外漏掉。
+//
+// ⚠ 与机制层的**帧内交错**没有对齐：原版三种单位在同一次遍历里按敌人列表顺序
+// 分派，这里是"机制层跑完再跑这一段"。本关（无天桩装置）两者不可能同时非空，
+// 所以先按这个顺序落；将来遇到"既有装置召唤的乙、又有出怪表刷的乙"的关卡，
+// 要回来把两者合进同一次遍历。
+func pileDiverTick(enemies []*enemy, ops []*operator, t float64, c *simCtx) {
+	for _, e := range enemies {
+		if !e.spec.Diver {
+			continue
+		}
+		//: 原版 `_pile_tick` 第 ② 段的四道闸门（`sim.py:4652`）
+		if e.hp <= 0 || e.leaked || e.offMap || e.rebornAt >= 0 {
+			continue
+		}
+		// ① 「攻击结束时强制击杀自身」。走**直接写血**（原版 `e.hp = 0.0`）：
+		//    按原版注释，"这不是我方击杀，也不该触发任何『被击倒』类效果"。
+		//    Go 的击杀数在挨打那条路上记账，直接写 hp 不会进 `verdict.Kills`；
+		//    而乙的 `kill_cost` 本来就是 0，结算里那条奖励也不会触发。
+		if e.diverBoomAt >= 0 && t >= e.diverBoomAt {
+			e.hp = 0
+			e.deathTime = t
+			if traceOn {
+				trace("PILEBOOM t=%.4f enemy=%s idx=%d", t, e.spec.Name, e.index)
+			}
+			continue
+		}
+		// ② 登场自缚没走完，或已经咬过一口了 → 什么都不做
+		if e.diverIdle > 0 || e.diverBitten {
+			continue
+		}
+		// ③ 最近的**存活**干员。原版不设距离上限：正文写的是「扑到…身上」，
+		//    而数据里 `rangeRadius = −1`，加一个上限就是凭空造数
+		//    （两种读法都登记在 `docs/verdicts-pending.md`）。
+		target := nearestAliveOperator(ops, e.position)
+		if target == nil {
+			continue
+		}
+		dx := target.cell[0] - e.position[0]
+		dy := target.cell[1] - e.position[1]
+		if math.Hypot(dx, dy) <= 0.5 {
+			// 已经贴到目标格：钉住——换成单点路线，免得"走到路线终点"被判成漏怪
+			setRoute(e, [][2]float64{target.cell})
+			dmg := resolveDamage(e.spec.ATK, e.spec.DamageType, 1.0,
+				target.defense(), target.res(), target.dodgeVs(e.spec.DamageType))
+			dealt := target.take(dmg)
+			spOnHit(target, dealt)
+			e.diverBitten = true
+			e.diverBoomAt = t + c.EnemyWindup()
+			attachMark(e, target, ops, t, c)
+			if traceOn {
+				trace("PILEBITE t=%.4f enemy=%s idx=%d target=%s dealt=%.3f boom=%.4f",
+					t, e.spec.Name, e.index, target.spec.Name, dealt, e.diverBoomAt)
+			}
+			continue
+		}
+		// ④ 还没到 → 朝目标扑。**每帧都指一遍**：目标换人、或目标刚登场时，
+		//    路线都要重设（原版 4781-4785 的注释就是这么写的）。
+		setRoute(e, [][2]float64{e.position, target.cell})
+	}
+}
+
+// nearestAliveOperator 是离 `from` 最近的**存活且未撤退**的干员。
+// 原版用 `math.dist` 比欧氏距离、并列取先遇到的（`<` 不是 `<=`）。
+func nearestAliveOperator(ops []*operator, from [2]float64) *operator {
+	var best *operator
+	bestD := math.Inf(1)
+	for _, op := range ops {
+		if !op.alive() {
+			continue
+		}
+		d := math.Hypot(op.cell[0]-from[0], op.cell[1]-from[1])
+		if d < bestD {
+			bestD = d
+			best = op
+		}
+	}
+	return best
+}
+
+// attachMark 是乙咬中之后挂天标那一步（原版 `_pile_attach_mark`，
+// `sim.py:4787-4807`）。
+//
+// 在**目标所在地块中心**造一个天标敌人。⚠ 三个容易漏的点：
+//
+//  1. 它是**敌人**，不是 buff——要进 `*c.enemies`，否则我方索敌看不见它
+//     （原版的出手账里确实有一笔打在它身上）。
+//  2. 路线必须是**单点**（`static`）：原版 `reached_end` 要求路线长度 > 0，
+//     单点路线长度为 0，所以它既不动、也不会被判成走到终点而漏怪。
+//     主循环的 `SpawnSpec.Static` **没有被消费**（只有机制层那份模板认它），
+//     所以这里直接改腿，别指望那个字段。
+//  3. `attached` 是**登场那一刻的快照**：半径 0.3 从格心量出去够不到别格
+//     （干员都在格心、相邻 1.0 格），所以快照就是这一格的人。
+func attachMark(diver *enemy, target *operator, ops []*operator,
+	t float64, c *simCtx) {
+	if diver.spec.Mark == nil {
+		return
+	}
+	cell := target.cell
+	spec := *diver.spec.Mark
+	spec.Legs = []LegSpec{{Kind: "static", Points: [][2]float64{cell}}}
+	m := newEnemy(spec, c.nextEnemyIndex, cell, c)
+	c.nextEnemyIndex++
+	//: ⚠ 不可阻挡读的是 `spec.Unblockable`（`sim.go:1686`），敌人身上**没有**
+	//: 单独的 `unblockable` 位——写成 `m.unblockable = true` 编译不过，
+	//: 而如果哪天有人"顺手加一个字段"，它会静默不生效。改规格这一份才对。
+	m.spec.Unblockable = true
+	m.attachDamage = spec.AttachDamage
+	m.attachRadius = spec.AttachRadius
+	radius := spec.AttachRadius
+	if radius <= 0 {
+		radius = 0.3
+	}
+	for _, op := range ops {
+		if !op.alive() {
+			continue
+		}
+		if math.Hypot(op.cell[0]-cell[0], op.cell[1]-cell[1]) <= radius {
+			m.attached = append(m.attached, op)
+		}
+	}
+	*c.enemies = append(*c.enemies, m)
+	if traceOn {
+		trace("PILEMARK t=%.4f enemy=%s idx=%d cell=%.4f,%.4f attached=%d dmg=%.3f",
+			t, m.spec.Name, m.index, cell[0], cell[1], len(m.attached), m.attachDamage)
+	}
+}
+
+// pileMarkTick 是身上的天标的每秒结算（原版 `_pile_mark_tick`，`sim.py:4809-4824`）。
+//
+// 附着对象**全部退场就自毁**（直接写血，不是我方击杀）。
+// 伤害是「预计算无途径物理伤害」= 定额，**不走 `resolveDamage`**（不吃防御、
+// 不吃法抗），所以这里直接 `take`。
+//
+// ⚠ 原版这一行还套了一层 `_species_resist(op, e, ...)`（泥岩「手足相惜」一类
+// 的按物种减伤），**Go 侧还没有这个机制**。差在哪只能靠对拍发现——写在这里
+// 免得下一次又要从头找。
+func pileMarkTick(enemies []*enemy, t float64, dt float64) {
+	for _, e := range enemies {
+		if e.attachDamage <= 0 {
+			continue
+		}
+		if e.hp <= 0 || e.leaked || e.offMap || e.rebornAt >= 0 {
+			continue
+		}
+		//: 快照里还有谁是活的（原版 `[op for op in e.attached if ...]`）
+		alive := e.attached[:0:0]
+		for _, op := range e.attached {
+			if op.alive() {
+				alive = append(alive, op)
+			}
+		}
+		if len(alive) == 0 {
+			e.hp = 0
+			e.deathTime = t
+			if traceOn {
+				trace("PILEMARKGONE t=%.4f enemy=%s idx=%d", t, e.spec.Name, e.index)
+			}
+			continue
+		}
+		e.attachTimer += dt
+		for e.attachTimer >= 1.0 {
+			e.attachTimer -= 1.0
+			for _, op := range alive {
+				dealt := op.take(e.attachDamage)
+				if traceOn {
+					trace("PILEMARKDMG t=%.4f enemy=%s idx=%d target=%s dealt=%.3f",
+						t, e.spec.Name, e.index, op.spec.Name, dealt)
+				}
+			}
+		}
+	}
+}
+
 // EnemyMoveSpeed 是这一只**这一刻**的推进速度：与主循环 `advance` 用的是同一个
 // 算式（`spec.MoveSpeed × 自身乘区 × 关卡乘区 × 机制请求的乘区`），免得机制自己
 // 抄一份。`自身乘区`就是原版 `haste_multiplier`（明识形态的清水会改它）。
 func (c *simCtx) EnemyMoveSpeed(index int) float64 {
 	if e := c.enemyAt(index); e != nil {
-		return e.spec.MoveSpeed * e.haste * c.spec.SpeedScale * c.speedFor(index)
+		//: 与 `advance` 同一口径、同一顺序（原版六项连乘，见那里的注释）：
+		//: 机制看到的移速与真正推进用的移速必须**逐位**相同，否则
+		//: "机制按 A 减速、主循环按 B 推进"会在末位长期分家。
+		return e.spec.MoveSpeed * c.spec.SpeedScale * c.speedFor(index) * e.haste
 	}
 	return 0
 }
@@ -1020,6 +1611,17 @@ func (c *simCtx) Trace(format string, args ...any) {
 	}
 }
 
+// initMechTrace 把主包的痕迹通道交给机制层（`mech.Trace`）。
+//
+// 机制内部那些拿不到 `Ctx` 的小方法（`tick`/`cast`/`add`）要靠它才能打痕迹，
+// 而"计时器为什么不动、施放为什么没发生"只能在这些地方问。
+// 未调用时 `mech.Trace` 是 no-op——单测里不需要任何桩。
+func initMechTrace() {
+	if traceOn {
+		mech.Trace = trace
+	}
+}
+
 // ================================================================ 推进
 
 // advance 沿分段计划推进 dt 秒（`EnemyUnit._advance_legs`，unit.py）。
@@ -1027,22 +1629,37 @@ func (c *simCtx) Trace(format string, args ...any) {
 // 三种段共用 `legU`：走段里它是已走格数，等待/离场段里是已过秒数。
 // 整个循环**以时间为预算**——按格数当预算的话，等待段会被移速缩放，
 // 3 秒的待命会被拉成好几分钟。
-func advance(e *enemy, dt, speedScale float64) {
-	// `e.haste` 是原版 `haste_multiplier`（明识形态的清水会改它），与
-	// `EnemyMoveSpeed` 必须乘同一串量——两边不一致的话，"机制看到的移速"
-	// 与"实际推进的移速"会各说各话。
-	speed := e.spec.MoveSpeed * e.haste * speedScale
+func advance(e *enemy, dt, speedScale, speedMult float64) {
+	// `e.haste` 是原版 `haste_multiplier`（明识形态的清水会改它）。
+	//
+	//: ⚠⚠ **四项必须逐项、按原版的顺序左到右连乘，不许提前合并任何两项。**
+	//: 原版（`unit.py:1493-1496`）是**六项**连乘：
+	//:     move_speed * speed_scale * speed_multiplier * haste_multiplier
+	//:                * (1 - slow_pct) * lock_slow
+	//: （后两项在本关恒为 1.0，乘 1.0 是精确的，省略无害。）
+	//:
+	//: 这里曾经写成 `MoveSpeed * haste * (SpeedScale * speedFor(idx))`——
+	//: 把 `speed_scale * speed_multiplier` **先乘成一个数**再参与。
+	//: 浮点乘法**不满足结合律**，`(mv*h)*(ss*sm)` 与 `((mv*ss)*sm)*h`
+	//: 在末位就分了家。每帧差 ~1e-16，累加 500 帧就是 1e-14 量级，
+	//: 足以让**卡在半整数坐标上**的敌人翻格——`hsex07` 里那只除秽的
+	//: x 原版算成 `7.4999999999999885`（落格 7、在凛冬范围内、当主目标），
+	//: Go 算成 `7.5000000`（落格 8、不在范围、只能当溅射受害者），
+	//: 判决因此差出 杀 +1 / 用时 +12.7s。排查全过程见
+	//: `AK-TACTIC-进度.md` §3.12–§3.15。
+	speed := e.spec.MoveSpeed * speedScale * speedMult * e.haste
 	if speed <= 0 {
 		return
 	}
 	// 移速**变化即记一笔**（不逐帧打，那样 72 只 × 2900 帧没法看）。
-	// 原版的移速是六项连乘：`move_speed × speed_scale × speed_multiplier ×
-	// haste_multiplier × (1 - slow_pct) × lock_slow`；这里只有三项，
-	// 哪一项分家只能靠"同一只敌人两边速度何时开始不同"去指认。
+	//
+	// ⚠ 只看"整速变化"不够：机制自己算的那一段（如积雪的 `speed_multiplier`）
+	// 是**每帧重算**的，整速不变不代表它没变。要盯那一段得看机制的痕迹
+	// （`SNOWSLOW`），两者并排才是完整的现场。
 	if traceOn && speed != e.traceSpeed {
 		e.traceSpeed = speed
-		trace("SPEED t=%.4f enemy=%s speed=%.6f move=%.4f haste=%.6f scale=%.6f",
-			*e.sim.time, e.spec.Name, speed, e.spec.MoveSpeed, e.haste, speedScale)
+		trace("SPEED t=%.4f enemy=%s speed=%.6f move=%.4f haste=%.6f scale=%.6f mult=%.6f",
+			*e.sim.time, e.spec.Name, speed, e.spec.MoveSpeed, e.haste, speedScale, speedMult)
 	}
 	left := dt
 	guard := 0
@@ -1054,9 +1671,25 @@ func advance(e *enemy, dt, speedScale float64) {
 		leg := e.spec.Legs[e.legIndex]
 		e.offMap = leg.Kind == "vanish"
 		if leg.Kind == "static" {
-			// 自缚：站在原地。这条腿**永远走不完**（`legU` 不动），所以既不会
-			// 位移、也不会被 `reachedEnd` 判成走到路线终点（原版靠"单点路线 +
-			// `reached_end` 要求路线长度 > 0"达到同一效果）。
+			// 自缚：**站位不动，但 `progress` 照涨**。
+			//
+			// 原版对"没有分段计划"的敌人走的是（`unit.py:1504-1505`）
+			//     self.progress += speed * dt
+			//     self.position = point_at(self.route, self.progress)
+			// 而自缚者的 `route` 只有**一个点**，`point_at` 对单点折线
+			// 循环体一次都不进、直接 `return points[-1]` —— 也就是
+			// **位置钉死、`progress` 一直在涨**。
+			//
+			// ⚠ 这不是无关紧要的记账：索敌排序键是 `(嘲讽等级, progress)`
+			// （`_pick_targets`，sim.py:3649），**progress 大的先挨打**。
+			// 这里曾经直接 `break`、把 `progress` 冻在 0，于是"自缚的甲"
+			// 永远输给任何走上来的敌人——`hsex07` t=17.0 凛冬因此把主目标
+			// 从甲换成了除秽（原版甲的 progress 已涨到 4.9，除秽才 0.98），
+			// 溅射落点整体位移，判决差出 杀 +1 / 用时 +12.7s。
+			//
+			// `legU` **不涨**：它只喂 `pointAt`，涨了会被 `reachedEnd` 当成
+			// 走到终点（原版靠"路线长度 > 0 才算走到终点"达到同一效果）。
+			e.progress += speed * left
 			break
 		}
 		if leg.Kind == "walk" {
@@ -1183,6 +1816,19 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 		if !op.alive() {
 			continue
 		}
+		// ⚠ **干员【冻结】= 缴械，冻结期间不出手**（原版 `_operators_attack`
+		// 的开头，`sim.py:3978`：`if op.freeze_timer > 0: continue`）。
+		//
+		// 位置是定的：这道闸门在 `op.attack_timer += dt` **之前**，所以冻结
+		// 的那几秒**连出手计时器都不走**——解冻后不是"立刻补一发"，而是接着
+		// 之前攒到的地方继续。把它写在 `attack_timer += dt` 之后，出手节奏
+		// 会整体提前，症状与"没有这道闸门"完全不同。
+		//
+		// 目前唯一的来源是「圣山的祝福」的自冻结（`spec.BlessingSelfFreeze`）；
+		// 晕眩 `stun_timer` 与闭锁 `locked_timer` 仍未移植，理由见 `hurt`。
+		if op.freezeTimer > 0 {
+			continue
+		}
 		op.attackTimer += dt
 		if op.attackTimer < op.interval() {
 			continue
@@ -1205,10 +1851,19 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 			heals = pickHeals(op, ops, 1)
 		}
 		if traceOn {
-			trace("%8.4f %s 技=%v 间隔=%.4f 计时=%.4f 挡=%v 选=%v 范围里=%v 治=%v",
+			//: ⚠ 这一行**必须是自描述的 `key=value`**：它是"这次出手计时到了，
+			//: 我选到了谁"的**唯一**记录，而"某位干员一次都没出力"只有它看得见。
+			//: 第一版写成 `OPATK  8.0333 怒潮凛冬 …`（前两个字段没有键名），
+			//: 结果 `trace_kv` 一行都解析不出来——探针报"0 笔"，
+			//: 与"她真的没出手"**长得一模一样**。列表用 `|` 连接，
+			//: 空格会破坏 `key=value` 的切分。
+			trace("OPATK t=%.4f op=%s skill=%v interval=%.4f timer=%.4f "+
+				"block=%s pick=%s inrange=%s heals=%s",
 				t, op.spec.Name, op.skillActive, op.interval(), op.attackTimer,
-				names(op.blocking), names(targets), names(inRangeOf(op, enemies)),
-				namesOp(heals))
+				strings.Join(names(op.blocking), "|"),
+				strings.Join(names(targets), "|"),
+				strings.Join(names(inRangeOf(op, enemies)), "|"),
+				strings.Join(namesOp(heals), "|"))
 		}
 		if len(targets) == 0 && len(heals) == 0 {
 			continue
@@ -1217,7 +1872,34 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 		scale := scaleNow
 		hits := op.hitCount()
 		finalScale, hasFinal := op.finalHitScale()
+		// 普攻连击（焰狐龙梓兰的**隐藏天赋**）：普通攻击为三连击、每击 100%，
+		// **计算防御/法抗之后**再 ×33.3%（原版 `sim.py:4049-4062` + 4135）。
+		//
+		// 「是不是普攻」的判据与上面 `deals` 同一套写法：**看技能有没有改写这一击
+		// 的攻击倍率**，不看技能开没开——她的技2 是 +buff 型、技1 是改攻击型，
+		// 两者在这一点上不同。`scaleNow` 就是 `effects.atk_scale`。
+		//
+		// ⚠ 三连击是**覆盖** `hits` 与 `scale`，不是相加：技能自己写了
+		// `hit_count`（她的技2 是 13 笔）时那条判据已经把它排除在外了。
+		comboDmgScale := 1.0
+		if op.spec.ComboHits > 1 && math.Abs(scaleNow-1.0) < 1e-9 {
+			hits = op.spec.ComboHits
+			scale = op.spec.ComboHitScale
+			comboDmgScale = op.spec.ComboDamageScale
+		}
 		power := op.atk()
+		// 天赋「强击瓶专家」：接下来 N **轮**攻击的攻击力倍率提升。备注写明
+		// "于弹道脱手前对当次连击的所有弹道生效" ⇒ 乘在这一轮的全部箭矢上，
+		// 整轮只扣一层（原版 `sim.py:4088-4101`）。
+		//
+		// ⚠ 原版的 `rounds` 会因"技2 三轮齐射 ＋ 落地点射""技1 刚连射"而大于 1；
+		// 那三样（`volley_arrows` / `landing_scale` / `charge_arrows`）**还没进
+		// Go 的 `Profile`**。所以这里只兑现 `rounds = 1` 这一种，闸门负责把
+		// 剩下的挡在门外——两边都不许猜。
+		if op.powerAttackLeft > 0 {
+			power *= op.spec.PowerAttackScale
+			op.powerAttackLeft = math.Max(0, op.powerAttackLeft-1)
+		}
 		dmgType := op.damageType()
 		if !deals {
 			// 治疗量 = 当前攻击力 × 治疗倍率（医疗干员平A 的倍率是 1）。
@@ -1247,11 +1929,17 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 				// （原因写在 `enemy.dodgeVs` 上），所以这里不是"先不管"，
 				// 而是"与原版同值、并且有名字"。
 				dmg := resolveDamage(power, dmgType, hitScale,
-					target.spec.DEF, target.spec.RES, target.dodgeVs(dmgType))
+					target.spec.DEF, target.res(), target.dodgeVs(dmgType))
+				// 连击的 `ComboDamageScale` **乘在这里**：原版是
+				// `self._damage_enemy(target, dmg.final * combo_dmg_scale, ...)`
+				// （`sim.py:4135`），也就是**算完防御/法抗之后**再整笔缩放。
+				// 乘进 `hitScale`（结算之前）会得到完全不同的数——那是法抗/
+				// 防御也一起被缩放，症状是"伤害偏低且随目标防御变化"。
+				dmg *= comboDmgScale
 				dealt := target.take(dmg, op)
 				trace("        打 %s 攻=%.1f 类型=%s 倍率=%.3f 防=%.1f 抗=%.1f 伤害=%.3f 实扣=%.3f 剩=%.3f",
 					target.spec.Name, power, dmgType, hitScale, target.spec.DEF,
-					target.spec.RES, dmg, dealt, target.hp)
+					target.res(), dmg, dealt, target.hp)
 				if dealt <= 0 {
 					continue
 				}
@@ -1409,7 +2097,7 @@ func traitSplash(op *operator, spec *Spec, enemies []*enemy, target *enemy,
 func splashHit(op *operator, e *enemy, power, scale, t float64, verdict *Verdict,
 	kind string, from *enemy) {
 	dmg := resolveDamage(power, "PHYSICAL", scale,
-		e.spec.DEF, e.spec.RES, e.dodgeVs("PHYSICAL"))
+		e.spec.DEF, e.res(), e.dodgeVs("PHYSICAL"))
 	dealt := e.take(dmg, op)
 	if kind == "highland" && op.spec.HighlandSplashSluggish > 0 {
 		// 原版 `sim.py:3855-3857`：高台那一半溅到谁，就给谁挂【停顿】
@@ -1455,7 +2143,16 @@ func pickHeals(op *operator, ops []*operator, n int) []*operator {
 	}
 	var pool []cand
 	for _, o := range ops {
-		if o == op || !o.alive() || o.hp >= o.spec.MaxHP {
+		// ⚠ **不能排除自己**：原版 `_pick_heals` 的候选池是
+		// `[o for o in self.operators if o.alive and o.hp < o.max_hp]`
+		// （`sim.py:3691`）——**没有 `o is not op` 这一条**，
+		// 所以医疗可以把自己的平A治在自己身上。
+		//
+		// 多写一个 `o == op` 的症状极具误导性：她**照常出手、照常有治疗痕迹**，
+		// 只是永远治不到自己；于是"医疗是全场唯一没人治的人"，她会比原版
+		// 早 107 秒倒下（k=4：84.3667 vs 191.2000），而她的治疗量看起来
+		// 完全正常——顺着治疗量查一辈子也查不到。
+		if !o.alive() || o.hp >= o.spec.MaxHP {
 			continue
 		}
 		cell := [2]int{int(math.RoundToEven(o.cell[0])), int(math.RoundToEven(o.cell[1]))}
@@ -1552,6 +2249,162 @@ func inRangeOf(op *operator, enemies []*enemy) []*enemy {
 	return out
 }
 
+// teamAuraTick 把全场光环的当前数值刷到每个干员身上（原版 `_refresh_auras`，
+// `sim.py:3547`；帧位 5.4，`sim.py:2831-2832`）。
+//
+// 三条口径：
+//  1. **按目标逐个算**，不能先算一份再刷给所有人——「万众巨潮」对
+//     【乌萨斯学生自治团】翻倍、对别人不翻，取值因人而异。
+//  2. 多条光环**相加**，不是连乘。
+//  3. 光环一旦建立就**不随主人阵亡而消失**（原版 `self.team_auras` 只 append、
+//     没有删除点）。主人倒了之后只有「技能期间才生效」那类会自然变 0
+//     （技能状态没了），常驻那类照旧——所以这里不判 `owner.alive()`。
+func teamAuraTick(ops []*operator) {
+	for _, op := range ops {
+		atk, def := 0.0, 0.0
+		for _, owner := range ops {
+			for i := range owner.spec.TeamAuras {
+				x, y := owner.spec.TeamAuras[i].current(owner, op)
+				atk += x
+				def += y
+			}
+		}
+		op.auraAtkPct = atk
+		op.auraDefPct = def
+	}
+}
+
+// current 是原版 `TeamAura.current(target)`（`talents.py:702`）——
+// **唯一的判定函数**。`owner` 是光环主人（判它开没开技能），`target` 是吃光环的人。
+//
+// 分支顺序照抄原版：`self_only` → `ammo_skill_only` → `faction_only`
+// → `profession` → 最后才是"常驻 / 技能期间"那条。
+// **顺序有意义**：某条光环可能同时带着筛选与倍率，先命中的分支说了算。
+func (a *TeamAuraSpec) current(owner, target *operator) (float64, float64) {
+	if a.SelfOnly && target != owner {
+		return 0.0, 0.0
+	}
+	if a.AmmoSkillOnly {
+		sk := target.spec.Skill
+		if sk == nil || sk.DurationType != "AMMO" {
+			return 0.0, 0.0
+		}
+		k := 1.0
+		if a.NationDouble != "" && target.spec.NationID == a.NationDouble {
+			k = a.DoubleScale
+		}
+		return a.AtkPct * k, a.DefPct * k
+	}
+	if a.FactionOnly != "" {
+		if target.spec.NationID != a.FactionOnly {
+			return 0.0, 0.0
+		}
+		return a.AtkPct, a.DefPct
+	}
+	if a.Profession != "" {
+		if target.spec.Profession != a.Profession {
+			return 0.0, 0.0
+		}
+		return a.AtkPct, a.DefPct
+	}
+	active := owner.skillActive
+	if a.SkillOnly {
+		if !active {
+			return 0.0, 0.0
+		}
+		k := 1.0
+		for _, id := range a.Faction {
+			if id == target.spec.CharID {
+				k = a.FactionScale
+				break
+			}
+		}
+		return a.AtkPct * k, a.DefPct * k
+	}
+	k := 1.0
+	if active {
+		k = a.DoubleScale
+	}
+	return a.AtkPct * k, a.DefPct * k
+}
+
+// regenAuraTick 兑现天赋「医者丰碑」的增益治疗光环（原版 `RegenAura.tick`，
+// `talents.py:772`；帧位 5.5，`sim.py:2834-2840`）。
+//
+// 三件事按顺序：① 判"谁**进入**了光环主人的攻击范围"（每人只触发一次）；
+// ② 给吃到的人挂上剩余时长与每秒回复量；③ **所有**身上还挂着增益的人跳一次回血
+// ——注意 ③ 与 ① 是分开的：光环主人倒下之后不再发新的，**但已经发出去的照跳完**。
+//
+// ⚠ 部署进射程**也算"进入"**：游戏里干员落地那一刻就是在范围里，天赋照样触发。
+// 所以这里在部署当帧就判一次，不等它"走进来"。
+func regenAuraTick(ops []*operator, dt float64) {
+	for _, owner := range ops {
+		au := owner.spec.RegenAura
+		if au == nil {
+			continue
+		}
+		//: 每一份光环的身份 = 主人的 `deploySeq`（原版每次部署 append 一个新的
+		//: `RegenAura` 对象，那个对象就是身份）。
+		auraID := owner.deploySeq
+		give := owner.alive()
+		for _, op := range ops {
+			if op == owner || !op.alive() {
+				continue
+			}
+			cell := [2]int{int(math.RoundToEven(op.cell[0])),
+				int(math.RoundToEven(op.cell[1]))}
+			// 严格读法只认**光环之后**才进场的人（原版按 `operators` 里的先后）。
+			eligible := !au.Strict || indexOfOp(ops, op) > indexOfOp(ops, owner)
+			if give && eligible && !op.hasRegenGrant(auraID) &&
+				inCells(owner.spec.Range, cell) {
+				op.markRegenGranted(auraID)
+				op.regenLeft = math.Max(op.regenLeft, au.Duration)
+				// 【罗德岛】翻的是**速率**，不是持续时间（原文那句话紧跟在
+				// "每秒回复 N 点"后面）。倍率取黑板，不写死 2.0。
+				rate := au.HPPerSec
+				if au.Nation != "" && op.spec.NationID == au.Nation {
+					rate *= au.NationMult
+				}
+				op.regenPerSec = math.Max(op.regenPerSec, rate)
+			}
+			if op.regenLeft > 0 {
+				// `step` 夹在剩余时长上：最后一帧只跳剩下的那点，不能多跳一帧的整量。
+				step := math.Min(dt, op.regenLeft)
+				op.heal(op.regenPerSec * step)
+				op.regenLeft = math.Max(0.0, op.regenLeft-dt)
+				if op.regenLeft <= 0 {
+					op.regenPerSec = 0
+				}
+			}
+		}
+	}
+}
+
+// indexOfOp 是 `ops` 里的位置（找不到给 -1）。
+func indexOfOp(ops []*operator, want *operator) int {
+	for i, o := range ops {
+		if o == want {
+			return i
+		}
+	}
+	return -1
+}
+
+// hasRegenGrant 问"这一份光环（按主人的部署序号认）发的那份增益，我吃过没有"。
+func (o *operator) hasRegenGrant(auraID int) bool {
+	for _, v := range o.regenGrantedBy {
+		if v == auraID {
+			return true
+		}
+	}
+	return false
+}
+
+// markRegenGranted 记下"吃过了"。
+func (o *operator) markRegenGranted(auraID int) {
+	o.regenGrantedBy = append(o.regenGrantedBy, auraID)
+}
+
 func inCells(cells [][2]int, cell [2]int) bool {
 	for _, c := range cells {
 		if c == cell {
@@ -1577,7 +2430,11 @@ func enemiesAttack(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec,
 		}
 		// 冻结：**既不走也不出手**（原版 `_enemies_attack` 的 `e.frozen` 闸门）。
 		// 与「停顿」不是一回事——停顿只是移速降 80%，照样打人。
-		if e.freezeTimer > 0 {
+		//
+		// ⚠ 读的是**复合**的 `frozen()`：原版的 `frozen` 是
+		// `freeze_timer > 0` **或**"所站格满层"（积雪），只读计时器会让
+		// 积雪那一半静默失效（敌人照打）。
+		if e.frozen() {
 			continue
 		}
 		op := enemyTarget(e, ops, spec.RangedEnemies)
@@ -1585,7 +2442,7 @@ func enemiesAttack(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec,
 			continue
 		}
 		e.attackTimer += dt
-		if e.attackTimer < e.spec.Interval {
+		if e.attackTimer < e.interval() {
 			continue
 		}
 		e.attackTimer = 0
@@ -1705,11 +2562,96 @@ func resolve(enemies []*enemy, cost *float64, life *int, t float64,
 // anyActive：场上还有"活着的、没漏的、清得掉的"敌人吗（run 1907-1912）。
 func anyActive(enemies []*enemy) bool {
 	for _, e := range enemies {
-		if e.alive() && !e.leaked && !e.spec.CannotClear {
+		if e.alive() && !e.leaked && !e.cannotClear() {
 			return true
 		}
 	}
 	return false
+}
+
+// cannotClear 是原版的 `Sim._cannot_clear`（`sim.py:2596`）——这个单位
+// **有没有可能被清掉**：要么被打死，要么走到目标点。两个条件**同时**成立才算。
+//
+//   - **打不死** → `always_invincible`。⚠ 这是**运行期**字段：天桩-甲的监测形态
+//     常驻无敌，激活时机制会把它摘掉（改成每秒自损 1%），那时它就打得死了。
+//   - **不会离场** → 单点路线。原版判 `route_length == 0`；Go 侧"自缚"落地成的
+//     是一条 `static` 腿（见 `advance` 里那句"这条腿永远走不完"），口径等价。
+//
+// ⚠ **不能读 `spec.CannotClear`**：那是规格在**开局**算好的定值，而
+// `always_invincible` 要到这只怪**出场那一刻**才被机制写上——于是它恒为 false，
+// 天桩-甲永远被算成"能清掉"。症状极具迷惑性：**杀、漏、伤害全对，
+// 只有用时等于时间上限**（这一局根本收不了场），而 Go 的判决里此前
+// 连"场上还剩谁"都不报，只能看到一个 +80 秒然后去猜。
+func (e *enemy) cannotClear() bool {
+	if !e.invincible {
+		return false
+	}
+	for _, leg := range e.spec.Legs {
+		if leg.Kind != "static" {
+			return false
+		}
+	}
+	return true
+}
+
+// frozen 是原版的 `EnemyUnit.frozen`——**复合判据**（`sim.py:1139` 每帧重置成
+// `freeze_timer > 0`，再由积雪在 1156 那一行补上"所站格满层"）。
+//
+// 为什么合成一个方法而不是散着判：读它的地方有两处（推进闸门、出手闸门），
+// 而"两处都记得读两个字段"这种约定迟早会破——漏一处就是**冻结静默失效**，
+// 判决上看不出"是冻结没生效"还是"本来就没人冻它"。写成方法，漏读会编译不过。
+func (e *enemy) frozen() bool { return e.freezeTimer > 0 || e.frozenSnow }
+
+// interval 是这一只**这一刻**的出手间隔：`基础间隔 × 100 / max(20, 总攻速)`。
+//
+// 与干员侧同一条公式（原版 `SkillEffects.attack_interval`）。这条攻速轴上目前
+// 唯一的修正是【寒冷】−30；**没有寒冷时 `× 100/100` 恒等于 `spec.Interval`**，
+// 所以既有的对拍基线一位都不动——这条是刻意的，别在这里顺手加别的因子。
+func (e *enemy) interval() float64 {
+	aspd := 100.0
+	if e.coldTimer > 0 {
+		aspd -= coldASPDDown
+	}
+	return e.spec.Interval * 100.0 / math.Max(aspdMin, aspd)
+}
+
+// res 是这一只**这一刻**的法术抗性：冻结期间 −15（PRTS《敌人一览/数据》tooltip）。
+//
+// ⚠ 必须是**动态**判据而不是写进 `spec.RES`：冻结解除后抗性要回来，而
+// `spec.RES` 是整局的静态规格（改写它会让同一只敌人"冻过一次就永久变脆"）。
+// 所有"敌人作为受击方"的结算都要走这里读，直接读 `spec.RES` 就是漏这条。
+func (e *enemy) res() float64 {
+	if e.frozen() {
+		return e.spec.RES - frozenResDown
+	}
+	return e.spec.RES
+}
+
+// applyCold 施加【寒冷】秒数；**已在寒冷中则转为【冻结】**。
+//
+// 来源是 PRTS《敌人一览/数据》tooltip：「寒冷：攻击速度下降 30，如果在持续时间
+// 内再次受到寒冷效果则会变为冻结」。
+//
+// ⚠ 转冻结之后的**时长**，tooltip 没有给数。本函数按"触发那一次的秒数"取——
+// 这是一条**假设**，不是查到的定论，已登记进 `docs/uncertainties.md`
+// （键：`寒冷转冻结后的时长`）。要改成别的口径，只改这一处。
+func (e *enemy) applyCold(secs float64) {
+	if secs <= 0 {
+		return
+	}
+	if e.coldTimer > 0 {
+		e.applyFreeze(secs)
+		return
+	}
+	e.coldTimer = math.Max(e.coldTimer, secs)
+}
+
+// applyFreeze 施加【冻结】秒数。取较大值与既有那条来源（圣山的祝福 `blessingTick`）
+// 同款，免得"后到的短冻结把先到的长冻结顶掉"。
+func (e *enemy) applyFreeze(secs float64) {
+	if secs > 0 {
+		e.freezeTimer = math.Max(e.freezeTimer, secs)
+	}
 }
 
 func (e *enemy) take(amount float64, src *operator) float64 {
@@ -1725,6 +2667,23 @@ func (e *enemy) take(amount float64, src *operator) float64 {
 	}
 	dealt := math.Min(e.hp, math.Max(0, amount))
 	e.hp -= dealt
+	//: 敌人**受伤的唯一汇点**留痕（原版对应 `Combatant.take`，`unit.py:104`）。
+	//:
+	//: 为什么要有这一条：`HITENEMY`（机制直伤）、`SPLASH`（溅射）、普攻各有各的
+	//: 痕迹，**总伤害对不上时无从下手**——三路加起来差 1,392 点，是"某一路多打了"
+	//: 还是"同一个敌人被多打了一次"，只能靠一个**统一的**账本回答。
+	//: 原版侧用同样的钩子（钩 `Combatant.take`）就能逐笔对。
+	if traceOn && e.sim != nil && dealt > 0 {
+		//: `src` 就是出手的干员（没有来源的机制伤害是 nil）。**必须带上**：
+		//: 只记"这只敌人挨了多少"能定位到"哪一只不对"，记不到"谁打的那一下"——
+		//: 而多出来的那一笔往往正是某一门干员**多出手了一次**。
+		who := "(机制)"
+		if src != nil {
+			who = src.spec.Name
+		}
+		trace("DMGENEMY t=%.4f enemy=%s idx=%d src=%s amount=%.3f dealt=%.3f hp=%.3f",
+			*e.sim.time, e.spec.Name, e.index, who, amount, dealt, e.hp)
+	}
 	if dealt > 0 && e.sim != nil {
 		// 挨打的附加效果（原版 `_enemy_on_hit`）。放在 `take` 里而不是放在
 		// 各个调用点上：普攻、技能、机制伤害都会走到这里，漏一个就是
@@ -1772,6 +2731,9 @@ func (c *simCtx) onEnemyHit(e *enemy, src *operator) {
 		sp.DEF += sp.PhitDef
 		sp.RES += sp.PhitRes
 		sp.MoveSpeed += sp.PhitMove
+		c.Trace("PHIT t=%.4f name=%s 层=%d/%d atk=%.2f def=%.2f res=%.2f",
+			c.Now(), sp.Name, e.phitStacks, sp.PhitMaxStack,
+			sp.ATK, sp.DEF, sp.RES)
 		// 原版还按 `phit_weight_cnt` 每 N 层重量等级 −1。Go 侧没有重量字段
 		// （阻挡只看 block_cnt，位移那套不在本模拟器范围内），故不减——这
 		// 一条是**已知边界**，写在 `docs/uncertainties.md` 的口径里。
@@ -1804,6 +2766,11 @@ func (c *simCtx) enterPm2(e *enemy, t float64) {
 		return
 	}
 	e.pm2Active = true
+	//: ⚠ 这两套改写（`phit_*` 蜕皮、`pm2_*` 归来）改的是**普通字段**，原版与 Go
+	//: 都不产生任何可观测量，下游只能看到"伤害被顶到 5% 保底"这种间接信号。
+	//: 拿间接信号反推"防御被改成了多少"是猜；所以在这里把**改写前后**直接打出来。
+	c.Trace("PM2 t=%.4f name=%s 前 层=%d atk=%.2f def=%.2f res=%.2f",
+		t, sp.Name, e.phitStacks, sp.ATK, sp.DEF, sp.RES)
 	if !e.pm2Applied {
 		e.pm2Applied = true
 		sp.ATK *= 1.0 + sp.Pm2Atk
@@ -1815,6 +2782,8 @@ func (c *simCtx) enterPm2(e *enemy, t float64) {
 			sp.ApplyWay = "RANGED"
 		}
 	}
+	c.Trace("PM2 t=%.4f name=%s 后 层=%d atk=%.2f def=%.2f res=%.2f applied=%t",
+		t, sp.Name, e.phitStacks, sp.ATK, sp.DEF, sp.RES, e.pm2Applied)
 	if sp.Pm2Invincible > 0 {
 		e.invincibleUntil = t + sp.Pm2Invincible
 	}
@@ -1843,7 +2812,14 @@ func (c *simCtx) pm2Tick(ctx mech.Ctx, t float64, ops []*operator) {
 		if ctx != nil {
 			clean = c.mechanisms.IsClear(ctx, [2]int{cx, cy}, allies)
 		}
-		if clean != e.pm2Clean || !e.pm2Clean {
+		//: ⚠ 判据**只有"切换"这一支**（原版 `if clean != e.pm2_clean:`）。
+		//: 曾经多写了一个 `|| !e.pm2Clean`，本意是"进去时先算一次"，实际效果是
+		//: **只要不在清水里就每帧重算** —— 而重算是"从 `rebornDefBase` 覆盖"，
+		//: 于是「蜕皮」每帧攒下的 `−50/层` 被逐帧冲掉（80 层本该 `350→−245`，
+		//: 实测停在 `4000×0.3 − 50 = 1150`）。症状是**物理伤害被顶到 5% 保底**
+		//: （`525.20 × 5% = 26.26`），一只 BOSS 因此整场打不死。
+		//: 进去那一次不需要这里补：`enterPm2` 已经乘过 `(1 + Pm2Def)` 了。
+		if clean != e.pm2Clean {
 			e.pm2Clean = clean
 			// 防御**从基准重算**，不是加减：清水能来回切，累乘会指数漂。
 			e.spec.DEF = e.rebornDefBase *
@@ -1911,7 +2887,8 @@ func (c *simCtx) summonReborn(e *enemy, i int, t float64, verdict *Verdict) {
 	for n := 0; n < rs.Count; n++ {
 		tmpl := *rs.Template
 		tmpl.Legs = legs
-		e2 := newEnemy(tmpl, len(*c.enemies), [2]float64{float64(cx), float64(cy)}, c)
+		e2 := newEnemy(tmpl, c.nextEnemyIndex, [2]float64{float64(cx), float64(cy)}, c)
+		c.nextEnemyIndex++
 		*c.enemies = append(*c.enemies, e2)
 		verdict.Events = append(verdict.Events,
 			Event{T: t, Kind: "summon", Who: e2.spec.Name})
@@ -1938,7 +2915,32 @@ func (c *simCtx) polluteFromEnemy(e *enemy, amount float64, radius float64) floa
 }
 
 func (o *operator) take(amount float64) float64 {
-	dealt := math.Min(o.hp, math.Max(0, amount))
+	amount = math.Max(0, amount)
+	// 「层数护盾」：**次数制抵挡**，一层把这一下**整笔**吃掉（原版
+	// `unit.py:613-620`，位置在屏障分支之前）。顺序是原版定的：先裂、先回血，
+	// 再把这一下归零——所以"回血之后血量更高"是原版的语义，不是笔误。
+	//
+	// ⚠ 判据是 `amount > 0`：伤害本来就是 0 的那一下**不消耗层数**
+	// （原版同一句）。漏掉这个条件会让护盾被"0 伤害"白白吃掉。
+	if o.shieldLayers > 0 && amount > 0 {
+		o.shieldLayers--
+		o.shieldBreaks++
+		amount = 0
+		if o.shieldBreakHeal > 0 {
+			o.hp = math.Min(o.maxHP(), o.hp+o.shieldBreakHeal)
+		}
+		if o.shieldBreakSP > 0 {
+			o.sp += o.shieldBreakSP
+		}
+		if traceOn && o.sim != nil {
+			//: 这一族**没有别可观测量**：它把伤害变成 0，判决里只剩"谁活到最后"。
+			//: 所以破裂点必须打痕迹——`tr02` 就是靠它认出"原版前三下没挨"的。
+			trace("SHIELD t=%.4f op=%s break %d/%d heal=%.3f hp=%.3f",
+				*o.sim.time, o.spec.Name, o.shieldLayers, o.shieldMaxLayers,
+				o.shieldBreakHeal, o.hp)
+		}
+	}
+	dealt := math.Min(o.hp, amount)
 	o.hurt(dealt)
 	return dealt
 }
@@ -1968,11 +2970,15 @@ func (o *operator) hurt(dealt float64) {
 	// 漏一处，而漏掉的那一处会让这个"免死一次"在某个伤害来源下悄悄失效——
 	// 这一句是原版注释里的原话，也是它把判据放在掉血唯一入口的理由）。
 	//
-	// ⚠ 本条兑现的是"免死 + 满血复活 + 攻击范围内全体敌人冻结"。同一天赋里
-	// **自身**冻结 N 秒（黑板 `freeze`）那半**未移植**——Go 侧还没有干员冻结/
-	// 晕眩状态。所以这里**故意不写**自冻结计时器：没有消费点的字段就是假完成，
-	// 它会让人以为这条天赋已经接完了。规格照送 `blessing_self_freeze`，那是
-	// 给"哪天补上"留的接口，不是"已经生效"的证据。
+	// ⚠ 本条兑现的是"免死 + 满血复活 + 攻击范围内全体敌人冻结 + **自身冻结
+	// N 秒**"。自身冻结（黑板 `freeze` → `blessing_self_freeze`）**是缴械**：
+	// 原版 `_operators_attack` 的开头就有 `if op.freeze_timer > 0: continue`
+	// （`sim.py:3978`），冻结期间**不出手**（但不动阻挡）。
+	//
+	// 漏掉它的症状**在 Go 的痕迹里完全看不见**——它不是"算错了一个数"，
+	// 是"少了一道闸门"，所以只会表现为"某一门干员比原版多打了几次"。
+	// HS-EX-8 第 3 手实测：圣聆初雪在 t=63.3 免死并自冻 4 秒，正好吃掉
+	// 65.0 / 67.0 两次出手；Go 多打 2 笔 696 = 1,392 点，正好是总伤害残差。
 	if o.hp <= 0 && !o.blessingUsed && o.spec.BlessingSave > 0 {
 		o.blessingUsed = true
 		o.hp = o.maxHP()
@@ -1980,8 +2986,12 @@ func (o *operator) hurt(dealt float64) {
 		// sim.py:1065-1071：把空间查询塞进 `take()` 会让纯数值函数反向依赖
 		// 整张地图）。差一帧，与原版同。
 		o.blessingFreeze = o.spec.BlessingSave
+		// 自冻结：取 `max`（原版 `unit.py:646` 就是 `max`），递减在 `skillTick`。
+		if o.spec.BlessingSelfFreeze > 0 {
+			o.freezeTimer = math.Max(o.freezeTimer, o.spec.BlessingSelfFreeze)
+		}
 		if traceOn && o.sim != nil {
-			trace("BLESSING t=%.4f op=%s 免死→满血 %.1f（待冻结攻击范围内敌人 %.2fs；自冻结 %.2fs 未移植）",
+			trace("BLESSING t=%.4f op=%s 免死→满血 %.1f（待冻结攻击范围内敌人 %.2fs；自冻结 %.2fs）",
 				*o.sim.time, o.spec.Name, o.hp, o.spec.BlessingSave,
 				o.spec.BlessingSelfFreeze)
 		}
@@ -2025,7 +3035,7 @@ func blessingTick(ops []*operator, enemies []*enemy, t float64, verdict *Verdict
 			}
 			// **取更大值**而不是覆盖：她已经冻着的敌人不该因为这次触发被缩短
 			// （原版注释原话，与 `sluggish_timer` 的写法一致）。
-			e.freezeTimer = math.Max(e.freezeTimer, secs)
+			e.applyFreeze(secs)
 			hit++
 		}
 		verdict.Events = append(verdict.Events, Event{T: t, Kind: "mech",
