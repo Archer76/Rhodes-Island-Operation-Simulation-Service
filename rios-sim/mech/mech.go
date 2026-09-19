@@ -54,6 +54,17 @@ import (
 	"fmt"
 )
 
+// Trace 由**主包**在启动时注入：机制内部的排障痕迹走它。
+//
+// 为什么机制不能直接用 `Ctx.Trace`：那要求手上正好有一个 `Ctx`，而
+// "计时器为什么不动""施放为什么没发生"这类问题要问的地方**往往在
+// 拿不到 `ctx` 的那些小方法里**（`tick`/`cast`/`add`）。为了打一行痕迹
+// 而给每个方法加一个 `ctx` 形参，是把排障需求渗进算法签名，不划算。
+//
+// 契约与 `Ctx.Trace` 相同：只在 `RIOS_TRACE=1` 时输出、只走 stderr、
+// **不进判决**。未注入时（单测里）是 no-op。
+var Trace = func(format string, args ...any) {}
+
 // ID 是机制的稳定标识。
 //
 // 命名约定：`<活动或机制族>.<东西>`，全小写下划线（`huai_shu_li.farmland`、
@@ -121,6 +132,24 @@ type PileTicker interface {
 	PileTick(ctx Ctx, dt float64)
 }
 
+// SnowTicker 是**积雪**（圣聆初雪天赋「无垠的雪景」，原版 `sim.py:1096`
+// `_snow_tick`，帧序 **3.5**）。
+//
+// ⚠ 位置是本层最讲究的一处，夹在 3.4（重生）与 3.5 之后的天赋冻结之间：
+//
+//	3.4 重生结算
+//	3.5 积雪（**要在推进之后**判"踏入了哪一格"，写的减速给下一帧用）
+//	   天赋欠下的范围冻结（`_blessing_tick`）
+//	   技力（`_qi_tick`）
+//	3.7 关卡环境（田地）
+//
+// 所以它**不能**并进 `EnvTick`（那是 3.7，把"踏入判定"推到环境伤害之后，
+// 会让"这一帧刚踏进去的敌人"少吃一次踏入伤害，而且减速晚一帧生效），
+// 也不能并进 `Frame`（帧末看到的是一整帧都结算完的世界，漏怪已经记过了）。
+type SnowTicker interface {
+	SnowTick(ctx Ctx, dt float64)
+}
+
 // Summoner 让机制在运行期**造出敌人**（装置造甲、甲造乙、乙造天标）。
 //
 // 模板是机制从自己那份规格里拿到的**一段 JSON**（"我能造谁"写在造它的人的
@@ -176,6 +205,26 @@ type PollutionAdder interface {
 // 不要"取最近的水源"之类的近似——那不是原版的判定。
 type ClearWaterProbe interface {
 	IsClear(cell [2]int, allies [][2]int) bool
+}
+
+// DeployDamager 回答"干员落到这一格的那一下吃多少"——**部署瞬间的一次性环境伤害**。
+//
+// 原文（原版 `sim.py:3383-3394`）把它写成
+// `first_basic_damage + 实际病害值 × first_damage_ratio`，并且与"每秒受到 …"
+// 是**两句分开的话**：落地那一秒的总量 = 这一下 **加上** 那一秒的结算。
+//
+// ⚠ **不能并进 `EnvTick`**。并进去就少了下半句——而"这一拍刚好整秒"只是巧合，
+// 不整秒时两者谁都补不上谁。
+//
+// 这条回调是补上来的，来历值得记：`Farmland.DeployDamage` 早就实现了、还有黄金
+// 测试，却**全仓没有一个调用点**——规格在、算术在、单测绿，模拟里一次都没跑过。
+// 实测代价（HS-7，银灰落 (1,3) 受污田地）：原版落地那一拍扣 `505`（这一下）
+// **再加** `152`（那一秒的结算），Go 只有后者 ⇒ 银灰多活 0.97 秒、多打一笔
+// 28.85 伤害 ⇒ 判决"杀/漏/用时"全同而**总伤害 +28.85**。
+//
+// 病害值为 0 时返回 0：落进干净田地的干员不吃这一下（原版同一个判据）。
+type DeployDamager interface {
+	DeployDamage(x, y int) float64
 }
 
 // Framer 在**每一帧的末尾**被调用（`t += dt` 之前，即这一帧的伤害、击杀、
@@ -239,6 +288,27 @@ type Ctx interface {
 	EnemyWindup() float64
 	//: 按**出怪顺序下标**改这一只敌人的推进速度乘区（1.0 = 不变）。
 	ScaleEnemySpeed(index int, scale float64)
+	//: 按**出怪顺序下标**打一次**分类型**的伤害（原版 `_damage_enemy` 那一路）。
+	//: 与 `HitOperator` 对称：倍率由机制自己算（`攻击力 × 倍率`），防御/法抗/
+	//: 闪避与 5% 保底由主循环按这一只**这一刻**的数值结算，无敌窗口、蜕皮叠层、
+	//: 加速、明识形态记名也一并走主循环那唯一的出口。
+	//:
+	//: 第一个使用者是积雪的踏入伤害（`sim.py:1174 _snow_hit`：`magic_scale ×
+	//: 干员当前攻击力`，**走正规法抗结算、不吃物理的 5% 保底**）。
+	//: `src` 是伤害来源的干员下标（机制造成的伤害通常没有明确来源，传 -1）。
+	//: 返回实际掉的血。
+	HitEnemy(index int, raw float64, damageType string, src int) float64
+	//: 这一格是不是**防守点**（原版 `_is_goal`，`sim.py:672`：`tile_end`）。
+	//: 积雪要用它：满层的雪**不冻结终点格**——把已经踏到终点的敌人冻在离终点
+	//: 半格处，它永远到不了终点，等于白送一条命（原版 `sim.py:1155`）。
+	IsGoalCell(cell [2]int) bool
+	//: 按**出怪顺序下标**把这一只标记为**冻结**（原版 `e.frozen = True`）。
+	//:
+	//: ⚠ 原版的 `frozen` 是**复合判据**：`freeze_timer > 0` **或**"所站格满层"
+	//: （`sim.py:1139` 每帧重置 + 1156 由积雪置位）。守这个字段的是"不推进、
+	//: 不出手"两处闸门，所以少写一半的后果是**冻结静默失效**——敌人照走照打，
+	//: 而判决上看不出"是冻结没生效"还是"本来就没人冻它"。
+	SetEnemyFrozen(index int, on bool)
 	//: 按**出怪顺序下标**读/写一只敌人的血量（天桩链用：甲监测时把生命
 	//: 重设成所在地块病害值、激活后每秒自伤、乙到时自毁——全是**直接写血**，
 	//: 不是"受到伤害"：原版那三处都是 `e.hp = ...`，既不算我方战果、
@@ -289,6 +359,14 @@ type OpView struct {
 	//: 阻挡数。敌方技能出手的"部署于地面"取它（`block_cnt > 0`，
 	//: 原版 `_skill_atk_target` 3566-3580 与 `docs/verdicts-pending.md` E16）。
 	BlockCnt int
+	//: **这一刻**的攻击力（原版 `OperatorUnit.current_atk()`，Go 侧 `operator.atk()`）。
+	//:
+	//: 为什么要它：积雪的踏入伤害是 `magic_scale × 干员当前攻击力`，而这个数
+	//: **随技能开关变**——所以必须是每帧现读，不能用 `OperatorSpec.ATK` 那个
+	//: "无技能帧的定值"。两者数值上只在技能开启期间不同，而那正是最难查的一类差。
+	//:
+	//: 机制层拿到的仍是**快照**（本结构按帧组装），机制不要缓存它。
+	ATK float64
 }
 
 // EnemyView 是一只敌人在这一帧的样子（只读）。
@@ -405,13 +483,20 @@ type Set struct {
 	starters []hookStarter
 	envs     []hookEnv
 	piles    []hookPile
+	snows    []hookSnow
 	attacks  []hookAttack
 	posts    []hookPost
 	drains   []hookDrain
 	adds     []hookAdd
 	clears   []hookClear
 	framers  []hookFramer
+	deploys  []hookDeploy
 	all      []Mechanism
+}
+
+type hookSnow struct {
+	id ID
+	m  SnowTicker
 }
 
 type hookPile struct {
@@ -460,6 +545,12 @@ type hookFramer struct {
 	m  Framer
 }
 
+// hookDeploy 是"部署瞬间一次性环境伤害"的挂点（见 `DeployDamager`）。
+type hookDeploy struct {
+	id ID
+	m  DeployDamager
+}
+
 // Load 按名字取机制，`cfg` 是各机制的规格（键 = 机制名）。
 //
 // 有一个名字取不到就整组失败——见包注释里那条：少挂一个机制与"本来没这机制"
@@ -498,6 +589,9 @@ func Load(cfg map[string]json.RawMessage, ids ...string) (*Set, error) {
 		if p, ok := m.(PileTicker); ok {
 			set.piles = append(set.piles, hookPile{id, p})
 		}
+		if sw, ok := m.(SnowTicker); ok {
+			set.snows = append(set.snows, hookSnow{id, sw})
+		}
 		if p, ok := m.(PostAttacker); ok {
 			set.posts = append(set.posts, hookPost{id, p})
 		}
@@ -515,6 +609,9 @@ func Load(cfg map[string]json.RawMessage, ids ...string) (*Set, error) {
 		}
 		if f, ok := m.(Framer); ok {
 			set.framers = append(set.framers, hookFramer{id, f})
+		}
+		if dd, ok := m.(DeployDamager); ok {
+			set.deploys = append(set.deploys, hookDeploy{id, dd})
 		}
 	}
 	return set, nil
@@ -581,6 +678,35 @@ func (s *Set) PileTick(ctx Ctx, dt float64) {
 	for _, h := range s.piles {
 		h.m.PileTick(ctx, dt)
 	}
+}
+
+// SnowTick 依次调用各机制的 SnowTick（位置见 `SnowTicker` 的注释：帧序 3.5，
+// **在推进之后、天赋冻结之前**）。
+func (s *Set) SnowTick(ctx Ctx, dt float64) {
+	if s == nil {
+		return
+	}
+	for _, h := range s.snows {
+		h.m.SnowTick(ctx, dt)
+	}
+}
+
+// DeployDamage 汇总所有机制的"部署瞬间一次性环境伤害"（见 `DeployDamager`）。
+//
+// 由**模拟器**在部署路径里调用，位置照原版 `_do_deploy`：落位、技能/天赋的
+// 部署时效果之后，扣费用与建积雪之前。
+//
+// 这里**求和**而不是"取第一个回答 > 0 的"（与 `DrainPollution` 那套不同）：
+// 扣病害值是"同一格只该有一个机制认领"，而伤害是各自加一份才是它们的语义。
+func (s *Set) DeployDamage(cell [2]int) float64 {
+	if s == nil {
+		return 0.0
+	}
+	var total float64
+	for _, h := range s.deploys {
+		total += h.m.DeployDamage(cell[0], cell[1])
+	}
+	return total
 }
 
 // DrainPollution 依次问各机制"这一格能扣走多少病害值"，取第一个回答 > 0 的。

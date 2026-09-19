@@ -165,6 +165,9 @@ type pileUnit struct {
 	isParent bool
 	isDiver  bool
 	isMark   bool
+	//: 这个单位是**哪一帧建出来的**。只有天标用得到它，理由见 `PileTick`
+	//: 的循环上方——原版对"本帧新建的天标"有一条**只对它生效**的例外。
+	bornAt float64
 
 	// ---- 甲 ----
 	monitor    bool
@@ -194,8 +197,33 @@ func (m *farmlandMech) PileTick(ctx Ctx, dt float64) {
 	if len(m.piles) == 0 && len(m.devices) > 0 {
 		m.summonParents(ctx, t)
 	}
+	//: ⚠ 循环条件读的是**当帧重算**的 `len(m.piles)`——这是刻意的，
+	//: 而且**只对天标另有例外**（下一段）。原版第②跳是
+	//: `for e in list(self.enemies)`（`sim.py:4651`）：快照在 ① 之后取，
+	//: 于是"甲当帧生的乙""乙当帧挂的天标"都**不在快照里**。
+	//:
+	//: 但这两者**只有天标**真的按"当帧不跑"对齐：
+	//:
+	//:   * **乙**必须当帧就跑。曾经把乙也按快照排除掉，`hsex07` 依然全绿——
+	//:     那是**两处错误互相遮盖**：真正让乙晚一帧的不是快照，而是
+	//:     `diverTick` 里自缚少了夹零（见那里的注释）。补上 `math.Max(0, …)`
+	//:     之后，乙当帧跑才对得上原版那四组硬数据：
+	//:     86.3333 / 89.3667 / 95.3667 / 97.8333，**四组各四笔逐位相同**。
+	//:     误按快照排除时 Go 会变成 86.3667 / 89.4 / 95.4 / 97.8667，全部晚一帧。
+	//:   * **天标**必须当帧不跑。原版贴上 86.3333、首次扣血 **87.3667**
+	//:     （间隔 1.0333s）；当帧跑了会变成 87.3333（间隔 1.0s），整整早一帧。
+	//:     这一帧引出 `hsex07` 最后的连锁：泥岩 89.3333 而不是 89.3667 阵亡
+	//:     → 甲改扑凯尔希 → 4 枚天标换归属 → 伤害 −1,100.8。
+	//:
+	//: ⚠ **这一处必须两头同时验**：单看 16 份计划，"乙也按快照排除"照样全绿。
+	//: 是 `check_mech_parity.py` 的 `HS-S-1`（4 只失控天桩-乙漏怪晚一帧）把它
+	//: 照出来的。改这两行的人，两个入口都要跑。详见 `docs/uncertainties.md`。
 	for i := 0; i < len(m.piles); i++ {
 		u := m.piles[i]
+		if u.isMark && u.bornAt == t {
+			// 本帧刚挂上的天标：**这帧不给它计时**（原版快照的可见效果）
+			continue
+		}
 		switch {
 		case u.isMark:
 			m.markTick(ctx, u, dt, t)
@@ -371,7 +399,18 @@ func (m *farmlandMech) diverTick(ctx Ctx, u *pileUnit, dt, t float64) {
 		return
 	}
 	if u.idleTimer > 0 {
-		u.idleTimer -= dt
+		// ⚠ **必须夹零**，写 `u.idleTimer -= dt` 会整整差一帧。
+		//
+		// 原版是 `e.idle_timer = max(0.0, e.idle_timer - dt)`（`sim.py:2730`），
+		// 而 `max(0.0, …)` 不是防御性写法——它对**浮点残差**是有意义的：
+		// 自缚初值是 1.0、`dt` 是 1/30，扣 30 次之后 `1.0 − 30·dt` 会留下一个
+		// 约 2e-16 的**正**残差。不夹零的话 `u.idleTimer > 0` 就又多真了一帧，
+		// 乙整整晚一帧扑出去：`hsex07` 的甲啃啮时刻从 86.3333 变成 86.3667，
+		// 四组全部晚一帧，级联到判决。
+		//
+		// 之前这里没有夹零，而"本帧新建的单位当帧不跑"那条快照改动**恰好**
+		// 把这个残差抵消掉了——两处错误互相遮盖，`hsex07` 全绿而 `HS-S-1` 转红。
+		u.idleTimer = math.Max(0, u.idleTimer-dt)
 		return
 	}
 	if u.attacked {
@@ -401,6 +440,12 @@ func (m *farmlandMech) diverTick(ctx Ctx, u *pileUnit, dt, t float64) {
 		}
 	}
 	if target < 0 {
+		//: 没有目标（干员全灭）——乙会一直停在原地。这一条要记，
+		//: 否则"40 只乙全留在场上"会被误读成"扑咬逻辑坏了"。
+		if best == math.Inf(1) && u.selfDestructAt < 0 {
+			ctx.Trace("PILEDIVERNONE t=%.4f idx=%d pos=%.4f,%.4f 场上无存活干员",
+				t, u.enemy, pos[0], pos[1])
+		}
 		return
 	}
 	if best <= cfg.HitRadius {
@@ -410,8 +455,18 @@ func (m *farmlandMech) diverTick(ctx Ctx, u *pileUnit, dt, t float64) {
 		ctx.HitOperator(target, u.atk, u.damageType)
 		u.attacked = true
 		u.selfDestructAt = t + ctx.EnemyWindup()
+		ctx.Trace("PILEDIVERBITE t=%.4f idx=%d target=%d dist=%.4f boom=%.4f"+
+			" pos=%.4f,%.4f tpos=%.4f,%.4f",
+			t, u.enemy, target, best, u.selfDestructAt,
+			pos[0], pos[1], targetPos[0], targetPos[1])
 		m.attachMark(ctx, u, u.tmpl, target, targetPos, t)
 		return
+	}
+	//: 追的时候只在**接近**时记：40 只乙 × 134 秒逐帧记会把 stderr 撑爆，
+	//: 而"到底有没有在靠近"只需要看最后那几格。
+	if best < 3.0 {
+		ctx.Trace("PILEDIVERNEAR t=%.4f idx=%d dist=%.4f pos=%.4f,%.4f tpos=%.4f,%.4f ops=%d",
+			t, u.enemy, best, pos[0], pos[1], targetPos[0], targetPos[1], len(ops))
 	}
 	// 还没到 → 朝目标扑：**换成一条 `[自己, 目标]` 的路线，交给主循环**（原版
 	// 4086-4090 就是这两行）。位移、速度乘区、以及"走完算漏怪要扣命"全部走
@@ -452,6 +507,7 @@ func (m *farmlandMech) attachMark(ctx Ctx, diver *pileUnit, tmpl json.RawMessage
 		device:         -1,
 		raw:            tmpl,
 		isMark:         true,
+		bornAt:         t,
 		attached:       attached,
 		selfDestructAt: -1,
 	})
@@ -490,6 +546,15 @@ func (m *farmlandMech) markTick(ctx Ctx, u *pileUnit, dt, t float64) {
 		u.attachTimer -= 1.0
 		for _, i := range alive {
 			ctx.DamageOperator(i, dmg, true)
+			//: ⚠ 这一族**没有第二处可观测量**：天标扣的是定额血、不进食疗，
+			//: 判决里只看得到最终"谁活到最后"。而 `hsex07` 剩下的分歧恰恰是
+			//: **时刻**——原版可露希尔挨这几笔在 96.3667，Go 在 92.3667，
+			//: 整整早 4 秒，也就是它早死 4 秒的全部原因。不记时刻就查不下去。
+			//:
+			//: 顺带记 `idx`（干员序号）与 `mark`（天标序号）：同一个名字的
+			//: 干员只有一位，但**天标有好几个**，只记名字分不清是哪一枚在扣。
+			ctx.Trace("PILEMARKDMG t=%.4f mark=%d target=%d dmg=%.3f timer=%.4f src=mech",
+				ctx.Now(), u.enemy, i, dmg, u.attachTimer)
 		}
 	}
 }
@@ -1033,6 +1098,24 @@ func (fs *Farmland) DrainPollution(cell Cell, want float64) float64 {
 		fs.actual[cell] = left
 	}
 	return moved
+}
+
+// DeployDamage 是机制层对 `DeployDamager` 的回答：部署瞬间的一次性环境伤害。
+//
+// ⚠ **这一层转发是必须的，不是顺手的包装**。`farmlandMech` 持有的是**具名字段**
+// `field *Farmland`，不是嵌入——于是 `Farmland.DeployDamage` 这个方法**不会被
+// 提升**到 `*farmlandMech` 上，机制层里 `m.(DeployDamager)` 的断言**静默为假**，
+// `Set.deploys` 空空如也，模拟器拿到 0 却看不出哪里不对（构造没有错、算术没有错、
+// 单测也是绿的）。实测代价：HS-7 上银灰少挨 505 点、多活 0.97 秒、判决的
+// "杀/漏/用时"全同而**总伤害 +28.85**——只有拿承伤逐笔对才看得见。
+//
+// 所以这一族（`IsClear` / `DrainPollution` / `PolluteAround` / 本方法）都要在
+// `*farmlandMech` 上各写一遍转发；新增一条可选接口时，**先问它是不是具名字段**。
+func (m *farmlandMech) DeployDamage(x, y int) float64 {
+	if m.field == nil {
+		return 0
+	}
+	return m.field.DeployDamage(x, y)
 }
 
 // DrainPollution 是机制层的入口：模拟器在帧序 3.4 问"这一格能扣走多少"。

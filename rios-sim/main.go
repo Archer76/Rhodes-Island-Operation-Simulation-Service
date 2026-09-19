@@ -77,6 +77,9 @@ type pong struct {
 }
 
 func main() {
+	// 机制层的痕迹通道（见 `initMechTrace`）：`RIOS_TRACE=1` 时接上，
+	// 否则 `mech.Trace` 保持 no-op。
+	initMechTrace()
 	// 无缓冲地一行一行应答：调用方是"发一批、收一批"的同步用法，
 	// 攒着不写会让人以为进程挂住了。
 	in := bufio.NewScanner(os.Stdin)
