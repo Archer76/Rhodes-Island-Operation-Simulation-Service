@@ -221,7 +221,10 @@ def _rebuild_ranges() -> tuple[str, str]:
     reg.save()
     msg = f"代号 {len(codes)} 个：取到 {got} 个，落盘 {reg.index_path.name}"
     if failed:
-        msg += f"；⚠ 取不到 {len(failed)} 个：" + "、".join(failed[:8])
+        # ★ **失败项逐条列出，不许截断**——"只报前 N 条"会让"共几个失败"重新变成猜的。
+        # （本行原先写的是 `failed[:8]`，2026-09-20 第一次实跑时当场吃掉了 2 条，
+        #   正是 PM 明令要求"失败项逐条列出"的东西。）
+        msg += f"；⚠ 取不到 {len(failed)} 个，逐条：\n        " + "\n        ".join(failed)
         return "failed", msg
     return "ok", msg
 
@@ -346,12 +349,17 @@ def _reconcile(ran: dict[str, str]) -> tuple[list[str], list[str]]:
     for db, musts in MUST_HAVE_ROWS.items():
         owner = DB_OWNER.get(db, "")
         st = ran.get(owner, "notrun")
+        got = seen.get(db)
         if st in ("skipped", "notrun"):
+            # ★ **"那一步没跑" ≠ "这个库不在"**——同族第三例。
+            # `--only stage 表,enemydb` 时 akdb 那步没跑，但它就在盘上、行数齐全；
+            # 这时报一句"akdb 没建"就是**假信号**。库在且有行 ⇒ 什么都不说。
+            if got and any(v > 0 for v in got.values()):
+                continue
             notes.append(f"{db} 没建 —— 它的那一步（`{owner}`）本次"
                          + ("**被 `--offline` 跳过**" if st == "skipped"
                             else "**没在 `--only` 里**"))
             continue
-        got = seen.get(db)
         if got is None:
             problems.append(f"{db} 建不出来（表都没读到），而它的那一步报的是 {st}")
             continue
@@ -362,9 +370,9 @@ def _reconcile(ran: dict[str, str]) -> tuple[list[str], list[str]]:
                 problems.append(f"{db}.{t} **0 行**（必须在，空了说明这一步没做成）")
 
     for db, allows in MAY_BE_EMPTY.items():
-        if ran.get(DB_OWNER.get(db, ""), "notrun") in ("skipped", "notrun"):
+        got = seen.get(db)
+        if got is None:
             continue
-        got = seen.get(db) or {}
         for t, reason in allows.items():
             if got.get(t) == 0:
                 notes.append(f"{db}.{t} 是 0 行 —— {reason}")
