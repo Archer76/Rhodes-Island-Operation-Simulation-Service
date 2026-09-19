@@ -5,8 +5,8 @@
 ## 生成方式（元数据，便于复核）
 
 * 工具：`tools/two_spelling_audit.py`；运行者：**RIOS后端2**
-* 所属树 HEAD：`c72d213`；工作区（`ak_tactic/`＋`tools/`）**dirty**
-* 键空间对拍（vs 审计 `keys_of()`）：抽 4 位（等距）逐位相同的 4 位
+* 所属树 HEAD：`0b03868`；工作区（`ak_tactic/`＋`tools/`）**dirty**
+* 键空间对拍（vs 审计 `keys_of()`）：抽 16 位（等距）逐位相同的 16 位
 * **判据来源**：`tools/audit_coverage.py:50-69` 的 `is_read()`（整键 → 方括号条件名 → `key.rsplit('@', 1)[-1]`）；键空间＝DB 黑板行摊平后**另存 `$键名`**（`ak_tactic/operator/talent.py:139-147`）。
 
 ## 口径（五档，先说清「这一列数的是什么」）

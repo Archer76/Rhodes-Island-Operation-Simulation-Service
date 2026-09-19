@@ -595,8 +595,11 @@ def main() -> int:
     checks: list[str] = []
     if args.sample_check:
         real = real_operators(con)
+        #: `operator` 表里有 703 个 `token_*`/`trap_*`（召唤物/装置也住这张表），
+        #: 抽验要只看真干员——否则会抽到 `SkillBook` 必然抛错的对象（那不是"不一致"）。
         cids = sorted({c for (c,) in con.execute(
-            "SELECT DISTINCT char_id FROM operator_skill")} & real)
+            "SELECT DISTINCT char_id FROM operator_skill")
+            if c in real and not c.startswith(("token_", "trap_"))})
         step = max(1, len(cids) // args.sample_check)
         sample = cids[::step][:args.sample_check]
         n_same = n_all = 0
