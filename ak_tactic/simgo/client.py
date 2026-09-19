@@ -34,17 +34,88 @@ def repo_root() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parent.parent.parent
 
 
-def find_binary() -> pathlib.Path | None:
-    """找 `rios-sim` 的二进制。找不到就返回 None（调用方据此**跳过**，不是失败）。"""
-    env = os.environ.get("RIOS_SIM_BIN")
-    if env and pathlib.Path(env).exists():
-        return pathlib.Path(env)
-    root = repo_root() / "rios-sim"
+class EngineBinaryUnpinned(RuntimeError):
+    """没钉住引擎二进制。
+
+    ⚠ 这不是"找不到文件"那类错，是**拒绝**：不许悄悄挑一个能跑的（PM 2026-09-19 裁定）。
+    """
+
+
+def legacy_binary() -> pathlib.Path | None:
+    """工作树里那枚预编译的 `rios-sim/rios-sim.exe`。
+
+    ⚠ 它在 `.gitignore` 里 ⇒ **不入库、任何一次 Go 改动之后都会过期**，而各会话都从
+    工作树构建 ⇒ 它看起来"一直能用"。2026-09-19 实测：它比本树最新 `.go` 旧 260 分钟、
+    落后 16 个 rios-sim 提交，却让同一条 `--check` 从 48杀/221.6667s 读成 83杀/814.0333s。
+    现在它**只用于把"旧了多少"写进报错消息**，不再作为回退项。
+    """
     for name in ("rios-sim.exe", "rios-sim"):
-        cand = root / name
+        cand = repo_root() / "rios-sim" / name
         if cand.exists():
             return cand
     return None
+
+
+def staleness_minutes(p: pathlib.Path) -> tuple[float, pathlib.Path] | None:
+    """`p` 比本树最新的 `.go` 源旧多少分钟。返回 `(分钟, 那个 .go)`，不旧则 None。"""
+    srcs = list((repo_root() / "rios-sim").rglob("*.go"))
+    if not srcs or not p.exists():
+        return None
+    newest = max(srcs, key=lambda q: q.stat().st_mtime)
+    delta = (newest.stat().st_mtime - p.stat().st_mtime) / 60.0
+    return (delta, newest) if delta > 0 else None
+
+
+def build_hint() -> str:
+    """报错消息里给出的**那一条能直接粘的命令**——报错不附修法等于只报了一半。"""
+    return ('cd rios-sim && go build -o "../out/acceptance/rios-sim-'
+            '$(git -C .. rev-parse --short HEAD).exe" .  '
+            '# 然后 RIOS_SIM_BIN=<该文件> 再跑')
+
+
+def require_binary() -> pathlib.Path:
+    """取**显式钉住**的引擎二进制。没钉就大声失败。
+
+    ## 为什么默认值是"不许有默认值"
+
+    先说事实（2026-09-19，同一条 `--check`、同一批 19 份、同一份基线，**只差这台仪器**）：
+
+    * 未钉 ⇒ 落到工作树那枚 19:08 的 exe ⇒ `hsex8_max` 83杀/1漏/814.0333s，报 1 份不一致；
+    * 钉住 ⇒ 当轮私有构建 ⇒ 48杀/3漏/221.6667s，19/19 一致。
+
+    两台仪器都不报错、都给出"看起来正常"的数。**"默认仪器是老的"比"没有默认仪器"危险**：
+    前者静默，后者立刻可见。所以这里**不回退**——工作树那枚只用来把"旧了多少分钟"写进消息。
+    """
+    raw = (os.environ.get("RIOS_SIM_BIN") or "").strip()
+    if not raw:
+        legacy = legacy_binary()
+        extra = ""
+        if legacy is not None:
+            st = staleness_minutes(legacy)
+            extra = (f"\n  查见工作树里那枚 {legacy}（{legacy.stat().st_size}B）"
+                     + (f"：比本树最新 .go 旧 **{st[0]:.1f} 分钟**（{st[1].name}）"
+                        if st else "（目前不比 .go 旧）")
+                     + "——**未采用**。")
+        raise EngineBinaryUnpinned(
+            "没有钉住 Go 引擎二进制：环境变量 RIOS_SIM_BIN 未设。\n"
+            f"  先构建：{build_hint()}\n"
+            "  ⚠ 不自动挑工作树里那枚 rios-sim.exe：它是构建产物、会在 Go 改动后悄悄过期，"
+            "静默用旧会让读数不可比（2026-09-19 事故：未钉与钉住只差这一项，读数 814.0333s vs 221.6667s）。"
+            + extra)
+    p = pathlib.Path(raw)
+    if not p.exists():
+        raise EngineBinaryUnpinned(
+            f"RIOS_SIM_BIN 指向的文件不存在：{p}\n  先构建：{build_hint()}")
+    return p
+
+
+def find_binary() -> pathlib.Path:
+    """**已改名为 `require_binary()` 的旧入口**，保留只为不改动几十处调用方。
+
+    ⚠ 语义已变：以前"找不到就返回 None（调用方据此跳过）"——**"跳过"是静默的**，
+    而静默跳过在读数上长得跟"跑过了、一致"一模一样。现在一律抛 `EngineBinaryUnpinned`。
+    """
+    return require_binary()
 
 
 class Simgo:
@@ -52,10 +123,7 @@ class Simgo:
 
     def __init__(self, exe: pathlib.Path | str | None = None,
                  timeout: float = 120.0) -> None:
-        self.exe = pathlib.Path(exe) if exe else find_binary()
-        if self.exe is None:
-            raise FileNotFoundError(
-                "没找到 rios-sim 的可执行文件：先 cd rios-sim && go build")
+        self.exe = pathlib.Path(exe) if exe else require_binary()
         self.timeout = timeout
         self._proc = subprocess.Popen(
             [str(self.exe)],
@@ -189,9 +257,11 @@ def compare(py_result, go_verdict: dict, *,
 def main(argv: list[str] | None = None) -> int:
     """命令行自检：`python -m ak_tactic.simgo` → ping 一次，报告版本与能力。"""
     argv = list(sys.argv[1:] if argv is None else argv)
-    exe = find_binary()
-    if exe is None:
-        print("没找到 rios-sim 的可执行文件（先 cd rios-sim && go build）")
+    try:
+        exe = require_binary()
+    except EngineBinaryUnpinned as e:
+        #: ⚠ 走到 stderr、退出码 2：**没钉住就是没钉住**，不许在这里自己挑一枚。
+        print(f"⛔ {e}", file=sys.stderr)
         return 2
     with Simgo(exe) as sim:
         pong = sim.ping()

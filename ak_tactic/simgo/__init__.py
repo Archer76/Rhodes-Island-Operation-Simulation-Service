@@ -15,7 +15,9 @@
 * `client.Simgo` —— 子进程 + 一行一个 JSON 的调用；`client.compare` 逐项对拍。
 """
 
-from .client import Simgo, compare, find_binary
+from .client import (EngineBinaryUnpinned, Simgo, compare, find_binary,
+                     legacy_binary, require_binary, staleness_minutes)
 from .spec import build_spec, unsupported_reasons
 
-__all__ = ["Simgo", "compare", "find_binary", "build_spec", "unsupported_reasons"]
+__all__ = ["Simgo", "compare", "find_binary", "require_binary", "EngineBinaryUnpinned",
+           "legacy_binary", "staleness_minutes", "build_spec", "unsupported_reasons"]
