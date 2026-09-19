@@ -5,8 +5,8 @@
 ## 生成方式（元数据，便于复核）
 
 * 工具：`tools/two_spelling_audit.py`；运行者：**RIOS后端2**
-* 所属树 HEAD：`6fd4693`；工作区（`ak_tactic/`＋`tools/`）**dirty**
-* **判据尺子身份**：`tools/audit_coverage.py` working blob `43637d52d016`（HEAD `f210a4a3e37e`，**不同（工作区已被改）**）
+* 所属树 HEAD：`9273e1d`；工作区（`ak_tactic/`＋`tools/`）**dirty**
+* **判据尺子身份**：`tools/audit_coverage.py` working blob `2f1835073377`（HEAD `f857bcff642d`，**不同（工作区已被改）**）
 * 键空间对拍（vs 审计 `keys_of()`）：抽 16 位（等距）逐位相同的 16 位
 * **判据来源**：`tools/audit_coverage.py:50-69` 的 `is_read()`（整键 → 方括号条件名 → `key.rsplit('@', 1)[-1]`）；键空间＝DB 黑板行摊平后**另存 `$键名`**（`ak_tactic/operator/talent.py:139-147`）。
 
@@ -60,7 +60,7 @@
 | `burn.atk_scale` | **有** | `attack@burn.atk_scale`、`burn.atk_scale` | 10 | 火哨｜char_493_firwhl | 灼燃那一族的倍率：**须按正文取证** | 火哨 1 位、10 行；无读点 ⇒ 要新读点 |
 | `chain.atk_scale` | **有** | `attack@chain.atk_scale`、`chain.atk_scale` | 1 | 乌啾｜char_4224_turdus | 链式那一族的倍率：**须按正文取证** | 乌啾；无读点 ⇒ 要新读点（链式那一家族） |
 | `chain.atk_scale_2` | **有** | `attack@chain.atk_scale_2`、`chain.atk_scale_2` | 4 | 乌啾｜char_4224_turdus | 链式第二倍率槽：**须按正文取证** | 乌啾；无读点 ⇒ 要新读点 |
-| `chain.max_target` | **有** | `attack@chain.max_target`、`chain.max_target` | 1 | 乌啾｜char_4224_turdus | 链式目标数：**须按正文取证** | 乌啾；无读点 ⇒ 要新读点 |
+| `chain.max_target` | **有** | `chain.max_target` | 1 | 乌啾｜char_4224_turdus | 链式目标数：**须按正文取证** | 乌啾；**零消费者**——但有**一处字面量**：`ak_tactic/formula.py:142` 的 `RULED_FLAT_KEYS`（公式编译器的**量纲裁定键名表**，按原键比对，不读值）。写法仍是「要新读点」，与 `chain.atk_scale`／`chain.atk_scale_2`（真的一处字面量都没有）**不是同一种无读点**（2026-09-20 修 `_LITERAL` 点号后实测：本族是全库 5 键／过闸 2 对里唯一带点的 C 档家族） |
 | `damage_addition` | **有** | `attack@damage_addition`、`damage_addition` | 10 | 戴菲恩｜char_4110_delphn | 附加伤害：**须按正文取证** | 戴菲恩 1 位、10 行；无读点 ⇒ 要新读点 |
 | `take_extra_enemy_key` | **有** | `$take_extra_enemy_key`、`take_extra_enemy_key` | 1 | 隐德来希｜char_4010_etlchi | 额外目标（按 enemy_key 取）：**须按正文取证**　※ 没人读的是 `$`（字符串）侧 ⇒ 接的是那一侧的值 | 隐德来希 1 位；无读点 ⇒ 要新读点 |
 

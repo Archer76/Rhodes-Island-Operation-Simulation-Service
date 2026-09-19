@@ -122,7 +122,11 @@ VERDICT: dict[str, tuple[str, str]] = {
     "burn.atk_scale": ("C", "火哨 1 位、10 行；无读点 ⇒ 要新读点"),
     "chain.atk_scale": ("C", "乌啾；无读点 ⇒ 要新读点（链式那一家族）"),
     "chain.atk_scale_2": ("C", "乌啾；无读点 ⇒ 要新读点"),
-    "chain.max_target": ("C", "乌啾；无读点 ⇒ 要新读点"),
+    "chain.max_target": ("C", "乌啾；**零消费者**——但有**一处字面量**：`ak_tactic/formula.py:142` 的 "
+                             "`RULED_FLAT_KEYS`（公式编译器的**量纲裁定键名表**，按原键比对，不读值）。"
+                             "写法仍是「要新读点」，与 `chain.atk_scale`／`chain.atk_scale_2`（真的一处字面量"
+                             "都没有）**不是同一种无读点**（2026-09-20 修 `_LITERAL` 点号后实测：本族是"
+                             "全库 5 键／过闸 2 对里唯一带点的 C 档家族）"),
     "damage_addition": ("C", "戴菲恩 1 位、10 行；无读点 ⇒ 要新读点"),
     "take_extra_enemy_key": ("C", "隐德来希 1 位；无读点 ⇒ 要新读点"),
 }
