@@ -85,14 +85,32 @@ FAMILIES: dict[str, tuple[str, str]] = {
     "灼燃": ("rios-sim/element.go::elemFire", "元素损伤族"),
     "侵蚀": ("rios-sim/element.go::elemWater", "元素损伤族"),
     "神经": ("rios-sim/element.go::elemSanity", "元素损伤族"),
+    # ── ★ 修账（2026-09-20）：这三条原登记为 `-`，实为**错账**——两侧都已实现。
+    #    改法是「给出真落点」，**不是「删掉这一行」**：词表要保留，
+    #    因为它仍要参与核对（删了就变成"这个词我们不看了"，那是把账做平不是把账做对）。
+    "闪避": ("rios-sim/skill.go::dodgeVs",
+             "**已建模**：干员侧闪避比例入口，消费点 `sim.go:1319`。"
+             "⚠ 敌人侧 `sim.go:239 enemy.dodgeVs` 恒 0，**且与原版同值**——"
+             "是「两边一致的零」，**不是「零调用点」**。"
+             "锚点与 `tools/coverage_table.py` 一致（PM 2026-09-20 裁定的那个锚）"),
+    "治疗": ("rios-sim/sim.go::heal",
+             "**已建模**：治疗量入口 `operator.heal`（Python 侧对应 "
+             "`ak_tactic/battle/unit.py::heal`）；技能治疗倍率另走 `Heals` / `heal_scale` "
+             "一路，见 `tools/gate_inventory.py`"),
+    "回复": ("rios-sim/sim.go::heal",
+             "**同上**：语料里 `回复` 与 `治疗` 是同一件事的两种写法"
+             "（同 `晕眩`／`眩晕` 的先例，两条指向同一个落点）"),
     # ── 明确登记为"我们没有"（不是漏填）
-    "闪避": ("-", "**未建模**：Go 侧 `enemy.dodgeVs` 恒返回 0，干员侧没有闪避字段族"),
     "庇护": ("-", "**未建模**：减伤型庇护不在现模型里"),
     "冷却": ("-", "**未建模**：技能冷却另有口径，未建字段族"),
     "沉默": ("-", "**未建模**：它是异常效果 `SILENCED`，但 Go 侧没有对应标志位/实现"),
-    "回复": ("-", "**未建模**：治疗量口径分散，无统一字段族（`治疗` 同）"),
-    "治疗": ("-", "同上"),
 }
+
+#: 2026-09-20 修账时逐条对过的 6 个词（**原 `-` 档的全集**）。
+#:
+#: 留在这里，是为了让「这 6 条现在各在哪一档」**随时可复现**，
+#: 而不是只活在某一次汇报里（`--absent` 就打印它）。
+ABSENT_LEDGER: tuple[str, ...] = ("闪避", "庇护", "冷却", "沉默", "回复", "治疗")
 
 #: `-` 档（登记为"我们没有这个字段族"）的**反证锚**。
 #:
@@ -103,6 +121,9 @@ FAMILIES: dict[str, tuple[str, str]] = {
 #: 被压成了同一个值——而后者**无处安放**，只能被读成前者。
 #: 2026-09-20 实测：该档 6 条里 **3 条是错账**（闪避／治疗／回复 其实两侧都已实现），
 #: 且因为这一档不会翻红，**错了也没人知道**。
+#: ★ **同日已修**：这三条搬去真落点（见 `FAMILIES`），本表现在只剩 3 条。
+#: **留下来的 3 条不是"没查过"，是"查过、反证锚都没命中"**——两者的区别写在这里，
+#: 免得下一个读的人以为这里少了一半。
 #:
 #: ## 口径
 #:
@@ -114,12 +135,9 @@ FAMILIES: dict[str, tuple[str, str]] = {
 #:
 #: 没登记反证锚的 `-` 条目**直接判 BAD**：`不可证伪`本身就是要报出来的病。
 ABSENT_ANCHORS: dict[str, tuple[tuple[str, str, str], ...]] = {
-    "闪避": (("ak_tactic/battle/unit.py", "dodge_phys",
-              "原声明：干员侧**没有**闪避字段族"),),
-    "治疗": (("ak_tactic/battle/unit.py", "def heal",
-              "原声明：治疗量口径分散，无统一字段族/入口"),),
-    "回复": (("rios-sim/sim.go", "func (o *operator) heal",
-              "原声明：同「治疗」，无统一字段族"),),
+    # ★ 闪避／治疗／回复 的锚**已随修账移除**：它们是错账（反证锚命中过 ⇒ 声明被证伪），
+    #   现在搬去 `FAMILIES` 的真落点。**移除本身就是那笔错账的记录**——
+    #   若哪天有人想把它们搬回来，先解释为什么 `dodgeVs` / `heal` 不存在了。
     "庇护": (("ak_tactic/battle/sim.py", "庇护",
               "原声明：减伤型庇护不在现模型里"),),
     "沉默": (("rios-sim/control.go", "Silence",
@@ -277,13 +295,39 @@ def self_test() -> int:
         if got == "BROKEN" and why:
             print(f"       {why[0]}")
 
-    # ① `-` 档守卫：反证锚命中 ⇒ 必须翻红（旧版这里恒为 UNMODELED 且永不翻红）
-    print("== ① `-` 档守卫：反证锚命中时必须变红 ==")
-    for text, want in (("闪避+30", "BROKEN"), ("回复生命值", "BROKEN"), ("治疗自身", "BROKEN")):
+    # ① `-` 档守卫：反证锚命中 ⇒ 必须翻红。
+    # ★ 2026-09-20 修账后，`-` 档只剩 3 条、且**都没有可命中的锚**
+    #   （那正是它们还活着的原因）⇒ **"现成的活例子"没有了**。
+    #   所以这里**必须合成一个**。否则这条守卫会随着错账被修完而
+    #   **悄悄变成看不见的守卫**——而这正是它当初要防的那件事。
+    print("== ① `-` 档守卫：反证锚命中时必须变红（合成用例） ==")
+    _k = "__自证_必然命中__"
+    _saved_fam, _saved_anc = dict(FAMILIES), dict(ABSENT_ANCHORS)
+    FAMILIES[_k] = ("-", "自证用：故意登记一个**必然命中**的反证锚")
+    ABSENT_ANCHORS[_k] = (("tools/audit_op_notes.py", "ABSENT_ANCHORS",
+                           "自证用：这个词就写在本文件里，翻一下必然命中"),)
+    try:
+        got, _, why = classify(_k)
+    finally:
+        FAMILIES.clear()
+        FAMILIES.update(_saved_fam)
+        ABSENT_ANCHORS.clear()
+        ABSENT_ANCHORS.update(_saved_anc)
+    ok = got == "BROKEN"
+    bad += 0 if ok else 1
+    print(f"  {'✅' if ok else '⛔'} 期望 BROKEN／得到 {got}")
+    for w in why:
+        print(f"       {w}")
+
+    # ★ 修账复核：这三条**必须已经落到 LINKED**（落点符号真实存在）。
+    #   把"修好了"也做成一条**会红的断言**——否则修完就再没人看它了。
+    print("== 修账复核：闪避／治疗／回复 必须落到 LINKED ==")
+    for text in ("闪避+30", "回复生命值", "治疗自身"):
         got, hits, why = classify(text)
-        ok = got == want
+        ok = got == "LINKED"
         bad += 0 if ok else 1
-        print(f"  {'✅' if ok else '⛔'} 期望 {want}／得到 {got}  命中词={hits}")
+        tgt = FAMILIES[hits[-1]][0] if hits else "?"
+        print(f"  {'✅' if ok else '⛔'} 期望 LINKED／得到 {got}  命中词={hits} 落点={tgt}")
         for w in why:
             print(f"       {w}")
 
@@ -350,18 +394,63 @@ def _force_utf8_stdout() -> None:
             pass
 
 
+def print_absent_ledger() -> int:
+    """原 `-` 档那 6 条的**对账单**：每一条现在落在哪一档、凭什么。
+
+    为什么做成命令而不是写进汇报里：PM 2026-09-20 要求「修完把 6 条现在各分列到
+    哪一档逐条印出来」——**一次性的打印会随上下文丢掉，命令不会**。
+    """
+    tier_of = {OK: "已建模（落点成立）", BAD: "错账（落点不成立）",
+               UNKNOWN: "判不了（验不了，不是没有）"}
+    print("== 原 `-` 档对账单：这 6 条现在各在哪一档 ==")
+    print("   `-` 档曾是四档里**唯一不需要证据就能通过**的档；2026-09-20 查出 3 条错账并已修。")
+    print()
+    n_bad = 0
+    for k in ABSENT_LEDGER:
+        if k not in FAMILIES:
+            print(f"  ⛔ {k}：**已不在 FAMILIES 里**——删词等于把它移出核对范围，那是把账做平")
+            n_bad += 1
+            continue
+        target, note = FAMILIES[k]
+        state, why = verify_target(target, k)
+        if target == "-":
+            tier = "未建模（登记为「我们没有」，反证锚均未命中）"
+            if state == BAD:
+                tier = "**错账**：登记为未建模，可反证锚命中了"
+        else:
+            tier = tier_of[state]
+        mark = "⛔" if state == BAD else ("❓" if state == UNKNOWN else "✅")
+        print(f"  {mark} {k}　落点 `{target}`")
+        print(f"        档位：{tier}")
+        print(f"        依据：{why}")
+        print(f"        备注：{note}")
+        print()
+        if state == BAD:
+            n_bad += 1
+    print(f"  合计 {len(ABSENT_LEDGER)} 条：**落点不成立 {n_bad} 条**")
+    print("  ★ 剩下的 `-` 条**不是「没查过」，是「查过、反证锚都没命中」**——"
+          "只是没被证伪，**不等于已证实**。")
+    return 1 if n_bad else 0
+
+
 def main() -> int:
     _force_utf8_stdout()
     ap = argparse.ArgumentParser(description="干员 wiki 备注逐条核查（覆盖率视角）")
     ap.add_argument("--only", help="只看名字/char_id 含该子串的干员")
     ap.add_argument("--top", type=int, default=10, help="各档列出前 N 个关键词族")
     ap.add_argument("--self-test", action="store_true", help="自证三档可红")
+    ap.add_argument("--absent", action="store_true",
+                    help=f"打印原 `-` 档那 {len(ABSENT_LEDGER)} 条的**对账单**："
+                         "每一条现在落在哪一档、凭什么")
     ap.add_argument("--dump-parse", metavar="PATH",
                     help="把 PARSE 那批（没有普查词的 fact）落盘成待核清单，供下一轮扩充普查表")
     args = ap.parse_args()
 
     if args.self_test:
         return self_test()
+
+    if args.absent:
+        return print_absent_ledger()
 
     if args.dump_parse:
         # ⚠ 这是**生成物**：题源是本文件的 FAMILIES 表，改词表请改这里，别手改落盘文件
