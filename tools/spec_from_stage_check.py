@@ -205,6 +205,12 @@ def main() -> int:
         #: ⇒ 这张表只报事实，**不下"字段没用"的结论**。
         print()
         print("  逐字段敏感性（改这一个字段，`spec_sha` 变不变）：")
+        #: ⚠⚠ **这张表是与夹具相关的**：实测同一套代码下，`snow_freeze` 在
+        #: `plan-hstr02`（无敌人）上判"不变"、在 `hsex8_max`（72 出怪）上判"会变"；
+        #: `goal_cells` 更是从"不变"变成"抛异常"。⇒ 单跑一份**不能**得出"这项没用"。
+        print(f"     ⚠ 本表基于 {len(plans)} 份夹具（{plans[0].name}）——"
+              "**换一份夹具结论会变**，")
+        print("       所以'不变'只能读作'**在这份夹具上**没被读到'，不能读成'没用'。")
         hot = sorted(k for k, v in sens.items() if v == 1)
         warm = sorted(k for k, v in sens.items() if v == 2)
         cold = sorted(k for k, v in sens.items() if v == 0)
