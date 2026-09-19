@@ -1235,8 +1235,22 @@ def write_report(items: list[dict], drops: list[dict], changes: list[dict],
     L.append(f"- 生成时间：{time.strftime('%Y-%m-%d %H:%M:%S')}")
     L.append(f"- 执行者：验收与守卫会话 `{SESSION}`"
              f"（命令：`python tools/acceptance.py{' --quick' if args.quick else ''}`）")
-    L.append(f"- 判定：**通过 {len(items) - len(fails) - len(noruns)} / 失败 {len(fails)} / "
-             f"未跑 {len(noruns)}**，退出码 **{rc}**，总耗时 {seconds / 60:.1f} 分钟")
+    #: ⚠ **「未跑」必须带口径，且报告头与控制台必须是同一个集合**（2026-09-20 修）：
+    #: 报告头原写 `len(noruns)`（= 所有未跑，4），控制台写的是 **判定项**里的未跑（3）
+    #: ⇒ 同一轮出现「报告头 未跑 4 / 控制台 未跑 3」两个都"对"的数。
+    #: 差的那一项是 `[1d]` 森空岛名册身份（已登记、`blocking=False`、又不在场）。
+    #: **第一版修错了**：只按 `blocking` 过滤 ⇒ 得 2，仍与控制台对不上——
+    #: 判定口径是 **`counted ∧ blocking`**（`check_battle` 是「只跑不判」：`counted=False`、
+    #: `blocking` 仍是 True）。⇒ 这里**照抄控制台那三个表达式**，两边不可能再漂。
+    _p_judged = len([i for i in items if i["status"] == PASS and i.get("counted", True)])
+    _f_judged = len([i for i in items if i["status"] == FAIL and i.get("counted", True)])
+    _n_judged = len([i for i in items if i["status"] == NORUN and i.get("counted", True)
+                     and i.get("blocking", True)])
+    _n_reg = len(noruns) - _n_judged
+    L.append(f"- 判定：**通过 {_p_judged} / 失败 {_f_judged} / "
+             f"未跑 {_n_judged}**（判定项；口径＝`counted ∧ blocking`，与控制台同一集合；"
+             f"另有 **{_n_reg}** 项未跑但不计入判定），"
+             f"退出码 **{rc}**，总耗时 {seconds / 60:.1f} 分钟")
     L.append(f"- 测量对象：HEAD `{fp1['head']}`，脏文件 {fp1['dirty_n']} 条")
     if drift:
         L.append("")
@@ -1420,6 +1434,16 @@ def write_report(items: list[dict], drops: list[dict], changes: list[dict],
 
 
 def update_baseline(now: dict, base: dict, by: str, why: str, head: str) -> None:
+    #: ⚠ **未跑项不许把水位冲成 None**（2026-09-20 修；本文件里早就记着这类事故：
+    #: 我带着 `--update-baseline` 跑，于是把 `golden_consistent=None` 写成了新基线）。
+    #: 未跑＝**这轮没量到**，不是"量到 0" ⇒ 只有**实测到的**值才许覆盖，缺的保留上次并打印出来。
+    #: 被判红的那几项如果也被保留，是因为 `--force` 才走到这里——那是人的决定，条目里有 who/why。
+    _prev = (base or {}).get("water") or {}
+    _kept = {k: _prev[k] for k, v in now.items() if v is None and _prev.get(k) is not None}
+    if _kept:
+        now = {**now, **_kept}
+        print("（未跑项不冲水位，保留上次实测：" +
+              "、".join(f"{k}={v}" for k, v in _kept.items()) + "）")
     hist = list(base.get("history") or [])
     hist.append({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "head": head,
                  "by": by, "why": why, "water": now})

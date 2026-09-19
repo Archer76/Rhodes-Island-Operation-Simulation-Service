@@ -6,9 +6,9 @@
     "reason": "首轮实测建立基线：金标准17/17、check_battle 816、check_verify 71、审计9登记(扫出7)/0未登记、selftest通过"
   },
   "water": {
-    "golden_plans": 17,
-    "golden_consistent": 17,
-    "golden_baseline_sha256": "87107fda15fa6a57",
+    "golden_plans": 19,
+    "golden_consistent": 19,
+    "golden_baseline_sha256": "0679bb9614890329",
     "check_battle_passed": 816,
     "check_verify_passed": 71,
     "audit_registered_known": 9,
@@ -66,6 +66,26 @@
         "golden_plans": 17,
         "golden_consistent": 17,
         "golden_baseline_sha256": "87107fda15fa6a57",
+        "check_battle_passed": 816,
+        "check_verify_passed": 71,
+        "audit_registered_known": 9,
+        "audit_registered_active": 2,
+        "audit_unregistered": 0,
+        "audit_guard_broken": 0,
+        "cap_read": 10,
+        "cap_defined_unread": 1,
+        "cap_unsent": 16
+      }
+    },
+    {
+      "at": "2026-09-20 02:32:38",
+      "head": "4c61fe5a4994",
+      "by": "session-1a45cfee-9a65-4830-a327-03ac84285bfb（验收与守卫）",
+      "why": "水位 17→19 有解释了：判据集扩容——3bab699(22:30) 把判据集收进 fixtures/，用 golden_go --extend 先验已有 17 份逐项一致、再并入新的 2 份（共 19 份），该提交正文自述『17 份的判决四数与 spec_sha 逐项未变，只是判据集长了两份』；基线表 history 里当时没留这笔 ⇒ 报告按规则标『无解释』，规则本身是对的。另：本轮未跑项（check_battle＝库 data/akdb.sqlite 0 字节无表 skill_level；check_verify＝data/skland 无名册）不冲水位，保留上次实测 816/71。",
+      "water": {
+        "golden_plans": 19,
+        "golden_consistent": 19,
+        "golden_baseline_sha256": "0679bb9614890329",
         "check_battle_passed": 816,
         "check_verify_passed": 71,
         "audit_registered_known": 9,
