@@ -126,7 +126,9 @@ STEPS: list[Step] = [
         source="prts.wiki 的 `Widget:Range/<代号>` SVG（代号从 akdb 的 `attack_range` 取）",
         needs="**要联网**；`data/akdb.sqlite` 必须先建好（用来找代号）",
         eta="约 1~2 分钟（代号只有几十种）",
-        fail_looks_like="个别代号取不到 ⇒ 逐个报出来，不静默少格子",
+        fail_looks_like="**两档分开**：「源上没有」（`PrtsError: 页面不存在`）记 `not_on_source`、"
+                        "**不进失败计数**；「解析不出」（`RangeParseError`：站位格数不对）才算失败。"
+                        "两类都**逐条列出**，不截断",
         func="_rebuild_ranges",
     ),
     Step(
@@ -209,24 +211,51 @@ def _rebuild_ranges() -> tuple[str, str]:
 
     sys.path.insert(0, str(ROOT))
     from ak_tactic.prts import RangeRegistry                      # noqa: PLC0415
+    from ak_tactic.prts.client import PrtsError                   # noqa: PLC0415
+    from ak_tactic.prts.grid import RangeParseError               # noqa: PLC0415
 
     reg = RangeRegistry()
-    got, failed = 0, []
+    got = 0
+    # ★ **两档分开**（PM 2026-09-20 裁定，本任务第六次同族）：
+    #   · `not_on_source`（源上没有）——**这不是失败**，是"这一项在源上不存在"，
+    #     **不进失败计数**；处置是"等上游补"。
+    #   · `failed`（我们没取到）——**这才是失败**；处置是"我们改解析"。
+    #   压在一起 ⇒ **永远分不清"该等谁"**。
+    not_on_source: list[str] = []
+    failed: list[str] = []
     for code in codes:
         try:
             reg.get(code)
             got += 1
+        except RangeParseError as e:
+            # grid.py:115 —— 页面在，但站位格数不对 ⇒ 我们的解析问题
+            failed.append(f"{code}｜**解析不出**：{e}")
+        except PrtsError as e:
+            if "页面不存在" in str(e):
+                # client.py:197 —— 源上没有这一页
+                not_on_source.append(f"{code}｜{e}")
+            else:
+                # ⚠ **只有拿到"页面不存在"这条正面证据才算源上没有。**
+                #   别的 `PrtsError`（403／超时／…）一律算失败——
+                #   否则就是把"**我们没取到**"伪装成"**源上没有**"，
+                #   那是**方向相反的同一种病**：又是两种不同的空压成一个值。
+                failed.append(f"{code}｜**取数失败**（非「页面不存在」）：{e}")
         except Exception as e:                                     # noqa: BLE001
-            failed.append(f"{code}（{e}）")
+            failed.append(f"{code}｜未知异常 {type(e).__name__}：{e}")
     reg.save()
-    msg = f"代号 {len(codes)} 个：取到 {got} 个，落盘 {reg.index_path.name}"
+
+    lines = [f"代号 {len(codes)} 个：取到 {got} 个，落盘 {reg.index_path.name}"]
+    if not_on_source:
+        lines.append(f"  · **源上没有 {len(not_on_source)} 个**（记 `not_on_source`，"
+                     f"**不是失败、不进失败计数**；处置＝等上游补）：")
+        lines += [f"      {x}" for x in not_on_source]
     if failed:
         # ★ **失败项逐条列出，不许截断**——"只报前 N 条"会让"共几个失败"重新变成猜的。
-        # （本行原先写的是 `failed[:8]`，2026-09-20 第一次实跑时当场吃掉了 2 条，
-        #   正是 PM 明令要求"失败项逐条列出"的东西。）
-        msg += f"；⚠ 取不到 {len(failed)} 个，逐条：\n        " + "\n        ".join(failed)
-        return "failed", msg
-    return "ok", msg
+        # （原先写的是 `failed[:8]`，2026-09-20 第一次实跑时当场吃掉了 2 条。）
+        lines.append(f"  · ⛔ **失败 {len(failed)} 个**（我们没取到；处置＝改解析）：")
+        lines += [f"      {x}" for x in failed]
+    msg = "\n".join(lines)
+    return ("failed" if failed else "ok"), msg
 
 
 def _report_external() -> tuple[str, str]:
