@@ -18,6 +18,7 @@ import json
 import re
 import sqlite3
 import sys
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -113,19 +114,9 @@ def load_roster() -> list[tuple[str, str, str, str]]:
     return out
 
 
-def trait_keys_of(cid: str) -> list[tuple[str, str]]:
-    """**特性**的黑板键——审计的第三处键源。
-
-    2026-09-18 之前审计只扫了**技能**与**天赋**两处黑板，于是**特性黑板整个没被
-    看见**：怒潮凛冬的 `attack@atk_scale_2 = 0.5`（特性溅射的底数）和
-    `attack@ability_range_radius = 1.0`（溅射半径）就在这一处，两道筛子都照不到。
-    全库 `operator_trait` 里带黑板的行中，光 `atk_scale` 就出现 39 次。
-
-    特性**不在独立表里**：`talent_table.json` 404、`character_table` 也没有
-    `traits` 字段；结构化特性只属 156/458 名干员，落在 `operator_trait`
-    （正文进 `override_description`，系数进 `blackboard`）。
-    """
-    out: list[tuple[str, str]] = []
+def trait_kv_of(cid: str) -> list[tuple[str, str, object]]:
+    """特性黑板的 `(来源, 键, 值)`——`trait_keys_of` 是它的丢值外壳。"""
+    out: list[tuple[str, str, object]] = []
     db = ROOT / "data" / "akdb.sqlite"
     if not db.exists():
         return out
@@ -139,10 +130,65 @@ def trait_keys_of(cid: str) -> list[tuple[str, str]]:
                 d = json.loads(bb)
             except Exception:  # noqa: BLE001
                 continue
-            for k in d:
-                out.append(("特性", k))
+            for k, v in d.items():
+                out.append(("特性", k, v))
     finally:
         conn.close()
+    return out
+
+
+def trait_keys_of(cid: str) -> list[tuple[str, str]]:
+    """**特性**的黑板键——审计的第三处键源。
+
+    2026-09-18 之前审计只扫了**技能**与**天赋**两处黑板，于是**特性黑板整个没被
+    看见**：怒潮凛冬的 `attack@atk_scale_2 = 0.5`（特性溅射的底数）和
+    `attack@ability_range_radius = 1.0`（溅射半径）就在这一处，两道筛子都照不到。
+    全库 `operator_trait` 里带黑板的行中，光 `atk_scale` 就出现 39 次。
+
+    特性**不在独立表里**：`talent_table.json` 404、`character_table` 也没有
+    `traits` 字段；结构化特性只属 156/458 名干员，落在 `operator_trait`
+    （正文进 `override_description`，系数进 `blackboard`）。
+    """
+    return [(s, k) for s, k, _v in trait_kv_of(cid)]
+
+
+#: 每位干员的 `(技能键, 天赋键, 特性键)` 三份 (来源, 键, 值)——同一趟里会被取两遍，
+#: 缓存一次即可（只读缓存：调用方不得原地改返回的列表）。
+_KV_CACHE: dict[str, tuple] = {}
+
+
+def keys_kv_of(cid: str) -> tuple[list[tuple[str, str, object]],
+                                 list[tuple[str, str, object]],
+                                 list[tuple[str, str, object]]]:
+    """(技能键, 天赋键, 特性键)，元素是 `(来源说明, 键名, 值)`。
+
+    ⚠ **2026-09-20 加**：第四批选人要把"缺失"分四类（PM 转后端2 的实测口径），
+    其中「第二写法（`$X` 与裸键成对、裸键恒 0）」「两表述」「读写不到（范围代号
+    在 `ranges.json` 里为空）」**都要看值**，只看键名分不出来。
+    `keys_of()` 保留为**丢掉值的外壳**，两处仍是同一份口径。
+    """
+    hit = _KV_CACHE.get(cid)
+    if hit is not None:
+        return hit
+    sk_keys: list[tuple[str, str, object]] = []
+    for sk in SkillBook().for_operator(cid):
+        try:
+            lv = sk.level(level=7, mastery=3)
+        except Exception:  # noqa: BLE001
+            continue
+        for k, v in (lv.blackboard or {}).items():
+            sk_keys.append((f"{sk.skill_id}·{lv.name}", k, v))
+    t_keys: list[tuple[str, str, object]] = []
+    try:
+        for t in TalentBook().for_operator(cid):
+            for k, v in (getattr(t, "blackboard", None) or {}).items():
+                t_keys.append((getattr(t, "name", "?"), k, v))
+    except Exception:  # noqa: BLE001
+        pass
+    out = (sk_keys, t_keys, trait_kv_of(cid))
+    #: 同一趟里 `screens_of()` 也会取一遍键 ⇒ 不缓存就是**每位干员扫两遍**
+    #: （实测全库 431 位一轮 ≈6 分钟）。调用方只读，不许改这三个列表。
+    _KV_CACHE[cid] = out
     return out
 
 
@@ -150,22 +196,10 @@ def keys_of(cid: str) -> tuple[list[tuple[str, str]],
                               list[tuple[str, str]],
                               list[tuple[str, str]]]:
     """返回 (技能键, 天赋键, **特性键**)，元素是 (来源说明, 键名)。"""
-    sk_keys: list[tuple[str, str]] = []
-    for sk in SkillBook().for_operator(cid):
-        try:
-            lv = sk.level(level=7, mastery=3)
-        except Exception:  # noqa: BLE001
-            continue
-        for k in (lv.blackboard or {}):
-            sk_keys.append((f"{sk.skill_id}·{lv.name}", k))
-    t_keys: list[tuple[str, str]] = []
-    try:
-        for t in TalentBook().for_operator(cid):
-            for k in (getattr(t, "blackboard", None) or {}):
-                t_keys.append((getattr(t, "name", "?"), k))
-    except Exception:  # noqa: BLE001
-        pass
-    return sk_keys, t_keys, trait_keys_of(cid)
+    sk_keys, t_keys, tr_keys = keys_kv_of(cid)
+    return ([(s, k) for s, k, _v in sk_keys],
+            [(s, k) for s, k, _v in t_keys],
+            [(s, k) for s, k, _v in tr_keys])
 
 
 #: 这些黑板键有**通用消费链路**：不靠天赋名，只按键名统一读走。
@@ -213,12 +247,542 @@ def talent_names_of(cid: str) -> list[str]:
     return out
 
 
+def screens_of(cid: str, lits: set[str], det: str) -> tuple[
+        list[tuple[str, str]], list[tuple[str, str]],
+        list[tuple[str, str]], list[str]]:
+    """该干员的三道筛子：返回 (全部键, 第一道·未归类, 第二道·无人读, 第三道·无检测器天赋名)。
+
+    ⚠ **2026-09-20 从 `main()` 里原样抽出**（PM 派单：第四批选人要复用这套口径）。
+    抽出的目的是**只留一处口径来源**：`--select` 模式下"缺什么"必须与这份审计
+    逐字同义，另写一份必然漂。抽出时**逐行照搬**，并用同一份输入比对输出未变。
+    """
+    sk_keys, t_keys, tr_keys = keys_of(cid)
+    allk = sk_keys + t_keys + tr_keys
+    if not allk:
+        return [], [], [], []
+    bad = [(src, k) for src, k in allk if _classify(k) is None]
+    # 第二道：源码里没人读过 = 真的没建模
+    dead = [(src, k) for src, k in bad if not is_read(k, lits)]
+    # 第三道：**天赋整个没有检测器**（见 `talent_names_of` 的说明）。
+    # 但要豁免"键有通用消费链路"的那些——它们的机制是好的（见
+    # `GENERIC_TALENT_KEYS`）。豁免条件是"全部键都落在通用表里"，
+    # 空键表不算（空集对任何集合都是子集，会把没键的天赋全放过）。
+    keys_by_name: defaultdict[str, list[str]] = defaultdict(list)
+    for _src, k in t_keys:
+        keys_by_name[_src].append(k)
+    no_det = []
+    for n in talent_names_of(cid):
+        if n in det:
+            continue
+        own = set(keys_by_name.get(n, ()))
+        if own and own <= GENERIC_TALENT_KEYS:
+            continue
+        no_det.append(n)
+    return allk, bad, dead, no_det
+
+
+#: ═══════════════════════════════════════════════════════════════════════════
+#: 选人模式（`--select`）：第四批「缺失内容最多 ＋ 一批做完通用最多」
+#: ═══════════════════════════════════════════════════════════════════════════
+#: 博士 2026-09-20 改策略：**不按练度**，先做缺失内容最多的，尽量让一批做完能通用
+#: 最多的其他干员 ⇒ 后半句是**集合覆盖**（max-coverage），不是排序问题。
+#:
+#: 口径（全部可复算，不写死）：
+#:   · 行＝干员；列＝**本项目既有的键空间**里"未建模的键"（第二道：`_classify` 认不了
+#:     且源码里没有任何字面量读它）——不另造一套键名；
+#:   · 权重 `wt[k]`＝**需要这个键的干员数**（「缺失内容最多」的量化版）；
+#:   · 选一位＝把它需要的键全部算作已覆盖，于是**顺手解锁**那些"所有缺失键都已被覆盖"
+#:     的其他干员 —— 后者才是"通用"；
+#:   · 覆盖率两个数分开报：**(干员×键) 需求对** 与 **完全解锁的干员数**；
+#:   · 第三道（天赋整个没有检测器）**单列一层、不进覆盖目标**：它的列是**天赋名**，
+#:     而检测器是**具名**的（`is_<名字>_talent`）⇒ 按定义**不可跨干员共享**，
+#:     选人策略在这一层没有杠杆（理由与数字都写进报告，不藏）；
+#:   · 反向守卫（必须能红）：① 控制组＝**合成宇宙**（造一个共享键，看贪心认不认）；
+#:     ② 换起点重跑（练度序 / charId 序 / 随机）；若另一策略**高于**贪心 ⇒ 贪心实现
+#:     有问题，**落退出码非 0**；若**相当** ⇒ 报「缺口分布均匀、这个杠杆不存在」。
+WORKSPACE_OPS_SQL = ("SELECT char_id, name FROM operator "
+                     "WHERE is_operator=1 AND is_not_obtainable=0")
+
+
+def all_operators() -> list[tuple[str, str]]:
+    """全库**可用**干员（特殊模式专属的 29 位按 `is_not_obtainable` 剔掉）。"""
+    db = ROOT / "data" / "akdb.sqlite"
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        rows = list(conn.execute(WORKSPACE_OPS_SQL))
+    finally:
+        conn.close()
+    return [(str(cid), str(nm)) for cid, nm in rows]
+
+
+def port_reasons_best(cid: str) -> list[str] | None:
+    """该干员**最好那一个技能**能不能进 Go（`simgo/skills.py` 白名单）。
+
+    返回理由最少的那次扫描结果；一个技能都没有 ⇒ `None`（不拿"没技能"当"能进"）。
+    做法照 `tools/check_simgo.py::_stray_reason` 的测试替身：`effect_source` 用
+    默认的 `blackboard`，`op.skill` 直接挂一个真实的技能等级对象。
+    """
+    from ak_tactic.simgo import skills as sk_mod
+
+    class _Sim:
+        effect_source = "blackboard"
+
+    best: list[str] | None = None
+    for sk in SkillBook().for_operator(cid):
+        try:
+            lv = sk.level(level=7, mastery=3)
+        except Exception:  # noqa: BLE001
+            continue
+        op = type("_Op", (), {})()
+        op.skill = lv
+        op.effects_override = None
+        try:
+            rs = list(sk_mod.port_reasons(_Sim(), op))
+        except Exception as exc:  # noqa: BLE001
+            rs = [f"扫描失败 {exc.__class__.__name__}"]
+        if best is None or len(rs) < len(best):
+            best = rs
+    return best
+
+
+#: ★ 后端2 2026-09-20 实测：「无人读」这一列**至少混了四类**（PM 已采纳并转达）。
+#: 覆盖收益**只算第 1 类**——第 2 类接上去是零收益（裸键恒 0）、第 3 类有**反向
+#: 回归**风险（实测两例：`attack@attack_range_id` 接上去范围反而缩小、
+#: `attack@max_walk_target` 接上去会把已解析的 4 改成 3）、第 4 类属**数据层**缺口
+#: （要先补数据，不是建模）。
+#: 规则全部可复算、写在报告里；第 1 类是**残差**（三类都不成立的那些）。
+GAP_CLASSES = {
+    1: "真没建模（该做的）",
+    2: "同一量的第二写法（$X 与裸键成对、裸键恒 0）⇒ 零收益",
+    3: "同一量的两表述（别名，本体已建模）⇒ 反向回归风险",
+    4: "读写不到（范围代号在 data/ranges.json 里缺失或为空）⇒ 数据层缺口",
+    5: "后缀读法（`.endswith(…)` 读的）⇒ 实际有人读，属**假欠账**",
+}
+
+_SUFFIXES: list[str] | None = None
+
+
+def read_suffixes() -> list[str]:
+    """`ak_tactic/**/*.py` 里 `.endswith("…")` 的后缀模式——与 `source_literals()` **同范围**。
+
+    `gamedata/enemy.py:466/481` 用 `k.endswith("enemy_key"/"token_key")` 读键，
+    **字面量尺子看不见这类读法**（它只认整键、不认后缀）⇒ 这类键会被误报成「无人读」。
+    PM 2026-09-20 转达的第五类。
+    ⚠ **边界**（后端2 自己标的）：那两处读的是**裸键**，**不覆盖 `$` 写法** ⇒
+    第五类只能解释一部分，**不是"剩下的都是它"**；下面也只对裸键套用这一类。
+    """
+    global _SUFFIXES
+    if _SUFFIXES is None:
+        pat = re.compile(r'\.endswith\(\s*"([^"]{2,})"\s*\)')
+        sfx: set[str] = set()
+        for p in (ROOT / "ak_tactic").rglob("*.py"):
+            if "__pycache__" in p.parts:
+                continue
+            sfx.update(pat.findall(p.read_text(encoding="utf-8")))
+        _SUFFIXES = sorted(sfx)
+    return _SUFFIXES
+
+RANGES_JSON = ROOT / "data" / "ranges.json"
+_RANGE_IDS: set[str] | None = None
+
+
+def range_ids() -> set[str]:
+    """`data/ranges.json` 里**有内容**的范围代号（空的不算有）。
+
+    `head核查` 正在改 `grid.py`（会重写这个文件）⇒ 报告里必须带它的 sha/mtime，
+    否则"这一轮取的是哪个版本"就说不清（PM 2026-09-20 特别要求声明）。
+    """
+    global _RANGE_IDS
+    if _RANGE_IDS is None:
+        _RANGE_IDS = set()
+        if RANGES_JSON.exists():
+            try:
+                d = json.loads(RANGES_JSON.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                d = {}
+            if isinstance(d, dict):
+                for code, cells in d.items():
+                    if cells:
+                        _RANGE_IDS.add(str(code))
+    return _RANGE_IDS
+
+
+def gap_class(key: str, value: object, sib: set[str]) -> tuple[int, str]:
+    """把一个「无人读」的键分到四类之一。`sib`＝该干员**全部**键（含 `$` 侧）。"""
+    if key.startswith("$"):
+        return 2, "键名带 $ 前缀（`valueStr` 那一侧）"
+    if ("$" + key) in sib:
+        return 2, "同一黑板里并存 $" + key + "（裸键那一侧恒 0）"
+    base = re.sub(r"^(attack@|talent@|enemy@)", "", key)
+    if base != key and _classify(base) is not None:
+        return 3, f"别名：本体 {base} 已建模（接上去可能反向回归）"
+    if isinstance(value, str) and re.fullmatch(r"\d+-\d+", value):
+        if value not in range_ids():
+            return 4, f"范围代号 {value} 在 ranges.json 里缺失或为空"
+    if not key.startswith("$"):
+        #: ★ 第五类：后缀读法。**只对裸键套用**（后端2 标的边界：那两处 `endswith`
+        #: 读的是裸键，不覆盖 `$` 写法）⇒ 别把"剩下的都是它"读成结论。
+        for s in read_suffixes():
+            if key.endswith(s):
+                return 5, '后缀读法 `.endswith("' + s + '")` ⇒ 实际有人读（假欠账）'
+    return 1, "五类都不成立 ⇒ 真的没建模"
+
+
+def classify_gaps(data: dict) -> None:
+    """就地给每位干员的缺失键打四类，并算出**第 1 类子集**（覆盖收益只用它）。"""
+    for d in data.values():
+        sib = {k for _s, k, _v in d["kv"]}
+        val: dict[str, object] = {}
+        for _s, k, v in d["kv"]:
+            val.setdefault(k, v)
+        cls: dict[str, int] = {}
+        why: dict[str, str] = {}
+        for k in d["keys"]:
+            c, w = gap_class(k, val.get(k), sib)
+            cls[k], why[k] = c, w
+        d["class"] = cls
+        d["why"] = why
+        d["keys1"] = {k for k, c in cls.items() if c == 1}
+
+
+def ident_of() -> dict:
+    """口径三件套：库／范围表／名册的 sha16（**输入身份**，不是输出身份）。"""
+    import hashlib
+
+    def h(p: Path) -> str:
+        try:
+            return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+        except Exception:  # noqa: BLE001
+            return "?"
+
+    ros = sorted((ROOT / "docs").glob("roster-*.md"))
+    db = ROOT / "data" / "akdb.sqlite"
+    return {"akdb": h(db), "akdb_mtime": time.strftime(
+        "%Y-%m-%d %H:%M:%S", time.localtime(db.stat().st_mtime)) if db.exists() else "?",
+        "ranges": h(RANGES_JSON),
+        "ranges_mtime": time.strftime("%Y-%m-%d %H:%M:%S",
+                                      time.localtime(RANGES_JSON.stat().st_mtime))
+        if RANGES_JSON.exists() else "?",
+        "roster": h(ros[0]) if ros else "?", "roster_file": ros[0].name if ros else "?"}
+
+
+def scan_ops(cids: list[str], lits: set[str], det: str, want_port: bool = True) -> dict:
+    """一趟扫完：每位干员的 (键层缺失, 天赋层缺失, 全部键数, 白名单理由)。"""
+    out: dict[str, dict] = {}
+    for cid in cids:
+        allk, _bad, dead, no_det = screens_of(cid, lits, det)
+        sk_kv, t_kv, tr_kv = keys_kv_of(cid)
+        out[cid] = {
+            "kv": sk_kv + t_kv + tr_kv,
+            "keys": {k for _s, k in dead},
+            "talents": set(no_det),
+            "n_allk": len(allk),
+            "port": port_reasons_best(cid) if want_port else None,
+        }
+    return out
+
+
+def coverage_of(needs: dict[str, set[str]], covered: set[str]) -> tuple[int, int, int]:
+    """(已覆盖需求对, 需求对总数, **完全解锁**的干员数)。"""
+    pairs = sum(len(v & covered) for v in needs.values())
+    total = sum(len(v) for v in needs.values())
+    full = sum(1 for v in needs.values() if v and v <= covered)
+    return pairs, total, full
+
+
+def greedy_pick(needs: dict[str, set[str]], wt: dict[str, int],
+                order: list[str], k: int, worst: bool = False) -> tuple[list[str], list[tuple]]:
+    """贪心（或"最差"控制）选 k 位；返回 (名单, 每步轨迹)。
+
+    每步的收益＝该干员**尚未覆盖**的那些键的权重和（权重＝需要这个键的干员数），
+    平局按"自身缺失更多"、再按 `order` 里的先后定序（**确定性**，可复现）。
+    """
+    covered: set[str] = set()
+    picks: list[str] = []
+    trace: list[tuple] = []
+    while len(picks) < k:
+        best: str | None = None
+        best_key: tuple | None = None
+        for cid in order:
+            if cid in picks:
+                continue
+            gain = sum(wt[x] for x in needs.get(cid, ()) if x not in covered)
+            key = (-gain if worst else gain, len(needs.get(cid, ())))
+            if best_key is None or key > best_key:
+                best, best_key = cid, key
+        if best is None:
+            break
+        new = needs.get(best, set()) - covered
+        picks.append(best)
+        covered |= needs.get(best, set())
+        pairs, total, full = coverage_of(needs, covered)
+        trace.append((best, len(new), sum(wt[x] for x in new), len(covered), pairs, total, full))
+    return picks, trace
+
+
+def control_group_ok() -> tuple[bool, str]:
+    """控制组：**合成宇宙**里造一个共享键，贪心必须认出来。
+
+    为什么必须有它：真实数据里若"每个键只被一位干员需要"，贪心与乱序**长得一样**
+    ——那时"两种策略差不多"既可能是"杠杆不存在"，也可能是"收益算法根本没生效"。
+    合成宇宙把这两个成因分开：这里**共享是构造出来的**，贪心不利用它 ⇒ 算法坏了。
+    """
+    needs: dict[str, set[str]] = {}
+    for i in range(20):
+        needs[f"op{i:02d}"] = {f"solo_{i}"}
+    for i in range(10):
+        needs[f"op{i:02d}"].add("shared")
+    order = list(needs)
+    wt = {k: sum(1 for v in needs.values() if k in v) for k in {x for v in needs.values() for x in v}}
+    picks, trace = greedy_pick(needs, wt, order, 1)
+    first_gain = trace[0][2] if trace else 0
+    ok = bool(trace) and "shared" in needs.get(picks[0], set()) and first_gain >= 10
+    return ok, (f"合成宇宙：20 位干员／1 个被 10 位共享的键；贪心第一手＝{picks[0] if picks else '—'}"
+                f"、收益 {first_gain}（须 ≥10 且落在共享键持有者上）")
+
+
+def select_mode(a, lits: set[str], det: str) -> int:
+    import random
+
+    ops = all_operators()
+    if len(ops) < 50:
+        raise SystemExit(f"全库可用干员只查到 {len(ops)} 位，明显不对")
+    roster = load_roster()
+    roster_cids = [cid for _n, cid, _e, _l in roster]
+    names = dict(ops)
+
+    want_port = not a.no_port
+    ident = ident_of()
+    if a.from_cache:
+        blob = json.loads(Path(a.from_cache).read_text(encoding="utf-8"))
+        print(f"（复用扫描缓存 `{a.from_cache}`，生成于 {blob.get('generated_at')}）")
+        print(f"  缓存身份：{blob.get('ident')}")
+        print(f"  本轮身份：{ident}")
+        if blob.get("ident") != ident:
+            print("  ⚠ 身份不一致：库／范围表／名册有变，读数不可与缓存同日而语")
+        data = {cid: {"keys": set(d["keys"]), "talents": set(d["talents"]),
+                      "n_allk": d["n_allk"], "port": d["port"],
+                      "kv": [tuple(x) for x in d["kv"]]}
+                for cid, d in blob["data"].items()}
+        classify_gaps(data)
+    else:
+        data = scan_ops([cid for cid, _n in ops], lits, det, want_port)
+        classify_gaps(data)
+    if a.cache and not a.from_cache:
+        Path(a.cache).write_text(json.dumps({
+            "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"), "ident": ident,
+            "data": {cid: {"keys": sorted(d["keys"]), "talents": sorted(d["talents"]),
+                           "n_allk": d["n_allk"], "port": d["port"], "kv": d["kv"],
+                           "class": d["class"], "keys1": sorted(d["keys1"])}
+                     for cid, d in data.items()}}, ensure_ascii=False), encoding="utf-8")
+        print(f"扫描缓存已落盘：{a.cache}")
+    needs = {cid: d["keys1"] for cid, d in data.items()}
+    needs_raw = {cid: d["keys"] for cid, d in data.items()}
+    if a.only_port and not a.no_port:
+        #: ★ 第二道闸当**前提**：白名单过不了的干员，键族补齐了他也进不了 Go
+        #: （实测批次内 10 位只有 2 位过闸）⇒ 这一档的读数才是"做完就能用"的口径。
+        keep = {cid for cid, d in data.items() if d["port"] == []}
+        print(f"（--only-port：行空间收窄到「至少一个技能能进 Go」的 **{len(keep)}** 位）")
+        data = {cid: d for cid, d in data.items() if cid in keep}
+        needs = {cid: d["keys1"] for cid, d in data.items()}
+        needs_raw = {cid: d["keys"] for cid, d in data.items()}
+    wt: Counter[str] = Counter()
+    for v in needs.values():
+        for k in v:
+            wt[k] += 1
+
+    order_all = [cid for cid, _n in ops]
+    order_roster = [cid for cid in roster_cids if cid in needs]
+    order_cid = sorted(needs)
+    rnd = random.Random(20260920)
+    order_rnd = list(order_cid)
+    rnd.shuffle(order_rnd)
+
+    k = a.batch
+    picks, trace = greedy_pick(needs, wt, order_all, k)
+    base_greedy = coverage_of(needs, {x for cid in picks for x in needs[cid]})
+
+    print("=" * 78)
+    print("选人模式：缺失内容最多 ＋ 一批做完通用最多（博士 2026-09-20 改的策略）")
+    print("=" * 78)
+    print(f"行空间：全库可用干员 **{len(ops)}** 位（`is_operator=1` 且 `is_not_obtainable=0`）；"
+          f"名册 **{len(roster_cids)}** 位（能实机验证的那个子集）")
+    nkeys = len(wt)
+    ntal = sum(len(d["talents"]) for d in data.values())
+    raw_wt: Counter[str] = Counter()
+    for v in needs_raw.values():
+        for kk in v:
+            raw_wt[kk] += 1
+    print(f"输入身份（口径三件套）：库 `{ident['akdb']}`（{ident['akdb_mtime']}）／"
+          f"范围表 `{ident['ranges']}`（{ident['ranges_mtime']}）／"
+          f"名册 `{ident['roster_file']}` `{ident['roster']}`")
+    print(f"列空间（键层，**分层前**）：**{len(raw_wt)}** 种「无人读」键、"
+          f"**{sum(raw_wt.values())}** 个 (干员×键) 位次")
+    print("★ 分层（后端2 2026-09-20 实测、PM 已采纳）——**覆盖收益只算第 1 类**：")
+    cls_cnt: Counter[int] = Counter()
+    for d in data.values():
+        for c in d["class"].values():
+            cls_cnt[c] += 1
+    for c in (1, 2, 3, 4, 5):
+        print(f"   第 {c} 类 {cls_cnt[c]:>5} 位次  {GAP_CLASSES[c]}")
+    print(f"   ⇒ **可做的（第 1 类）＝ {cls_cnt[1]} 位次 / {len(wt)} 种键**；"
+          f"第 2/3/4/5 类共 "
+          f"{cls_cnt[2] + cls_cnt[3] + cls_cnt[4] + cls_cnt[5]} 位次**不进覆盖收益**")
+    print(f"覆盖目标据此只用第 1 类：**{nkeys}** 种键、**{sum(wt.values())}** 个 (干员×键) 需求对")
+    print(f"另列一层（**不进覆盖目标**）：第三道「天赋整个没有检测器」"
+          f"**{len({n for d in data.values() for n in d['talents']})}** 个天赋名、{ntal} 位次"
+          f"——检测器是**具名**的，按定义不可跨干员共享，选人策略在这一层没有杠杆")
+    print()
+
+    print("--- 一、缺失内容最多的键族（**只算第 1 类**；权重＝需要它的干员数）---")
+    who: defaultdict[str, list[str]] = defaultdict(list)
+    for cid, v in needs.items():
+        for kk in v:
+            who[kk].append(names.get(cid, cid))
+    for kk, n in wt.most_common(20):
+        w = "、".join(who[kk][:6]) + ("…" if len(who[kk]) > 6 else "")
+        print(f"  {n:>3} 位  {kk:<36} {w}")
+    print()
+
+    print(f"--- 二、贪心名单（k={k}，博士策略）---")
+    print(f"  {'步':>3} {'干员':<14}{'本步新增键':>10}{'新增需求对':>11}"
+          f"{'累计键':>8}{'累计需求对':>11}{'完全解锁干员':>13}")
+    for i, (cid, nnew, wnew, ncov, pairs, total, full) in enumerate(trace, 1):
+        print(f"  {i:>3} {names.get(cid, cid):<14}{nnew:>10}{wnew:>11}"
+              f"{ncov:>8}{pairs:>7}/{total:<4}{full:>13}")
+    print(f"  ⇒ 名单：{'、'.join(names.get(c, c) for c in picks)}")
+    print()
+
+    print("--- 三、反向守卫：换**选人策略**（不是换平局顺序）---")
+    #: ⚠ 2026-09-20 自纠：第一版把「换起点重跑」实现成"给同一个贪心喂不同的 order"
+    #: ——而贪心每一步扫的是**整个 order**，order 只影响平局 ⇒ 三行读数**必然相同**
+    #: （实测 charId 序/随机序/贪心 都是 222/783）。那是**结构上无法有差异的空判据**
+    #: （同族 key 3854af6b：先问"判据红得起来吗"）。现在的基线＝**直接取该序列的前 k 位**。
+    def _prefix(order: list[str]) -> list[str]:
+        return [c for c in order if c in needs][:k]
+
+    by_debt = sorted(needs, key=lambda c: (-len(needs[c]), c))[:k]
+    rows = []
+    for label, pk in (("贪心（博士策略）", picks),
+                      ("练度序取前 k", _prefix(order_roster)),
+                      ("charId 序取前 k", _prefix(order_cid)),
+                      ("随机序取前 k（seed 20260920）", _prefix(order_rnd)),
+                      ("按欠账条数排序取前 k", by_debt)):
+        cov = {x for cid in pk for x in needs.get(cid, ())}
+        pairs, total, full = coverage_of(needs, cov)
+        rows.append((label, pk, pairs, total, full, len(cov)))
+        print(f"  {label:<26} 需求对 {pairs:>5}/{total:<5} 完全解锁干员 {full:>3}  覆盖键 {len(cov):>3}")
+    _tie_pk, _tie_tr = greedy_pick(needs, wt, order_rnd, k)
+    print(f"  （附：同一贪心只换平局顺序 ⇒ "
+          f"{coverage_of(needs, {x for c in _tie_pk for x in needs[c]})[0]} 需求对，"
+          f"与贪心相同是**设计如此**，它不能当反向守卫）")
+    worst_label, worst_row = None, None
+    for label, _pk, pairs, _t, _f, _c in rows[1:]:
+        if pairs > base_greedy[0]:
+            worst_label, worst_row = label, pairs
+    print()
+    lead = rows[0][2] - max(r[2] for r in rows[1:])
+    same = [r[0] for r in rows[1:] if abs(r[2] - rows[0][2]) <= max(1, rows[0][2] * 0.05)]
+    if lead <= 0 and same:
+        print(f"  ⇒ **结论：这个选人策略的杠杆不存在（或缺口的可共享性≈0）**——"
+              f"贪心 {rows[0][2]}/{base_greedy[1]} 需求对，与 {('、'.join(same))} 相差 ≤5%。"
+              f"\n     成因是结构性的：需求对里绝大多数键**只被一位干员需要**"
+              f"（见下表），选谁都在各自补自己的账，通用不了别人。")
+    else:
+        print(f"  ⇒ 贪心领先最强的另一策略 {lead} 个需求对（≈{lead / max(1, base_greedy[1]) * 100:.1f}%）。")
+    print()
+
+    print("--- 四、控制组（合成宇宙，判「收益算法有没有生效」）---")
+    ok, msg = control_group_ok()
+    print(f"  {'✅' if ok else '❌'} {msg}")
+    print()
+
+    print("--- 五、需求对的「可共享性」分布（解释上面那个结论）---")
+    dist: Counter[int] = Counter(wt.values())
+    for n in sorted(dist, reverse=True):
+        print(f"  被 {n:>2} 位干员需要的键：{dist[n]:>3} 种")
+    print()
+
+    print("--- 六、换成「按族选」的覆盖曲线（族＝键，权重＝跨干员位数）---")
+    tot = sum(wt.values())
+    cum = 0
+    for i, (kk, n) in enumerate(wt.most_common(), 1):
+        cum += n
+        if i in (5, 10, 20, 30, 50, 100, 200, 300):
+            print(f"  前 {i:>3} 个键族 ⇒ 覆盖 {cum:>4}/{tot} 需求对（{cum / tot * 100:.1f}%）")
+    _cov_keys = len({x for cid in picks for x in needs[cid]})
+    print(f"  （对照：贪心选 {k} 位干员覆盖 {base_greedy[0]}/{base_greedy[1]}"
+          f"＝{base_greedy[0] / base_greedy[1] * 100:.1f}%，覆盖 {_cov_keys} 个族）")
+    print()
+
+    if want_port:
+        print("--- 七、第二道闸：能不能进 Go（`simgo/skills.py` 白名单）---")
+        ported = {cid for cid, d in data.items() if d["port"] == []}
+        failed = {cid: d["port"] for cid, d in data.items() if d["port"]}
+        noskill = {cid for cid, d in data.items() if d["port"] is None}
+        print(f"  至少一个技能能进 Go：**{len(ported)}**/{len(ops)} 位"
+              f"（另有 {len(noskill)} 位没有技能、{len(failed)} 位每个技能都被白名单挡）")
+        cov = {x for cid in picks for x in needs[cid]}
+        unlocked = [cid for cid, v in needs.items() if v and v <= cov]
+        unl_ok = [cid for cid in unlocked if cid in ported]
+        print(f"  ★ 边界诚实：「能通用」≠「做完就能用」——完全解锁 **{len(unlocked)}** 位，"
+              f"其中真能进 Go 的只有 **{len(unl_ok)}** 位")
+        if unlocked:
+            blocked = [cid for cid in unlocked if cid not in ported]
+            if blocked:
+                print(f"     被白名单挡住的 {len(blocked)} 位（前 6）："
+                      + "、".join(f"{names.get(c, c)}[{(failed.get(c) or ['无技能'])[0]}]"
+                                  for c in blocked[:6]))
+        inbatch = [(cid, data[cid]["port"]) for cid in picks]
+        print(f"  批次内 10 位：能进 Go {sum(1 for _c, r in inbatch if r == [])} 位；"
+              f"其余理由（前 5）："
+              + "；".join(f"{names.get(c, c)}[{(r or ['无技能'])[0]}]" for c, r in inbatch if r != [])[:300])
+        print()
+
+    if a.json:
+        Path(a.json).write_text(json.dumps({
+            "ident": ident, "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "rows": len(ops), "roster": len(roster_cids),
+            "class_counts": {str(c): cls_cnt[c] for c in (1, 2, 3, 4)},
+            "raw_keys": len(raw_wt), "raw_pairs": sum(raw_wt.values()),
+            "keys": nkeys, "pairs": sum(wt.values()), "batch": picks,
+            "trace": [{"step": i + 1, "cid": t[0], "name": names.get(t[0], t[0]),
+                       "new_keys": t[1], "new_pairs": t[2], "keys_covered": t[3],
+                       "pairs": t[4], "total": t[5], "full": t[6]} for i, t in enumerate(trace)],
+            "strategies": [{"label": r[0], "batch": r[1], "pairs": r[2], "total": r[3],
+                            "full": r[4], "keys": r[5]} for r in rows],
+            "weight_hist": {str(n): c for n, c in dist.items()},
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"JSON：{a.json}")
+
+    if worst_row is not None:
+        print(f"❌ 反向守卫失败：{worst_label} 的覆盖率 {worst_row} 高于贪心 {base_greedy[0]}"
+              f" ⇒ 贪心的收益算法有问题")
+        return 1
+    if not ok:
+        print("❌ 控制组失败：合成宇宙里贪心没利用共享键 ⇒ 收益算法没生效")
+        return 1
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--top", type=int, default=0)
     ap.add_argument("--only", nargs="*", default=None)
     ap.add_argument("--all", action="store_true",
                     help="连非 E2 的也看（默认只看 E2）")
+    ap.add_argument("--select", action="store_true",
+                    help="第四批选人模式：集合覆盖（缺失最多＋通用最多），不看 E2 限制")
+    ap.add_argument("--batch", type=int, default=10, help="--select：这批要选几位（默认 10）")
+    ap.add_argument("--json", default=None, help="--select：把结果落成 JSON")
+    ap.add_argument("--no-port", action="store_true",
+                    help="--select：跳过 `simgo/skills.py` 白名单扫描（省时间）")
+    ap.add_argument("--cache", default=None,
+                    help="--select：把全库扫描落成 JSON（含四类分层，便于复核与复算）")
+    ap.add_argument("--from-cache", default=None,
+                    help="--select：复用上一轮的扫描缓存（只跑选人与守卫，秒级）")
+    ap.add_argument("--only-port", action="store_true",
+                    help="--select：行空间先收窄到「至少一个技能能进 Go」的干员（第二道闸）")
     a = ap.parse_args()
 
     roster = load_roster()
@@ -234,11 +798,14 @@ def main() -> int:
         roster = [r for r in roster if r[0] in set(a.only)]
         if not roster:
             raise SystemExit(f"--only 的 {a.only} 在名册里一个都没找到")
-    elif not a.all:
+    elif not a.all and not a.select:
         roster = [r for r in roster if r[2] == "E2"]
 
     lits = source_literals()
     det = detector_text()
+    if a.select:
+        #: 选人模式走**全体名册**（不受 `--all`/E2 过滤影响），行空间另按全库可用干员取。
+        return select_mode(a, lits, det)
     rows = []
     unclass_global: Counter[str] = Counter()
     unclass_who: defaultdict[str, list[str]] = defaultdict(list)
@@ -247,28 +814,9 @@ def main() -> int:
     nodet_global: Counter[str] = Counter()
     nodet_who: defaultdict[str, list[str]] = defaultdict(list)
     for name, cid, elite, lvl in roster:
-        sk_keys, t_keys, tr_keys = keys_of(cid)
-        allk = sk_keys + t_keys + tr_keys
+        allk, bad, dead, no_det = screens_of(cid, lits, det)
         if not allk:
             continue
-        bad = [(src, k) for src, k in allk if _classify(k) is None]
-        # 第二道：源码里没人读过 = 真的没建模
-        dead = [(src, k) for src, k in bad if not is_read(k, lits)]
-        # 第三道：**天赋整个没有检测器**（见 `talent_names_of` 的说明）。
-        # 但要豁免"键有通用消费链路"的那些——它们的机制是好的（见
-        # `GENERIC_TALENT_KEYS`）。豁免条件是"全部键都落在通用表里"，
-        # 空键表不算（空集对任何集合都是子集，会把没键的天赋全放过）。
-        keys_by_name: defaultdict[str, list[str]] = defaultdict(list)
-        for _src, k in t_keys:
-            keys_by_name[_src].append(k)
-        no_det = []
-        for n in talent_names_of(cid):
-            if n in det:
-                continue
-            own = set(keys_by_name.get(n, ()))
-            if own and own <= GENERIC_TALENT_KEYS:
-                continue
-            no_det.append(n)
         for _src, k in bad:
             unclass_global[k] += 1
             unclass_who[k].append(name)
