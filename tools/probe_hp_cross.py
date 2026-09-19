@@ -93,18 +93,25 @@ def main() -> int:
     else:
         print("  ⬅ 该键上从第一帧起就不在容差内")
 
-    #: 分岔前后各 14 帧并排（按 t 取窗口，别按"第几条"取——条数受别的键影响）
-    print(f"\n  {key} 分岔前后各 14 帧（hp / x）")
-    print("        t          py_hp      go_hp      py_x        go_x")
-    sel = [kk for kk, tt in common if kk == key and abs(tt - t) <= 14 / 30.0 + 1e-9]
-    for tt in sorted({round(x[1], 4) for x in sel}):
-        kk = (key[0], key[1], key[2])
-        if (kk, tt) not in pyi or (kk, tt) not in goi:
+    #: 分岔前后各 14 帧并排。⚠ 窗口按**帧时刻**取，不按"第几条"取（条数受别的键影响）；
+    #: 并且把窗口内**所有键**都列出来——只看分岔那一个键会看不到"是不是两只搞混了"。
+    #: 上一版这里写错了：拿 `key[1]`（出怪时刻）当帧时刻，于是表一行都打不出来。
+    print(f"\n  分岔点 {key} t={t} 前后各 14 帧（窗口内所有键，hp / x）")
+    print("        t          键                        py_hp      go_hp      py_x        go_x")
+    lo = t - 14 / 30.0 - 1e-9
+    hi = t + 14 / 30.0 + 1e-9
+    shown = 0
+    for kk, tt in common:
+        if not (lo <= tt <= hi):
             continue
         a, b = pyi[(kk, tt)], goi[(kk, tt)]
-        mark = "  ← 分岔" if abs(tt - t) < 1e-9 else ""
-        print(f"    {tt:9.4f}  {a['hp']:9.1f}  {b['hp']:9.1f}  "
+        if abs(a["hp"] - b["hp"]) <= tol and abs(a["x"] - b["x"]) <= 1e-9:
+            continue                      # 这一帧这一只两边一致，不必占行
+        mark = "  ← 分岔" if abs(tt - t) < 1e-9 and kk == key else ""
+        print(f"    {tt:9.4f}  {str(kk):24s} {a['hp']:9.1f}  {b['hp']:9.1f}  "
               f"{a['x']:11.7f}  {b['x']:11.7f}{mark}")
+        shown += 1
+    print(f"    （窗口内不一致的行 {shown} 条）")
     return 0
 
 
