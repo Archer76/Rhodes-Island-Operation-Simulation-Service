@@ -42,6 +42,48 @@ ENTRIES: list[str] = [
 #: 统称，不是独立机制——单列出来是为了不漏、也不重复计数。
 UMBRELLA: list[str] = ["异常状态", "异常组合"]
 
+#: **PRTS 权威表 `异常效果` 的内部 ID**（词条 -> `内部ID(编号)`）。
+#:
+#: 取证时间 2026-09-19，来源 `https://prts.wiki/w/异常效果?action=raw`（客户端 2.7.61，
+#: 43 个异常效果 + 2 异常组合 + 9 种抗性）。**第三方内容不入库**，原文落在 `tmp/prts/`。
+#:
+#: 为什么值得单独列一栏：它把"词典词条"与"引擎里的那个开关"对上号，
+#: 而且能暴露一类**词典没说的**结构事实——见下面的 `NOT_A_FLAG`。
+PRTS_FLAG: dict[str, str] = {
+    "神经损伤": "—（不是异常效果：是元素损伤轴）",
+    "沉睡": "SLEEPING(组合 0)",
+    "浮空": "LEVITATE(25)",
+    "元素损伤": "—（不是异常效果：是元素值轴，见 ELEMENT_FREE_ALL(21) 元素免疫）",
+    "凋亡损伤": "—（同上）",
+    "灼燃损伤": "—（同上）",
+    "侵蚀损伤": "—（同上）",
+    "狂躁损伤": "—（同上）",
+    "寒冷": "COLD(23)",
+    "抵抗": "—（不是异常效果：是时长口径，非开关）",
+    "近地悬浮": "MOTION_TARGET_FREE(35) 对地规避（无法被行动方式为地面的不同阵营单位选中）",
+    "隐匿": "INVISIBLE(9)",
+    "迷彩": "CAMOUFLAGE(17)",
+    "恐惧": "FEARED(33) + FEARED_PRIVATE(42) 自惧",
+    "麻痹": "PALSY(39) → PALSYING(40) 麻痹震颤",
+    "战栗": "DISARMED_COMBAT(31)",
+    "晕眩": "STUNNED(0)；另有 STUNNED_NO_AMPLIFY_DAMAGE(19) 无法行动",
+    "停顿": "—（不是异常效果：是 Buff 造成的移速降低）",
+    "屏障": "—（不是异常效果：是 Buff/伤判效果）",
+    "束缚": "UNMOVABLE(13)；另有 UNMOVABLE_PRIVATE(22) 自缚",
+    "冻结": "FROZEN(16)",
+}
+
+#: **不是异常效果（Buff）** 的词典词条。这一条栏位存在的理由是：
+#: `异常效果` 权威表里逐行核对后，有几条词典词条**根本不在那张表上**——
+#: 它们是 **Buff / 伤判效果**，实现位置与异常开关完全不同。
+#: 若不区分，就会去"找那个开关"，然后永远找不到（或更糟：把别的开关当它）。
+NOT_A_FLAG: dict[str, str] = {
+    "脆弱": "Buff 类（不在 `异常效果` 表里）：受到的伤害提升，同名取最高；"
+            "公式层已归 `fragile`/`受到伤害`，**引擎零消费**",
+    "元素脆弱": "Buff 类（同上表里没有）；公式层有 `ep_fragile`",
+    "起飞": "不是独立异常效果；Go 侧只有一句注释，**不是**实现",
+}
+
 #: 已建模项的锚点表：词条 -> (文件::符号, 备注)。
 #: 锚点是**断言**，本工具负责证伪它。
 ANCHORS: dict[str, tuple[str, str]] = {
@@ -201,37 +243,47 @@ def discover() -> int:
 
 
 def report(check_only: bool) -> int:
-    print("词条            判定      调用点    守卫    锚点证据")
-    print("-" * 104)
+    print("词条            判定          调用点    守卫     PRTS 权威表")
+    print("-" * 108)
     reds: list[str] = []
     for e in ENTRIES:
+        flag = PRTS_FLAG.get(e, "（未登记）")
+        if e in NOT_A_FLAG:
+            print(f"{e:<16} {'未建模(Buff)':<14} {'—':<9} {'—':<6} {flag}")
+            print(f"{'':<16} {NOT_A_FLAG[e]}")
+            continue
         if e in UNMODELED:
-            print(f"{e:<16} {'未建模':<8} {'—':<9} {'—':<6} {UNMODELED[e]}")
+            print(f"{e:<16} {'未建模':<14} {'—':<9} {'—':<6} {flag}")
+            print(f"{'':<16} {UNMODELED[e]}")
             continue
         if e not in ANCHORS:
             reds.append(f"{e}: 既不在 ANCHORS 也不在 UNMODELED —— 漏登记")
-            print(f"{e:<16} {'漏登记':<8} {'?':<9} {'?':<6} 锚点表与未建模表都没有它")
+            print(f"{e:<16} {'漏登记':<14} {'?':<9} {'?':<6} {flag}")
             continue
         anchor, note = ANCHORS[e]
         ok, why = anchor_exists(anchor)
         if not ok:
             reds.append(f"{e}: 锚点失效 —— {why}")
-            print(f"{e:<16} {'锚点失效':<8} {'?':<9} {'?':<6} {why}")
+            print(f"{e:<16} {'锚点失效':<14} {'?':<9} {'?':<6} {flag}")
+            print(f"{'':<16} {why}")
             continue
         sym = anchor.split("::", 1)[1]
         callers = production_callers(sym)
         guards = guard_mentions(sym)
         call = "已接线" if callers else "零调用点"
         guard = f"{len(guards)} 处" if guards else "无"
-        extra = f"  （{note}）" if note else ""
-        print(f"{e:<16} {'已建模':<8} {call:<9} {guard:<6} {why}{extra}")
+        print(f"{e:<16} {'已建模':<14} {call:<9} {guard:<6} {flag}")
+        print(f"{'':<16} 锚点 {why}" + (f"；{note}" if note else ""))
         if not callers:
             reds.append(f"{e}: 内核已建但**零生产调用点**（对拍会静默全绿）")
         if not guards:
             reds.append(f"{e}: 无守卫（没有 *_test.go 提到 {sym}）")
     n_un = sum(1 for e in ENTRIES if e in UNMODELED)
+    n_buff = sum(1 for e in ENTRIES if e in NOT_A_FLAG)
     print()
-    print(f"已建模 {len(ENTRIES) - n_un} / 未建模 {n_un} / 共 {len(ENTRIES)} 条")
+    print(f"已建模 {len(ENTRIES) - n_un - n_buff} / 未建模 {n_un} / 未建模·Buff 类 {n_buff} / 共 {len(ENTRIES)} 条")
+    print(f"PRTS 权威表已登记 {sum(1 for e in ENTRIES if e in PRTS_FLAG)} 条；"
+          f"其中**不在异常效果表上**的 {n_buff} 条是 Buff，别去异常开关里找。")
     if reds:
         print(f"\n⚠ {len(reds)} 条欠账或红：")
         for r in reds:
