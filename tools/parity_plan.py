@@ -79,7 +79,12 @@ class PyCapture(Verifier):
         super().__init__(*a, **kw)
         self.sim = None
 
-    def _run_other_engine(self, *, sim, plan, stage, deployed, title):
+    def _run_other_engine(self, *, sim, plan, stage, deployed, title,
+                          schedule=None, env=None):
+        # ⚠ `schedule` / `env` 是 `Verifier._run_other_engine` 的新关键字
+        # （见 `ak_tactic/simgo/verifier.py`）。原版这条路只跑 python 侧，
+        # 用不到它们，但**签名必须收下**——不收就直接 TypeError，
+        # 而那个报错会伪装成"拿不到规格"，让对拍整条路线静默失效。
         self.sim = sim
         res = sim.run(max_time=900.0)
         self.res = res
@@ -93,8 +98,13 @@ class GoCapture(GoVerifier):
         super().__init__(*a, **kw)
         self.held = None
 
-    def _run_other_engine(self, *, sim, plan, stage, deployed, title):
-        self.held = (sim, build_spec(SpecInputs.from_sim(sim), allow_devices=True))
+    def _run_other_engine(self, *, sim, plan, stage, deployed, title,
+                          schedule=None, env=None):
+        # ⚠ `build_spec` 现在收 `schedule` / `env`（与上游同一处改动）。
+        # 这里必须**原样转发**：漏传的话规格与验证器手里的那份不是同一个时间表，
+        # 属于"静默给出另一份规格"。
+        self.held = (sim, build_spec(SpecInputs.from_sim(sim), allow_devices=True,
+                                     schedule=schedule, env=env))
         raise SystemExit(0)
 
 
