@@ -42,9 +42,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tools"))
 
 from ak_tactic.simgo import (EngineBinaryUnpinned, legacy_binary,  # noqa: E402
                              require_binary, staleness_minutes)
+
+try:
+    #: ⚠ **复用**验收/门的实现（`tools/engine_pin.py`），**绝不另写一份**：
+    #: 两处各写一份 `source_sig`，一改就对不上——这正是本项目反复吃到的那类账。
+    from engine_pin import source_sig as _source_sig              # noqa: E402
+except Exception:                                                # noqa: BLE001
+    _source_sig = None
+
+#: ⚠ **exe 的 sha16 只证明"是不是那一次构建"，不证明"是哪份源码"**（同一份源码两次构建哈希就不同）
+#: ——验收 2026-09-19 指出。所以每台仪器要同时记 `source_sig`（`rios-sim/**/*.go` 的内容摘要）。
+#: 这也是 `LEGACY_INSTRUMENTS` 里那一枚最要命的地方：它连 `source_sig` 都**不可得**（树已不存在）。
 
 #: ⚠ **不可复现仪器的存档**（PM 2026-09-19 裁定「留」，并要求把 sha 与读数写进入库物）。
 #:
@@ -62,6 +74,8 @@ LEGACY_INSTRUMENTS: tuple[dict, ...] = (
         "mtime": "2026-09-19 19:08:28",
         "built_from": ("rios-sim/ 工作树 @ 2026-09-19 19:08：当时的 HEAD + 未提交的五个文件"
                        "（main.go / mech/mech.go / mech/huai_shu_li.go / wire.go / skill.go）"),
+        "source_sig": ("**不可得**——那棵树（19:08 的混合工作树）已不存在，任何摘要都算不回来；"
+                       "这正是它不可复现、且必须留实物+留读数的那一条"),
         "removed_default_path": "rios-sim/rios-sim.exe（2026-09-19 23:36 删除——PM 三步走之第三步）",
         "reproduces": {
             "plan": "fixtures/hsex8_max.json",
@@ -74,12 +88,21 @@ LEGACY_INSTRUMENTS: tuple[dict, ...] = (
     },
 )
 
-#: 曾经把「没有引擎」当成正常分支、**rc=0 跳过**的四处出口（PM 2026-09-19 要求回去补一刀）。
-#: 它们现在由上游 `require_binary()` 抛异常"顺带救活"——但**顺带救活不算修复**，
-#: 所以另加静态控制（文件里不许再出现「跳过：」这条出口）+ 端到端反向守卫（见下）。
+#: 曾经把「没有引擎」当成正常分支、**rc=0 跳过**的出口（PM 2026-09-19 要求回去补一刀）。
+#: 它们此前只是被上游 `require_binary()` 抛异常"顺带救活"——但**顺带救活不算修复**，
+#: 所以另加静态控制（文件里不许再出现真的 print 跳过出口）+ 端到端反向守卫（见下）。
 SKIP_EXIT_SITES = (
     "tools/simgo_cost.py",
     "tools/check_simgo_parity.py",
+)
+
+#: ⚠ `_proto/` **不入库**（`.gitignore:45`）、跑前须自行钉 `RIOS_SIM_BIN`、**此处改动不保证留存**。
+#: 所以下面这两处的同名修复**只在磁盘上**（PM 2026-09-19 裁定：不 force-add）。
+#: **若将来某份原型要被当真，正确动作是把它移出 `_proto/` 并入库，而不是给它开 force-add 的口子。**
+#: ⚠ 这段说明必须住在**入库物**里（就是本文件）——不能写在 `_proto/` 自己里面，因为它也不入库。
+#: 也因为这层身份，这里**不在场不算失败**：fresh checkout 里根本没有 `_proto/`，
+#: 一条"干净解出树才能跑"的判据不能因为原型区缺席而变红。
+SKIP_EXIT_SITES_PROTO = (
     "_proto/simgo_cost_split.py",
     "_proto/simgo_parity.py",
 )
@@ -106,20 +129,30 @@ def check_legacy_instrument() -> int:
         print(f"  {'✅' if ok else '⛔'} 留证副本与入库记录一致：{rec['preserved_copy']}")
         print(f"     记录 sha256 {rec['sha256'][:16]}… ↔ 实测 {got[:16]}… ｜ "
               f"size {rec['size']} ｜ 它复现的读数：{rec['reproduces']['reading']}")
+        print(f"     源码身份 source_sig：{rec['source_sig']}")
         if not ok:
             print("     ⛔ 不一致 ⇒ 入库记录或副本被人动过，这正是「文件可以丢、读数不可无凭」要防的")
     return bad
 
 
 def check_skip_exit_sites() -> int:
-    """端到端反向守卫：把 exe 钉成一个**不存在的路径** ⇒ 这四处必须 rc≠0 且点名路径，不许「跳过」。"""
+    """端到端反向守卫：把 exe 钉成一个**不存在的路径** ⇒ 这些出口必须 rc≠0 且点名路径，不许「跳过」。"""
     ghost = ROOT / "out" / "acceptance" / "ghost-guard-nonexistent.exe"   # 全 ASCII：断言不受编码影响
     env = dict(os.environ)
     env["RIOS_SIM_BIN"] = str(ghost)
     env.pop("PYTHONIOENCODING", None)          # 不许靠环境变量兜住编码
     bad = 0
-    for rel in SKIP_EXIT_SITES:
-        src = (ROOT / rel).read_text(encoding="utf-8")
+    for rel, required in ([(r, True) for r in SKIP_EXIT_SITES]
+                          + [(r, False) for r in SKIP_EXIT_SITES_PROTO]):
+        src_path = ROOT / rel
+        if not src_path.exists():
+            # ⚠ `_proto/` 不入库 ⇒ fresh checkout 里没有它：**缺席不算失败**（但要说出来）
+            print(f"  ➖ {rel}：不在场（`_proto/` 不入库，fresh checkout 里没有）——跳过本项")
+            if required:
+                print("     ⛔ 但它属于**必须存在**的那一组 ⇒ 这一点是失败")
+                bad += 1
+            continue
+        src = src_path.read_text(encoding="utf-8")
         static_ok = not SKIP_EXIT_RE.search(src)
         proc = subprocess.run([sys.executable, rel], cwd=str(ROOT), env=env,
                               capture_output=True, text=True, encoding="utf-8",
@@ -130,7 +163,7 @@ def check_skip_exit_sites() -> int:
         ok = static_ok and rc_ok and named
         bad += 0 if ok else 1
         print(f"  {'✅' if ok else '⛔'} {rel}：rc={proc.returncode}（须≠0）｜"
-              f"点名路径={named}｜已无「跳过：」出口={static_ok}")
+              f"点名路径={named}｜已无真正的「跳过」出口={static_ok}")
         if not ok:
             tail = [ln for ln in out.strip().splitlines() if ln.strip()][-3:]
             print(f"       末尾输出：{tail if tail else '（空）'}")
@@ -164,6 +197,11 @@ def main() -> int:
 
     print("== 自证：未设 RIOS_SIM_BIN 时它敢不敢停下来 ==")
     bad = 0
+
+    # ---- 0：仪器身份的两个维度（`sha16` 只证"哪次构建"，`source_sig` 才证"哪份源码"）----
+    sig = _source_sig() if _source_sig is not None else None
+    print(f"  本树源码身份 source_sig = {sig if sig else '（engine_pin 不可用 ⇒ 不可得）'}")
+    print("　⚠ 判「这台仪器是不是 HEAD 的构建」要看 source_sig，不能只看 exe 的 sha16")
 
     legacy = legacy_binary()
     print(f"  现场：工作树里那枚老 exe = "
