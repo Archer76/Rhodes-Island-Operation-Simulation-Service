@@ -541,6 +541,67 @@ def control_group_ok() -> tuple[bool, str]:
                 f"、收益 {first_gain}（须 ≥10 且落在共享键持有者上）")
 
 
+def cross_mode(a) -> int:
+    """★ 同口径对比（PM 2026-09-20 裁 A 时要求）：两套行空间 × 两份名单。
+
+    「214/773」算在 **431 位**行空间上、「112/253」算在 **169 位**行空间上——
+    **分母不同，并列会被读成"A 比 B 小"**。这一档把两份名单**都**放到**两个**行空间上
+    各算一遍：同一行内的两列才可比，跨行比就是换分母、**不可比**。
+    """
+    if not a.from_cache:
+        raise SystemExit("--cross 必须配 --from-cache（要用带白名单读数的缓存）")
+    blob = json.loads(Path(a.from_cache).read_text(encoding="utf-8"))
+    data = {cid: {"keys": set(d["keys"]), "talents": set(d["talents"]),
+                  "n_allk": d["n_allk"], "port": d["port"],
+                  "kv": [tuple(x) for x in d["kv"]]}
+            for cid, d in blob["data"].items()}
+    classify_gaps(data)
+    names: dict[str, str] = {}
+    try:
+        db = ROOT / "data" / "akdb.sqlite"
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        names = {str(c): str(n) for c, n in conn.execute("SELECT char_id,name FROM operator")}
+        conn.close()
+    except Exception:  # noqa: BLE001
+        pass
+    port_ok = {cid for cid, d in data.items() if d["port"] == []}
+    spaces = {"全库（431 位那一档）": set(data), f"过闸（{len(port_ok)} 位那一档）": port_ok}
+    space_needs: dict[str, tuple[dict, Counter]] = {}
+    for sname, space in spaces.items():
+        needs = {c: d["keys1"] for c, d in data.items() if c in space}
+        wt: Counter[str] = Counter()
+        for v in needs.values():
+            for kk in v:
+                wt[kk] += 1
+        space_needs[sname] = (needs, wt)
+    batches: dict[str, list[str]] = {}
+    for label, sname in (("B：全库贪心", "全库（431 位那一档）"),
+                         ("A：过闸贪心（--only-port）", f"过闸（{len(port_ok)} 位那一档）")):
+        needs, wt = space_needs[sname]
+        batches[label] = greedy_pick(needs, wt, sorted(needs), a.batch)[0]
+    print("=" * 78)
+    print("同口径对比：两套行空间 × 两份名单（同一行内的两列才可比）")
+    print("=" * 78)
+    for sname, (needs, wt) in space_needs.items():
+        total = sum(wt.values())
+        print(f"\n行空间 {sname}：{len(needs)} 位干员、{len(wt)} 种键、{total} 个需求对")
+        print(f"  {'名单':<28}{'覆盖需求对':>12}{'占比':>8}{'完全解锁':>9}{'可进 Go':>9}{'覆盖键':>8}")
+        for label, picks in batches.items():
+            cov = {x for c in picks for x in needs.get(c, ())}
+            pairs, _tot, _full = coverage_of(needs, cov)
+            if not cov or pairs == 0:
+                print(f"  {label:<28}{'—':>12}{'不可比':>8}（名单落在这个行空间之外）")
+                continue
+            full = sum(1 for c, v in needs.items() if v and v <= cov)
+            usable = sum(1 for c, v in needs.items() if v and v <= cov and c in port_ok)
+            print(f"  {label:<28}{pairs:>7}/{total:<4}{pairs / total * 100:>7.1f}%"
+                  f"{full:>9}{usable:>9}{len(cov):>8}")
+    print("\n注：跨行比＝换分母，**不可比**；同一行内 A 与 B 才可比。")
+    for label, picks in batches.items():
+        print(f"  {label}：{'、'.join(names.get(c, c) for c in picks)}")
+    return 0
+
+
 def select_mode(a, lits: set[str], det: str) -> int:
     import random
 
@@ -783,6 +844,8 @@ def main() -> int:
                     help="--select：复用上一轮的扫描缓存（只跑选人与守卫，秒级）")
     ap.add_argument("--only-port", action="store_true",
                     help="--select：行空间先收窄到「至少一个技能能进 Go」的干员（第二道闸）")
+    ap.add_argument("--cross", action="store_true",
+                    help="--select：同口径对比（两套行空间 × 两份名单，配 --from-cache）")
     a = ap.parse_args()
 
     roster = load_roster()
@@ -805,6 +868,8 @@ def main() -> int:
     det = detector_text()
     if a.select:
         #: 选人模式走**全体名册**（不受 `--all`/E2 过滤影响），行空间另按全库可用干员取。
+        if a.cross:
+            return cross_mode(a)
         return select_mode(a, lits, det)
     rows = []
     unclass_global: Counter[str] = Counter()
