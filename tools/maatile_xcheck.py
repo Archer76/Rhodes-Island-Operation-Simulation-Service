@@ -256,7 +256,7 @@ def _cmp_variant(key: str, maa: dict, stage) -> dict:
     return rec
 
 
-def mutate_first(maa: dict, key: str) -> tuple[str, tuple, str]:
+def mutate_first(maa: dict, key: str, noop: bool = False) -> tuple[str, tuple, str]:
     """反向守卫：故意把 MAA 的某个格改掉，比对必须红、且指出是哪一关哪一格。
 
     ⚠ 必须改**该关所有变体**的同一格：比对时是从变体里挑「最接近的那一份」，
@@ -266,6 +266,8 @@ def mutate_first(maa: dict, key: str) -> tuple[str, tuple, str]:
     for y, row in enumerate(variants[0].get("tiles") or []):
         for x, c in enumerate(row):
             if c.get("buildableType") == 0:
+                if noop:
+                    return key, (x, y), "**假注入（什么都不改，合成反例）**"
                 hit = 0
                 for v in variants:
                     try:
@@ -299,6 +301,8 @@ def main() -> int:
     ap.add_argument("--json", default=str(OUTDIR / "maatile-xcheck.json"))
     ap.add_argument("--stages", default="", help="只比这几关（逗号分隔）")
     ap.add_argument("--mutate", action="store_true", help="反向守卫：故意改它一格")
+    ap.add_argument("--mutate-noop", action="store_true",
+                    help="反向守卫的**合成反例**：假注入（什么都不改）=> 必须报错且 rc=1")
     ap.add_argument("--sample", default="main_01-07,act31side_ex08,act31side_07,a001_01,act31side_ex05",
                     help="抽样人工复核的关卡（逗号分隔，默认 5 关，含 1-7 与我们已有定论的 SR-EX-8）")
     args = ap.parse_args()
@@ -354,11 +358,15 @@ def main() -> int:
     recs, errs = run_all()
     base_recs, base_errs = recs, errs
     guard = None
-    if args.mutate and names:
-        mut_key, mut_cell, how = mutate_first(maa, names[0])
+    #: ⚠ `--mutate-noop` **必须也进这个分支**：第一版只认 `args.mutate`，于是
+    #: `--mutate-noop` 单独跑时守卫根本没执行、rc=0，"合成反例"变成了一句空话
+    #: （实测：加了反例开关却什么也没测——**自检必须测正在被使用的那一份**）。
+    if (args.mutate or args.mutate_noop) and names:
+        mut_key, mut_cell, how = mutate_first(maa, names[0], noop=bool(args.mutate_noop))
         print(f"【反向守卫】基线已测完；现在把 `{mut_key}` 的 {mut_cell} {how}（其余不动）……")
         recs, errs = run_all()
-        guard = {"mutated": mut_key, "cell": list(mut_cell), "how": how}
+        guard = {"mutated": mut_key, "cell": list(mut_cell), "how": how,
+                 "noop": bool(args.mutate_noop)}
         b = {r["key"]: r for r in base_recs}
         moved = []
         for r in recs:
@@ -377,6 +385,8 @@ def main() -> int:
         guard["moved"] = moved
         guard["ok"] = (len(moved) == 1 and moved[0][0] == mut_key
                        and f"({mut_cell[0]}, {mut_cell[1]})" in moved[0][1])
+        print("【反向守卫·契约】红得起来且指得准 ⇒ rc=0；**没红／指错 ⇒ rc=1**"
+              "（`--mutate-noop` 是它的合成反例：假注入必须 rc=1）")
         print(f"【反向守卫】{'✅ 红得起来且指得准' if guard['ok'] else '❌ 没红/指错'}："
               f"改动 `{mut_key}` {mut_cell}；A/B 差异 = {moved}")
         #: ⚠ **结论一律取未改动那一版**：第一版把改动后的结果当了结论，
@@ -430,6 +440,13 @@ def main() -> int:
                  clean, kind_count, guard, mir_bad, samples)
         print(f"报告：{args.out}")
     print(f"耗时 {(time.time() - t0) / 60:.1f} 分钟")
+    #: ⚠ **退出码必须跟着反向守卫的结果走**（2026-09-20 修）：
+    #: 原实现无论 `guard["ok"]` 是什么都 `return 0` ⇒ **"没红"这件事只落在文字上**，
+    #: 只看退出码的调用方（门／CI／别的会话）会把"反向守卫没红"读成"通过"。
+    #: 同族实例：`1788fb1d`（判定层红了 ≠ 拦截层红了，`--mutate rc=0`）。
+    if guard is not None and not guard.get("ok"):
+        print("⇒ **反向守卫没通过**：退出码 1（**不是**『通过』）。")
+        return 1
     return 0
 
 
