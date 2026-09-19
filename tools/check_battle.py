@@ -1581,10 +1581,27 @@ def check_blessing(stage, lib, calc, book_t) -> None:
     check("她自己没被打死（免死没被误触发）",
           rz.blessing_saves[0][3] == 2 and not sim.operators[0].blessing_used)
 
-    print("     —— 未建模的部分如实记下，不装成 0 ——")
-    check("【寒冷】只有时长、没有攻速效果（数值两个镜像都是 404，见 "
-          "docs/uncertainties.md 第九节）",
-          "cold_timer" in {f for f in EnemyUnit.__dataclass_fields__})
+    print("     —— 寒冷：数值 2026-09-19 补上（出处 PRTS《敌人一览/数据》）——")
+    enemy0 = next((e for e in getattr(sim, "enemies", ()) if e.hp > 0), None)
+    if enemy0 is None:
+        check("寒冷用例需要一个活着的敌人实例", False, "本次模拟里一个都没有")
+    else:
+        base = enemy0.attack_interval
+        check("未中招时出手间隔与基础间隔**完全相同**（补数值不动既有基线）",
+              close(enemy0.effective_interval(), base, 1e-9),
+              f"{enemy0.effective_interval():.4f} vs {base:.4f}")
+        enemy0.cold_timer = 1.0
+        check("中招时出手间隔 ×100/70（攻速 −30）",
+              close(enemy0.effective_interval(), base * 100.0 / 70.0, 1e-6),
+              f"{enemy0.effective_interval():.4f} vs {base * 100.0 / 70.0:.4f}")
+        check("敌人**技能自己**的出手间隔同样被折减（同一条攻速公式）",
+              close(enemy0.effective_interval(2.0), 2.0 * 100.0 / 70.0, 1e-6),
+              f"{enemy0.effective_interval(2.0):.4f} vs {2.0 * 100.0 / 70.0:.4f}")
+        enemy0.cold_timer = 0.0
+    check("同一条 tooltip 里还有两半**未建模**，如实记下不装成 0："
+          "①「持续时间内再次受到寒冷则变为冻结」的升级；"
+          "② 冻结期间「敌方被冻结时法术抗性 −15」",
+          True, "见 ak_tactic/battle/unit.py 里 cold_timer 的说明")
 
 
 def check_charges(stage, lib, calc) -> None:
