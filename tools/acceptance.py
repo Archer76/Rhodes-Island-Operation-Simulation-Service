@@ -606,6 +606,65 @@ def exe_staleness_item(exe: str | None, src_sig: str | None = None) -> dict:
                 f"{r['behind_min']} 分钟" for r in stale)}
 
 
+def roster_identity_item(path: Path | str | None = None,
+                         expected: str | None = None) -> dict:
+    """**名册身份**：本次读数所用的那名册，`sha16` 必须等于**基线里记的那个**。
+
+    为什么要有这条：2026-09-20 实测，名册实物（`out/roster_max_modelled.json`）随旁支检出废弃而消失，
+    而它**从未入库** ⇒ **19 份基线读数当场不可复现**，而门里**没有任何一条判据会说话**。
+    读数的输入与读数本身一样需要身份——**"丢了就再也量不出来"的东西不该只住在易失目录里。**
+
+    PM 2026-09-20 00:21 三条硬要求：
+      * **实物缺失必须判红，不许判"跳过"**（"找不到"会被读成"通过"）；
+      * **"名册不在"与"名册不对"要分开报**——前者是**缺口**，后者是**结论**；
+      * 反向守卫必须**注入式**：改名册 ⇒ 红；删名册 ⇒ 红。
+    """
+    import golden_go as _G                       #: 与 `golden_check()` 用同一个夹具定位口径
+    #: ⚠ 记录值住在**金标准基线**（`fixtures/golden_go.json` 每条一栏），**不是** `load_baseline()`
+    #: 读的那份水位基线。第一版我写成了后者 ⇒ 反向守卫的**控制组当场没绿**
+    #: （`记录值=None`，判据会永远红）——**"控制组必须绿"这一层替我把空判据挡住了**。
+    gp = Path(_G.BASELINE) if hasattr(_G, "BASELINE") else ROOT / "fixtures" / "golden_go.json"
+    recorded: list[str] = []
+    try:
+        gj = json.loads(gp.read_text(encoding="utf-8-sig"))
+        recorded = sorted({v.get("roster_sha16") for v in gj.values()
+                           if isinstance(v, dict) and v.get("roster_sha16")})
+    except Exception as e:                                       # noqa: BLE001
+        recorded = []
+        gp = Path(f"{gp}（读失败：{type(e).__name__}: {e}）")
+    exp = expected or (recorded[0] if len(recorded) == 1 else None)
+    target = Path(path) if path is not None else _G._find("roster_max_modelled")
+    measured: dict = {"path": str(target), "recorded_sha16": recorded,
+                      "expected_sha16": exp}
+    if not Path(target).exists():
+        #: **缺口，不是结论**：实物不在场 ⇒ 红（且不许退化成"跳过"）。
+        return {"key": "roster_identity", "name": "名册身份（输入实物 sha16 == 基线记录）",
+                "status": FAIL, "seconds": 0.0, "measured": measured,
+                "judge": "本次读数所用名册的 sha16 必须等于基线里记的那个；"
+                         "**实物缺失即红**——它不是'跳过'，是'这份读数已不可复现'",
+                "note": f"**名册不在场**（缺口）：{target} 不存在 ⇒ 缺了输入实物，"
+                        f"基线记的是 {exp}；这不是'没得比'，是'比不了'"}
+    got = (sha256_file(Path(target)) or "")[:16]
+    measured["got_sha16"] = got
+    measured["bytes"] = Path(target).stat().st_size
+    if exp is None:
+        return {"key": "roster_identity", "name": "名册身份（输入实物 sha16 == 基线记录）",
+                "status": FAIL, "seconds": 0.0, "measured": measured,
+                "judge": "基线里没有登记 `roster_sha16` ⇒ 无法断言输入身份（**登记缺失也是缺口**）",
+                "note": "**基线没记名册身份**：`fixtures/golden_go.json` 里没有 `roster_sha16` 栏"}
+    if got != exp:
+        return {"key": "roster_identity", "name": "名册身份（输入实物 sha16 == 基线记录）",
+                "status": FAIL, "seconds": 0.0, "measured": measured,
+                "judge": "名册实物 sha16 必须等于基线记录值；不等即红（**换名册就是换输入，数字不可比**）",
+                "note": f"**名册不对**（结论）：实物 sha16={got}，基线记的是 {exp}"
+                        f"（{Path(target).name}，{measured['bytes']} B）"}
+    return {"key": "roster_identity", "name": "名册身份（输入实物 sha16 == 基线记录）",
+            "status": PASS, "seconds": 0.0, "measured": measured,
+            "judge": "名册实物 sha16 ＝ 基线记录值 ⇒ 输入身份成立；"
+                     "⚠ **换了名册必须换基线**（「能不能走到分歧点」会随名册变）",
+            "note": ""}
+
+
 def guard_new_items(exe: str | None = None) -> int:
     """两条新判据的**反向守卫**：逐条人为破坏 ⇒ **必须红，且红得指得准**。
 
@@ -686,8 +745,46 @@ def guard_new_items(exe: str | None = None) -> int:
               f"{'✅ 与起始一致' if abs(back - st.st_mtime) < 1e-6 else '❌ 不一致'}")
         it3 = exe_staleness_item(exe)
         print(f"  [还原后复跑] {it3['status']}（应与破坏前一致）")
+    print("【反向守卫 3/3】roster_identity：**注入式**三态——控制组必须绿、改名册必须红、删名册也必须红")
+    #: PM 2026-09-20 00:21 的硬要求：**"名册不在"与"名册不对"要分开报**（前者缺口、后者结论），
+    #: 且**实物缺失不许判"跳过"**（"找不到"会被读成"通过"）。
+    #: ⚠ 守卫**自己造夹具**（复制一份真名册再改一个字节），不依赖"仓库里恰好躺着一份坏名册"。
+    it_ctl = roster_identity_item()
+    ok_ctl = it_ctl["status"] == PASS
+    bad += 0 if ok_ctl else 1
+    print(f"  [控制组] 真名册 ⇒ {it_ctl['status']}　sha16={it_ctl['measured'].get('got_sha16')}"
+          f"　记录值={it_ctl['measured'].get('expected_sha16')}　"
+          f"⇒ {'✅ 该绿就绿' if ok_ctl else '❌ 控制组没绿：判据本身坏了'}")
+    tmpd2 = Path(tempfile.mkdtemp(prefix="ak-roster-"))
+    try:
+        real = Path(it_ctl["measured"]["path"])
+        if not real.exists():
+            print("  ⚠ 真名册不在场 ⇒ 这条守卫**未跑**（不冒充通过）")
+            bad += 1
+        else:
+            fake = tmpd2 / real.name
+            raw = bytearray(real.read_bytes())
+            #: 只改**一个字节**（且改在文件里而非末尾空白），证明判据看的是内容而不是"文件在不在"
+            raw[len(raw) // 2] = (raw[len(raw) // 2] + 1) % 256
+            fake.write_bytes(bytes(raw))
+            it_bad = roster_identity_item(path=fake)
+            ok_bad = it_bad["status"] == FAIL and "不对" in it_bad["note"]
+            bad += 0 if ok_bad else 1
+            print(f"  [改名册 1 字节] ⇒ {it_bad['status']}　{it_bad['note'][:88]}")
+            print(f"      ⇒ {'✅ 红得起来且报「不对」' if ok_bad else '❌ 没红/没报对'}")
+            it_miss = roster_identity_item(path=tmpd2 / "这里没有这个名册.json")
+            ok_miss = it_miss["status"] == FAIL and "不在场" in it_miss["note"]
+            bad += 0 if ok_miss else 1
+            print(f"  [删名册（路径不存在）] ⇒ {it_miss['status']}　{it_miss['note'][:88]}")
+            print(f"      ⇒ {'✅ 红得起来且报「不在场」（缺口），而不是跳过' if ok_miss else '❌ 没红/退化成跳过'}")
+            distinct = ("不在场" in it_miss["note"]) and ("不对" in it_bad["note"]) and \
+                       ("不在场" not in it_bad["note"])
+            bad += 0 if distinct else 1
+            print(f"  [两态可分] 「不在」与「不对」措辞不同：{'✅ 分开报' if distinct else '❌ 混成一态'}")
+    finally:
+        _sh.rmtree(tmpd2, ignore_errors=True)
     print("=" * 88)
-    print("✅ 两条守卫都成立" if bad == 0 else f"❌ {bad} 条不成立")
+    print("✅ 三条守卫都成立" if bad == 0 else f"❌ {bad} 条不成立")
     return 0 if bad == 0 else 1
 
 
@@ -1172,6 +1269,15 @@ def main() -> int:
     items.append(it)
     print(f"[1] 金标准：{it['status']}　一致 {it['measured'].get('consistent')}/"
           f"{it['measured'].get('baseline_plans')}　{it['seconds']:.0f}s"
+          + (f"　{it['note']}" if it["note"] else ""))
+    #: PM 2026-09-20 00:21 批准：**输入身份**也必须是一条会说话的判据。
+    #: 缘起：名册实物曾随旁支检出废弃而消失（住在易失 `out/`、从未入库）⇒ 19 份读数当场不可复现，
+    #: 而门里**没有一条判据会说话**。判据本体只问一件事：**这次读数的输入，是不是基线里那一个。**
+    it = roster_identity_item()
+    items.append(it)
+    _m = it["measured"]
+    print(f"[1c] 名册身份：{it['status']}　实物 {_m.get('path')}"
+          f"　sha16={_m.get('got_sha16')}　基线记录={_m.get('expected_sha16')}"
           + (f"　{it['note']}" if it["note"] else ""))
     #: PM 2026-09-19 23:27 新增：**仪器新鲜度**——"我手里的尺子是不是我造的那把"
     it = exe_staleness_item(exe, (ins.get("measured") or {}).get("src_sig"))

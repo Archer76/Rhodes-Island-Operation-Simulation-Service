@@ -69,7 +69,8 @@ def build_spec(plan_file: Path, roster_file: Path) -> tuple[dict, str]:
     return v.spec, G.canonical_sha(v.spec)
 
 
-def run_exe(exe: Path, spec: dict, trace_env: dict, window: float | None = None) -> dict:
+def run_exe(exe: Path, spec: dict, trace_env: dict, window: float | None = None,
+            dump: Path | None = None) -> dict:
     """跑一枚 exe，按**全部键**计数；`window` 给定时另出一份"只算 `t <= window`"的计数。
 
     ⚠ **为什么必须有同窗那一栏**：两次运行的**时长不同**（814.03 s ↔ 221.67 s），
@@ -84,6 +85,15 @@ def run_exe(exe: Path, spec: dict, trace_env: dict, window: float | None = None)
         raise RuntimeError(f"{exe.name} 没跑起来：rc={p.returncode} stderr 尾="
                            f"{(p.stderr or '').strip().splitlines()[-1][:200] if (p.stderr or '').strip() else '（空）'}")
     verdict = json.loads(out_lines[-1]).get("verdict") or {}
+    if dump is not None:
+        #: `--dump-stderr <目录>`：把两侧**原始 stderr** 各落一份盘。
+        #: 为什么要有这个出口：本工具交的是**计数级**结论（同窗键计数），
+        #: 而"同键同 t 两侧取值不同"这类**坐标级**问题，计数答不了——
+        #: 那是另一问，需要原始痕迹。**别让下一个会话为了同样一份 stderr 再跑一遍。**
+        dump.mkdir(parents=True, exist_ok=True)
+        f = dump / f"stderr-{exe.stem}-{hashlib.sha256(exe.read_bytes()).hexdigest()[:8]}.txt"
+        f.write_text(p.stderr or "", encoding="utf-8")
+        print(f"  [dump] {f}（{len((p.stderr or '').splitlines())} 行）")
     keys: Counter = Counter()
     keys_w: Counter = Counter()          #: 只算 t <= window（同窗可比的那一栏）
     tags: Counter = Counter()
@@ -138,6 +148,8 @@ def main() -> int:
     ap.add_argument("--exe-b", default="", help="B 侧（默认＝当轮自建自钉）")
     ap.add_argument("--pos-gate", default="", help="RIOS_TRACE_POS 的名字门控（两次都用同一个值）")
     ap.add_argument("--json", default="out/acceptance/trace-key-diff.json")
+    ap.add_argument("--dump-stderr", default="", help="把两侧原始 stderr 落盘到这个目录"
+                                                    "（给需要按 t 取值对齐的会话直接消费）")
     args = ap.parse_args()
 
     a = Path(args.exe_a)
@@ -166,9 +178,10 @@ def main() -> int:
     print(f"B＝{ident(b)}")
 
     #: 先跑 B（拿到它的全程时长 W），再跑 A 并**只统计 t <= W** 的那一段。
-    rb = run_exe(b, spec, trace_env)
+    dump = Path(args.dump_stderr) if args.dump_stderr else None
+    rb = run_exe(b, spec, trace_env, dump=dump)
     w = float(rb["verdict"]["elapsed"] or 0)
-    ra = run_exe(a, spec, trace_env, window=w)
+    ra = run_exe(a, spec, trace_env, window=w, dump=dump)
     #: B 的全程**就是**同窗那一段（W 取自它自己），所以它的同窗计数＝全程计数。
     rb["keys_in_window"] = dict(rb["keys"])
     print(f"（同窗窗长 W = {w:.4f}s ＝ B 的全程；A 只统计 t <= W 的痕迹）")
