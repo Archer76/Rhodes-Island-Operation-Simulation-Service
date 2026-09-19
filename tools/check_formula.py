@@ -487,6 +487,43 @@ def serialization() -> None:
                   f"{type(exc).__name__}: {exc}")
 
 
+def ep_unmatched() -> None:
+    """含「损伤」却编译不出任何公式项的句子，**必须**出现在未识别清单里。
+
+    出处：项目经理 2026-09-19「元素损伤三件」§二.3 ——「忽视」不等于「漏掉」；
+    生息演算按既有裁定是忽视，但**判据覆盖不到机制时只会沉默、不会否证**。
+    清单（`formula.scan()["unmatched"]`）是"继续加规则"的唯一入口，
+    一条句子从清单里漏掉，就等于它从此没人再看。
+
+    实测口径（2026-09-20）：全库 14967 条语料里含「损伤」的 683 条，
+    其中 **382 条**编译不出任何公式项——本节断言这 382 条的**骨架逐条都在清单里**。
+
+    ⚠ 清单要用 `top` 取得足够大：默认 `top=25` 会截断，
+    截断后"不在清单里"与"清单没显示它"长得一模一样——那正是本节要防的假绿。
+    """
+    section("[9] 含「损伤」却零公式项 ⇒ 必须在未识别清单里")
+    from ak_tactic.formula import TAG_RE, _skeleton, load_corpus, parse
+
+    r = scan(DB, top=10 ** 9)
+    listed = {sk for sk, _n in r["unmatched"]}
+    zero, short, missing = 0, 0, []
+    for src, key, text, bb in load_corpus(DB):
+        if "损伤" not in text:
+            continue
+        if parse(text, bb):
+            continue
+        zero += 1
+        clean = TAG_RE.sub("", text)
+        if len(clean) < 10:          # 与 scan() 同一条门槛：太短的只是提示文字
+            short += 1
+            continue
+        sk = _skeleton(clean)
+        if sk not in listed:
+            missing.append((src, key, sk))
+    check(missing == [], f"含「损伤」的零项句（{zero} 条，其中过短不计 {short} 条）全在未识别清单里",
+          f"漏 {len(missing)} 条，例如 {missing[:2]}" if missing else "")
+
+
 def main() -> int:
     global VERBOSE
     ap = argparse.ArgumentParser(description="描述→公式模型校验")
@@ -502,6 +539,7 @@ def main() -> int:
     expressions()
     operator_attrs()
     serialization()
+    ep_unmatched()
 
     print(f"\n{'=' * 60}")
     print(f"通过 {PASS} / 失败 {FAIL}")
