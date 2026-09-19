@@ -2768,7 +2768,14 @@ func (c *simCtx) onEnemyHit(e *enemy, src *operator) {
 		// 黑板里 atk/def/res/move 存的都是**增量**（攻防那几项是负数）
 		sp.ATK += sp.PhitAtk
 		sp.DEF += sp.PhitDef
+		//: 改写类机制**没有可观测量**（记忆 e681022e）：RES 被改了多少，下游只能看到
+		//: "伤害被顶到 5% 保底"这种间接信号，从下游反推必偏。
+		//: 所以在这里把**改写前后**直接打出来——"RES 变负"这类事应该在这里就能看见。
+		beforeRES := sp.RES
 		sp.RES += sp.PhitRes
+		c.Trace("PHITRES t=%.4f enemy=%s idx=%d stack=%d/%d before=%.2f delta=%.2f after=%.2f",
+			c.Now(), sp.Name, e.index, e.phitStacks, sp.PhitMaxStack,
+			beforeRES, sp.PhitRes, sp.RES)
 		sp.MoveSpeed += sp.PhitMove
 		c.Trace("PHIT t=%.4f name=%s 层=%d/%d atk=%.2f def=%.2f res=%.2f",
 			c.Now(), sp.Name, e.phitStacks, sp.PhitMaxStack,
@@ -2812,9 +2819,15 @@ func (c *simCtx) enterPm2(e *enemy, t float64) {
 		t, sp.Name, e.phitStacks, sp.ATK, sp.DEF, sp.RES)
 	if !e.pm2Applied {
 		e.pm2Applied = true
+		beforeRES := sp.RES
 		sp.ATK *= 1.0 + sp.Pm2Atk
 		sp.DEF *= 1.0 + sp.Pm2Def
 		sp.RES += sp.Pm2Res
+		//: 与 `PM2 前/后` 同族，但**只有这一行**能回答"这次真的改了没有、改了多少"：
+		//: 那两行在重复进入时照样打（`applied` 已是 true），于是"前后有差"
+		//: 与"这一次改的"是两件事，混在一起就会把重复改写读成正常。
+		c.Trace("PM2RES t=%.4f enemy=%s idx=%d applied_before=%t before=%.2f delta=%.2f after=%.2f",
+			t, sp.Name, e.index, false, beforeRES, sp.Pm2Res, sp.RES)
 		e.haste = 1.0 + sp.Pm2Move
 		sp.AttackTimes = 2
 		if sp.AttackRange > 0 {
