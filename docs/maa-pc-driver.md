@@ -82,6 +82,8 @@
 ## 踩过的坑（都与上面结论无关，但会伪装成它）
 
 1. **A/B 组曾整轮作废**：把 python 输出接进 PowerShell 管道（含 `| Out-Null`）触发 `拒绝访问`，复位与拍帧**一条没执行**。⇒ **"我的命令坏了"≠"Send 被拒"**。
+   ★ **补充（同一晚又踩两次）**：**赋值也是重定向**——`$out = & $P xxx.py` 报 `StandardOutputEncoding is only supported when standard output is redirected`；`& $P xxx.py 2>&1 | Select-Object -Last 1` 报 `拒绝访问`，而且**它会打印 `exit=0`——那是管道的退出码，不是被调脚本的**，看起来像"全部通过"。
+   ⇒ **规矩：python 只能裸调用**；要留证据就让脚本自己写文件（`--log` / `--out`），再用 `Select-String -Path <文件>` 读；**每跑一个判据单独一行裸调用 + 紧跟一行 `$LASTEXITCODE`**。
 2. **增量资源顶层写了一个字符串值** ⇒ `AsstLoadResource -> False`、`append_task -> REFUSED`，**连带已有任务一起静默失效**；症状是后面每一步都照跑，只有一行 `False`。
 3. **复位不是单步**：关卡列表之上还有"活动介绍页"，`Return` 只退到那一层（对族 MAD≈102 RED），需要再点「进入活动」。
 4. **子进程管道 stdio 被沙箱拒绝**（`CreatePipe -> WinError 5`）⇒ 改真实文件句柄重定向。
@@ -91,6 +93,15 @@
    **改法**：成员加 `role`（`stage-list` / `prebattle`），**只有 `role=stage-list` 让硬闸放行**；命中其它 role 时给**它自己的退出码 `4`（OTHER）**，文案写明"这是另一个已登记的屏，闸门不许据此放行"。
    **回归自检（改判据后必跑）**：`pre11`→PASS `0`、`recon1`→OTHER `4`、`pre7`→RED `3`。三种屏必须都还分得开。
    同族纪律：**一个值不能同时表示"我不认识它"与"我认识它、但它是另一个"**——这正是"两种不同的空压成一个值"在判据层的形态。
+8. ★ **某些中文按钮 OCR 读不出，但同区域的 ASCII 可定位**（**局部的、按钮级的，不是"中文 OCR 全局失效"**）。
+   * 证据：编队屏的「开始行动」——`fullMatch: true` 与 `fullMatch: false` **两次都 SubTaskError**，而**同一按钮上的拉丁字母 `OPERATION` 一次点成**（`chains_completed 1`，换屏 MAD 77.07）。
+   * **同一台机器上「演习」（中文）是命中过的** ⇒ 不是中文 OCR 整体坏掉，所以**不许把它写成"中文 OCR 失效"**。
+   * **配套判据**：**OCR 定位连续失败两次时，先换同区域的 ASCII 串再试一次，再谈"按钮不在屏上"。**
+   * 事前怎么知道按钮上有没有拉丁字母：**读图只用于定性时说得出按钮上的英文副标题**（`OPERATION START`），**别用它取坐标**。
+9. ★ **工具报"找不到"时，先证明工具自己是活的**。
+   * 实例：我报过 `BattleStartAll` NOT FOUND——真因是 `ConvertFrom-Json` 因 `specialParams_Doc` / `specialParams_doc` **大小写键冲突整份解析失败**（`$J` 为 null ⇒ **三个"找不到"全是假的**）；同一轮 `dump-tasks` 也崩在 `OverflowError`。**换 grep 才对上：`BattleStartAll` 在 `tasks.json:4271`。**
+   * **判别式：让它去找一个你知道一定存在的键。** 找不到已知存在的键 ⇒ 坏的是工具，不是对象。
+   * 这是**「静默返回空盖住前一个错」**的形态：**坏掉的那一层不报错，它报"没找到"。**
 
 ## 附：界面推进链（已定性的屏）
 
