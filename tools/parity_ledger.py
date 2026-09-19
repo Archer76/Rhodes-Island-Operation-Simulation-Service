@@ -649,9 +649,13 @@ def write_md(recs: list[dict], path: Path, exe, exe_sha: str = "?", exe_size: in
              "第二问才是「读了有用吗」；而 `sha` 只能回答第二问。**"
              "分辨法＝**给消费者装计数器＋哨兵返回值**（只喂哨兵：被调用了多少次、"
              "送出去的规格里有没有它）。另：`cost_init`/`cost_max`/`cost_time`/`life` "
-             "**根本不是 `SpecInputs` 的字段**（23 项里没有）⇒ 从来不在这个讨论范围内——"
-             "原先把「静态 8 项走 `env`」写成 8 是错的，**实测只有 5 项**"
-             "（`enemy_windup`/`fps`/`ranged_enemies`/`speed_scale`/`environment_difficulty`）。")
+             "**根本不是 `SpecInputs` 的字段**（23 项里没有）⇒ 从来不在**这一段所讲的**范围内——"
+             "这一段讲的是「**`env` 缺席时**由 `inp` 供上的那几项」，**实测 5 项**"
+             "（`enemy_windup`/`fps`/`ranged_enemies`/`speed_scale`/`environment_difficulty`）。"
+             "⚠ **别把这 5 项读成「`env` 里只有 5 项」**：`env` 承载并被 `spec.py` 消费的是 **8 项**"
+             "（`stage_env.ENV_KEYS`；取用点 `spec.py:1197`／`:1206-1212`）——"
+             "「8」与「5」量的是**两个不同的量**（2026-09-20 后端2 复核：本条原措辞「写成 8 是错的」"
+             "按 8 项那一读是假的，账已撤回、措辞按此收窄）。")
     L.append("")
     L.append("### 〇之六、措辞更正：`goal_cells` **不是「死字段」**")
     L.append("")
