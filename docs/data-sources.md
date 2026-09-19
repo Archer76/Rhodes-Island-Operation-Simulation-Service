@@ -53,13 +53,68 @@ data/gamedata/                     关卡与敌人本体（源 #2 / #3，按域�
 data/cache/{prts,prts_calc,theresa}/ 各来源的原始响应缓存
 ```
 
-## 五、prts.wiki 全站检索：可用页面清单（2026-09-19）
+> ⚠ **上表这些东西不会一直在**。它们在 `.gitignore` 里（第 7~25、62 行），
+> **任何 `git clean -xdf` 都会把它们当忽略文件删掉**。要重建见下一节。
+
+## 五、重建 `data/`：一条命令（2026-09-20 起）
+
+**为什么单开这一节**：2026-09-20 凌晨，`prts-notes.sqlite` / `op-briefs.txt` /
+`enemydb.sqlite` / `ranges.json` / `operbox/` 在 01:0x 还在、03:1x 全无，
+**而回收站是空的**。原因不是谁手快——是**"数据可重建"没有被当成硬要求**。
+这一节就是那个硬要求。
+
+```
+python tools/rebuild_data.py            # 全量（含联网步骤）
+python tools/rebuild_data.py --offline  # 只跑不需要联网的
+python tools/rebuild_data.py --dry-run  # 只报计划，不动手
+python tools/rebuild_data.py --list     # 逐项列出来源 / 耗时 / 是否联网 / 失败长什么样
+```
+
+### 5.1 每一项从哪来
+
+| 产物 | 来源 | 要联网？ | 要登录？ | 耗时 | 失败长什么样 |
+|---|---|---|---|---|---|
+| `data/akdb.sqlite` | 本地 `data/gamedata/` 的六张 excel 表 | **否** | 否 | 约 14 秒 | gamedata 不在 ⇒ `FileNotFoundError`；或建完 `operator` 行数为 0 |
+| ↑ 的 `stage` / `zone` 表 | map.ark-nights.com 的 JS bundle ＋ 镜像的 `zone_table`/`stage_table` | **是** | 否 | 约 1 分钟 | **`stage` 行数为 0**（`db info` 自带警告）；命令 `db stage-fetch` |
+| `data/enemydb.sqlite` | prts.wiki 的「分类:敌人」（约 1800 页） | **是** | 否 | 冷启约 53 秒 | 库建得出但 `enemy` 行数远小于预期；或 403 |
+| `data/prts-notes.sqlite` | prts.wiki 干员页的 `\|备注=` / `\|特性备注=`（460 页） | **是** | 否 | 约 10~15 分钟 | **失败页会被逐页列出**；正常约 `fact` 3247 条 / `page` 459 页 |
+| `data/op-briefs.txt` | 从 `prts-notes.sqlite` 展平（人读用） | 否 | 否 | <1 秒 | 备注库不在 ⇒ 本步跳过（不算失败） |
+| `data/ranges.json` | prts.wiki 的 `Widget:Range/<代号>`（代号取自 akdb 的 `attack_range.range_id`） | **是** | 否 | 约 1~2 分钟 | 个别代号取不到 ⇒ 逐个报出来 |
+| `data/operbox/` | **玩家自己从 MAA 导出的文件** | — | — | — | **不可重建**。缺了名册退档，但不是错误 |
+| `data/skland/` | 森空岛 API（练度＋模组） | 是 | **要登录态** | — | **不可离线重建**。见本文件 §二 第 7 条 |
+| `data/gamedata/` | 镜像 `Kengxxiao/ArknightsGameData`（`excel/` 只有这个镜像有） | 是 | 否 | 首次几十 MB | **离线步骤的源头**；本脚本不负责取它，只检查在不在 |
+
+### 5.2 三条纪律
+
+* **只加不删**。重建脚本**不删除任何文件**——不"顺手清理"。
+  哪天确实需要先删旧的，**必须把删了什么打印出来**（今晚的教训）。
+* **空表必须给出原因**。脚本跑完**逐表报行数**，0 行的表**显著标出并写明为什么空**。
+  ⚠ **"跑通"不等于"库是完整的"**：在"只剩 `gamedata/`"的空状态下重建，
+  `stage` 会是 **0 行**——**脚本返回 0 而库少一张表，是最坏的一种"成功"**。
+  对账不过 ⇒ **rc=1**。
+* **外部输入不假装能重建**。`operbox/` 与 `skland/` 是**别人给的/要登录的**，
+  脚本只如实报在不在，不编一个假重建路径。
+
+### 5.3 已知的坑
+
+* **`data/gamedata/` 也在 `.gitignore` 里**，但它**不是派生物**（要从镜像下载），
+  所以它是本节的**前置**而不是产物。`git clean -xdf` 同样会删掉它。
+* **`data/op-briefs.txt` 全仓找不到生产者**。`grep -r briefs` 只命中 `.gitignore`
+  与本文档——**原文件丢失后无法"复原"**。`rebuild_data.py` 里的展平函数是
+  **新定义**，不是还原；谁要用它的格式，以那个函数为准。
+* **`enemydb` 的建库命令有两个写法在文档里打架**：`ak_tactic/db/__init__.py` 与
+  `db/enemy_build.py` 的 docstring 写 `python -m ak_tactic enemy build`，
+  而 `db/enemy_schema.py`、`db/enemy_api.py` 写 `python -m ak_tactic enemydb build`。
+  **以 CLI 实际注册的为准：`enemydb`**（`python -m ak_tactic --help` 里顶层是 `enemydb`，
+  `enemy` 是"取敌人图鉴与数值"的查询命令，不是建库）。前两处 docstring 是**旧的、错的**。
+
+## 六、prts.wiki 全站检索：可用页面清单（2026-09-19）
 
 检索方法（可复现）：`list=search` 24 个机制/数据关键词 ＋ `list=allpages` 17 个前缀
 ＋ `list=categorymembers` 7 个分类，去重后 **86 个命中页**。
 脚本 `tmp/prts_sweep.py`，原始结果 `tmp/prts/全站检索.{txt,json}`。
 
-### 5.1 已抓并已用上的（本轮新发现）
+### 6.1 已抓并已用上的（本轮新发现）
 
 | 页面 | 大小 | 里面有什么 | 对我们的用途 |
 |---|---|---|---|
@@ -77,7 +132,7 @@ data/cache/{prts,prts_calc,theresa}/ 各来源的原始响应缓存
 > 那条 tooltip 恰恰写着「寒冷：攻击速度下降 30」。这也解释了项目此前为什么记"拿不到数"：
 > 找错了页面。
 
-### 5.2 已定位、还没抓的（按价值排序）
+### 6.2 已定位、还没抓的（按价值排序）
 
 | 页面 | 大小 | 为什么值得抓 |
 |---|---|---|
@@ -92,13 +147,13 @@ data/cache/{prts,prts_calc,theresa}/ 各来源的原始响应缓存
 | `干员一览/干员id`、`干员分支`、`干员专精`、`干员信赖` | — | 干员侧索引入口 |
 | `作战机制/sandbox/待测机制`、`作战机制/sandbox2` | 3.9 KB / — | 站方自己标"待测"的机制，可当待验证清单 |
 
-### 5.3 分类入口（比页面更好用的两条）
+### 6.3 分类入口（比页面更好用的两条）
 
 * **`分类:游戏数据`**（15 项）：`常见同名状态`、`仇恨`、`符文`、`干员等级上限`、
   `可抵抗状态`、`数值范围`、`随机数`、`特殊地形`、`特殊地形/sandbox`、`特殊机制`…
 * `分类:敌人`（300+ 项，敌人库的取数入口）、`分类:干员`（300+ 项）。
 
-## 六、相关文档导航
+## 七、相关文档导航
 
 | 主题 | 文档 |
 |---|---|
