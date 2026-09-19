@@ -313,6 +313,65 @@ WIRED_WHY: dict[str, str] = {
         "而永久假红会把真正的锚点失效淹掉。"
         "**守卫**：`*_test.go` 里 `sluggish`／`speedFor`／`speedReq` **零命中**（`status_test.go:40` 只有一句"
         "「与 sluggishTimer 同一类」的注释）⇒ 与本行登记的「守卫缺失」相符；**「零覆盖」是这条判据该抓出来的结论，不是麻烦。**",
+
+    # ---- 批次二：control.go 异常效果位图族（2026-09-20）----
+    "晕眩":
+        "定义位 `rios-sim/control.go:28`（`const` 块 iota 成员，`flagStun`）。"
+        "**消费点：零。** 它只作为清单成员出现：`control.go:44`（`maskBlocksAttack`）、`:47`（`maskBlocksAbility`），"
+        "判据函数 `blocksAttack` `control.go:57-63`。穷举取证（`grep abnormalFlag` 于全 `rios-sim/**/*.go` 含测试）："
+        "**共 17 处命中，无一例外落在 `control.go` 与 `control_test.go`**；且**没有任何结构体持有该类型的字段**"
+        "（`grep '^\\s*\\w+\\s+abnormalFlag'` 只命中 `control_test.go:18` 的局部变量）；"
+        "`blocksAttack(`／`blocksMove(`／`blocksAbility(` 在非测试代码里**除自身定义外零调用点**；"
+        "全仓亦**没有 `stunTimer` 之类的运行期字段**。⇒ 引擎里没有任何一处按「晕眩」判行为。"
+        "⚠ **同名不同义的假信号**（按名字搜会误读成「这一族已被消费」）：`rios-sim/stealth.go:132` 的 `flags=%d` "
+        "打的是**索敌的 `targetFree` 位集**（参数 `f`，`:127-133`），与 `abnormalFlag` 无关——"
+        "与 `mech/snow.go:597` 的 `f.add(cell)` 是同一族陷阱（关键记忆 `1bd38acb`）。"
+        "**守卫**：`control_test.go:15 TestAbnormalFlagListsAreExact`（三张清单逐项相等＋反向「不得多一位」）、"
+        "`control_test.go:56 TestFlagListsAreNotNested`（`:64-68` 专门断言晕眩**不属于**阻止移动清单）。"
+        "锚点指向的是哪个量：`flagStun` 是「晕眩」在**清单位图**里的那一位（成员身份），**不是**运行期状态量——"
+        "本行判的是「这一位在不在清单里」，引擎有没有真的按它拦人，本行覆盖不到。",
+    "冻结":
+        "定义位 `rios-sim/control.go:31`（`flagFrozen`）。"
+        "**消费点（就这一位而言）：零**——与晕眩同一次穷举：`abnormalFlag` 全仓 17 处、无字段持有、谓词零调用点。"
+        "⚠ **但「冻结状态」另有其量且已接线**（同名同义、不同符号）：字段 `rios-sim/sim.go:175 freezeTimer`（＋`:759 frozenSnow`），"
+        "消费 `sim.go:732`（`frozenLatched = e.freezeTimer > 0 || e.frozenSnow`）与 `:739`（递减）／`:761`（推进闸门）；"
+        "写入入口 `rios-sim/mech/mech.go:311 SetEnemyFrozen`（积雪那一侧调用 `mech/snow.go:452-454`）；"
+        "抗性下调那一支见 `sim.go` 的 `frozenResDown`（`d7d8319` 21:26）。"
+        "**守卫**：`res_frozen_test.go:15 TestFrozenResistanceDownFifteen`、`:50 TestFrozenResistanceOnlyForFriendlyFreeze`；"
+        "`status_test.go:48 TestFrozenLowersEnemyRes`、`:80 TestHostileFreezeGivesNoResDown`、`:136 TestApplyFreezeTakesMax`；"
+        "位图那一侧 `control_test.go:15`。"
+        "锚点指向的是哪个量：本行锚点指的是**位图里的那一位**（无消费点），而这一行名字在引擎里真正被消费的量是 "
+        "`sim.go:175 freezeTimer`⇒ **两者不是同一个量**。按「不改锚点、锚点问题上报裁」的约定，本条**上报 PM 裁定**。",
+    "沉睡":
+        "定义位 `rios-sim/control.go:36`（`flagSleeping`）；⚠ 与 `control.go:35 flagAsleep`（小睡）是**两个位**。"
+        "**消费点：零**（同穷举）：只出现在 `control.go:41-48` 的清单反向排除项与 `:93 const maskSleeping = flagUnableAction | flagSleeping`，"
+        "而 `maskSleeping` 在全仓**只此一处**；沉睡专用判据 `control.go:111 canDamageSleepingTarget`、"
+        "`control.go:123 damageVsInvincible` **同样零调用点**。"
+        "**守卫**：`control_test.go:107 TestSleepingFlagsAndSleepIsNotNap`（`:113` 断言 `flagAsleep != flagSleeping`、"
+        "`:120` 断言 `maskBlocksAttack&flagSleeping == 0`）、`control_test.go:128 TestCanDamageSleepingTarget`。"
+        "锚点指向的是哪个量：`flagSleeping` 是「沉睡」在清单位图里的那一位（且与小睡分属两位）；仓里没有字段保存它，"
+        "沉睡的**伤害落点判据**被实现成纯函数，同样没有调用方。",
+    "浮空":
+        "定义位 `rios-sim/control.go:30`（`flagLevitate`）。"
+        "**消费点：零**（同穷举）：作为清单成员出现在 `control.go:44`／`:47`／`:50`（三张表**都**含浮空，这是原文特性）；"
+        "同族纯函数 `levitateBuffApplies` `control.go:191`、`groundBuffApplies` `:205`、`heavyDuration` `:226`、"
+        "`airStateAfterStack` `:248` 在非测试代码里**全部零调用点**。"
+        "**守卫**：`control_test.go:15 TestAbnormalFlagListsAreExact`（三张表都含浮空，逐项相等）、"
+        "`control_test.go:154 TestLevitateBuffAppliesThreeConditions`、`control_test.go:235 TestAirStateAfterStack`（6 组输入）。"
+        "锚点指向的是哪个量：`flagLevitate` 是「浮空」在**阻止攻击／阻止能力／阻止移动三张清单**里的成员位；"
+        "⚠ 本行**未覆盖**「浮空相对 PRTS 行动方式整页原文」那三处历史缺口（已持有浮空／缚地镜像／四分之一累乘）"
+        "现在的状态——本批**没有复核**，登记为未核，别把这一行读成「浮空已对齐原文」。",
+    "束缚／自缚":
+        "定义位 `rios-sim/control.go:37`（`flagBind` 束缚）与 `control.go:38`（`flagSelfBind` 自缚）——**两个位**，本行是族名。"
+        "**消费点：零**（同穷举）：作清单成员出现在 `control.go:50 maskBlocksMove = flagBind | flagSelfBind | flagFrozen | flagLevitate`，"
+        "判据 `control.go:69 blocksMove`（零调用点）。"
+        "⚠ 引擎里真正会**拦推进**的是另一个量：`sim.go:174 sluggishTimer`（停顿）——见上一行；"
+        "与「自缚」相邻的**唯一活接线**是怀黍离那一支：`mech/huai_shu_li.go:362 SelfBind`（规格键 `self_bind`）→ "
+        "`:384 idleTimer: diver.SelfBind`，那是**待机**通道，**我不主张它等于自缚**（只登记坐标）。"
+        "**守卫**：`control_test.go:15 TestAbnormalFlagListsAreExact`（阻止移动 4 项逐项相等＋反向不许多项）、"
+        "`control_test.go:56 TestFlagListsAreNotNested`（`:57-59` 断言阻止移动**不是**阻止攻击的子集——束缚/自缚只住在移动那张表里）。"
+        "锚点指向的是哪个量：`flagBind` 是「阻止移动」清单里束缚那一位（自缚是紧邻的另一位）；"
+        "本行判的是「这两位在不在移动清单里」，不判「引擎有没有真的拦住谁」。",
 }
 
 
