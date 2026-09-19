@@ -105,9 +105,14 @@ def load_roster() -> Roster:
 
 # ------------------------------------------------------------------ 原版
 
-def run_python(plan: Plan, roster: Roster, *, max_time: float | None = None,
+def run_python(plan: Plan, roster: Roster, *, max_time: float | None = 900.0,
                target=None) -> tuple[list[dict], object]:
     """跑原版，逐帧记目标敌人的状态（帧首，与 Go 痕迹同一时刻）。
+
+    ⚠ `max_time` 默认 **900.0**，与 `tools/parity_plan.py:89` 的 `sim.run(max_time=900.0)`
+    对齐。原来是 `None`（等于"不转发"）⇒ 原版走 `BattleSimulator.run` 的默认上限，
+    与对拍工具**不是同一个上限**，两台工具的数字根本不可比。
+    要显式取消上限就传 `0`（假值）——那是"用默认"，不是"跑到底"。
 
     ⚠ 同一关里**同名敌人同时有好几只**（HS-EX-8 上「去蚀」一度六只同时在跑），
     所以帧记录里带下标，比对时按 (名字, 出怪时刻/下标) 成组——见 §5.2 那两个坑。
@@ -175,7 +180,20 @@ def run_python(plan: Plan, roster: Roster, *, max_time: float | None = None,
     simmod.BattleSimulator._enemies_attack = atk
     try:
         from ak_tactic.verify import Verifier
-        v = Verifier().run(plan, roster=roster)
+        #: ⚠⚠ **必须显式钉 `engine="python"`。** 2026-09-19 引擎切换后，`Verifier` 的默认引擎
+        #: 变成 `"go"`（`verify.py:145`），而 `verify.py:160` 那条注释就是为这件事写的：
+        #: 「仓里凡是"必须拿到 Python 结果"的地方，都要**显式**传 `engine="python"`」。
+        #: 裸 `Verifier()` 会跑 **Go**，而本函数照样打 `[python]` 那一行 ——
+        #: 于是"两台引擎完全一致"其实是**自己跟自己比**。这是一个**假绿**：
+        #: 它不报错，只会安静地什么都不比。实测 `hsex8_max`：本函数给出
+        #: `48杀 3漏 221.667s`（与 Go 侧逐位相同），而钉了 engine 的 `parity_plan` 给
+        #: `83杀 1漏 814.033s` —— 差 592 秒，全由这一个关键字造成。
+        #:
+        #: ⚠ 另：`max_time` 参数**不要往 `run()` 里塞**——它不是 `BattleSimulator` 的构造键
+        #: （塞了会 `TypeError`）。基类的原版路径本来就是 `sim.run(max_time=900.0)`
+        #: （`verify.py:492`），与 `parity_plan:89` 同值，**上限早就对齐了**。
+        #: 我这轮先试过转发，实测炸在 `BattleSimulator.__init__` 上，已撤回。
+        v = Verifier(engine="python").run(plan, roster=roster)
     finally:
         simmod.BattleSimulator._environment_tick = orig
         simmod.BattleSimulator._enemies_attack = orig_atk
