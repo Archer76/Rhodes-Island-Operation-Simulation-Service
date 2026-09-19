@@ -39,6 +39,7 @@ from typing import Any
 from ..verify import Verdict, Verifier, stars_of
 from . import build_spec, find_binary
 from .client import Simgo
+from ak_tactic.frontend.inputs import SpecInputs
 
 __all__ = ["GoEngineMixin", "GoVerifier"]
 
@@ -89,7 +90,7 @@ class GoEngineMixin:
         这些"此刻"的字段，跑完之后 `life` 已经是 0，Go 收到一份 life=0 的规格会
         当场判负、一帧都不跑（这个坑实测撞过）。
         """
-        spec = build_spec(sim, allow_devices=True, schedule=schedule, env=env)
+        spec = build_spec(SpecInputs.from_sim(sim), allow_devices=True, schedule=schedule, env=env)
         unsupported = list(spec.get("unsupported") or [])
         if unsupported:
             # 没移植的东西——**退回原版**，并且写清楚。

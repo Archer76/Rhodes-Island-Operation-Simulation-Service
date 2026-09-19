@@ -28,6 +28,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+from ak_tactic.frontend.inputs import SpecInputs
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SIMDIR = ROOT / "rios-sim"
@@ -293,7 +294,7 @@ def _parity_one(src, lib, calc, code, char_id, kw, BattleSimulator, Deployment,
     r_nd = sim_nd.run()
     dev_ok = (r_nd.kills, r_nd.leaks, round(r_nd.elapsed, 6)) == (
         res.kills, res.leaks, round(res.elapsed, 6))
-    spec = build_spec(fresh(), stage_label=code, allow_devices=dev_ok,
+    spec = build_spec(SpecInputs.from_sim(fresh()), stage_label=code, allow_devices=dev_ok,
                       allow_skills=True)
     if spec["unsupported"]:
         return False, f"规格里有不支持项：{spec['unsupported']}"
@@ -382,7 +383,7 @@ def check_skill_contract() -> None:
 
     lv = next(x for x in book.for_operator(char_id) if x.slot == slot)
     lv = lv.level(slevel, mastery)
-    spec = build_spec(make(lv), stage_label=code, allow_skills=True)
+    spec = build_spec(SpecInputs.from_sim(make(lv)), stage_label=code, allow_skills=True)
     op = (spec.get("operators") or [{}])[0]
 
     check("技能落在已移植子集里就放行（这一例是窄子集内的技能）",

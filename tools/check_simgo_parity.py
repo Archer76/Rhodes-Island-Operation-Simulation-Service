@@ -30,6 +30,7 @@ from ak_tactic.battle.unit import OperatorUnit                      # noqa: E402
 from ak_tactic.gamedata import EnemyLibrary, GameDataSource, load_stage  # noqa: E402
 from ak_tactic.operator import OperatorCalculator                   # noqa: E402
 from ak_tactic.simgo import Simgo, build_spec, compare, find_binary  # noqa: E402
+from ak_tactic.frontend.inputs import SpecInputs
 
 #: 对拍用的关卡（都不带装置、都不是活动中那些特殊机制关）
 STAGES = ["1-1", "1-2", "1-3", "1-4", "1-5", "1-6", "1-7",
@@ -118,7 +119,7 @@ def run_case(src, lib, calc, code: str, label: str, squad) -> tuple[bool, str]:
     spec_sim = BattleSimulator(stage, enemy_at=lib.get)
     for d in plan:
         spec_sim.plan(d)
-    spec = build_spec(spec_sim, stage_label=code, allow_devices=dev_ok)
+    spec = build_spec(SpecInputs.from_sim(spec_sim), stage_label=code, allow_devices=dev_ok)
     if spec["unsupported"]:
         return False, f"规格里有不支持项：{spec['unsupported']}"
 

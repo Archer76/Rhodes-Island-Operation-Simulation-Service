@@ -30,6 +30,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 from ak_tactic.battle import BattleSimulator                    # noqa: E402
 from ak_tactic.gamedata import EnemyLibrary, GameDataSource, load_stage  # noqa: E402
 from ak_tactic.simgo import mech                                # noqa: E402
+from ak_tactic.frontend.inputs import SpecInputs
 
 STAGES = ["HS-EX-4", "HS-8", "HS-EX-3", "HS-EX-8", "HS-1"]
 SEED = 20260918
@@ -103,7 +104,7 @@ def check_one(src, lib, code: str) -> tuple[bool, str]:
     fs0 = sim.farmland
     if fs0 is None or not fs0._index:
         return False, "这一关没有田地系统（跳过）"
-    spec = mech.farmland_spec(sim)
+    spec = mech.farmland_spec(SpecInputs.from_sim(sim))
     try:
         fs1 = mech.from_spec(spec)
     except Exception as exc:                                       # noqa: BLE001

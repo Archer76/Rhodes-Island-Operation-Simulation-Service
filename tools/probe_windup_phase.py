@@ -30,18 +30,34 @@ from ak_tactic.battle import sim as simmod                       # noqa: E402
 from ak_tactic.plan import Plan, Roster                          # noqa: E402
 from ak_tactic.simgo import build_spec, find_binary              # noqa: E402
 from ak_tactic.simgo.verifier import GoVerifier                  # noqa: E402
+from ak_tactic.frontend.inputs import SpecInputs
 
 #: 目标敌人（用户给的原始数据里那只「多停一帧 / 多走一帧」的敌人）。
 TARGET = "去蚀"
 #: 窗口（秒）——原始数据是 17–42。
 WIN = (17.0, 42.0)
 
-POS_RE = re.compile(
-    r"POS t=(?P<t>[\d.]+) idx=(?P<idx>\d+) name=(?P<name>\S+) "
-    r"x=(?P<x>-?[\d.]+) y=(?P<y>-?[\d.]+) hp=(?P<hp>[\d.]+) "
-    r"blocked=(?P<blocked>\w+) pause=(?P<pause>[\d.]+) "
-    r"sluggish=(?P<sluggish>[\d.]+) freeze=(?P<freeze>[\d.]+) "
-    r"leg=(?P<leg>\d+) legu=(?P<legu>[\d.]+)")
+#: ⚠ 痕迹一律按**自描述的 `key=value`** 解析，不再逐列写死正则。
+#: 原先 POS_RE 把列顺序钉死（`freeze=… leg=…`），Go 侧每加一列就**静默失配**，
+#: 而失配的表现是「帧记录=0 / 共 0 条坐标分开」——**假绿**。
+#: 本会话为此白跑过一轮：加了 `snow=`/`latch=` 两列，`probe_firstdiff` 报"0 条分歧"，
+#: 看着像"已经对齐了"。**加列不该需要动这里；缺列必须显式报错。**
+_KV_RE = re.compile(r"(\w+)=(\S+)")
+
+
+def parse_trace(line: str) -> tuple[str, dict[str, str]] | None:
+    """把一行痕迹拆成 `(标签, {键: 值})`；不是痕迹行就给 `None`。"""
+    line = line.strip()
+    if not line or "=" not in line:
+        return None
+    tag, _, rest = line.partition(" ")
+    if not rest:
+        return None
+    return tag, dict(_KV_RE.findall(rest))
+
+
+#: 坐标比对的**最低必需列**：少任何一列都必须当场报错，不许退化成"没有分歧"。
+POS_NEEDED = ("t", "idx", "name", "x", "y")
 
 ATK_RE = re.compile(
     r"ATK t=(?P<t>[\d.]+) enemy=(?P<name>\S+) idx=(?P<idx>\d+) "
@@ -54,15 +70,26 @@ HEAD = ROOT.parent / "ak-tactic-head"
 
 
 def _fixture(name: str) -> pathlib.Path:
+    p = pathlib.Path(name)
+    if p.is_absolute() and p.exists():
+        return p
     for base in (ROOT, HEAD):
-        p = base / "out" / name
-        if p.exists():
-            return p
+        for cand in (base / "out" / name, base / "out" / f"{name}.json"):
+            if cand.exists():
+                return cand
     raise FileNotFoundError(f"out/{name} 在 {ROOT} 与 {HEAD} 都没有")
 
 
 def load_plan(k: int) -> Plan:
-    raw = json.loads(_fixture("hsex8_max.json").read_text(encoding="utf-8"))
+    """夹具可用环境变量换关：`RIOS_PLAN=hs7`。
+
+    ⚠ 为什么必须能换：这一族探针（出手台账 / 承伤逐账 / 索敌键 / 逐帧坐标）
+    原先**全写死在 `hsex8_max.json`** 上。而"怀黍离全部关卡的 Go/Python 对拍"
+    要求的是换一份作业就能查同一个问题；每个关卡复制一份脚本，
+    筛选逻辑会各自漂移——那种漂移比 bug 更难查。
+    """
+    raw = json.loads(_fixture(os.environ.get("RIOS_PLAN", "hsex8_max.json"))
+                     .read_text(encoding="utf-8"))
     if k:
         raw = dict(raw, deploys=raw["deploys"][:k])
     return Plan.from_dict(raw)
@@ -70,27 +97,34 @@ def load_plan(k: int) -> Plan:
 
 def load_roster() -> Roster:
     try:
-        return Roster.from_json(_fixture("roster_max_modelled.json"))
+        return Roster.from_json(_fixture(
+            os.environ.get("RIOS_ROSTER", "roster_max_modelled.json")))
     except FileNotFoundError:
         return Roster.empty()
 
 
 # ------------------------------------------------------------------ 原版
 
-def run_python(plan: Plan, roster: Roster, *, max_time: float | None = None
-               ) -> tuple[list[dict], object]:
+def run_python(plan: Plan, roster: Roster, *, max_time: float | None = None,
+               target=None) -> tuple[list[dict], object]:
     """跑原版，逐帧记目标敌人的状态（帧首，与 Go 痕迹同一时刻）。
 
     ⚠ 同一关里**同名敌人同时有好几只**（HS-EX-8 上「去蚀」一度六只同时在跑），
     所以帧记录里带下标，比对时按 (名字, 出怪时刻/下标) 成组——见 §5.2 那两个坑。
+
+    `target` 覆盖模块级的 `TARGET`（默认「去蚀」）。可以是名字字符串，也可以是
+    **谓词 `e -> bool`**：名字里带全角引号那种（`“祟”`）从命令行传会被 shell 吃掉
+    ——症状是"帧记录=0"，看着像"原版根本没这只敌人"。传一个按**出怪时刻**匹配的
+    谓词就绕开了整条转义链。
     """
     frames: list[dict] = []
     attacks: list[dict] = []
     orig = simmod.BattleSimulator._environment_tick
+    want = TARGET if target is None else target
 
     def scan(self, t, src):
         for e in self.enemies:
-            if e.name != TARGET:
+            if not (want(e) if callable(want) else e.name == want):
                 continue
             # ⚠ 比对键只能是 **(名字, 出怪时刻)**：原版列表下标与 Go 的
             # `spec.Spawns` 序**不是一回事**（重生会插到列表里），实测错位两位。
@@ -160,7 +194,7 @@ class SpecThief(GoVerifier):
         self.spec: dict | None = None
 
     def _run_other_engine(self, *, sim, plan, stage, deployed, title):
-        self.spec = build_spec(sim, allow_devices=True)
+        self.spec = build_spec(SpecInputs.from_sim(sim), allow_devices=True)
         raise SystemExit(0)
 
 
@@ -187,18 +221,35 @@ def run_go(plan: Plan, roster: Roster) -> tuple[dict, list[dict], list[dict]]:
                 for i, sp in enumerate(spec.get("spawns") or [])}
     frames = []
     attacks = []
+    raw_pos: list[str] = []
     for line in (p.stderr or "").splitlines():
-        m = POS_RE.search(line)
-        if m:
-            d = m.groupdict()
+        parsed = parse_trace(line)
+        if parsed is None:
+            continue
+        tag, d = parsed
+        if tag == "POS":
+            if len(raw_pos) < 3:
+                raw_pos.append(line.strip())
+            missing = [k for k in POS_NEEDED if k not in d]
+            if missing:
+                raise RuntimeError(
+                    f"POS 痕迹缺列 {missing}——**解析器与该轮的痕迹格式对不上**。"
+                    "这不是'没有记录'，别再当成'没有分歧'。原始行："
+                    f"{line.strip()}")
+            #: 冻结取 `latch`（= 推进门控真正读的那个锁存值）；没有才退回 `freeze`。
+            #: ⚠ 它的采样点在**本帧雪算之前**，而原版那一列在**之后**——两边语义不同源，
+            #: 只做参考，不要拿它当"谁先冻"的判据。
+            lat = d.get("latch")
             frames.append(dict(
                 key=(d["name"], spawn_at.get(int(d["idx"]), -1.0)),
                 idx=int(d["idx"]),
                 t=float(d["t"]), name=d["name"], x=float(d["x"]), y=float(d["y"]),
-                hp=float(d["hp"]), pause=float(d["pause"]),
-                sluggish=float(d["sluggish"]), frozen=float(d["freeze"]) > 0,
-                blocked=d["blocked"] == "true", leg=int(d["leg"]),
-                legu=float(d["legu"]),
+                hp=float(d.get("hp", 0.0)), pause=float(d.get("pause", 0.0)),
+                sluggish=float(d.get("sluggish", 0.0)),
+                frozen=(lat == "true") if lat is not None
+                else float(d.get("freeze", 0.0)) > 0,
+                blocked=d.get("blocked") == "true",
+                leg=int(d.get("leg", 0)), legu=float(d.get("legu", 0.0)),
             ))
             continue
         m = ATK_RE.search(line)
@@ -209,6 +260,13 @@ def run_go(plan: Plan, roster: Roster) -> tuple[dict, list[dict], list[dict]]:
                 t=float(d["t"]), interval=float(d["interval"]),
                 pause_after=float(d["pause"]), hits=int(d["hits"]),
             ))
+    #: ⚠ **一条都没解析出来 = 仪器坏了，不是"对齐了"**。这道闸门是拿一次假绿换来的。
+    if not frames:
+        raise RuntimeError(
+            "Go 侧 POS 痕迹一条都没解析出来。判据：`RIOS_TRACE=1` 与 "
+            f"`RIOS_TRACE_POS={TARGET}` 是否生效、以及痕迹格式是否又变了。"
+            "本会话曾因加列导致正则失配，被报成「帧记录=0 且共 0 条坐标分开」"
+            f"（看着像已经对齐）。stderr 里 POS 行样本：{raw_pos or '（一行都没有）'}")
     print(f"[go]     {got['kills']}杀 {got['leaks']}漏 {got['elapsed']:.6f}s "
           f"帧记录={len(frames)} 出手={len(attacks)}")
     return got, frames, attacks
