@@ -1,13 +1,13 @@
 # 怀黍离逐关台账（判据＝**Go 自身基线漂移**）
 
-- 生成时间：2026-09-20 01:48:19；执行者：后端2（会话 session-37b2c3e2-6993-4a98-a7d2-5f09d62088a2）
+- 生成时间：2026-09-20 03:29:32；执行者：验收与守卫（session-1a45cfee-9a65-4830-a327-03ac84285bfb）
 - 工具：`tools/parity_ledger.py`（通告 #3 派工；**不复用跑不起来的** `parity_plan.py`，见 `docs/acceptance-claims.md`）
-- Go 二进制：`out/acceptance/rios-sim-9b81f2d5.exe`（私有构建，`RIOS_SIM_BIN` 指定，不写回共享树）
-  - **仪器身份**：`RIOS_SIM_BIN` 已显式设上，其 sha256 前 16 位 **`98fe111bce6c4ff0`**、3,599,360 字节（未设变量的轮次一律标「二进制身份未知」，不得与本表混用）
+- Go 二进制：`out/acceptance/rios-sim-4f47539b.exe`（私有构建，`RIOS_SIM_BIN` 指定，不写回共享树）
+  - **仪器身份**：`RIOS_SIM_BIN` 已显式设上，其 sha256 前 16 位 **`6ab41e7de224017f`**、3,599,360 字节（未设变量的轮次一律标「二进制身份未知」，不得与本表混用）
   - **来源三件套**：每条带 `plan_path`（绝对）／所属检出树／该树 HEAD，见下一节
   - **基线自身记着的那枚仪器**：`fixtures/golden_go.json` 每条都带 `engine_bin` / `engine_bin_sha16` / `engine_bin_mtime` / `roster_sha16`（**与基线记录不同时只报不判**：那是仪器差，不是模型漂移；同一份源码两次构建哈希就不同 ⇒ `sha16` 只能证明「是不是那一次构建」，源码身份要看 `source_sig`）
   - **留证仪器（历史读数用）**：身份与它复现的读数**唯一登记处**＝`tools/guard_engine_bin.py::LEGACY_INSTRUMENTS`（入库、可 diff、随守卫逐位核对）；本表**只放指针不复制数字**——两处各写一份，一改就对不上
-  - **`source_dirty`**：本轮 **40** 条未提交改动（实测同一棵树在两次运行之间从 60 变 61 ⇒ **本表只对当时那份工作树成立，不对任何提交成立**）
+  - **`source_dirty`**：本轮 **41** 条未提交改动（实测同一棵树在两次运行之间从 60 变 61 ⇒ **本表只对当时那份工作树成立，不对任何提交成立**）
 - 本轮实测（**新判据**）：**与 Go 基线一致 19 / Go 漂移 0 / 闸门拒跑 0 / 未跑 0**（共 19 份作业）
 - 旧读法留档（**已退出判据**）：vs 原版归零 18 / 真差 1——变更前的数字原样留在 git 历史（`eae2fc1`），此处只作对照
 
@@ -88,25 +88,25 @@
 
 | 关卡 | 计划 | 作业人数 | 标题 | 检出树 HEAD | 绝对路径 |
 |---|---|---|---|---|---|
-| act31side_ex08 | `hsex8.json` | 3 | 3 人 | `31bb439` | `fixtures\hsex8.json` |
-| act31side_ex08 | `hsex8_max.json` | 8 | 8 人 | `31bb439` | `fixtures\hsex8_max.json` |
-| act31side_01 | `plan-hs01.json` | 2 | 2 人 | `31bb439` | `fixtures\plan-hs01.json` |
-| act31side_02 | `plan-hs02.json` | 2 | 2 人 | `31bb439` | `fixtures\plan-hs02.json` |
-| act31side_03 | `plan-hs03.json` | 2 | 2 人 | `31bb439` | `fixtures\plan-hs03.json` |
-| act31side_04 | `plan-hs04.json` | 2 | 2 人 | `31bb439` | `fixtures\plan-hs04.json` |
-| act31side_05 | `plan-hs05.json` | 2 | 2 人 | `31bb439` | `fixtures\plan-hs05.json` |
-| act31side_06 | `plan-hs06.json` | 2 | 2 人 | `31bb439` | `fixtures\plan-hs06.json` |
-| act31side_09 | `plan-hs09.json` | 4 | 4 人 | `31bb439` | `fixtures\plan-hs09.json` |
-| act31side_ex01 | `plan-hsex01.json` | 4 | 4 人 | `31bb439` | `fixtures\plan-hsex01.json` |
-| act31side_ex02 | `plan-hsex02.json` | 3 | 3 人 | `31bb439` | `fixtures\plan-hsex02.json` |
-| act31side_ex03 | `plan-hsex03.json` | 4 | 4 人 | `31bb439` | `fixtures\plan-hsex03.json` |
-| act31side_ex04 | `plan-hsex04.json` | 4 | 4 人 | `31bb439` | `fixtures\plan-hsex04.json` |
-| act31side_ex05 | `plan-hsex05.json` | 4 | 4 人 | `31bb439` | `fixtures\plan-hsex05.json` |
-| act31side_ex06 | `plan-hsex06.json` | 4 | 4 人 | `31bb439` | `fixtures\plan-hsex06.json` |
-| act31side_ex07 | `plan-hsex07.json` | 4 | 4 人 | `31bb439` | `fixtures\plan-hsex07.json` |
-| act31side_ex08 | `plan-hsex08.json` | 1 | 勿玷对照 1 人（只求敌方技能出手落地，不求是好解） | `31bb439` | `fixtures\plan-hsex08.json` |
-| act31side_tr01 | `plan-hstr01.json` | 1 | 1 人 | `31bb439` | `fixtures\plan-hstr01.json` |
-| act31side_tr02 | `plan-hstr02.json` | 1 | 1 人 | `31bb439` | `fixtures\plan-hstr02.json` |
+| act31side_ex08 | `hsex8.json` | 3 | 3 人 | `213bbc4` | `fixtures\hsex8.json` |
+| act31side_ex08 | `hsex8_max.json` | 8 | 8 人 | `213bbc4` | `fixtures\hsex8_max.json` |
+| act31side_01 | `plan-hs01.json` | 2 | 2 人 | `213bbc4` | `fixtures\plan-hs01.json` |
+| act31side_02 | `plan-hs02.json` | 2 | 2 人 | `213bbc4` | `fixtures\plan-hs02.json` |
+| act31side_03 | `plan-hs03.json` | 2 | 2 人 | `213bbc4` | `fixtures\plan-hs03.json` |
+| act31side_04 | `plan-hs04.json` | 2 | 2 人 | `213bbc4` | `fixtures\plan-hs04.json` |
+| act31side_05 | `plan-hs05.json` | 2 | 2 人 | `213bbc4` | `fixtures\plan-hs05.json` |
+| act31side_06 | `plan-hs06.json` | 2 | 2 人 | `213bbc4` | `fixtures\plan-hs06.json` |
+| act31side_09 | `plan-hs09.json` | 4 | 4 人 | `213bbc4` | `fixtures\plan-hs09.json` |
+| act31side_ex01 | `plan-hsex01.json` | 4 | 4 人 | `213bbc4` | `fixtures\plan-hsex01.json` |
+| act31side_ex02 | `plan-hsex02.json` | 3 | 3 人 | `213bbc4` | `fixtures\plan-hsex02.json` |
+| act31side_ex03 | `plan-hsex03.json` | 4 | 4 人 | `213bbc4` | `fixtures\plan-hsex03.json` |
+| act31side_ex04 | `plan-hsex04.json` | 4 | 4 人 | `213bbc4` | `fixtures\plan-hsex04.json` |
+| act31side_ex05 | `plan-hsex05.json` | 4 | 4 人 | `213bbc4` | `fixtures\plan-hsex05.json` |
+| act31side_ex06 | `plan-hsex06.json` | 4 | 4 人 | `213bbc4` | `fixtures\plan-hsex06.json` |
+| act31side_ex07 | `plan-hsex07.json` | 4 | 4 人 | `213bbc4` | `fixtures\plan-hsex07.json` |
+| act31side_ex08 | `plan-hsex08.json` | 1 | 勿玷对照 1 人（只求敌方技能出手落地，不求是好解） | `213bbc4` | `fixtures\plan-hsex08.json` |
+| act31side_tr01 | `plan-hstr01.json` | 1 | 1 人 | `213bbc4` | `fixtures\plan-hstr01.json` |
+| act31side_tr02 | `plan-hstr02.json` | 1 | 1 人 | `213bbc4` | `fixtures\plan-hstr02.json` |
 
 ## 一之三、总表
 
@@ -385,9 +385,9 @@
 
 ## 四、本台账**没做**的事（别读成已做）
 
-- **覆盖缺口（最重要的一条）**：「归零」只说明**本树现有的这份作业**上两条路算得一样。同一关在别的树/别的练度下的**深水用例**（如 8 人满练度 814 秒那条线）本台账**一份都没跑到** —— 记忆 8a1ec6d6「无回归 ≠ 已验证」说的就是这个。要收这条缺口，先把深水夹具搬进本树并纳入金标准，再谈有没有差。
+- **覆盖缺口（最重要的一条）**：「归零」只说明**本树现有的这份作业**上两条路算得一样。★ **2026-09-20 更正（后端2 发现）**：本节原来写「深水用例…本台账**一份都没跑到**」——**与本产物 §一、§二 矛盾**：本轮**跑到了** 8 人满练度深水夹具`hsex8_max.json`（原版 83杀/1漏/814.0333s，见 §二 `act31side_ex08` 那一节）。**仍然没跑到的**是**别的树（如 `ak-tactic-head`）/别的练度**下的同类深水用例 —— 记忆 8a1ec6d6「无回归 ≠ 已验证」说的就是这个。
 - ③ 的「时刻」粒度到**事件级**（漏事件第几笔、用时差几帧），**没有**逐帧事件流比对（那要开两侧 trace 通道，属下一层）。
-- 只跑了 `out/` 里现成的 17 份计划；怀黍离其它关卡（若作业不在树上）未覆盖。
+- 本轮实跑 **19 份计划**（§一 末表逐条列出；其中含 8 人满练度深水夹具`hsex8_max.json`：**是**）——**份数按实际跑到的计，不写死**；怀黍离其它关卡（若作业不在树上）未覆盖。
 - 闸门拒跑的关卡**没有**绕开闸门强跑——绕开需要改规格送法，不在我的权限内。
 - 名册：本轮用 `roster_max_modelled`（满练度名册，落在旁支树）；换名册会换掉「能不能走到分歧点」，所以数字只在同名册间可比。
 
