@@ -398,6 +398,12 @@ def main() -> int:
         _w = max([t for t, _tg, _d in _eb], default=0.0)
         print(f"== 逐点分类（袋语义）：A={want[0].name}（{len(_ea)} 事件）"
               f"　B={want[1].name}（{len(_eb)} 事件）　窗 [0, {_w:.4f}] ==")
+        #: ★ **仪器身份必须跟着这张表**（UI_2b 2026-09-20 01:36 提醒）：
+        #: 源签名 `source_sig` 相同、`sha16` 不同 ＝ **同源重建的又一枚**；
+        #: 若只写 A/B 文件名，别人拿另一枚 B 的读数来对账会在**两个维度**上同时错
+        #: （键空间不同 ＋ 仪器不是同一次构建）。
+        print(f"  仪器 A＝{ident(a)}")
+        print(f"  仪器 B＝{ident(b)}")
         series_report(_ea, _eb, args.series_tag, 0.0, _w)
         return 0
 
