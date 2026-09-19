@@ -831,6 +831,11 @@ def write_report(items: list[dict], drops: list[dict], changes: list[dict],
     L.append("")
     L.append("## 八、本门**不覆盖**什么（别把绿读成全绿）")
     L.append("")
+    L.append("> ⚠ **判据变更（博士 2026-09-19 裁定：基线改用 Go）**：本门第 1 项的参照物本就是 "
+             "**Go 自身基线**（`fixtures/golden_go.json`），裁定后语义更纯："
+             "**红＝Go 自己漂了**。原版数字**退出判据**，任何「与 Python 一致」类判据"
+             "要么报废、要么改判据，逐列点名见 `docs/parity-ledger.md` 〇之二。")
+    L.append("")
     L.append("- **逐关对拍**：已按项目经理通告 #2 **退役**（博士 2026-09-19 19:56 弃用"
              "Python 模拟器），本门不再把它当验收手段、不为它写新仪器；"
              "「8 关闸门拦下 / 3 关真差」改读**闸门能力清单**（第六项）。"
@@ -956,11 +961,19 @@ def main() -> int:
               + (f"　{it['note']}" if it["note"] else ""))
 
     for key, name, script, bkey in (
-            ("battle", "自检 check_battle（战斗与技能回归）", "check_battle.py",
-             "check_battle_passed"),
-            ("verify", "自检 check_verify（验证器）", "check_verify.py",
+            #: ⚠ 点名（博士 2026-09-19 裁定「基线改用 Go」后必须说清）：
+            #: `check_battle.py` **直接 import `ak_tactic.battle`** 并断言**原版自己的数**
+            #: （24 处 `Verifier()` **零 `.run()`** ⇒ 引擎根本不参与）。原版已退出产品路径，
+            #: 所以这 816 项的绿**只说明「原版没退化」，不说明 Go 如何**。
+            #: 留作历史水位还是撤下——**等裁定**，我不擅自撤水位。
+            ("battle", "自检 check_battle（**原版引擎自身**的回归套件，已退出产品路径）",
+             "check_battle.py", "check_battle_passed"),
+            ("verify", "自检 check_verify（验证器，主体＝Go）", "check_verify.py",
              "check_verify_passed")):
         it = water_item(key, name, script, bkey)
+        if key == "battle":
+            it["judge"] = ("原版引擎自身的回归（816 项）；⚠ **不替 Go 背书**——"
+                           "原版已退出基线地位（博士 2026-09-19 裁定）")
         items.append(it)
         print(f"[{len(items) - 1}] {name}：{it['status']}　通过 "
               f"{it['measured'].get('passed')} 项　{it['seconds']:.0f}s"
@@ -1019,6 +1032,8 @@ def main() -> int:
         print(f"⛔ {i['name']}：{i['note']}")
     for i in noruns:
         print(f"⊘ {i['name']} 未跑：{i['note'][:120]}")
+    _gi = next((it for it in items if it["key"] == "golden"), None)
+    n_plans = ((_gi or {}).get("measured") or {}).get("baseline_plans") or 0
     print(f"⚠ 本门不覆盖：{n_plans or '判据集'} 份作业未走到的路径、保真层（两台引擎一起错）、"
           f"深水限定语——详见报告第八节")
     print(f"报告：{REPORT.relative_to(ROOT)}")

@@ -38,6 +38,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -142,9 +143,22 @@ def plan_files() -> list[Path]:
     return found
 
 
+def _why_arg() -> str:
+    if "--why" not in sys.argv:
+        return ""
+    i = sys.argv.index("--why")
+    return " ".join(sys.argv[i + 1:]).strip()
+
+
 def main() -> int:
     check = "--check" in sys.argv
     extend = "--extend" in sys.argv
+    #: ⚠ `--rebless`＝**合法地改基线**。博士 2026-09-19 裁定「基线改用 Go」之后必然要用它：
+    #: 基线换人、以及将来 Go 修好一处机制后数会变，那时**必须能改**，但**必须留下"为什么"**。
+    #: 与 `--extend` 的分工：extend 只管"判据集长大"（不许顺手改已有的），
+    #: rebless 只管"已有条目换数"（必须带 `--why`，并逐条打印 旧→新）。
+    rebless = "--rebless" in sys.argv
+    why = _why_arg()
     roster = _find("roster_max_modelled")
     plans = plan_files()
     if not plans:
@@ -164,7 +178,7 @@ def main() -> int:
             got[p.name] = {"error": f"{type(e).__name__}: {e}"}
             print(f"  {p.name:<22} ❌ {type(e).__name__}: {e}")
 
-    if not check and not extend:
+    if not check and not extend and not rebless:
         GOLDEN.write_text(json.dumps(got, ensure_ascii=False, indent=2,
                                      sort_keys=True), encoding="utf-8")
         print(f"\n基线已写入 {GOLDEN.relative_to(ROOT)}（{len(got)} 份计划）")
@@ -174,6 +188,7 @@ def main() -> int:
         raise SystemExit(f"没有基线可比：{GOLDEN} 不存在，先跑一次不带 --check 的")
     base = json.loads(GOLDEN.read_text(encoding="utf-8"))
     bad = 0
+    changes: list[tuple[str, dict]] = []
     keys = ["kills", "leaks", "elapsed", "damage", "spec_sha"]
     new_names: list[str] = []
     for name in sorted(set(base) | set(got)):
@@ -191,10 +206,43 @@ def main() -> int:
             continue
         diff = [k for k in keys if b.get(k) != g.get(k)]
         if diff:
-            bad += 1
-            print(f"  ❌ {name}：{'、'.join(diff)} 不一致")
-            for k in diff:
-                print(f"        {k}: 基线={b.get(k)!r}  现在={g.get(k)!r}")
+            if rebless:
+                changes.append((name, {k: (b.get(k), g.get(k)) for k in diff}))
+                print(f"  ~ {name}：{'、'.join(diff)} 将换数")
+                for k in diff:
+                    print(f"        {k}: 旧={b.get(k)!r}  新={g.get(k)!r}")
+            else:
+                bad += 1
+                print(f"  ❌ {name}：{'、'.join(diff)} 不一致")
+                for k in diff:
+                    print(f"        {k}: 基线={b.get(k)!r}  现在={g.get(k)!r}")
+    if rebless:
+        if not why:
+            print(f"\n❌ 拒绝改基线：`--rebless` 必须带 `--why \"<为什么改>\"`"
+                  f"——**改动必须被解释**，这正是不让基线被无声挪走的那道门")
+            return 2
+        errs = [n for n, g in got.items() if g.get("error")]
+        if errs:
+            print(f"\n❌ 拒绝改基线：{len(errs)} 份这次**没跑成功**"
+                  f"（{', '.join(errs[:3])}{'…' if len(errs) > 3 else ''}）"
+                  f"——失败不许写成基线")
+            return 1
+        merged = dict(base)
+        merged.update(got)
+        GOLDEN.write_text(json.dumps(merged, ensure_ascii=False, indent=2,
+                                     sort_keys=True), encoding="utf-8")
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        log = ROOT / "out" / "acceptance" / "golden-rebless.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(f"\n=== {stamp}（{len(changes)} 份换数 / 基线共 {len(merged)} 份）\n")
+            fh.write(f"理由：{why}\n")
+            for name, ch in changes:
+                fh.write(f"  {name}: " + "; ".join(f"{k} {a}→{b}" for k, (a, b) in ch.items())
+                         + "\n")
+        print(f"\n✅ 已按理由改基线：{len(changes)} 份换数（共 {len(merged)} 份）；"
+              f"台账 `{log.relative_to(ROOT)}`")
+        return 0
     if extend:
         if bad:
             print(f"\n❌ 拒绝扩展：已有 {bad} 份与基线不一致——扩展**不许**顺手掩盖改动")
