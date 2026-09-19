@@ -148,6 +148,107 @@ def run_exe(exe: Path, spec: dict, trace_env: dict, window: float | None = None,
             "keys_in_window": {f"{t}.{k}": c for (t, k), c in keys_w.items()}}
 
 
+#: ── 值序列（袋语义）逐点分类 ────────────────────────────────────────────────
+#: UI_2b 2026-09-20 01:23 要的第三件事：**不能归类的差异点逐处列出**。
+#: 口径写在表头里，因为「(t, idx)」与「(t, enemy, idx, src)」不是同一件事。
+FACTORS = ((1.18750, "0.95/0.80"), (1.16667, "1.05/0.90"), (0.84211, "0.80/0.95"),
+           (0.85714, "0.90/1.05"), (1.10000, "1.10"), (0.90909, "1.00/1.10"))
+
+
+def num(d: dict, k: str):
+    """取数值字段：取不到就回 None（**不假装成 0**——0 会静默参与比较）。"""
+    try:
+        return float(d.get(k))
+    except (TypeError, ValueError):
+        return None
+
+
+def _bags(evs, tag: str, t0: float, t1: float, group_by):
+    """按 `group_by` 建 **袋**（多重集）：同键多行**不合并**，行数本身是信息。"""
+    out = {}
+    for t, tg, d in evs:
+        if tg != tag or not (t0 - 1e-9 <= t <= t1 + 1e-9):
+            continue
+        k = group_by(t, d)
+        if k is None:
+            continue
+        out.setdefault(k, []).append(d)
+    return out
+
+
+def series_report(ea, eb, tag: str, t0: float, t1: float) -> list:
+    """逐点分类，**未归类逐处打印**（不许给它一个像的名字）。返回未归类清单。"""
+    def gb(t, d):
+        idx = d.get("idx")
+        return None if idx in (None, "") else (round(t, 4), str(idx))
+
+    ba = _bags(ea, tag, t0, t1, gb)
+    bb = _bags(eb, tag, t0, t1, gb)
+    keys = sorted(set(ba) | set(bb))
+    cls = {"相同": 0, "截断": [], "因子族": [], "换目标": [], "袋不可配对": [], "未归类": []}
+    for k in keys:
+        la, lb = ba.get(k, []), bb.get(k, [])
+        if not la or not lb:
+            cls["换目标"].append((k, len(la), len(lb)))
+            continue
+        da = sorted(num(x, "dealt") or 0 for x in la)
+        db = sorted(num(x, "dealt") or 0 for x in lb)
+        if da == db:
+            cls["相同"] += 1
+            continue
+        hps = [num(x, "hp") or 0 for x in la + lb]
+        if min(hps) <= 0:
+            cls["截断"].append((k, da, db))
+            continue
+        if len(da) != len(db):
+            cls["袋不可配对"].append((k, da, db))
+            continue
+        sa, sb = sum(da), sum(db)
+        hit = None
+        if sb:
+            r = sa / sb
+            for f, why in FACTORS:
+                if abs(r - f) < 1e-4:
+                    hit = why
+                    break
+        if hit is None and len(da) == len(db):
+            #: ★ **多行袋里只有一个成员差一个因子**（实测 5 处：`[17.577,17.577,40.362,696.0]`
+            #: 对 `[…,826.5]`）——按**总和**比是抓不到的（其余成员相同会把比值稀释掉），
+            #: 所以按**逐成员配对**再判一次。两条规则都写在这儿，谁命中就标谁。
+            diffs = [(x, y) for x, y in zip(da, db) if abs(x - y) > 1e-9]
+            if len(diffs) == 1:
+                x, y = diffs[0]
+                if y:
+                    rr = x / y
+                    for f, why in FACTORS:
+                        if abs(rr - f) < 1e-4:
+                            hit = why + "（袋内单成员）"
+                            break
+        if hit:
+            cls["因子族"].append((k, hit, da, db))
+        else:
+            cls["未归类"].append((k, da, db))
+
+    print(f"\n=== 值序列（袋语义）逐点分类：标签 {tag}，窗 [{t0:g}, {t1:g}] ===")
+    print("  口径：键 = (t, idx)；同一 (t,idx) 的 dealt 取**多重集**（同 t 多行不合并）；"
+          "分类优先级＝截断 → 袋不可配对 → 因子族 → 未归类")
+    print(f"  点数：相同 {cls['相同']}　截断 {len(cls['截断'])}　袋不可配对 {len(cls['袋不可配对'])}"
+          f"　因子族 {len(cls['因子族'])}　换目标(一侧无此 idx) {len(cls['换目标'])}"
+          f"　**未归类 {len(cls['未归类'])}**")
+    for k, why, da, db in cls["因子族"][:10]:
+        print(f"    [因子族 {why}] t={k[0]:.4f} idx={k[1]}　A={da}　B={db}")
+    if len(cls["因子族"]) > 10:
+        print(f"    …… 其余 {len(cls['因子族']) - 10} 处因子族")
+    for k, da, db in cls["袋不可配对"][:10]:
+        print(f"    [袋不可配对 ⚠] t={k[0]:.4f} idx={k[1]}　A={da}　B={db}（行数不同 ⇒ 不许按序硬对）")
+    for k, n, m in cls["换目标"][:10]:
+        print(f"    [换目标] t={k[0]:.4f} idx={k[1]}　A 行数={n}　B 行数={m}（一侧无此 idx）")
+    print(f"  ★ **未归类（逐处列出，不给它一个像的名字）** {len(cls['未归类'])} 处：")
+    for k, da, db in cls["未归类"]:
+        print(f"    未归类 t={k[0]:.4f} idx={k[1]}　A 袋={da}　B 袋={db}")
+    return cls["未归类"]
+
+
 def table(title: str, rec: dict, window: float | None) -> None:
     print(f"\n=== {title}：全键表（共 {len(rec['keys'])} 个 键）===")
     el = float(rec["verdict"].get("elapsed") or 0) or 0
@@ -160,12 +261,20 @@ def table(title: str, rec: dict, window: float | None) -> None:
         print(f"    {k:<34} {rec['keys'][k]:>9}")
 
 
+ROOT_DEFAULT = Path(__file__).resolve().parent.parent / "out" / "acceptance" / "trace-stderr"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="trace_key_diff.py")
     ap.add_argument("--plan", default="fixtures/hsex8_max.json")
     ap.add_argument("--exe-a", default=str(LEGACY), help="A 侧（默认＝19:08 留证副本）")
     ap.add_argument("--exe-b", default="", help="B 侧（默认＝当轮自建自钉）")
     ap.add_argument("--pos-gate", default="", help="RIOS_TRACE_POS 的名字门控（两次都用同一个值）")
+    ap.add_argument("--series", action="store_true",
+                    help="只做值序列（袋语义）逐点分类：截断/袋不可配对/因子族/换目标/未归类逐处列出")
+    ap.add_argument("--series-tag", default="DMGENEMY", help="--series 用哪个标签（默认 DMGENEMY）")
+    ap.add_argument("--series-a", help="--series：A 侧 dump 路径（缺省按 --dump-stderr 目录＋exe 名＋sha16 推导）")
+    ap.add_argument("--series-b", help="--series：B 侧 dump 路径")
     ap.add_argument("--json", default="out/acceptance/trace-key-diff.json")
     ap.add_argument("--dump-stderr", default="", help="把两侧原始 stderr 落盘到这个目录"
                                                     "（给需要按 t 取值对齐的会话直接消费）")
@@ -195,6 +304,48 @@ def main() -> int:
     print(f"**同一套环境**：{trace_env}")
     print(f"A＝{ident(a)}")
     print(f"B＝{ident(b)}")
+
+    if args.series:
+        #: ⚠ **只读 dump、不跑 exe**，而且**缺文件就拒跑**：
+        #: `run_exe` 只回汇总、不回原始行 ⇒ 早先那版会拿到空列表，于是"逐点分类 0 处"
+        #: 长得和"两侧完全一致"一模一样——**静默空＝最坏的一类假绿**。
+        dump_dir = Path(args.dump_stderr) if args.dump_stderr else ROOT_DEFAULT
+        want = []
+        for _f, _explicit in ((a, args.series_a), (b, args.series_b)):
+            if _explicit:
+                want.append(Path(_explicit))
+                continue
+            _h = hashlib.sha256(_f.read_bytes()).hexdigest()[:8]
+            want.append(dump_dir / f"stderr-{_f.stem}-{_h}.txt")
+        missing = [x for x in want if not x.is_file()]
+        if missing:
+            print("⛔ 拒跑（rc=3）：逐点分类需要的原始痕迹不在场：")
+            for x in missing:
+                print(f"    缺 {x}")
+            print("  取得方式：python tools/trace_key_diff.py --dump-stderr out/acceptance/trace-stderr"
+                  "（先跑一次计数级，它会顺手把两侧 stderr 各落一份盘）")
+            return 3
+        _loaded = []
+        for _f in want:
+            _lst = []
+            for _ln in _f.read_text(encoding="utf-8", errors="replace").splitlines():
+                _g = trace_kv.parse_trace(_ln)
+                if _g:
+                    try:
+                        _lst.append((float(_g[1].get("t", "nan")), _g[0], _g[1]))
+                    except ValueError:
+                        pass
+            _loaded.append(_lst)
+        if len(_loaded) != 2 or not _loaded[0] or not _loaded[1]:
+            print(f"⛔ 拒跑（rc=3）：一侧事件数为 0（A={len(_loaded[0]) if _loaded else 0}"
+                  f"／B={len(_loaded[1]) if len(_loaded) > 1 else 0}）⇒ 不许把空读成'两侧一致'。")
+            return 3
+        _ea, _eb = _loaded
+        _w = max([t for t, _tg, _d in _eb], default=0.0)
+        print(f"== 逐点分类（袋语义）：A={want[0].name}（{len(_ea)} 事件）"
+              f"　B={want[1].name}（{len(_eb)} 事件）　窗 [0, {_w:.4f}] ==")
+        series_report(_ea, _eb, args.series_tag, 0.0, _w)
+        return 0
 
     #: 先跑 B（拿到它的全程时长 W），再跑 A 并**只统计 t <= W** 的那一段。
     dump = Path(args.dump_stderr) if args.dump_stderr else None
