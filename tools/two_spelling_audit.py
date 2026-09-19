@@ -134,13 +134,35 @@ _SUFFIX_RE = re.compile(r"""endswith\(\s*["']([^"']+)["']""")
 _RANGE_CODE = re.compile(r"^[0-9a-zA-Z]+-[0-9]+$")
 
 
-def load_audit():
-    spec = importlib.util.spec_from_file_location(
-        "audit_coverage", ROOT / "tools" / "audit_coverage.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)              # type: ignore[union-attr]
-    return mod
+def audit_identity() -> str:
+    """尺子身份：`tools/audit_coverage.py` 的 working blob 与 HEAD blob。
 
+    **判据的地基也要有身份**：它被别的会话改过（正在做口径拆分），
+    而"换了尺子"会直接改这份清单的数字 ⇒ 必须一起写进生成物。
+    """
+    work = _git("hash-object", "tools/audit_coverage.py")[:12] or "?"
+    head = _git("rev-parse", "HEAD:tools/audit_coverage.py")[:12] or "?"
+    same = "相同" if work == head else "**不同（工作区已被改）**"
+    return f"`tools/audit_coverage.py` working blob `{work}`（HEAD `{head}`，{same}）"
+
+
+def load_audit():
+    """把审计当模块加载，**复用**它的 `is_read` / `source_literals` / `_LITERAL`。
+
+    读不了就**大声失败**：多半是别的会话正在改这个共享热点文件（半成品语法）。
+    此时**不许**换别的尺子继续跑——那会让这份清单的口径无声漂移。
+    """
+    path = ROOT / "tools" / "audit_coverage.py"
+    spec = importlib.util.spec_from_file_location("audit_coverage", path)
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)          # type: ignore[union-attr]
+    except Exception as exc:                                   # noqa: BLE001
+        print(f"  ❌ 判据尺子读不了：{path.name}（{exc.__class__.__name__}: {exc}）")
+        print(f"     身份：{audit_identity()}")
+        print("     ⇒ 多半是别的会话正在改它。等它落定再跑；**不换尺子**。")
+        raise SystemExit(3) from exc
+    return mod
 
 def literal_locations(audit) -> tuple[dict[str, list[str]], dict[str, str]]:
     """字面量 → 出现位置（`ak_tactic/**/*.py`，与 `source_literals()` 同一批文件）。
@@ -361,8 +383,12 @@ def build(con: sqlite3.Connection, lits: set[str], locs: dict[str, list[str]],
             if all(isinstance(v.get("value"), (int, float)) for v in vals.values()):
                 nums.append(vals)
         direction = how
-        if c in STRINGY or any(k.startswith("$") for k in unread):
-            direction = f"该概念的**字符串侧**（`$` 写法）没人读；接上后 {obs} 由正文决定要不要变"
+        if c in STRINGY:
+            direction = (f"该概念的值是**字符串**（另一个量）⇒ 接上后 {obs}"
+                         f"按该字符串设定；方向须与正文比对")
+        elif any(k.startswith("$") for k in unread):
+            direction = f"{how}　※ 没人读的是 `$`（字符串）侧 ⇒ 接的是那一侧的值"
+
         elif nums:
             direction = how
         miss = sorted({code for row in f["rows"] for code in row["range_codes"]
@@ -452,6 +478,7 @@ def write_md(rep: list[dict], lits: set[str], out: pathlib.Path, by: str,
     L.append(f"* 所属树 HEAD：`{_git('rev-parse', '--short', 'HEAD')}`；"
              f"工作区（`ak_tactic/`＋`tools/`）"
              f"{'**dirty**' if _git('status', '--porcelain', '--', 'ak_tactic/', 'tools/') else '干净'}")
+    L.append(f"* **判据尺子身份**：{audit_identity()}")
     L.append(f"* 键空间对拍（vs 审计 `keys_of()`）：{'；'.join(checks) or '未跑'}")
     L.append("* **判据来源**：`tools/audit_coverage.py:50-69` 的 `is_read()`"
              "（整键 → 方括号条件名 → `key.rsplit('@', 1)[-1]`）；"
