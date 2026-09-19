@@ -214,20 +214,29 @@ def main() -> int:
         #   （记忆 eff36235：生成物的问题改题源不手改正文）。
         # 为什么要落盘：它是下一轮的**输入**，只留在工具输出里丢了就要重跑。
         rows = _load_facts()
-        out = [f"{args.dump_parse} 由 tools/audit_op_notes.py --dump-parse 生成；"
-               "题源是本文件的 FAMILIES 表，请勿手改本文件。", "",
-               "# PARSE 待核清单：这些 fact 里没有任何普查词", "",
-               f"共 {sum(1 for r in rows if classify(r['value'])[0] == 'PARSE')} 条。",
-               "每一行请填两栏：**拟新增的普查词**与**落点**（DB 列 / Go 符号 / 或「不建模」）。",
-               "填完把词并进 tools/audit_op_notes.py 的 FAMILIES，再重跑本工具。", "",
-               "| char_id | fact 正文 | 拟新增词（人填） | 落点（人填） |", "|---|---|---|---|"]
-        for r in rows:
-            if classify(r["value"])[0] != "PARSE":
-                continue
+        # ★ 条数只留**一个来源**：这个列表。旧版表头写 len(parses)、stdout 写 `len(out) - 7`，
+        #   而表头实为 10 行 ⇒ 同一个文件里"304 条"与"307 条待核"并存，**307 就是这么传出去的**
+        #   （2026-09-19 实测复现：落盘文件 304 行、stdout 打印 307）。两个数字不许各说各话。
+        parses = [r for r in rows if classify(r["value"])[0] == "PARSE"]
+        head = [
+            f"{args.dump_parse} 由 tools/audit_op_notes.py --dump-parse 生成；"
+            "题源是本文件的 FAMILIES 表，请勿手改本文件。", "",
+            "# PARSE 待核清单：这些 fact 里没有任何普查词", "",
+            f"共 {len(parses)} 条。",
+            "每一行请填两栏：**拟新增的普查词**与**落点**（DB 列 / Go 符号 / 或「不建模」）。",
+            "填完把词并进 tools/audit_op_notes.py 的 FAMILIES，再重跑本工具。", "",
+            # ⚠ 更正留痕——留着比抹掉值钱，下一个人不必重新推（PM 2026-09-19 裁定）。
+            "⚠ **数量更正（2026-09-19）**：本条数曾以 **307** 对外传出，来源不是引用错误、"
+            "而是**本工具 stdout 的计数式**（旧版 `len(out) - 7`，表头实为 10 行 ⇒ 恒定多算 3）。"
+            "实测 **304 条**：数据行不含表头（`| char_` 匹配 305 行含表头），"
+            "与四档加总 2834+109+304=3247 自洽。⇒ 已改成只认 `len(parses)`。", "",
+            "| char_id | fact 正文 | 拟新增词（人填） | 落点（人填） |", "|---|---|---|---|"]
+        out = list(head)
+        for r in parses:
             txt = r["value"].replace("|", "／").replace("\n", " ")[:160]
             out.append(f"| {r['char_id']} | {txt} |  |  |")
         Path(args.dump_parse).write_text("\n".join(out) + "\n", encoding="utf-8")
-        print(f"已写 {args.dump_parse}（{len(out) - 7} 条待核）")
+        print(f"已写 {args.dump_parse}（{len(parses)} 条待核；表头 {len(head)} 行）")
         return 0
 
     if not NOTES_DB.exists():
