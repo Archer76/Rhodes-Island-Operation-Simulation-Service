@@ -100,7 +100,7 @@ def load_rulings(path: pathlib.Path) -> dict[tuple[str, str], str]:
         if pending_header:
             # 第六节的行：节 / 键 / 您填的裁定 / 状态
             if len(cells) >= 4 and cells[0] not in ("节", "—"):
-                key, val = cells[1].strip("`"), cells[-2].replace("\\|", "|")
+                key, val = _unkey(cells[1]), cells[-2].replace("\\|", "|")
                 if key and val:
                     out[(cells[0].strip(), key)] = val
             continue
@@ -119,19 +119,53 @@ def load_rulings(path: pathlib.Path) -> dict[tuple[str, str], str]:
             continue
         if len(cells) > ncol:
             cells = cells[:ncol - 1] + ["|".join(cells[ncol - 1:])]
-        key, val = cells[0].strip("`"), cells[-1].replace("\\|", "|")
+        key, val = _unkey(cells[0]), cells[-1].replace("\\|", "|")
         if key and val:
             out[(section, key)] = val
     return out
+
+
+def _unkey(cell: str) -> str:
+    """把「键」栏的单元格还原成生成时用的键。
+
+    **只削成对的外层反引号，键内部的反引号原样保留。** 这里曾经写的是
+    `cell.strip("`")`，它把**开头**的反引号一律削掉——于是
+    `` `tile_forbidden` 与 `tile_empty` … `` 读回来变成
+    `` tile_forbidden` 与 `tile_empty` … ``，和生成时的键**不再相等**。
+    后果是静默的、而且很像"博士没填"：`_answered` 判 False → 那一行照旧
+    列在表里；`LANDED` 里登记的同一个键也匹配不上。凡是键里带反引号的
+    （第二节整张词表都是）都中这一枪。2026-09-19 博士反馈"我记得我都填过"，
+    查到的第二个成因就是它。
+    """
+    s = (cell or "").strip()
+    # 渲染时键栏**总会**再包一层反引号，所以这里只削最外那一对；键内部原有的
+    # 反引号必须原样留下（`` `tile_forbidden` 与 `tile_empty` … `` 在文档里
+    # 是四个反引号，削一对才回到原键）。判据必须是"首尾都是反引号"——只削开头
+    # 正是老实现（`strip("`")`）的错处。
+    if len(s) >= 2 and s.startswith("`") and s.endswith("`"):
+        return s[1:-1]
+    return s
 
 
 def _cell(text: str, keep_tick: bool = False) -> str:
     """markdown 单元格转义：`|` 切断表格，换行切断行。
 
     **不要动反引号**——正文里的 `battle/damage.py` 这类代码路径就靠它可读；
-    键栏的反引号由 `load_rulings` 自己 `strip("`")` 处理，与这里无关。
+    键栏的反引号由 `_unkey` 还原（只削成对的外层），与这里无关。
     """
     return re.sub(r"\s+", " ", (text or "").replace("|", "\\|")).strip()
+
+
+def _key_roundtrip_bad() -> list[str]:
+    """键栏往返自检：写进表格、再读回来，键必须**一字不差**。
+
+    2026-09-19 加的守卫。当时 `_unkey` 的前身是 `strip("`")`，键里带反引号的
+    会被削变形（见 `_unkey` 的说明），后果是"博士填了也不生效"且完全静默。
+    守卫拿本工具真会写进「键」栏的两批键来走 `_cell` → `_unkey` 往返：
+    `LANDED` 的键（其中就有含两个反引号的）与第一节的模板键。
+    """
+    keys = list(dict.fromkeys(list(LANDED) + [q[0] for q in _Q]))
+    return [k for k in keys if _unkey("`" + _cell(k) + "`") != k or _unkey(k) != k]
 
 
 def _rb(rules: dict, section: str, key: str) -> str:
@@ -638,6 +672,18 @@ LANDED: dict[str, str] = {
         "证据：令/电弧「可以使用 3/4/5 个（最多同时部署 3 个）」→ 3；"
         "望「可以使用 4/5/6 枚（最多拥有 5/6/7 枚）」→ 7（前者是库存总量，不是上限）；"
         "PRTS 备注（多萝西/钼铅/艾拉）「陷阱部署上限与最多拥有数量相同」",
+    # —— 2026-09-19 博士本轮填的裁定（读回后逐条核实现状）——
+    "`tile_forbidden` 与 `tile_empty` 哪个对应哪种不可部署地块":
+        "博士裁定：**empty 那个来自生息演算，无视**。与现状一致 → `db/tiles.py`："
+        "`tile_forbidden`=禁入区、`tile_empty`=空（说明明写「游戏本体未包含该内容」）；"
+        "`tools/check_db.py:675-678` 已把这条悬案销案并留守卫",
+    "天赋「情绪吸收」在技能开启期间是否照常回 SP":
+        "博士裁定：**技能期间不回复 sp**。即现状 → `battle/sim.py:4170-4175`"
+        "（`if op.sp_per_attack_talent and not op.skill_active`）才额外回一份，"
+        "与 `sp_per_attack` 口径一致",
+    "受到的物理/法术伤害降低80%":
+        "博士裁定：**保持**（现状即结论）。落地处同 LANDED 里「受到的物理/法术伤害-80%」"
+        "→ `enemy_formula.py` 规则 `e_damage_reduce_sign`",
 }
 
 
@@ -645,6 +691,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="生成待裁定清单")
     ap.add_argument("-o", "--out", type=pathlib.Path, default=OUT)
     args = ap.parse_args()
+    bad = _key_roundtrip_bad()
+    if bad:
+        print(f"[!] 键往返自检失败 {len(bad)} 项——这些键写进表格后读回来会变形，"
+              f"博士填了也不生效：")
+        for k in bad[:5]:
+            print(f"    {k!r}")
+        return 1
     rules = load_rulings(args.out)
     text = render(rules, args.out)
     args.out.parent.mkdir(parents=True, exist_ok=True)
