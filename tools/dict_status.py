@@ -321,7 +321,24 @@ def report(check_only: bool) -> int:
     return 1 if (check_only and reds) else 0
 
 
+def _force_utf8_stdout() -> None:
+    """把 stdout/stderr 显式设成 UTF-8。
+
+    ⚠ 为什么写进工具：实测 `python tools/dict_status.py > out.txt` 在 Windows 上 **rc=1**，
+    打印第一个 `⚠` 时抛 `UnicodeEncodeError: 'gbk' codec can't encode character '\\u26a0'`
+    ——输出被截断在那一行，而 rc=1 是**编码**造成的，读的人却会以为表里有红项。
+    口径（2026-09-19）：**凡打印非 ASCII 符号的工具，输出重定向时必须 rc=0。**
+    同类工具 `audit_op_notes.py` 同一毛病（同一个修法），`coverage_table.py` 已修。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")     # type: ignore[union-attr]
+        except Exception:                            # noqa: BLE001  （非 TextIOWrapper 时跳过）
+            pass
+
+
 def main() -> int:
+    _force_utf8_stdout()
     ap = argparse.ArgumentParser()
     ap.add_argument("--discover", action="store_true", help="列原始命中，供人工定锚点")
     ap.add_argument("--check", action="store_true", help="只报红（无红退出码 0）")
