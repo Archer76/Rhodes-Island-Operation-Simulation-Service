@@ -32,7 +32,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
+import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -42,6 +45,96 @@ sys.path.insert(0, str(ROOT))
 
 from ak_tactic.simgo import (EngineBinaryUnpinned, legacy_binary,  # noqa: E402
                              require_binary, staleness_minutes)
+
+#: ⚠ **不可复现仪器的存档**（PM 2026-09-19 裁定「留」，并要求把 sha 与读数写进入库物）。
+#:
+#: 为什么要留：这一枚构建于 2026-09-19 19:08 的**混合工作树**（当时已提交的部分 + 尚未提交的
+#: 五个文件），那个状态此后**不复存在** ⇒ 删掉它就再没有任何实物能复现那次读数。
+#: 同一条道理在本项目里的老形状是「**预录制的哈希优于"两边互等"**」：**不可复现的读数必须留实物**。
+#:
+#: 它**不在** `legacy_binary()` 的默认定位路径上 ⇒ 「留证」与「不许静默用旧」是两件事，同时成立。
+#: `out/` 是易失目录 ⇒ **文件可以丢，读数不可无凭**：身份与读数记在这里（入库、可 diff）。
+LEGACY_INSTRUMENTS: tuple[dict, ...] = (
+    {
+        "preserved_copy": "out/acceptance/rios-sim-legacy-1908_b3e4d6b1.exe",
+        "sha256": "b3e4d6b1565d63b45128516588603853a8c8333c08777593fcc1ed24f30c4dc6",
+        "size": 3594240,
+        "mtime": "2026-09-19 19:08:28",
+        "built_from": ("rios-sim/ 工作树 @ 2026-09-19 19:08：当时的 HEAD + 未提交的五个文件"
+                       "（main.go / mech/mech.go / mech/huai_shu_li.go / wire.go / skill.go）"),
+        "removed_default_path": "rios-sim/rios-sim.exe（2026-09-19 23:36 删除——PM 三步走之第三步）",
+        "reproduces": {
+            "plan": "fixtures/hsex8_max.json",
+            "reading": "83杀 / 1漏 / 814.0333s / 591046.1",
+            "spec_sha": ("464a9dc2f94b1428c8569a36f3b00d1211b6de2c902b481c5f0fa97cae607564"),
+            "baseline_it_differed_from": "48杀 / 3漏 / 221.6667s / 282276.8（**同一 spec_sha**）",
+            "how": ("同一条 golden_go.py --check、同一批 19 份夹具、同一份基线，"
+                    "唯一变量 = RIOS_SIM_BIN 设没设（未设⇒落到这枚；钉住⇒当轮私有构建）"),
+        },
+    },
+)
+
+#: 曾经把「没有引擎」当成正常分支、**rc=0 跳过**的四处出口（PM 2026-09-19 要求回去补一刀）。
+#: 它们现在由上游 `require_binary()` 抛异常"顺带救活"——但**顺带救活不算修复**，
+#: 所以另加静态控制（文件里不许再出现「跳过：」这条出口）+ 端到端反向守卫（见下）。
+SKIP_EXIT_SITES = (
+    "tools/simgo_cost.py",
+    "tools/check_simgo_parity.py",
+    "_proto/simgo_cost_split.py",
+    "_proto/simgo_parity.py",
+)
+SKIP_EXIT_MARKER = "跳过："
+#: ⚠ 只认**真的 print 调用**，不认"这个词出现在文件里"。
+#: 本守卫的第一版就是按子串判的，结果被我自己删出口时留下的**注释**（"这里原本是「跳过：…」"）
+#: 判红——那正是本项目记录过的假信号「注释被当证据」的一个微缩版：**判据必须落在会执行的那一行上**。
+SKIP_EXIT_RE = re.compile(r"""print\(\s*[fr]?["']跳过""")
+
+
+def check_legacy_instrument() -> int:
+    """核对留证副本与入库记录是否一致（副本不在＝`out/` 被清，不算失败）。"""
+    bad = 0
+    for rec in LEGACY_INSTRUMENTS:
+        p = ROOT / rec["preserved_copy"]
+        if not p.exists():
+            print(f"  ✅ 留证副本不在场（out/ 易失，正常）：{rec['preserved_copy']}")
+            print(f"     身份与读数仍在入库物里：sha256 {rec['sha256'][:16]}… ⇒ "
+                  f"{rec['reproduces']['reading']}")
+            continue
+        got = hashlib.sha256(p.read_bytes()).hexdigest()
+        ok = (got == rec["sha256"]) and (p.stat().st_size == rec["size"])
+        bad += 0 if ok else 1
+        print(f"  {'✅' if ok else '⛔'} 留证副本与入库记录一致：{rec['preserved_copy']}")
+        print(f"     记录 sha256 {rec['sha256'][:16]}… ↔ 实测 {got[:16]}… ｜ "
+              f"size {rec['size']} ｜ 它复现的读数：{rec['reproduces']['reading']}")
+        if not ok:
+            print("     ⛔ 不一致 ⇒ 入库记录或副本被人动过，这正是「文件可以丢、读数不可无凭」要防的")
+    return bad
+
+
+def check_skip_exit_sites() -> int:
+    """端到端反向守卫：把 exe 钉成一个**不存在的路径** ⇒ 这四处必须 rc≠0 且点名路径，不许「跳过」。"""
+    ghost = ROOT / "out" / "acceptance" / "ghost-guard-nonexistent.exe"   # 全 ASCII：断言不受编码影响
+    env = dict(os.environ)
+    env["RIOS_SIM_BIN"] = str(ghost)
+    env.pop("PYTHONIOENCODING", None)          # 不许靠环境变量兜住编码
+    bad = 0
+    for rel in SKIP_EXIT_SITES:
+        src = (ROOT / rel).read_text(encoding="utf-8")
+        static_ok = not SKIP_EXIT_RE.search(src)
+        proc = subprocess.run([sys.executable, rel], cwd=str(ROOT), env=env,
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=900)
+        out = (proc.stdout or "") + (proc.stderr or "")
+        rc_ok = proc.returncode != 0
+        named = ghost.name in out
+        ok = static_ok and rc_ok and named
+        bad += 0 if ok else 1
+        print(f"  {'✅' if ok else '⛔'} {rel}：rc={proc.returncode}（须≠0）｜"
+              f"点名路径={named}｜已无「跳过：」出口={static_ok}")
+        if not ok:
+            tail = [ln for ln in out.strip().splitlines() if ln.strip()][-3:]
+            print(f"       末尾输出：{tail if tail else '（空）'}")
+    return bad
 
 
 def _with_env(value: str | None):
@@ -141,6 +234,14 @@ def main() -> int:
     finally:
         _restore(old)
         probe.unlink(missing_ok=True)
+
+    print()
+    print("== 留证仪器：不可复现的那个读数必须有实物/有据 ==")
+    bad += check_legacy_instrument()
+
+    print()
+    print("== 曾把「没有引擎」当正常分支的四处出口：钉错必须点名，不许「跳过」 ==")
+    bad += check_skip_exit_sites()
 
     print()
     print(f"== 小结：{'全部成立' if not bad else f'{bad} 条不成立'}；"

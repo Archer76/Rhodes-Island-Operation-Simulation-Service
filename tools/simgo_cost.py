@@ -22,10 +22,20 @@ from ak_tactic.battle import BattleSimulator, Deployment            # noqa: E402
 from ak_tactic.battle.unit import OperatorUnit                      # noqa: E402
 from ak_tactic.gamedata import EnemyLibrary, GameDataSource, load_stage  # noqa: E402
 from ak_tactic.operator import OperatorCalculator                   # noqa: E402
-from ak_tactic.simgo import Simgo, build_spec, find_binary          # noqa: E402
+from ak_tactic.simgo import (EngineBinaryUnpinned, Simgo, build_spec,
+                             require_binary)                         # noqa: E402
 from ak_tactic.frontend.inputs import SpecInputs
 
 STAGES = ["1-7", "2-1", "SR-6", "HS-EX-4"]
+
+
+def _force_utf8_stdout() -> None:
+    """输出重定向时消息也必须可读（口径⑤）：否则报错里的中文路径按 GBK 落盘、看的人读不出来。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")     # type: ignore[union-attr]
+        except Exception:                            # noqa: BLE001
+            pass
 
 
 def make_unit(calc, char_id: str, **kw) -> OperatorUnit:
@@ -43,10 +53,15 @@ def make_unit(calc, char_id: str, **kw) -> OperatorUnit:
 
 
 def main() -> int:
-    exe = find_binary()
-    if exe is None:
-        print("跳过：没有 rios-sim 二进制")
-        return 0
+    _force_utf8_stdout()
+    try:
+        exe = require_binary()
+    except EngineBinaryUnpinned as e:
+        # ⚠ 这里原本是「跳过：没有 rios-sim 二进制 → return 0」。那是一条**rc=0 的假绿出口**：
+        #    什么都没跑，而在读数上与「跑过了、一致」长得一模一样（PM 2026-09-19）。
+        #    现在**没有"跳过"这条出口**：未钉住/钉错 ⇒ 报出那条能直接粘的命令、点名路径，rc=2。
+        print(f"⛔ {e}", file=sys.stderr)
+        return 2
     src = GameDataSource()
     lib = EnemyLibrary(source=src)
     calc = OperatorCalculator()
