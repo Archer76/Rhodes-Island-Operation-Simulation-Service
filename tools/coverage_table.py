@@ -31,7 +31,7 @@
 
 `rc=1` ⇔ 有行的**量出列**（`measured`）是 `⛔`。⚠ 这里曾经数的是**人判列**（`WIRED`），
 而 `WIRED` 的 17 条里没有任何一条以 `⛔` 开头 ⇒ **退出码结构性恒为 0**：
-量出列真出「⛔ 零调用点且无守卫」／「⛔ 锚点失效」也不会红，后面所有判据都会"看起来全绿"
+量出列真出「⛔ 零调用点且无守卫」／「⛔ 锚点失效」也不会红，后面所有判据都会「看起来全绿」
 （本项目最贵的那类错：**判据看不见所断言之物**）。
 修完必须能回答一句「**它红得起来吗**」——`--mutate` 就是那条反向守卫，没有它不算修好。
 
@@ -39,7 +39,7 @@
     python tools/coverage_table.py                  # 三平面覆盖表
     python tools/coverage_table.py --plane 敌人     # 只看一个平面
     python tools/coverage_table.py --mutate anchor  # 反向守卫：注入坏锚点 ⇒ 必须 rc=1 并点名
-    python tools/coverage_table.py --mutate zero    # 反向守卫：注入"零调用点且无守卫" ⇒ 必须 rc=1 并点名
+    python tools/coverage_table.py --mutate zero    # 反向守卫：注入「零调用点且无守卫」 ⇒ 必须 rc=1 并点名
     python tools/coverage_table.py --self-test      # 自证：坏锚点与零调用点都必须翻红
 
 ⚠ 输出含非 ASCII（`✅`／`⛔`）⇒ **重定向到文件**时 Windows 默认 GBK 编码会在打印第一个
@@ -169,8 +169,19 @@ SEVERITY: dict[str, str] = {
 #: **「我们没有这个字段族」**——按后果严重度分两栏（项目经理口径）。
 #: ⚠ 它们不是"忘了做"，是**模型里没有这个概念**；来源是 `tools/audit_op_notes.py` 的实测条数。
 UNMODELED_BY_SEVERITY: list[tuple[str, str, str, str]] = [
-    ("必败级", "闪避", "124 条",
-     "概念未建模：Go 侧 dodgeVs 恒返回 0 ⇒ **闪避高的单位被静默算成必中**"),
+    # ⚠ 2026-09-20 PM 裁定 (a)：**保留「124 条」这个测量、改掉那句解释、不移出**。
+    #   先判过"是不是生成物"：那句话**只出现在本表**（全仓唯一命中），`tools/audit_op_notes.py` 既不生成它、
+    #   也不写本表（对「必中」／「概念未建模」／`coverage_table` 均 0 命中，只打印）⇒ **人手写的**，故直接改；
+    #   （若它是生成物，就该改题源、不在产物上手改——见关键记忆 8b328b2d。）
+    #   为什么要"以具名行为准"这句：本表按"说明里提到的严重度"普查，与具名行的 `WIRED` 是**两个轴**；
+    #   两张表同时讲一件事时，必须显式写出谁以谁为准，否则下一个人会读到矛盾却不知道信哪张。
+    ("必败级", "闪避", "124 条（普查）",
+     "★ **本行的接线状态以具名行「闪避」为准，本行只报普查条数**（PM 2026-09-20 裁定）。"
+     "「说明里提到闪避的干员 124 条」是**普查测量**，与接线判定**不同轴**。接线事实两句："
+     "① 我方闪避**已接线**（锚点 `rios-sim/skill.go:327 operator.dodgeVs`，消费点 `sim.go:1319`）；"
+     "② 敌人侧 `sim.go:239 dodgeVs` **恒 0 且与原版同值**——是「**两边一致的零**」，**不是「零调用点」**。"
+     "（原句「概念未建模：Go 侧 dodgeVs 恒返回 0 ⇒ 闪避高的单位被静默算成必中」的**因果已按裁定作废**，"
+     "只保留「124 条」这个测量本身。）"),
     ("必败级", "庇护", "54 条",
      "概念未建模：减伤型庇护不在现模型 ⇒ 该活下来的单位静默被打死"),
     ("必败级", "沉默", "（无普查词，按机制登记）",
@@ -746,7 +757,7 @@ MUTATIONS: dict[str, tuple[str, str, str, str]] = {
 
 
 def mutation_precheck(kind: str) -> tuple[bool, str]:
-    """注入之前先问一句"这条注入真的会红吗"——挑错输入的控制组是空的。"""
+    """注入之前先问一句「这条注入真的会红吗」——挑错输入的控制组是空的。"""
     plane, name, anchor, _ = MUTATIONS[kind]
     ok, why = anchor_ok(anchor)
     if kind == "anchor":
@@ -775,7 +786,7 @@ def mutation_precheck(kind: str) -> tuple[bool, str]:
 #:      只有控制组能把"永远红／永远绿"这两类**同时**照出来。
 #:
 #: 数据来源：`tools/acceptance.py --guard-new-items` 写出的 `out/acceptance/guard-matrix.json`
-#: （每条判据三层结论 ＋ 控制组"该绿就绿"那一行原话）。
+#: （每条判据三层结论 ＋ 控制组「该绿就绿」那一行原话）。
 #: ⚠ **矩阵不在场 ⇒ ⚠ 未测，不翻红**：否则我自己就成了"永久假红"。
 #:   **只有"控制组测了但没绿"才计入退出码**——那才是"这个判据可能恒红/恒绿"的硬信号。
 GUARD_MATRIX = ROOT / "out" / "acceptance" / "guard-matrix.json"
@@ -823,14 +834,14 @@ def red_names(assessed: list[dict]) -> list[tuple[str, str, str]]:
     ⚠ 不要改回去数 `status`（人判列）：`WIRED` 里没有以 `⛔` 开头的值，
     数它就等于 rc 恒 0 —— 那正是本次修掉的 bug。
 
-    ★★ **已知边界（PM 2026-09-20 要求留档，不许写成"改值无副作用"）**：
-    「本次改值不影响 rc。这说明 `WIRED` 栏的校验目前**不参与退出码判决**；因此"改了值 rc 没变"
-    不能读成"改对了"，只能读成"这一栏还没进判决面"。」
+    ★★ **已知边界（PM 2026-09-20 要求留档，不许写成「改值无副作用」）**：
+    「本次改值不影响 rc。这说明 `WIRED` 栏的校验目前**不参与退出码判决**；因此「改了值 rc 没变」
+    不能读成「改对了」，只能读成「这一栏还没进判决面」。」
     实测出处：2026-09-20 把 `WIRED` 里四位（晕眩／沉睡／浮空／束缚／自缚）由「已接线」改成
     「未接线」后，`--self-test` 的 rc 与判决位 ⛔ 均未变化 —— 只认 `measured` 列是**故意的**
-    （人判列混进退出码会让 rc 变成"人有没有填字"，不是"接线对不对"），但**边界必须留档**：
+    （人判列混进退出码会让 rc 变成「人有没有填字」，不是「接线对不对」），但**边界必须留档**：
     `WIRED` 的校验目前在自检里是 ⚠ 级（未登记背离），**不是** rc 级。**要不要把它纳入 rc 是设计决定，
-    归 PM；在它进判决面之前，任何"改了栏位但 rc 没动"的读数都只证明"这一栏还没进判决面"。**
+    归 PM；在它进判决面之前，任何「改了栏位但 rc 没动」的读数都只证明「这一栏还没进判决面」。**
     """
     return [(a["name"], a["measured"], a["why"]) for a in assessed
             if str(a["measured"]).startswith("⛔")]
@@ -841,7 +852,7 @@ def _git(*args: str) -> str:
     不许拿一个看起来正常的空白顶上去（身份未知是**可以写出来的状态**）。
 
     ⚠ **只 rstrip 换行，绝不 strip**：`git status --porcelain` 的每行以两列状态码开头，
-    其中"已改未暂存"那一类**首行的第一个字符就是空格**（`" M path"`）。整体 strip 会把
+    其中「已改未暂存」那一类**首行的第一个字符就是空格**（`" M path"`）。整体 strip 会把
     它吃掉，下游按固定列位切路径时就少一个字符——实测第一版把 `docs/parity-ledger-deepwater.md`
     打印成了 `ocs/parity-ledger-deepwater.md`：**只错第一条**，最容易看漏的那种错。
     """
@@ -865,7 +876,7 @@ def source_dirty() -> tuple[int, list[str]]:
     """工作区脏不脏——**这批数字是在哪棵树上量出来的**。
 
     口径抄 `tools/parity_ledger.py::source_dirty()`（本仓约定：数 `git status --porcelain`
-    的行数），这里多带回文件名：只说"脏了 6 个文件"而不说是哪 6 个，读者没法判断要不要重跑，
+    的行数），这里多带回文件名：只说「脏了 6 个文件」而不说是哪 6 个，读者没法判断要不要重跑，
     也没法判断脏的是不是自己关心的那几个。
     """
     out = _git("status", "--porcelain")
@@ -882,8 +893,8 @@ def provenance_lines(dirty: tuple[int, list[str]], head: str, branch: str) -> li
     """来源三件套（仪器身份／来源树／脏污）。
 
     ⚠ **做成纯函数**是为了能在自检里拿合成输入问它两句："干净时不许报警""脏时必须报警
-    并点名到文件"。做成一段直接读磁盘的打印代码，这两句就没人验得了——而"提示恒出现"
-    与"提示恒不出现"在输出上都不是错误，只会让读者当成噪音或者当成没事。
+    并点名到文件"。做成一段直接读磁盘的打印代码，这两句就没人验得了——而「提示恒出现」
+    与「提示恒不出现」在输出上都不是错误，只会让读者当成噪音或者当成没事。
     """
     n, names = dirty
     lines = [
@@ -1007,7 +1018,7 @@ def self_test() -> int:
         bad += 0 if good12b else 1
         print(f"  {'✅' if good12b else '⛔'} 反向守卫：抽掉坐标后「必须带坐标」必须点名："
               f"{nc[:1] or '（没红 ⇒ 这条判据红不起来）'}")
-    # ★ 来源三件套：**两边都要试**——只试一边的话，"提示恒出现"与"提示恒不出现"都算过。
+    # ★ 来源三件套：**两边都要试**——只试一边的话，「提示恒出现」与「提示恒不出现」都算过。
     clean_txt = "\n".join(provenance_lines((0, []), "abc1234", "main"))
     good9 = ("source_dirty=0" in clean_txt) and ("⚠" not in clean_txt)
     bad += 0 if good9 else 1
@@ -1087,6 +1098,33 @@ def self_test() -> int:
     bad += 0 if got_b else 1
     print(f"  {'✅' if got_b else '⛔'} 反向守卫（方向二：状态说「未接线」／依据无零取证）必须翻红："
           f"{got_b[:1] or '（没红 ⇒ 这条判据红不起来）'}")
+    # ── 判据：正文里的 ASCII 引号必须为 0（PM 2026-09-20 规矩：中文正文的引号一律用「」）──
+    # 为什么要有这条：我一晚**三次**在同一处混进 ASCII 引号，三次都是 `py_compile` 拦下的。
+    # ⚠ 靠守卫拦第三次，不如让第三次不可能发生 ⇒ 把这一步**并进前置检查**，且**先自检再守卫**。
+    # 判据自己也要能红：拿一句合成的"中文里的 ASCII 引号"喂进去，扫描器必须报出来（否则就是空判据）。
+    import re as _re
+    _CJKQ = _re.compile("[一-鿿）】」》]" + chr(34) + "[一-鿿（【「《]")
+
+    def ascii_quote_hits(text: str) -> list[tuple[int, str]]:
+        """找「中文字符－ASCII 双引号－中文字符」这种夹在正文里的引号（注释行不算）。"""
+        hits = []
+        for lineno, ln in enumerate(text.split("\n"), 1):
+            if ln.strip().startswith("#"):
+                continue
+            if _CJKQ.search(ln):
+                hits.append((lineno, ln.strip()[:70]))
+        return hits
+
+    src_hits = ascii_quote_hits(Path(__file__).read_text(encoding="utf-8"))
+    good16 = not src_hits
+    bad += 0 if good16 else 1
+    print(f"  {'✅' if good16 else '⛔'} 正文里的 ASCII 引号必须为 0（中文正文引号一律用「」）：命中 {len(src_hits)} 处"
+          f"{('；首处 行' + str(src_hits[0][0]) + '：' + src_hits[0][1]) if src_hits else ''}")
+    _sample = "（零是" + chr(34) + "双方同值" + chr(34) + "，不是" + chr(34) + "没人调用" + chr(34) + "）"
+    got_c = ascii_quote_hits(_sample)
+    bad += 0 if got_c else 1
+    print(f"  {'✅' if got_c else '⛔'} 反向守卫（合成一句中文里的 ASCII 引号）必须翻红："
+          f"{got_c[:1] or '（没红 ⇒ 这条判据红不起来）'}")
     return 1 if bad else 0
 
 
@@ -1119,7 +1157,7 @@ def main() -> int:
         _bad = json.loads(_src.read_text(encoding="utf-8"))
         _n = 0
         for _v in (_bad.get("criteria") or {}).values():
-            _v["control"] = False                              # 人为把"该绿就绿"改坏
+            _v["control"] = False                              # 人为把「该绿就绿」改坏
             _v["control_line"] = "[注入] 控制组被人为改坏"
             _n += 1
         _tmp = ROOT / "out" / "acceptance" / "guard-matrix-injected.json"
