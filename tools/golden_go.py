@@ -29,14 +29,22 @@
 排好程的 sim。子类在那个点上抄一份规格，再把活交回给基类走 Go。
 
 用法:
-    python tools\\golden_go.py                 # 跑 fixtures/ 里的作业，写到 fixtures/golden_go.json
-    python tools\\golden_go.py --check         # 与已有基线比对，有差则退出码 1
-    python tools\\golden_go.py --extend        # 判据集长大了：先验已有的一致，再并入新的
+    python tools\\golden_go.py                     # **默认只检查**（不再默认写基线）
+    python tools\\golden_go.py --check             # 同上；与已有基线比对，有差则 rc=1
+    python tools\\golden_go.py --write             # 首次建立基线（写，要显式说）
+    python tools\\golden_go.py --extend            # 判据集长大了：先验已有的一致，再并入新的
+    python tools\\golden_go.py --rebless --why "…"  # 已有条目换数（必须解释为什么）
+
+⚠ **破坏性默认值是缺陷**：本脚本原先用 `"--x" in sys.argv` 判定，任何未知参数或打错字
+都会掉进「无参数 ⇒ 重写基线」那条分支——`--help` 也能把基线静默重写（真发生过）。
+现在改成 argparse：未知参数 ⇒ rc≠0 并列出可用开关；**不给动作时默认只检查**。
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -120,7 +128,28 @@ def run_one(plan_file: Path, roster_file: Path) -> dict:
         "go_fallbacks": getattr(v, "go_fallbacks", None),
         "spec_sha": canonical_sha(v.spec) if v.spec is not None else None,
         "spec_error": v.spec_error,
+        #: **量测三件套之①：仪器身份与输入身份**（判决/规格是"结果"，这两栏是"用谁测的"）。
+        #: ⚠ 实证：同一份基线、同一批 19 份、同一条 `--check`，只因一枚是共享 exe（19:08 构建、
+        #: 落后 16 个提交）一枚是当轮私有构建，`hsex8_max.json` 一处 814.0333s/591046.1、
+        #: 一处 221.6667s/282276.8 ——**条目里没有这两栏时，事后无法归因**。
+        #: 这两栏**只记录、不参与判定**（判定键见 `keys`）：换仪器导致的差异是"仪器差"，
+        #: 不是"模型漂移"，读红绿之前先钉仪器。
+        "engine_bin": engine_identity()[0],
+        "engine_bin_sha16": engine_identity()[1],
+        "engine_bin_mtime": engine_identity()[2],
+        "roster_sha16": hashlib.sha256(Path(roster_file).read_bytes()).hexdigest()[:16],
     }
+
+
+def engine_identity() -> tuple[str, str, str]:
+    """(文件名, sha16, mtime) —— 这台读数用的是什么可执行文件。"""
+    raw = os.environ.get("RIOS_SIM_BIN", "").strip()
+    p = Path(raw) if raw and Path(raw).exists() else (ROOT / "rios-sim" / "rios-sim.exe")
+    if not p.exists():
+        return "", "", ""
+    return (p.name if raw else f"(默认){p.name}",
+            hashlib.sha256(p.read_bytes()).hexdigest()[:16],
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(p.stat().st_mtime)))
 
 
 def plan_files() -> list[Path]:
@@ -143,22 +172,62 @@ def plan_files() -> list[Path]:
     return found
 
 
-def _why_arg() -> str:
-    if "--why" not in sys.argv:
-        return ""
-    i = sys.argv.index("--why")
-    return " ".join(sys.argv[i + 1:]).strip()
+def _parse_args():
+    """⚠ **破坏性默认值是缺陷，不是风格。**
+
+    这个脚本原先全是 `"--x" in sys.argv` 的成员判定：**任何未知参数或打错字都会掉进
+    「无参数 ⇒ 重写基线」那条分支**——`--help` 也能把 `fixtures/golden_go.json` 静默重写
+    （真发生过，靠 `git checkout` 还原）。修复判据：
+      * 未知参数 / 拼错的开关 ⇒ **rc≠0 且列出可用开关**；
+      * **不给动作时不再写基线**：默认动作改成 `--check`（只读），要写必须显式说。
+    """
+    ap = argparse.ArgumentParser(
+        prog="golden_go.py",
+        description="Go 金标准：判决四数 + 规格摘要（spec_sha）。**默认只检查，不写基线**。",
+        epilog="写入类动作：--write（首次建基线）/ --extend（判据集长大）/ "
+               "--rebless --why <理由>（已有条目换数）")
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--check", action="store_true",
+                   help="只与已有基线比对，有差则 rc=1（**默认动作**）")
+    g.add_argument("--write", action="store_true", help="写基线（首次建立时用）")
+    g.add_argument("--extend", action="store_true",
+                   help="判据集长大：先验已有条目逐项一致，再并入新的")
+    g.add_argument("--rebless", action="store_true",
+                   help="已有条目换数（**必须**带 --why；会逐条打印 旧→新 并记台账）")
+    ap.add_argument("--why", default="", help="换基线的理由（--rebless 必填）")
+    return ap.parse_args()
+
+
+def instrument_line() -> str:
+    """**仪器身份**（量测三件套第一条）。
+
+    ⚠ 这条不是装饰：实测过一次事故——同一条 `--check`、同一份基线、同一批 19 份，
+    **只因为一个用了钉住的私有构建、一个走了默认（共享 exe）**，`hsex8_max.json` 一处绿一处红
+    （221.6667s/282276.8 vs 814.0333s/591046.1）。**报告里没有仪器身份，两台仪器就会被当成一台。**
+    """
+    raw = os.environ.get("RIOS_SIM_BIN", "").strip()
+    if raw and Path(raw).exists():
+        p = Path(raw)
+        h = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+        return f"RIOS_SIM_BIN 已钉：{p.name}（sha16 {h}，{p.stat().st_size}B）"
+    shared = ROOT / "rios-sim" / "rios-sim.exe"
+    if shared.exists():
+        h = hashlib.sha256(shared.read_bytes()).hexdigest()[:16]
+        stamp = time.strftime("%m-%d %H:%M", time.localtime(shared.stat().st_mtime))
+        return (f"⚠ **未钉 RIOS_SIM_BIN** ⇒ 用的是共享 `{shared.relative_to(ROOT)}`"
+                f"（sha16 {h}，构建于 {stamp}）——**它可能与基线不是同一台仪器**，"
+                f"红/绿都先按仪器差读")
+    return "⚠ **未钉 RIOS_SIM_BIN**，也没有共享 exe ⇒ 引擎来源不明"
 
 
 def main() -> int:
-    check = "--check" in sys.argv
-    extend = "--extend" in sys.argv
-    #: ⚠ `--rebless`＝**合法地改基线**。博士 2026-09-19 裁定「基线改用 Go」之后必然要用它：
-    #: 基线换人、以及将来 Go 修好一处机制后数会变，那时**必须能改**，但**必须留下"为什么"**。
-    #: 与 `--extend` 的分工：extend 只管"判据集长大"（不许顺手改已有的），
-    #: rebless 只管"已有条目换数"（必须带 `--why`，并逐条打印 旧→新）。
-    rebless = "--rebless" in sys.argv
-    why = _why_arg()
+    args = _parse_args()
+    check, extend, rebless = args.check, args.extend, args.rebless
+    if not (check or extend or rebless or args.write):
+        check = True          #: 默认＝只检查（**不再默认写基线**）
+    why = args.why.strip()
+    print(f"仪器：{instrument_line()}")
+    roster = _find("roster_max_modelled")
     roster = _find("roster_max_modelled")
     plans = plan_files()
     if not plans:
@@ -178,14 +247,14 @@ def main() -> int:
             got[p.name] = {"error": f"{type(e).__name__}: {e}"}
             print(f"  {p.name:<22} ❌ {type(e).__name__}: {e}")
 
-    if not check and not extend and not rebless:
+    if args.write:
         GOLDEN.write_text(json.dumps(got, ensure_ascii=False, indent=2,
                                      sort_keys=True), encoding="utf-8")
         print(f"\n基线已写入 {GOLDEN.relative_to(ROOT)}（{len(got)} 份计划）")
         return 0
 
     if not GOLDEN.exists():
-        raise SystemExit(f"没有基线可比：{GOLDEN} 不存在，先跑一次不带 --check 的")
+        raise SystemExit(f"没有基线可比：{GOLDEN} 不存在，首次建立请显式跑 `--write`")
     base = json.loads(GOLDEN.read_text(encoding="utf-8"))
     bad = 0
     changes: list[tuple[str, dict]] = []
@@ -255,6 +324,20 @@ def main() -> int:
               f"{GOLDEN.relative_to(ROOT)}（共 {len(merged)} 份）")
         return 0
     print(f"\n{'❌ 有 %d 份不一致' % bad if bad else '✅ 全部 %d 份与基线逐项一致' % len(base)}")
+    #: 仪器身份**只报不判**：与基线记的不同 ⇒ 这是"仪器差"，不是"模型漂移"
+    idiff = [(n, base[n].get("engine_bin_sha16"), got[n].get("engine_bin_sha16"))
+             for n in sorted(set(base) & set(got))
+             if base[n].get("engine_bin_sha16") and got[n].get("engine_bin_sha16")
+             and base[n]["engine_bin_sha16"] != got[n]["engine_bin_sha16"]]
+    if idiff:
+        b = sorted({x[1] for x in idiff})
+        g = sorted({x[2] for x in idiff})
+        print(f"⚠ **仪器与基线记录不同**（{len(idiff)} 份）：基线记的 {b} ↔ 这次用的 {g}"
+              f"——**这不是漂移**，是仪器差；要判红绿先把二进制钉成基线那一枚")
+    if bad and "未钉" in instrument_line():
+        print("⚠ **先看上面那行仪器身份**：未钉 RIOS_SIM_BIN 时，这份红**不能当源码差**读"
+              "——换一枚二进制就可能翻绿（实测：同一批 19 份、同一份词表，"
+              "共享 exe 红 1 份、私有构建全绿）。要归因就先钉住二进制再跑一次。")
     return 1 if bad else 0
 
 
