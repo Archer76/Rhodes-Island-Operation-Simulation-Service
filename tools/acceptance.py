@@ -599,7 +599,11 @@ def exe_staleness_item(exe: str | None, src_sig: str | None = None) -> dict:
             "judge": "所用 exe 的 mtime **不早于**本树最新 `.go` 源；否则这次的读数**不可归因**"
                      "（先钉/重建二进制再读红绿）。⚠ `sha16` 只能证明「**是不是那一次构建**」，"
                      "**不能证明「是哪份源码」**——实测同一份源码两次构建哈希就不同"
-                     "（`b88b28ce6d0ca14f` ↔ `98fe111bce6c4ff0`）；源码身份看 `source_sig`",
+                     "（`98fe111bce6c4ff0` ↔ `06b7e0a8b7199ae2`，两者 `source_sig` 都是 `9b81f2d5`）；"
+                     "⚠ **反例（我自己踩过）**：曾把 22:13 那枚 `b88b28ce6d0ca14f` 也算成"
+                     "「同一份源码」，理由是「它的 `tree_sig` 也是 `9b81f2d5`」——**那是我今晚在当前树上算的，"
+                     "证明不了那枚 exe 从哪份源码构建**。实测它不含 `baf1708`（`HITENEMY` 只有 6 列）⇒ "
+                     "**给旧 exe 贴 `source_sig`，除非当时量过，一律写「不可得」**；源码身份看 `source_sig`",
             "note": "" if not stale else "；".join(
                 f"{r['label']} {r['sha16']} 构建于 {r['mtime']}，"
                 f"落后最新 .go（{newest.name} {time.strftime('%H:%M:%S', time.localtime(nm))}）"
