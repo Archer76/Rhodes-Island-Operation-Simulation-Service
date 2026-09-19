@@ -17,6 +17,7 @@ import argparse
 import json
 import re
 import sqlite3
+import subprocess
 import sys
 import time
 from collections import Counter, defaultdict
@@ -89,6 +90,47 @@ def source_literals() -> set[str]:
             continue
         out.update(_LITERAL.findall(p.read_text(encoding="utf-8")))
     return out
+
+
+#: 三态里的**第二态**：`仅名字表提到`（PM 2026-09-20 裁定「丙」：报表加 `name_table_only` 列，
+#: 三态可分，**不动 `source_literals()`**）。
+#:
+#: 起因：`_LITERAL` 补点号（提交 `d9e0512`）后，`is_read()` 清掉了 5 键/12 对，而那 5 处的字面量
+#: **全在 `ak_tactic/formula.py:119-145` 的 `RULED_FLAT_KEYS`**——公式编译器的**量纲裁定键名表**
+#: （按原键比对、不读值）。⇒ **「读过这个名字」与「消费了这个键」之间有一道缝**，这一列就是那道缝。
+#:
+#: ★ **这是判据（启发式），不是事实**：判别式原文＝「**该字面量所在行去掉字符串与注释后只剩分隔符**
+#: （无调用 `(`、无属性访问 `.`、无下标 `[`）」。已知窄口：**单行**写的集合/字典
+#: （如 `_X = {"a", "b"}`）**不会**被判为名字表 ⇒ 落回「真有人读」；反过来，将来若出现
+#: 「集合构造 ＋ 动态取键」，这一列会**静默**判错。三态里**前两者不许压成一个**。
+_STR_ANY = re.compile(r"""["'][^"']*["']""")
+
+
+def _member_of_collection(line: str) -> bool:
+    """该行去掉字符串与注释后只剩分隔符（逗号/空白）⇒ 它是某个多行集合/字典的**成员行**。"""
+    body = _STR_ANY.sub("", line).split("#", 1)[0]
+    return re.fullmatch(r"[\s,]*", body) is not None
+
+
+def name_table_literals() -> set[str]:
+    """**只**出现在集合/字典成员行上的字面量（`RULED_FLAT_KEYS` 那类键名表）。"""
+    out: set[str] = set()
+    for p in (ROOT / "ak_tactic").rglob("*.py"):
+        if "__pycache__" in p.parts:
+            continue
+        for line in p.read_text(encoding="utf-8").splitlines():
+            if _member_of_collection(line):
+                out.update(_LITERAL.findall(line))
+    return out
+
+
+def name_table_only(key: str, lits: set[str], nt: set[str]) -> bool:
+    """三态判据：`True` ＝ **拿掉名字表之后就没人读它**（即它只被名字表提到）。
+
+    三个条件缺一不可：`is_read` 认了它（全量）／名字表那一份也认它／**去掉名字表就不认**。
+    第三个条件是关键：同时有真消费点与名字表的键，**不算**这一态。
+    """
+    return is_read(key, lits) and is_read(key, nt) and not is_read(key, lits - nt)
 
 
 def detector_text() -> str:
@@ -458,7 +500,12 @@ def classify_gaps(data: dict) -> None:
 
 
 def ident_of() -> dict:
-    """口径三件套：库／范围表／名册的 sha16（**输入身份**，不是输出身份）。"""
+    """口径三件套＋**来源三件套**（库／范围表／名册的 sha16，加树 HEAD 与工作区状态）。
+
+    ★ 补 HEAD 的理由（验收 2026-09-20）：这份读数的分母会随**源码**变（尺子字符类改一次，
+    599→594），只记输入三件套**不足以**说明"这两个数能不能比"——跨提交比较必须带树身份。
+    取不到就写「不可得」，**不许留空**（留空会被读成"没有这回事"）。
+    """
     import hashlib
 
     def h(p: Path) -> str:
@@ -467,6 +514,15 @@ def ident_of() -> dict:
         except Exception:  # noqa: BLE001
             return "?"
 
+    def git(*args: str) -> str:
+        try:
+            r = subprocess.run(["git", *args], cwd=ROOT, capture_output=True,
+                               text=True, timeout=30)
+            return r.stdout.strip() or "(空)"
+        except Exception:  # noqa: BLE001
+            return "不可得"
+
+    dirty = git("status", "--porcelain", "--", ".")
     ros = sorted((ROOT / "docs").glob("roster-*.md"))
     db = ROOT / "data" / "akdb.sqlite"
     return {"akdb": h(db), "akdb_mtime": time.strftime(
@@ -475,7 +531,9 @@ def ident_of() -> dict:
         "ranges_mtime": time.strftime("%Y-%m-%d %H:%M:%S",
                                       time.localtime(RANGES_JSON.stat().st_mtime))
         if RANGES_JSON.exists() else "?",
-        "roster": h(ros[0]) if ros else "?", "roster_file": ros[0].name if ros else "?"}
+        "roster": h(ros[0]) if ros else "?", "roster_file": ros[0].name if ros else "?",
+        "head": git("rev-parse", "--short", "HEAD"),
+        "src_dirty": "干净" if dirty in ("", "(空)") else f"有未提交改动（{len(dirty.splitlines())} 项）"}
 
 
 def scan_ops(cids: list[str], lits: set[str], det: str, want_port: bool = True) -> dict:
@@ -656,6 +714,9 @@ def select_mode(a, lits: set[str], det: str) -> int:
         #: （实测批次内 10 位只有 2 位过闸）⇒ 这一档的读数才是"做完就能用"的口径。
         keep = {cid for cid, d in data.items() if d["port"] == []}
         print(f"（--only-port：行空间收窄到「至少一个技能能进 Go」的 **{len(keep)}** 位）")
+        #: ★ 收窄**前**留一份全库快照：第二态「仅名字表提到」要按「全库／过闸」两档分列报数
+        #: （只报一档会让人把两个分母并列，2026-09-20 实测踩过）。
+        data_all = data
         data = {cid: d for cid, d in data.items() if cid in keep}
         needs = {cid: d["keys1"] for cid, d in data.items()}
         needs_raw = {cid: d["keys"] for cid, d in data.items()}
@@ -705,6 +766,33 @@ def select_mode(a, lits: set[str], det: str) -> int:
     print(f"另列一层（**不进覆盖目标**）：第三道「天赋整个没有检测器」"
           f"**{len({n for d in data.values() for n in d['talents']})}** 个天赋名、{ntal} 位次"
           f"——检测器是**具名**的，按定义不可跨干员共享，选人策略在这一层没有杠杆")
+    print()
+
+    nt = name_table_literals()
+    nt_keys: Counter[str] = Counter()
+    nt_gate_keys: set[str] = set()
+    nt_gate_pairs = 0
+    gate_all = {cid for cid, d in data_all.items() if d.get("port") == []}
+    for cid, d in data_all.items():
+        # ★ 用**摊平键集** `kv`，不要用 `d["keys"]`——后者是**筛后**集合，被名字表清掉的键
+        # 已经不在里面了（用它会恒得 0，2026-09-20 实测踩过）；也别复用 `k`（本函数里 `k = a.batch`
+        # 是切片上界，覆盖它会崩在 `[:k]`）。
+        for _key in {kk for _s, kk, _v in (d.get("kv") or [])}:
+            if name_table_only(_key, lits, nt):
+                nt_keys[_key] += 1
+                if cid in gate_all:
+                    nt_gate_keys.add(_key)
+                    nt_gate_pairs += 1
+    print("★ 三态之第二态「仅名字表提到」（**判据**，不是事实）——**覆盖收益不算它**：")
+    print(f"  全库（{len(data_all)} 位）：**{len(nt_keys)}** 种键、{sum(nt_keys.values())} 个 (干员×键) 位次；"
+          f"其中过闸 **{len(nt_gate_keys)}** 种键、**{nt_gate_pairs}** 个位次"
+          f"（过闸 {len(gate_all)} 位）")
+    print("  判别式（启发式，原文）：该字面量**所在行去掉字符串与注释后只剩分隔符**"
+          "（无调用、无属性访问、无下标）")
+    print("  ⇒ 它只是集合/字典里的一个键名，**没人拿它去取值**；三态里**前两者不许压成一个**")
+    print("  已知窄口：单行写的集合/字典（键名与赋值同行）落回「真有人读」")
+    if nt_keys:
+        print("  明细（前 8）：" + "、".join(f"{k}（{n} 位）" for k, n in nt_keys.most_common(8)))
     print()
 
     print("--- 一、缺失内容最多的键族（**只算第 1 类**；权重＝需要它的干员数）---")
@@ -817,6 +905,12 @@ def select_mode(a, lits: set[str], det: str) -> int:
             "ident": ident, "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "rows": len(ops), "roster": len(roster_cids),
             "class_counts": {str(c): cls_cnt[c] for c in (1, 2, 3, 4)},
+            "name_table_only": {
+                "判据": "启发式：该字面量所在行去掉字符串与注释后只剩分隔符"
+                        "（无调用、无属性访问、无下标）⇒ 只是集合/字典里的键名",
+                "keys": sorted(nt_keys), "pairs": sum(nt_keys.values()),
+                "gate_keys": sorted(nt_gate_keys), "gate_pairs": nt_gate_pairs,
+            },
             "raw_keys": len(raw_wt), "raw_pairs": sum(raw_wt.values()),
             "keys": nkeys, "pairs": sum(wt.values()), "batch": picks,
             "trace": [{"step": i + 1, "cid": t[0], "name": names.get(t[0], t[0]),
@@ -877,6 +971,7 @@ def main() -> int:
         roster = [r for r in roster if r[2] == "E2"]
 
     lits = source_literals()
+    nt = name_table_literals()
     det = detector_text()
     if a.select:
         #: 选人模式走**全体名册**（不受 `--all`/E2 过滤影响），行空间另按全库可用干员取。
@@ -888,12 +983,18 @@ def main() -> int:
     unclass_who: defaultdict[str, list[str]] = defaultdict(list)
     dead_global: Counter[str] = Counter()
     dead_who: defaultdict[str, list[str]] = defaultdict(list)
+    nt_global: Counter[str] = Counter()
+    nt_who: defaultdict[str, list[str]] = defaultdict(list)
     nodet_global: Counter[str] = Counter()
     nodet_who: defaultdict[str, list[str]] = defaultdict(list)
     for name, cid, elite, lvl in roster:
         allk, bad, dead, no_det = screens_of(cid, lits, det)
         if not allk:
             continue
+        for _src, _key in allk:
+            if name_table_only(_key, lits, nt):
+                nt_global[_key] += 1
+                nt_who[_key].append(name)
         for _src, k in bad:
             unclass_global[k] += 1
             unclass_who[k].append(name)
@@ -931,6 +1032,20 @@ def main() -> int:
         print("  （空）")
     for k, n in dead_global.most_common():
         who = "、".join(dict.fromkeys(dead_who[k]))[:36]
+        print(f"  {n:>3} 位  {k:<34} {who}")
+    print()
+    print("=" * 74)
+    print(f"★ 三态之第二态「仅名字表提到」（**判据**，不是事实）：{len(nt_global)} 种键、"
+          f"{sum(nt_global.values())} 位次")
+    print("=" * 74)
+    print("  三态＝`真有人读` ／ `仅名字表提到`（本节）／ `无人读`（上一节）——**前两者不许压成一个**。")
+    print("  判别式（启发式，原文）：该字面量**所在行去掉字符串与注释后只剩分隔符**（无调用 `(`、")
+    print("  无属性访问 `.`、无下标 `[`）⇒ 它只是集合/字典里的一个键名，**没人拿它去取值**。")
+    print("  已知窄口：**单行**写的集合/字典（键名与赋值写在同一行）不会被判为名字表 ⇒ 落回「真有人读」。")
+    if not nt_global:
+        print("  （空）")
+    for k, n in nt_global.most_common():
+        who = "、".join(dict.fromkeys(nt_who[k]))[:36]
         print(f"  {n:>3} 位  {k:<34} {who}")
     print()
     print("--- 附：第一道命中但源码有人在读的（不是欠账，仅供核对）---")
