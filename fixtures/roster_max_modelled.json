@@ -1,0 +1,182 @@
+[
+ {
+  "id": "char_103_angel",
+  "name": "能天使",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_1041_angel2",
+  "name": "新约能天使",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_1048_orchd2",
+  "name": "焰狐龙梓兰",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_1051_headb2",
+  "name": "怒潮凛冬",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_1052_kalts2",
+  "name": "凯尔希·思衡托",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_136_hsguma",
+  "name": "星熊",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_311_mudrok",
+  "name": "泥岩",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_4132_ascln",
+  "name": "阿斯卡纶",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_4217_makoto",
+  "name": "结城理",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_4228_closur",
+  "name": "可露希尔",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_4195_radian",
+  "name": "电弧",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_4230_mcnist",
+  "name": "机械师",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_2027_wang",
+  "name": "望",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_1050_chen3",
+  "name": "赤刃明霄陈",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_1046_sbell2",
+  "name": "圣聆初雪",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_2023_ling",
+  "name": "令",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_002_amiya",
+  "name": "阿米娅",
+  "elite": 2,
+  "level": 80,
+  "own": true,
+  "potential": 6,
+  "rarity": 5
+ },
+ {
+  "id": "char_2012_typhon",
+  "name": "提丰",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_4133_logos",
+  "name": "逻各斯",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ },
+ {
+  "id": "char_1015_aglna2",
+  "name": "予愿安洁莉娜",
+  "elite": 2,
+  "level": 90,
+  "own": true,
+  "potential": 6,
+  "rarity": 6
+ }
+]
