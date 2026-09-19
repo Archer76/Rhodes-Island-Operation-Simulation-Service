@@ -84,9 +84,39 @@ _NOT_A_LANDING = frozenset("append other value len make range min max sum print"
 #: 每加一个文件都要在这里补一行——**清单要能被人拿去复核，而不是只能被相信**。
 _NEW_THIS_ROUND = frozenset({"rios-sim/mech/chain.go"})
 
-#: 划界规则（写进表里，供复核）
-_NEW_THIS_ROUND_RULE = ("手工枚举的路径集合（不是 tag、不是起点 sha）："
-                        "本轮新增且会被同一把尺子算成落点的文件")
+#: ★ 边界改成「**起点 sha ＋ 命令**」（验收 `msg-mu903mk4-fz`：手工枚举是**自陈式**的，
+#: 它换两个起点各算一次得同一集合 ⇒ 那我们就把起点写死、把命令原样贴出来，
+#: 让**任何人可复算**；手工枚举降级为历史说明）。
+_ROUND_START = "136e617"          #: 本轮起点＝chain 骨架首笔（骨架第一轮就是这一笔）
+_ROUND_CMD = (f"git log --diff-filter=A --name-only {_ROUND_START}^..HEAD -- '*.go'")
+
+#: 划界规则（写进表里，供复核）：**起点 sha 之后新增 ∧ 在 Go 索引（生产 .go）里**
+_NEW_THIS_ROUND_RULE = (f"`{_ROUND_CMD}` 的输出 ∩ **Go 索引（生产 .go）的文件集**；"
+                        f"即「{_ROUND_START} 之后新增、且**会被同一把尺子算成落点**的文件」")
+
+
+def new_files_since_start(index_files: set[str], idx: dict) -> tuple[list[str], list[tuple[str, str]]]:
+    """算「本轮新增文件」：**起点 sha ＋ 那条命令**（不再依赖手工枚举）。
+
+    返回 (计入集合, [(区间内新增的全部 .go, 计入/不计入的理由)])。
+    ★ 「不计入」的理由必须**由尺子给出**（不在 Go 索引里＝不是生产 .go，例如 `_test.go`），
+    不能写成「我觉得它不算」——那样它又变回自陈（`bd07345f`：找不到会被读成通过）。
+    """
+    p = subprocess.run(["git", "log", "--diff-filter=A", "--name-only",
+                        f"{_ROUND_START}^..HEAD", "--", "*.go"],
+                       cwd=ROOT, capture_output=True, text=True, encoding="utf-8")
+    added: list[str] = []
+    for ln in (p.stdout or "").splitlines():
+        ln = ln.strip()
+        if ln.endswith(".go") and ln not in added:
+            added.append(ln)
+    rows: list[tuple[str, str]] = []
+    for rel in added:
+        if rel in index_files:
+            rows.append((rel, "**计入**：在 Go 索引（生产 .go）里"))
+        else:
+            rows.append((rel, "不计入：**不在 Go 索引**里（如 `_test.go`）⇒ 它改变不了那一列的读数"))
+    return sorted(r for r in added if r in index_files), rows
 
 
 def new_file_provenance() -> list[tuple[str, str, str]]:
@@ -211,6 +241,7 @@ def go_index(strip_comments: bool = True, exclude: frozenset = frozenset()) -> d
     if not GO_ROOT.exists():
         return idx
     n_files = 0
+    files: list[str] = []
     for p in sorted(GO_ROOT.rglob("*.go")):
         if p.name.endswith("_test.go"):
             continue
@@ -218,6 +249,7 @@ def go_index(strip_comments: bool = True, exclude: frozenset = frozenset()) -> d
         if rel in exclude:
             continue
         n_files += 1
+        files.append(rel)
         for i, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
             if line.lstrip().startswith("//"):
                 continue          #: ★ 整行注释不算落点
@@ -227,7 +259,15 @@ def go_index(strip_comments: bool = True, exclude: frozenset = frozenset()) -> d
             for w in set(_WORD.findall(body)):
                 idx.setdefault(w, []).append((rel, i, body.strip()[:110]))
     idx["__files__"] = [("", n_files, "")]      #: 索的非空性证据（守卫要用）
+    #: ★ 文件清单也要能取出来：「本轮新增文件的边界」要按**索引里的文件集**算
+    #: （验收 `msg-mu903mk4-fz`：边界得是规则算出来的，不是手工枚举自述的）
+    idx["__filelist__"] = [(f, 0, "") for f in files]
     return idx
+
+
+def _n_words(idx: dict) -> int:
+    """索引里的**词**数（`__` 开头的元数据键不算词——它们不是从源码里数出来的）。"""
+    return sum(1 for k in idx if not k.startswith("__"))
 
 
 def anchor_word(idx: dict) -> str:
@@ -321,8 +361,12 @@ def build(strip_comments: bool = True) -> dict:
     rules = kinds_and_rules()
     fields = landing_fields()
     idx = go_index(strip_comments=strip_comments)
-    #: ★ 本轮新增的文件：把「不含本轮新增」的读数也算出来（与验收那一版对齐）
-    idx_x = go_index(strip_comments=strip_comments, exclude=_NEW_THIS_ROUND)
+    #: ★ 本轮新增文件的**可复算**边界（验收 `msg-mu903mk4-fz` 要求：换成「起点 sha ＋ 命令」）：
+    #: 上面的 `_NEW_THIS_ROUND` 只是**手工枚举过的历史说明**；真正用在这儿的是**算出来的集合**
+    #: ＝「起点 sha 之后新增 ∧ 在 Go 索引（生产 .go）里」。这样别人能自己算一遍，
+    #: 而不是只能相信我的枚举（`18f53299`：边界要么写成规则、要么别用全称）。
+    new_files, added_all = new_files_since_start({f for f, _n, _t in idx.get("__filelist__", [])}, idx)
+    idx_x = go_index(strip_comments=strip_comments, exclude=frozenset(new_files))
     #: 共用 cand：同一个字段名被多个 kind 抽到（damage 与 ep_damage 共用 damage_type）
     used: dict[str, list[str]] = {}
     for k, cs in fields.items():
@@ -363,16 +407,18 @@ def build(strip_comments: bool = True) -> dict:
     excluded_by_cand: dict[str, set[tuple[str, int]]] = {}
     for r in landed:
         for name, rel, ln, _t in hits_of(fields.get(r["kind"], []), idx):
-            if rel in _NEW_THIS_ROUND:
+            if rel in set(new_files):
                 excluded_by_cand.setdefault(name, set()).add((rel, ln))
     for r in landed:
         for name, rel, ln, _t in hits_of(fields.get(r["kind"], []), idx_x):
             by_cand_lines_x.setdefault(name, set()).add((rel, ln))
-    return {"rows": rows, "go_words": len(idx) - 1,
+    return {"rows": rows, "go_words": _n_words(idx),
             "go_files": idx.get("__files__", [("", 0, "")])[0][1],
-            "go_words_x": len(idx_x) - 1,
+            "go_words_x": _n_words(idx_x),
             "go_files_x": idx_x.get("__files__", [("", 0, "")])[0][1],
-            "new_files": sorted(_NEW_THIS_ROUND),
+            "new_files": new_files,
+            "added_since_start": added_all,
+            "round_start": _ROUND_START,
             "excluded_by_cand": {c: sorted(v) for c, v in sorted(excluded_by_cand.items())},
             "distinct_cands": distinct, "shared_cands": shared_landed,
             "shared_cands_all": shared_all, "used": {n: sorted(set(k)) for n, k in used.items()},
@@ -406,7 +452,7 @@ def check() -> int:
     print("  ② 控制组：锚**从索自身取**（不许用「记忆里该存在」的名字）")
     n_files = idx.get("__files__", [("", 0, "")])[0][1]
     anchor = anchor_word(idx)
-    print(f"     Go 生产代码 {n_files} 个 .go、{len(idx) - 1} 个词；取命中最多的 `{anchor}` 当锚")
+    print(f"     Go 生产代码 {n_files} 个 .go、{_n_words(idx)} 个词；取命中最多的 `{anchor}` 当锚")
     if n_files < 5 or not anchor:
         print("     ✗ 索太空/取不到锚 ⇒ 『未核』不值得信（不是通过）")
         ok = False
@@ -427,7 +473,7 @@ def check() -> int:
         cs = fields.get(kind, [])
         if state_of(kind, cs, idx) != state_of(kind, cs, idx_keep):
             diff.append(kind)
-    print(f"     词表：剥={len(idx) - 1}／不剥={len(idx_keep) - 1}；态不同的 kind={diff or '无'}")
+    print(f"     词表：剥={_n_words(idx)}／不剥={_n_words(idx_keep)}；态不同的 kind={diff or '无'}")
     if diff:
         print("     ✗ 判决受注释口径影响 ⇒ 必须先说清用哪种口径")
         ok = False
@@ -480,7 +526,8 @@ def md(d: dict) -> str:
              f"**{sum(d['hit_lines_by_cand'].values())}** | "
              + "、".join(f"`{c}` {n} 处" for c, n in d['hit_lines_by_cand'].items())
              + " —— ★ 与上面两行**不是同一口径**：这行数的是 Go 侧的**行** |")
-    L.append(f"| 　└ **不含本轮新增文件**（＝**下面「本轮新增文件清单」里的那些**） | "
+    L.append(f"| 　└ **不含本轮新增、且计入落点统计的文件**"
+             f"（＝**下面「被排除文件清单」里的那些**） | "
              f"**{sum(d['hit_lines_by_cand_x'].values())}** | "
              + "、".join(f"`{c}` {n} 处" for c, n in d['hit_lines_by_cand_x'].items())
              + " —— ★ **这一行才与验收那一版可比**（它量时那种文件还不存在）；"
@@ -492,22 +539,43 @@ def md(d: dict) -> str:
              f"★ 多出的 `heal_scale`（`heal`／`regen`）不在有落点范围内，"
              f"**而它正是 `regen` 那格缺陷的本体** |")
     L.append("")
-    L.append("### 本轮新增文件清单（**「不含本轮新增」那一列的口径来源**）")
+    L.append("### 被排除文件清单（**「不含本轮新增、且计入落点统计」那一列的口径来源**）")
     L.append("")
-    L.append(f"划界规则：**{_NEW_THIS_ROUND_RULE}**。★ 为什么必须印这一节（PM `msg-mu8zychr-fp` "
-             "把验收的建议升格为硬要求）：**「本轮」是随时间漂移的词**——同一个 `6`，"
-             "在这一轮与下一轮的意思不同（下一轮若又新增了带 `json:\"atk_scale\"` 的文件，`6` 就变了）。"
-             "**只印 `6`，读者无法判断它是否可比；印出清单，`6` 才有身份**（同族 `515530a8`："
-             "表的身份先于数值）。")
+    L.append(f"划界规则（**任何人可复算**，不再靠自述）：**{_NEW_THIS_ROUND_RULE}**。"
+             f"★ 起点写死为 `{_ROUND_START}^`、命令原样贴在上面——**手工枚举降级为历史说明**"
+             "（验收 `msg-mu903mk4-fz`：手工枚举是自陈式的；换成「起点 sha ＋ 命令」之后，"
+             "它换两个起点各算一次得同一集合这件事，别人也能自己算一遍）。")
     L.append("")
-    L.append("| 路径 | 首次入库 sha | 入库时间 |")
+    L.append("★ 为什么必须印这一节（PM `msg-mu8zychr-fp` 把验收的建议升格为硬要求）："
+             "**「本轮」是随时间漂移的词**——同一个 `6`，在这一轮与下一轮的意思不同"
+             "（下一轮若又新增了带 `json:\"atk_scale\"` 的文件，`6` 就变了）。"
+             "**只印 `6`，读者无法判断它是否可比；印出清单，`6` 才有身份**"
+             "（同族 `515530a8`：表的身份先于数值）。")
+    L.append("")
+    L.append(f"**区间内新增的全部 `.go`**（`{_ROUND_CMD}` 的输出，逐条给计入/不计入的理由）——"
+             "★ 这一步是「标题与规则同宽」的修法（验收指出：标题若写成「新增文件清单」，"
+             "读者会当成**文件全集**，而 `_test.go` 并不在口径内）：")
+    L.append("")
+    L.append("| 区间内新增的 `.go` | 是否计入那一列的口径 | 理由（由尺子给出，不是我说了算） |")
+    L.append("| --- | --- | --- |")
+    for rel, why in d["added_since_start"]:
+        mark = "**计入**" if rel in set(d["new_files"]) else "不计入"
+        L.append(f"| `{rel}` | {mark} | {why} |")
+    L.append("")
+    L.append("| 计入集合（＝该列排除的东西） | 首次入库 sha | 入库时间 |")
     L.append("| --- | --- | --- |")
     for rel, sha, when in new_file_provenance():
         L.append(f"| `{rel}` | `{sha}` | {when} |")
     L.append("")
-    L.append("★ **被排除的命中处**（现算，故行号会随该文件改动而漂移——**这正是不能写死行号的理由**；"
-             "验收 07:05 独立算的是 `atk_scale` ← `chain.go:34,70`、`max_target` ← `:33,67,111,114`，"
-             "**本轮重生成后行号已经变了**，因为我随后又改过那个文件）：")
+    L.append("★ **被排除的命中处**（现算，故行号会随该文件改动而漂移——**这正是不能写死行号的理由**）："
+             "验收 07:05 的读数对应 **`5d2b4cf`**（`atk_scale` ← `chain.go:34,70`、"
+             "`max_target` ← `:33,67,111,114`）；v4（`ae95a11`）的读数对应 **`:35,81`／`:34,78,124,127`**；"
+             "**本轮又变了一次**（我在两次之间改过该文件）。")
+    L.append("")
+    L.append("★★ **验收的判词，照抄（它把「两个数不一样」从冲突变成了两个坐标）**："
+             "**「两份行号都不是错的，各自钉在一个 sha 上；变的是文件，不是尺子。」**"
+             "（它逐版本复算一致；`git diff --stat 5d2b4cf ae95a11 -- rios-sim/mech/chain.go` ＝ **+21/−8** "
+             "⇒「我又改过」成立。）")
     L.append("")
     L.append("| cand | 被排除的 `文件:行` |")
     L.append("| --- | --- |")

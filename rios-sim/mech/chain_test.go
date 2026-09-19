@@ -9,8 +9,17 @@ package mech
 //	断言 2  真实参数（max_target=3）下**必须拒绝**并给出 ErrJumpUndetermined（未定不猜）
 //	断言 3  合成反例：坏实现必须被**同一条断言**抓住（抓 0 个即判失败）
 //	断言 4  反向守卫：实现对 scale 不敏感（忽略 0.75 恒返回满量）时必须红
-//	已知盲区  「每次乘基准」（第 3 跳 = 0.75）本判据**抓不到**——第 3 跳未定，故判据不覆盖它；
-//	          本文件把它**显式登记为绿**，这样将来收紧判据时这条会主动提醒改文档。
+//	断言 5  读法判别器（**与实现解耦**）：三个候选读法做成**真读器**后——
+//	        候选③ 的形态能过本判据（盲区**本体**，实测）＋ 三读法在 n=2 **同值**
+//	        （第 2 跳对区分读法零信息量，这是盲区的**理由**）
+//	断言 6  分岔点：三读法在 n=3 **两两不等** ⇒ §7.2 那张表是**测出来**的，不是写出来的
+//
+// ★ 独立性纪律（验收顶回、PM 提成通则 `msg-mu903tfp-g0`）：**「一个改动红几条」就是独立性的判据**。
+// 上一版我用「字面量 75」比「实现算出的 100×0.75」——两个数由**同一对常量**决定，
+// 判词「若不同值 ⇒ 判据本可区分它」是**推断**而不是**测到的东西**；而且那条被前两条算术**蕴含**
+// （`d8706dc5`：判据被算术必然满足＝零信息量）。现在候选③ 是一个**真读法**，
+// 判据比的是**生成器的输出**，并与实现解耦：**每个最小变异只红一条**（逐条实测见
+// `tools/chain_judge_independence.py`）。
 //
 // 数据来源（DB 实测，2026-09-20）：`char_4224_turdus`／`char_4071_peper`／`char_4139_papyrs`
 // 特性黑板 = `{"attack@chain.atk_scale": 0.75, "attack@chain.max_target": 3.0}`；
@@ -19,6 +28,7 @@ package mech
 import (
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 )
 
@@ -48,6 +58,46 @@ func assertDecayFirstTwo(seq []float64, scale float64) error {
 	return nil
 }
 
+// ── 三个候选读法，各做成一个**真读器**（生成器）────────────────────────────
+//
+// 为什么要有它们：上一版把候选③ 写成字面量 `[]float64{100, 75, 75}`——
+// 那样判据比的是「字面量 vs 实现算出的数」，两者由同一对常量决定 ⇒ 恒等式，零信息量。
+// 现在候选③ 是一个**独立实现**：判据比的是**两个生成器的输出**；变异任一侧，
+// 只红它自己那一条。
+//
+//	下标 :  0        1             2               3
+//	n    :  1 跳     2 跳          3 跳            4 跳
+func candSeqGeom(base float64, n int, scale float64) []float64 {
+	// ① 等比衰减：第 k 跳 = base × scale^(k−1)
+	seq := make([]float64, n)
+	for k := 1; k <= n; k++ {
+		seq[k-1] = base * math.Pow(scale, float64(k-1))
+	}
+	return seq
+}
+
+func candSeqArith(base float64, n int, scale float64) []float64 {
+	// ② 等差衰减：第 k 跳 = base × (1 − (k−1)(1−scale))
+	seq := make([]float64, n)
+	for k := 1; k <= n; k++ {
+		seq[k-1] = base * (1 - float64(k-1)*(1-scale))
+	}
+	return seq
+}
+
+func candSeqPerJump(base float64, n int, scale float64) []float64 {
+	// ③ 每跳倍率：第 1 跳满量，其后**每一跳**都是 base × scale（这是「降低 25%」的另一种读法）
+	seq := make([]float64, n)
+	for k := 1; k <= n; k++ {
+		if k == 1 {
+			seq[k-1] = base
+		} else {
+			seq[k-1] = base * scale
+		}
+	}
+	return seq
+}
+
 func TestChainJudge_AtkScale_FirstTwoJumps(t *testing.T) {
 	// ── 观察：逐跳治疗量（计数可见——只印一个数就看不出「衰减发生在哪一跳」）
 	seq, err := chainHealJumps(chainBase, 2, chainScale)
@@ -74,10 +124,10 @@ func TestChainJudge_AtkScale_FirstTwoJumps(t *testing.T) {
 		name string
 		seq  []float64
 	}{
-		{"丢掉衰减（第 2 跳仍满量）", []float64{100, 100}},             //: 断言 1＋方向
-		{"方向弄反（越跳越高）", []float64{100, 125}},                  //: 断言 1＋方向
-		{"把「降低 25%」读成「降到 25%」", []float64{100, 25}},           //: 断言 1
-		{"只算一跳就返回（序列不足）", []float64{100}},                   //: 断言 1
+		{"丢掉衰减（第 2 跳仍满量）", []float64{100, 100}},    //: 断言 1＋方向
+		{"方向弄反（越跳越高）", []float64{100, 125}},        //: 断言 1＋方向
+		{"把「降低 25%」读成「降到 25%」", []float64{100, 25}}, //: 断言 1
+		{"只算一跳就返回（序列不足）", []float64{100}},          //: 断言 1
 	}
 	caught := 0
 	for _, m := range mutants {
@@ -93,25 +143,76 @@ func TestChainJudge_AtkScale_FirstTwoJumps(t *testing.T) {
 	}
 	t.Logf("合成反例 %d/%d 被抓", caught, len(mutants))
 
-	// ── 已知盲区：显式登记为绿（不是漏网，是「判据按裁定的范围不覆盖它」）
-	//: 这个「坏实现」就是**候选 ③（每跳倍率）**：第 3 跳 75，而非等比 56.25／等差 50。
-	blind := []float64{100, 75, 75}
-	if err := assertDecayFirstTwo(blind, chainScale); err != nil {
-		t.Errorf("已知盲区用例应当通过（判据只看前两跳），实际红了：%v\n"+
-			"若判据已被收紧，请同步更新 docs/chain-skeleton-plan.md 的 §四／§七", err)
-	} else {
-		t.Logf("⚠ 已知盲区（**有意**）：%v 通过本判据——它是**候选 ③（每跳倍率）**；"+
-			"其它实现若落到这一形态，只有第 3 跳读数到位后才能判", blind)
+	// ── 断言 5：读法判别器（**只用生成器，不碰实现**）
+	//:
+	//: 这三句话是**同一件事的三个面**（候选③ 与本判据在 n=2 无法区分），
+	//: 故**合成一条断言**：否则一个变异会同时红三行，而「一个改动红几条」本身是独立性的判据
+	//: （红三条 ⇒ 那是同一判据的三份副本）。三个面各自都要过，红哪面就在判词里说清。
+	readings := []struct {
+		name string
+		gen  func(float64, int, float64) []float64
+	}{
+		{"① 等比衰减", candSeqGeom},
+		{"② 等差衰减", candSeqArith},
+		{"③ 每跳倍率", candSeqPerJump},
 	}
-	//: ★ 盲区**是有理由的**，把理由也做成断言：候选 ③ 与本实现在 n=2 **同值** ⇒
-	//: 第 2 跳对「区分读法」零信息量。这一条如果红了，说明「盲区」的说法不成立（那才是真漏网）。
-	if blind[1] != seq[1] {
-		t.Errorf("候选 ③ 的第 2 跳 %v 与本实现的 %v 不同 ⇒ 判据本该能区分它，"+
-			"「已知盲区」的说法不成立（这是真漏网，不是边界）", blind[1], seq[1])
-	} else {
-		t.Logf("✓ 盲区有理由：候选 ③ 与本实现在 n=2 **同值**（%v）⇒ 第 2 跳对区分读法零信息量；"+
-			"分岔点只有 n=3 一处（0.5625 ／ 0.5 ／ 0.75）", seq[1])
+	seqs := make([][]float64, len(readings))
+	for i, r := range readings {
+		seqs[i] = r.gen(chainBase, 4, chainScale)
+		t.Logf("读法 %s：n=1..4 ⇒ %v", r.name, seqs[i])
 	}
+	{
+		var bad []string
+		// (a) 盲区**本体**：候选③ 的形态确实过本判据（这是实测，不是推断）
+		if err := assertDecayFirstTwo(seqs[2], chainScale); err != nil {
+			bad = append(bad, fmt.Sprintf("(a) 候选③ 形态应当过本判据（盲区本体），实际红了：%v", err))
+		}
+		// (b) n=2 三读法**同值** ⇒ 第 2 跳对区分读法零信息量（这是盲区的**理由**）
+		for i := 1; i < len(seqs); i++ {
+			if d := seqs[i][1] - seqs[0][1]; d > 1e-9 || d < -1e-9 {
+				bad = append(bad, fmt.Sprintf("(b) n=2 三读法不再同值：%s=%v vs %s=%v ⇒ "+
+					"「n=2 零信息量」不成立（那判据本该能区分它们）",
+					readings[i].name, seqs[i][1], readings[0].name, seqs[0][1]))
+			}
+		}
+		if len(bad) > 0 {
+			t.Errorf("读法判别器红：\n  %s", joinLines(bad))
+		} else {
+			t.Logf("✓ 盲区本体＋理由（实测）：候选③ 形态 %v 过本判据，且三读法 n=2 **同值**（%v）"+
+				"⇒ 第 2 跳对区分读法零信息量", seqs[2][:3], seqs[0][1])
+		}
+	}
+
+	// ── 断言 6：分岔点只有 n=3（三读法两两不等）——§7.2 的表由此**被测出来**
+	{
+		n3 := []float64{seqs[0][2], seqs[1][2], seqs[2][2]}
+		okAll := true
+		for i := 0; i < len(n3); i++ {
+			for j := i + 1; j < len(n3); j++ {
+				if d := n3[i] - n3[j]; d < 1e-9 && d > -1e-9 {
+					okAll = false
+					t.Errorf("n=3 的 %s 与 %s 同值（%v）⇒ 「分岔点只有 n=3」不成立，"+
+						"§7.2 的三联判决要改", readings[i].name, readings[j].name, n3[i])
+				}
+			}
+		}
+		if okAll {
+			t.Logf("✓ 分岔点（实测）：n=3 ⇒ ① %v ／ ② %v ／ ③ %v（两两不等）",
+				n3[0], n3[1], n3[2])
+		}
+	}
+}
+
+// joinLines 把多条判词拼成一段（只给测试用，避免引第三方包）。
+func joinLines(ss []string) string {
+	out := ""
+	for i, s := range ss {
+		if i > 0 {
+			out += "\n  "
+		}
+		out += s
+	}
+	return out
 }
 
 // TestChainSpec_RefusesBadConfig 校验「解不开就拒跑」而不是静默当没有（包注释那条纪律）。
