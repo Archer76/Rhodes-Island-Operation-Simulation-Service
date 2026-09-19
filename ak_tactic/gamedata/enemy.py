@@ -846,6 +846,34 @@ def affinity_of(blackboard: dict, prefix: str = "TotalAttack") -> dict[str, int]
     return out
 
 
+def _load_species() -> dict[str, str]:
+    """从敌人库读「名字 → 种类」。**读不到就返回空字典，不抛异常**。
+
+    只取 `category` 非空的行（1804 行里 649 行有种类）。三个名字列都收作键——
+    PRTS 的 `page` 是页面名、`name` 与 `display_name` 可能带显示差异，收全了
+    命中面更宽；同一个名字先到的先存（同名不同类实测只有 2 例）。
+    """
+    try:
+        from ..db.enemy_api import connect_enemy            # noqa: PLC0415
+        conn = connect_enemy()
+    except Exception:
+        return {}
+    try:
+        rows = conn.execute(
+            "SELECT page, name, display_name, category FROM enemy "
+            "WHERE category IS NOT NULL AND category <> ''").fetchall()
+    except Exception:
+        return {}
+    finally:
+        conn.close()
+    out: dict[str, str] = {}
+    for page, nm, disp, cat in rows:
+        for key in (page, nm, disp):
+            if key:
+                out.setdefault(key, cat)
+    return out
+
+
 class EnemyLibrary:
     """敌人图鉴与属性的统一入口。
 
@@ -858,6 +886,9 @@ class EnemyLibrary:
         self.source = source or GameDataSource()
         self._stats: dict[str, dict[int, EnemyStats]] | None = None
         self._handbook: dict[str, dict] | None = None
+        #: 「名字 → 敌人种类」的惰性索引（来自敌人库 `data/enemydb.sqlite`）。
+        #: 见 `species_of`：这个量不在 gamedata 里。
+        self._species: dict[str, str] | None = None
 
     # ------------------------------------------------------------ 加载
 
@@ -1106,6 +1137,34 @@ class EnemyLibrary:
                 if levels[lv].name:
                     return levels[lv].name
         return enemy_id
+
+    def species_of(self, enemy_id: str) -> str:
+        """敌人的**种类**（PRTS 敌人页那一列「种类」：萨卡兹、化物、感染生物……）。
+
+        这个量**不在 gamedata 里**：`enemy_database.json` 与
+        `enemy_handbook_table.json` 的 `enemyTags` 实测**全空**（2151 + 1754 条无一非空），
+        所以只能从**敌人库** `data/enemydb.sqlite` 的 `enemy.category` 取。
+
+        两库**没有共享 id**：gamedata 用 `enemy_1007_slime` 这种 Key，而 enemydb 的
+        `prts_id` 是 wiki 页号（`860`）——实测按 id join **0 命中**。能对上的是**名字**
+        （gamedata 的 `enemyData.name` ↔ enemydb 的 `page`／`name`／`display_name`）：
+        实测 2151 个敌人里 1875 个（87.2%）能按名字匹配，其中 681 个（31.7%）有非空
+        `category`。同一个游戏里的同一个字符串，不是猜，所以走名字。
+
+        ⚠️ 两条如实记下的边界（见 `docs/uncertainties.md`）：
+
+        * **覆盖率 31.7%**：enemydb 自己的「种类」列就有近七成是空的（源头缺，不是
+          我们没取），所以不是每个敌人都有种类，没有的一律空串。
+        * **同名不同类**：实测只有 2 例（萨卡兹悖谬裂变术师／学徒），这里取先到的一条。
+
+        敌人库不在、表不对、读失败一律返回空串——按种类判的机制于是**不生效**，
+        而不是把整场验证搞崩。
+        """
+        if self._species is None:
+            self._species = _load_species()
+        if not self._species:
+            return ""
+        return self._species.get(self.name(enemy_id), "")
 
     def handbook_entry(self, enemy_id: str) -> dict:
         return self._ensure_handbook().get(enemy_id) or {}
