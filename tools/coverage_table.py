@@ -27,10 +27,24 @@
 `dict_status`（词典分层）、`audit_op_notes`（备注核查）与本工具**共用同一份测量函数**：
 本文件 `import` 它们，而不是各写一遍 grep。所以「锚点/调用点」这类数字在三张表里必然一致。
 
+## 退出码只认**量出列**（2026-09-19 修）
+
+`rc=1` ⇔ 有行的**量出列**（`measured`）是 `⛔`。⚠ 这里曾经数的是**人判列**（`WIRED`），
+而 `WIRED` 的 17 条里没有任何一条以 `⛔` 开头 ⇒ **退出码结构性恒为 0**：
+量出列真出「⛔ 零调用点且无守卫」／「⛔ 锚点失效」也不会红，后面所有判据都会"看起来全绿"
+（本项目最贵的那类错：**判据看不见所断言之物**）。
+修完必须能回答一句「**它红得起来吗**」——`--mutate` 就是那条反向守卫，没有它不算修好。
+
 用法：
     python tools/coverage_table.py                  # 三平面覆盖表
     python tools/coverage_table.py --plane 敌人     # 只看一个平面
+    python tools/coverage_table.py --mutate anchor  # 反向守卫：注入坏锚点 ⇒ 必须 rc=1 并点名
+    python tools/coverage_table.py --mutate zero    # 反向守卫：注入"零调用点且无守卫" ⇒ 必须 rc=1 并点名
     python tools/coverage_table.py --self-test      # 自证：坏锚点与零调用点都必须翻红
+
+⚠ 输出含非 ASCII（`✅`／`⛔`）⇒ **重定向到文件**时 Windows 默认 GBK 编码会在打印第一个
+符号时就抛 `UnicodeEncodeError`（实测 `rc=1`、输出从第 4 行截断）。本工具在 `main()` 入口
+自己 reconfigure 成 UTF-8，**不依赖调用方记得设 `PYTHONIOENCODING`**——默认值比纪律可靠。
 """
 from __future__ import annotations
 
@@ -286,6 +300,70 @@ def assess(row: tuple[str, str, str, str]) -> dict:
             "severity": SEVERITY.get(name, "—"), "kind": KINDS.get(name, "—")}
 
 
+def _force_utf8_stdout() -> None:
+    """把 stdout/stderr 显式设成 UTF-8。
+
+    ⚠ 为什么写进工具而不是留在 README：实测 `python tools/coverage_table.py > out.txt`
+    在 Windows 上 rc=1，前 3 行正常、第 4 行打印 `✅` 时抛
+    `UnicodeEncodeError: 'gbk' codec can't encode character '\\u2705'`。
+    同类工具（`dict_status.py`、`audit_op_notes.py`）同一毛病，实测都是 rc=1。
+    ⇒ 口径：**凡打印非 ASCII 符号的工具，输出重定向时必须 rc=0。**
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")     # type: ignore[union-attr]
+        except Exception:                            # noqa: BLE001  （非 TextIOWrapper 时跳过）
+            pass
+
+
+#: **反向守卫的注入行**——退出码只有在"量出列真的能变红"时才可信，这里就是让它变红。
+#:
+#: 两档对应 `assess()` 里两种 `⛔`：
+#:   · `anchor` —— 锚点指向一个不存在的符号 ⇒ 量出列 `⛔ 锚点失效`（与仓库内容无关，永远可注入）；
+#:   · `zero`   —— 锚点真存在、但**零生产调用点且零守卫提及** ⇒ `⛔ 零调用点且无守卫`。
+#: ⚠ `zero` 那档依赖"仓库里今天恰好有个没人用的符号"（实测 2026-09-19 有 114 个候选，
+#:   其中含 `continue` 这类被 `_BLOCK_MEMBER` 误当 const 块成员的假候选）。所以它
+#:   **运行时复核**：若那个符号被接线/被加守卫了，本守卫**吼出来并 rc=1**（控制组挑错输入
+#:   与判据坏掉是两件事，不许混成一个沉默），维护者换一个没人用的符号即可。
+MUTATIONS: dict[str, tuple[str, str, str, str]] = {
+    # ⚠ 四元组顺序**与 ROWS 一致**：(平面, 名称, 锚点, 后果)。写反了不会报错——
+    #   只会让红行点名时把"平面"和"名字"对调（第一版就这样，输出成「敌人 ⇒ ⛔ 锚点失效」）。
+    "anchor": ("敌人", "合成·坏锚点", "rios-sim/control.go::这个符号不存在_CG反向守卫",
+               "反向守卫用：锚点失效必须在量出列翻红"),
+    "zero": ("敌人", "合成·零调用点无守卫", "rios-sim/control.go::blocksMove",
+             "反向守卫用：零调用点且无守卫必须在量出列翻红"),
+}
+
+
+def mutation_precheck(kind: str) -> tuple[bool, str]:
+    """注入之前先问一句"这条注入真的会红吗"——挑错输入的控制组是空的。"""
+    plane, name, anchor, _ = MUTATIONS[kind]
+    ok, why = anchor_ok(anchor)
+    if kind == "anchor":
+        good = not ok
+        return good, (f"{anchor} 现在确实是坏锚点（{why}）" if good
+                      else f"控制组挑错输入：{anchor} 居然有定义位（{why}）")
+    if not ok:
+        return False, f"控制组挑错输入：{anchor} 没有定义位（{why}）"
+    hits, _how = callers(anchor)
+    g = guards_for(anchor.partition("::")[2])
+    if hits or g:
+        return False, (f"控制组输入已失效：{anchor} 现在有 {len(hits)} 处生产引用 / "
+                       f"{len(g)} 条守卫提及 ⇒ 它不再是「零调用点且无守卫」。"
+                       f"请在 MUTATIONS['zero'] 里换一个没人用的符号。")
+    return True, f"{anchor} 现在真是零调用点（0 处）且零守卫提及"
+
+
+def red_names(assessed: list[dict]) -> list[tuple[str, str, str]]:
+    """**退出码只认这一列**：量出列（`measured`）为 `⛔` 的行。
+
+    ⚠ 不要改回去数 `status`（人判列）：`WIRED` 里没有以 `⛔` 开头的值，
+    数它就等于 rc 恒 0 —— 那正是本次修掉的 bug。
+    """
+    return [(a["name"], a["measured"], a["why"]) for a in assessed
+            if str(a["measured"]).startswith("⛔")]
+
+
 def self_test() -> int:
     """自证：这张表红得起来吗。判据坏掉时必须翻红，而不是继续一片绿。"""
     print("== 自证：判据红得起来吗 ==")
@@ -308,29 +386,52 @@ def self_test() -> int:
     good4 = len(g) > 0
     bad += 0 if good4 else 1
     print(f"  {'✅' if good4 else '⛔'} 冻结应有守卫：{g}")
+    # ★ 退出码的两条：一条证明**红得起来**，一条证明**不是恒非零**（控制组）。
+    #   少了任何一条，"rc 可信"都只是我自己的说法。
+    mutated = [assess(MUTATIONS["anchor"])]
+    got_red = bool(red_names(mutated))
+    bad += 0 if got_red else 1
+    print(f"  {'✅' if got_red else '⛔'} 注入坏锚点后退出码判据必须变红："
+          f"{red_names(mutated) or '（没红 ⇒ 退出码仍然恒 0）'}")
+    clean = red_names([assess(r) for r in ROWS])
+    good6 = not clean
+    bad += 0 if good6 else 1
+    print(f"  {'✅' if good6 else '⛔'} 控制组：不打注入时现有 {len(ROWS)} 行必须没有红行："
+          f"{clean or '（0 行）'}")
     return 1 if bad else 0
 
 
 def main() -> int:
+    _force_utf8_stdout()
     ap = argparse.ArgumentParser(description="干员／敌人／关卡覆盖表")
     ap.add_argument("--plane", choices=["敌人", "干员", "关卡"], help="只看一个平面")
     ap.add_argument("--self-test", action="store_true", help="自证：坏锚点与零调用点必须翻红")
+    ap.add_argument("--mutate", choices=sorted(MUTATIONS),
+                    help="反向守卫：注入一条量出列必定为 ⛔ 的行，退出码必须变非 0 并点名")
     args = ap.parse_args()
 
     if args.self_test:
         return self_test()
 
     rows = [r for r in ROWS if not args.plane or r[0] == args.plane]
+    if args.mutate:
+        # ★ 先验控制组再注入：挑错输入的"绿"与判据坏掉的"绿"长得一模一样。
+        ok, why = mutation_precheck(args.mutate)
+        print(f"== 反向守卫注入 --mutate {args.mutate} ==")
+        print(f"  {'✅' if ok else '⛔'} {why}")
+        print()
+        if not ok:
+            return 1
+        rows = rows + [MUTATIONS[args.mutate]]
+
     print(f"== 覆盖表（{len(rows)} 行；调用点与守卫是量出来的，「后果」一列是人写的断言） ==")
     print()
-    cur, reds = None, 0
-    for row in rows:
-        a = assess(row)
+    assessed = [assess(r) for r in rows]
+    cur = None
+    for a in assessed:
         if a["plane"] != cur:
             cur = a["plane"]
             print(f"── {cur} ──")
-        if a["status"].startswith("⛔"):
-            reds += 1
         files = sorted({str(h[0].relative_to(ROOT)) for h in a["hits"]})
         print(f"  {a['name']}")
         print(f"    内核     {'✅' if a['ok'] else '⛔'} {a['why']}")
@@ -352,8 +453,18 @@ def main() -> int:
             print(f"  ── {sev} ──")
         print(f"    {name:<6} {cnt:<22} {consequence}")
 
+    # ★ 退出码只看**量出列**。这里把红行逐条点名——"哪一行红"必须能从输出里读出来，
+    #   否则 rc=1 只是一声没有内容的警报（下游只能靠翻屏找，等于没报）。
+    reds = red_names(assessed)
+    if reds:
+        print()
+        print(f"== ⛔ 量出列为红的行（{len(reds)} 行；退出码只认这一列） ==")
+        for name, measured, why in reds:
+            print(f"    {name}  ⇒ {measured}")
+            print(f"      {why}")
+
     print()
-    print(f"== 小结：{len(rows)} 行，红 {reds} 行；"
+    print(f"== 小结：{len(rows)} 行，红 {len(reds)} 行；"
           f"「我们没有」{len(UNMODELED_BY_SEVERITY)} 项 ==")
     print("  ⚠ 「已接线」≠「已验证」；「零调用点」读作「这个符号没有生产调用者」，"
           "不读作「机制没落地」。")
