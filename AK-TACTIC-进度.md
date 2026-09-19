@@ -1238,3 +1238,68 @@ from ..battle import talents as _talents         # spec.py 五处
 ① 把 `talents.py` 的那 13 个函数改成从新家 re-export（注意模块级常量的**定义顺序**）；
 ② `spec.py` 改从 `frontend.talent_finders` 取；
 ③ 然后再动 `SpecInputs`——那时导入面只剩 `environment` / `devices` / `sim` 三家。
+
+### 3.46 摘除 battle/ round 16：天赋查找器搬进 frontend/（提交 6782be3）
+
+#### 一、做了什么
+
+`build_spec` 需要"这位干员身上有没有这条天赋"。实测那一片闭包是
+**14 个常量 + 21 个函数、全部无 `self`、无引擎态**，而 `battle/talents.py` 有 1126 行。
+⇒ 整体搬进 `ak_tactic/frontend/talent_finders.py`，`talents.py` 改成 re-export（同一对象）。
+
+| 处 | 改动 |
+|---|---|
+| `frontend/talent_finders.py` | **新增**，289 行，按 AST 行区间从原件原样切（连同前导注释） |
+| `battle/talents.py` | 删掉那 35 个定义，插入转出导入 |
+| `simgo/spec.py` | 5 处 `from ..battle import talents` → `from ..frontend import talent_finders` |
+| `simgo/spec.py::_talent_dodge` | 去掉静默兜底（见下） |
+
+⚠ **为什么不重打**：注释里记的是**为什么这样认**——「青色怒火」只能按天赋名认、
+不能按黑板键名认（它和技能自己的增益在**同名黑板**上完全无法区分）。
+重打代码容易，重打论证不容易。
+
+#### 二、本轮抓到的两个真缺陷
+
+**1. `_talent_dodge` 的静默兜底把 bug 藏起来了**
+
+原写法是一串 `try/except` + `getattr(_talents, "find_damage_block", None)`，取不到就
+`return 0.0, 0.0`。后果不是报错，而是**"这名干员恰好没有天赋闪避"**：
+
+```
+spec.py:793   if talent_phys or talent_arts:        ← 不成立
+spec.py:794       out["talent_dodge_phys"] = ...    ← 两个键静默消失
+```
+
+`plan-hs06` 的判决**一模一样**，只有 `spec_sha` 变了。
+**17 份金标准里它单独变红**，是唯一抓住这件事的判据。已改成直取、取不到就炸。
+
+**2. 生成器的根名字扫描漏了 `getattr` 形态**
+
+第一版只认 `_t.find_x`（属性访问），认不出 `getattr(_t, "find_x", None)`（字符串）。
+`find_damage_block` 因此没被搬走 —— 而正是上面那条兜底把它藏住的。
+两种形态现在都认。清单也不再手写：**从 `spec.py` 的实际用法反推 + 传递闭包**。
+
+#### 三、验证
+
+```
+① 金标准：✅ 17 份与基线逐项一致，spec_sha 逐字相同（4ae2140cd53c / 575b375a270c …）
+② 逐字 A/B：✅ 常量 14 + 函数 21 源码逐字一致；行为层 8 条真天赋无例外
+③ 摘除面：方法调用真正要搬的 **0 项**、可达闭包 0 个函数
+④ 导入面：battle/ 导入 10 处 → **5 处**
+⑤ 全仓自检：通过 **816 项**，无失败
+⑥ 闸门审计：已登记 7 / 未登记 0 / 守卫失效 0
+```
+
+⚠ **A/B 的基线必须取 `git HEAD` 那一版**，不能取工作树里的 `talents.py`：
+搬完之后那里已经没有定义了，拿它比会报 35 项"原件里找不到"——
+**看起来像搬坏了，其实只是基线选错了地方**。
+
+#### 四、剩下的导入面（5 处）
+
+| 目标 | 情况 |
+|---|---|
+| `battle/environment.py` | `mech.py` 用 15 次（`FarmlandSystem`，`farmland_spec` 深读 `params`/`fields`） |
+| `battle/devices.py` | 只要 3 个常量 |
+| `battle/sim.py` | 只要 3 个常量（`PILE_SUMMON_DELAY` 等） |
+
+下一阶段：这 6 个常量先搬；之后再动 `environment`，最后才是 `build_spec` 收 `SpecInputs`。
