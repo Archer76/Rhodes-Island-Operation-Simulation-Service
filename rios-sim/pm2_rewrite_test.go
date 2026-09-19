@@ -15,7 +15,7 @@ import "testing"
 //   - `applied` 标记本身要立住（否则上面两条都只是巧合）。
 func TestEnterPm2RewritesPanelExactlyOnce(t *testing.T) {
 	c := &simCtx{}
-	e := &enemy{spec: Spec{
+	e := &enemy{spec: SpawnSpec{
 		Name: "测试归来", ATK: 100, DEF: 50, RES: 10,
 		Pm2Atk: 0.5, Pm2Def: 0.2, Pm2Res: -30, Pm2Move: 0.25,
 		AttackRange: 1.5,
@@ -52,7 +52,7 @@ func TestEnterPm2RewritesPanelExactlyOnce(t *testing.T) {
 // 少了这条，`pm2_res` 单独有值也会被当成"归来"，把 RES 平白改一次。
 func TestEnterPm2SkipsWhenNoTriggerField(t *testing.T) {
 	c := &simCtx{}
-	e := &enemy{spec: Spec{Name: "测试归来", ATK: 100, RES: 10, Pm2Res: -30}}
+	e := &enemy{spec: SpawnSpec{Name: "测试归来", ATK: 100, RES: 10, Pm2Res: -30}}
 	c.enterPm2(e, 0)
 	if e.pm2Active || e.pm2Applied {
 		t.Fatal("三个触发量全 0 时不该进形态（照原版 4229）")
@@ -65,7 +65,7 @@ func TestEnterPm2SkipsWhenNoTriggerField(t *testing.T) {
 // `pm2_invincible > 0` 单独也能触发形态——它是三个触发量之一（上一条只试了"全 0"）。
 func TestEnterPm2TriggersOnInvincibleAlone(t *testing.T) {
 	c := &simCtx{}
-	e := &enemy{spec: Spec{Name: "测试归来", ATK: 100, RES: 10, Pm2Invincible: 5}}
+	e := &enemy{spec: SpawnSpec{Name: "测试归来", ATK: 100, RES: 10, Pm2Invincible: 5}}
 	c.enterPm2(e, 3.0)
 	if !e.pm2Active {
 		t.Fatal("pm2_invincible>0 应单独触发形态")
