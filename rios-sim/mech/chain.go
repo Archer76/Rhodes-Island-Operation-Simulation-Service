@@ -37,7 +37,7 @@ type ChainSpec struct {
 
 // ErrJumpUndetermined 是「第 3 跳及以后的读法未定」。
 //
-// ★ 它的存在**就是本轮的交付内容之一**：没有读数支撑时，唯一诚实的输出是"未定"，
+// ★ 它的存在**就是本轮的交付内容之一**：没有读数支撑时，唯一诚实的输出是「未定」，
 // 而不是选一个读法先跑起来（`fe63d832`：没有读数就判＝赌读数）。
 var ErrJumpUndetermined = errors.New(
 	"chain: 第 3 跳及以后的读法未定（等比 0.75²=0.5625 vs 等差 1-0.25×2=0.5 在 n=3 分岔，" +
@@ -54,7 +54,7 @@ func (m *chainMech) ID() ID { return "chain" }
 // Spec 供判据与后续接线读取本关规格。
 func (m *chainMech) Spec() ChainSpec { return m.spec }
 
-// newChain 解规格。**解不开就报错（拒跑），不许"解不开就当没有"**（包注释里的那条）。
+// newChain 解规格。**解不开就报错（拒跑），不许「解不开就当没有」**（包注释里的那条）。
 func newChain(cfg json.RawMessage) (Mechanism, error) {
 	if len(cfg) == 0 {
 		return nil, errors.New("chain: 规格为空——本机制不吃默认值，缺规格就是配置错")
@@ -103,7 +103,7 @@ func chainJumpScale(n int, scale float64) (float64, error) {
 
 // chainHealJumps 返回逐跳治疗量（首跳 ＝ base）。
 //
-// 只要 maxTarget > 2 就返回 `ErrJumpUndetermined`——**这是有意的"早阶段大声失败"**：
+// 只要 maxTarget > 2 就返回 `ErrJumpUndetermined`——**这是有意的「早阶段大声失败」**：
 // 乌啾/明椒的特性 max_target 正是 3，所以本骨架**现在跑不了它们**。这是第 3 跳未定的
 // 直接后果，不是缺陷；等读数到位，改的只有这一个函数（出口见 §五）。
 func chainHealJumps(base float64, maxTarget int, scale float64) ([]float64, error) {

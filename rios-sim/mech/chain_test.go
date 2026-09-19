@@ -13,7 +13,7 @@ package mech
 //	          本文件把它**显式登记为绿**，这样将来收紧判据时这条会主动提醒改文档。
 //
 // 数据来源（DB 实测，2026-09-20）：`char_4224_turdus`／`char_4071_peper`／`char_4139_papyrs`
-// 特性黑板 = {"attack@chain.atk_scale": 0.75, "attack@chain.max_target": 3.0}；
+// 特性黑板 = `{"attack@chain.atk_scale": 0.75, "attack@chain.max_target": 3.0}`；
 // 正文「恢复友方单位生命，且会在 3 个友方单位间跳跃，每次跳跃治疗量降低 25%」。
 
 import (
@@ -30,7 +30,7 @@ const (
 )
 
 // assertDecayFirstTwo 是**本判据的唯一断言入口**——判据与反例走同一条路，
-// 这样"能抓住反例"证明的就是这条判据本身，而不是另写的一段代码。
+// 这样「能抓住反例」证明的就是这条判据本身，而不是另写的一段代码。
 func assertDecayFirstTwo(seq []float64, scale float64) error {
 	if len(seq) < 2 {
 		return fmt.Errorf("序列不足两跳（拿到 %d 跳：%v）", len(seq), seq)
@@ -49,7 +49,7 @@ func assertDecayFirstTwo(seq []float64, scale float64) error {
 }
 
 func TestChainJudge_AtkScale_FirstTwoJumps(t *testing.T) {
-	// ── 观察：逐跳治疗量（计数可见——只印一个数就看不出"衰减发生在哪一跳"）
+	// ── 观察：逐跳治疗量（计数可见——只印一个数就看不出「衰减发生在哪一跳」）
 	seq, err := chainHealJumps(chainBase, 2, chainScale)
 	if err != nil {
 		t.Fatalf("两跳调用不该失败：%v", err)
@@ -93,7 +93,7 @@ func TestChainJudge_AtkScale_FirstTwoJumps(t *testing.T) {
 	}
 	t.Logf("合成反例 %d/%d 被抓", caught, len(mutants))
 
-	// ── 已知盲区：显式登记为绿（不是漏网，是"判据按裁定的范围不覆盖它"）
+	// ── 已知盲区：显式登记为绿（不是漏网，是「判据按裁定的范围不覆盖它」）
 	blind := []float64{100, 75, 75} //: 「每次乘基准」——第 3 跳 75 而非 0.5625×100=56.25
 	if err := assertDecayFirstTwo(blind, chainScale); err != nil {
 		t.Errorf("已知盲区用例应当通过（判据只看前两跳），实际红了：%v\n"+
@@ -129,7 +129,7 @@ func TestChainSpec_RefusesBadConfig(t *testing.T) {
 		t.Fatalf("一条坏规格都没拒 ⇒ 拒跑是空架子")
 	}
 
-	// 正例：真规格必须放行（否则"拒跑"只是把一切都拒了）
+	// 正例：真规格必须放行（否则「拒跑」只是把一切都拒了）
 	m, err := newChain([]byte(`{"max_target":3,"atk_scale":0.75,"atk_scale_2":1.1}`))
 	if err != nil {
 		t.Fatalf("真规格应放行：%v", err)
