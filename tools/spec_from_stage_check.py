@@ -43,11 +43,14 @@ GOLDEN = FIXTURES / "golden_go.json"
 class Probe:
     """在 `_run_other_engine` 那个挂载点上取两份规格。"""
 
-    def __init__(self, *, sensitivity: bool = False, sabotage: str | None = None) -> None:
+    def __init__(self, *, sensitivity: bool = False, sabotage: str | None = None,
+                 env_fallback: bool = False) -> None:
         self.rows: list[dict] = []
         self.sensitivity = sensitivity
         self.sabotage = sabotage
+        self.env_fallback = env_fallback
         self.sens: dict[str, int] = {}
+        self.envfb: dict[str, int] = {}
 
     def hook(self, verifier, sim, plan, stage, schedule, env):
         a = build_spec(SpecInputs.from_sim(sim), allow_devices=True,
@@ -76,11 +79,49 @@ class Probe:
             #: 要么 `build_spec` 是用别的东西算出来的。**两种都必须有人答**。
             #: 这是"判据红得起来吗"的最强形态：不是红一次，而是**逐项红**。
             self.sens = _sensitivity(base, schedule, env, sha_b)
+
+        if self.env_fallback:
+            #: PM 裁定的落点：`env` 缺席时那 5 项必须真的被 `inp` 读到。
+            self.envfb, _ = _env_fallback_check(base, schedule)
         raise SystemExit(0)
 
 
+def _env_fallback_check(base, schedule) -> tuple[dict[str, int], bool]:
+    """**把"这 5 项只在 env 缺席时才生效"从暗含前提变成判据。**
+
+    项目经理裁定：那几项走 `env` 的**不删**，但要把前提测出来。
+    `spec.py:1150-1160` 的原文是：
+
+        if env is None:
+            env = dict(stage_env(inp.stage, environment_difficulty=...))
+            env.update({"fps": int(inp.fps), "speed_scale": float(inp.speed_scale),
+                        "ranged_enemies": bool(inp.ranged_enemies),
+                        "enemy_windup": float(inp.enemy_windup)})
+
+    ⇒ 前提是"`env` 缺席时它们真的被 `inp` 读到"。**谁都没验过这句**。
+    ⚠ 注意收窄：项目里说的"静态 8 项"里，`cost_init` / `cost_max` / `cost_time` / `life`
+    **根本不是 `SpecInputs` 的字段**（23 项里没有）⇒ 真正走 `inp` 的只有 **5 项**：
+    `environment_difficulty`（传给 `stage_env`）与上面 `update` 的 4 项。
+    """
+    import dataclasses
+    r0 = build_spec(base, allow_devices=True, schedule=schedule, env=None)
+    s0 = canonical_sha(r0)
+    names = ("environment_difficulty", "fps", "speed_scale",
+             "ranged_enemies", "enemy_windup")
+    out: dict[str, int] = {}
+    for n in names:
+        tampered = dataclasses.replace(base, **{n: _perturb(getattr(base, n))})
+        try:
+            got = canonical_sha(build_spec(tampered, allow_devices=True,
+                                           schedule=schedule, env=None))
+            out[n] = 1 if got != s0 else 0
+        except Exception:                             # noqa: BLE001
+            out[n] = 2
+    return out, all(v != 0 for v in out.values())
+
+
 def _perturb(value):
-    """把一个字段改成"另一个合法值"。绝不喂不可能的输入（记忆 `6e20b44e`）。"""
+    """把一个字段改成「另一个合法值」。绝不喂不可能的输入（记忆 `6e20b44e`）。"""
     if isinstance(value, bool):
         return not value
     if isinstance(value, (int, float)):
@@ -126,10 +167,19 @@ def main() -> int:
     plans = sorted(FIXTURES.glob("plan-*.json"))
     if only is not None:
         plans = [only]
-    #: (c) 逐字段敏感性：只跑一份就够了（23 个字段 × 每份 = 太贵），
-    #: 默认挑**最小的那份**——字段敏感性是规格的性质，不是某一关的性质。
+    #: (c) 逐字段敏感性：⚠ **至少跑两份夹具**（项目经理 2026-09-19 升为全员纪律）——
+    #: 一份最小、一份**有大出怪表**的。同一套代码下 `snow_freeze` 在无敌人的夹具上判
+    #: "不变"、在有 72 个出怪的夹具上判"会变"；`goal_cells` 更是从"不变"翻成"抛异常"。
+    #: ⇒ **一张只跑了一份夹具的敏感性表，它的"不变"里混着"这个夹具没走到"，两者长得一模一样。**
     if "--sensitivity" in args and only is None:
-        plans = [min(plans, key=lambda p: p.stat().st_size)] if plans else []
+        if not plans:
+            print("  ⚠ out/ 里没有 plan-*.json")
+            return 1
+        small = min(plans, key=lambda p: p.stat().st_size)
+        big = max(plans, key=lambda p: p.stat().st_size)
+        plans = [small] if small == big else [small, big]
+        print(f"  ⚠ 敏感性至少跑两份夹具：最小 {small.name} + 最大 {big.name}"
+              "（只跑一份时「不变」会与「没走到」混淆）")
     if not plans:
         print("  ⚠ out/ 里没有 plan-*.json")
         return 1
@@ -146,14 +196,16 @@ def main() -> int:
     n_same = n_gold = n_tot = 0
     bad: list[str] = []
     sens: dict[str, int] = {}
+    envfb: dict[str, int] = {}
     want_sens = "--sensitivity" in args
+    want_envfb = "--env-fallback" in args
     sabotage = None
     if "--negative-control" in args:
         sabotage = args[args.index("--negative-control") + 1]
     print(f"  {'夹具':<22} {'from_sim':<12} {'from_stage':<12} {'金标准':<12} 判定")
     for path in plans:
         plan = Plan.from_dict(json.loads(path.read_text(encoding="utf-8")))
-        probe = Probe(sensitivity=want_sens, sabotage=sabotage)
+        probe = Probe(sensitivity=want_sens, sabotage=sabotage, env_fallback=want_envfb)
 
         v = Verifier(engine="go")
         #: ⚠ 必须钉 `engine="go"`：默认已是 go，但这条判据要的是"**拿到那台 sim**"，
@@ -190,6 +242,8 @@ def main() -> int:
               f"{(g or '无')[:10]:<12} {verdict}  金标准{gmark}")
         if probe.sens:
             sens = probe.sens
+        if probe.envfb:
+            envfb = probe.envfb
 
     print()
     print(f"  from_sim ≡ from_stage ：{n_same}/{n_tot}")
@@ -226,6 +280,33 @@ def main() -> int:
         if not hot:
             print("  ⛔ **空洞的绿**：没有任何字段能让 sha 变化 ⇒ 这条判据根本没在比规格。")
             return 1
+
+    if envfb:
+        #: ⚠ PM 裁定的落点：**"这 5 项只在 env 缺席时才生效"** 这句暗含前提，从此是被检过的断言。
+        print()
+        print("  `env=None` 时的兜底（`spec.py:1150-1160`）——改这一项，规格 sha 变不变：")
+        hot = sorted(k for k, v in envfb.items() if v == 1)
+        warm = sorted(k for k, v in envfb.items() if v == 2)
+        cold = sorted(k for k, v in envfb.items() if v == 0)
+        print(f"    ✅ 真的从 `inp` 读到 {len(hot)}/{len(envfb)} 项：{hot}")
+        if warm:
+            print(f"    （改了就抛异常 = 被读且不容忍）：{warm}")
+        if cold:
+            print(f"    ⚠ 未能证明 {cold} 在 `env` 缺席时由 `inp` 供上。")
+            print("       两种成因**必须分开**（本会话栽过同型）：")
+            print("       ① **没被读**——真前提不成立；")
+            print("       ② **被读了但这一步是空操作**——例如 `environment_difficulty`：")
+            print("          `spec.py:1153` 确实把它传给了 `stage_env`，但实测换值后")
+            print("          `stage_env` 的输出**一字不变**（这些关卡只有 NORMAL 一档）")
+            print("          ⇒ 不是没送，是**这一关用不到**。")
+            print("       ⚠ 分辨法：给消费者装**计数器 + 哨兵返回值**，别只看 sha。")
+        if cold or len(hot) + len(warm) != len(envfb):
+            print("  ⚠ `env=None` 兜底前提**未对全部项证明**——这是发现，逐项归因，")
+            print("    但**不要**据此改结构（PM 裁定：收尾期登记事实、不改结构）。")
+            return 1
+        print("  ✅ 前提成立：`env` 缺席时这 5 项确实由 `inp` 供上。")
+        print("     ⚠ 收窄一句：项目里说的「静态 8 项」中，`cost_init`/`cost_max`/`cost_time`/`life`")
+        print("       **不是 `SpecInputs` 的字段**（23 项里没有）⇒ 真正走 `inp` 的只有这 5 项。")
 
     control_ineffective = (sabotage is not None and not bad)
     if control_ineffective:
