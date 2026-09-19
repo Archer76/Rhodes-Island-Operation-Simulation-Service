@@ -665,6 +665,103 @@ def roster_identity_item(path: Path | str | None = None,
             "note": ""}
 
 
+#: **输入身份登记处**：`sha16` ＋ 来源约定（命令/路径/权威）。写在 `docs/`、**不写进 `fixtures/`**
+#: （PM 2026-09-20 00:29 裁定：森空岛名册是博士自己的账号数据，**实物不入库**，但身份要能核）。
+#: 登记表里那一块是 `key = value` 行，**机器可读**；判据读不到登记就报缺口，不猜。
+IDENTITY_DOC = ROOT / "docs" / "input-identities.md"
+IDENTITY_BLOCK = "identity"
+SKLAND_GLOB = "data/skland/roster_*.json"
+
+
+def load_input_identities() -> dict:
+    """读 `docs/input-identities.md` 里 ```identity 块内的 `key = value`（机器可读的那一块）。"""
+    if not IDENTITY_DOC.exists():
+        return {}
+    txt = IDENTITY_DOC.read_text(encoding="utf-8")
+    m = re.search(rf"```{IDENTITY_BLOCK}\n(.*?)```", txt, re.S)
+    if not m:
+        return {}
+    out: dict = {}
+    for ln in m.group(1).splitlines():
+        ln = ln.strip()
+        if not ln or ln.startswith("#") or "=" not in ln:
+            continue
+        k, _, v = ln.partition("=")
+        out[k.strip()] = v.strip()
+    return out
+
+
+def skland_identity_item(paths: list[Path] | None = None,
+                         expected: str | None = None) -> dict:
+    """**森空岛名册身份**（`data/skland/roster_*.json`）：在不在、对不对，**分开报**。
+
+    PM 2026-09-20 00:29 裁定的三态（缺一不可）：
+      * **"输入不在" ⇒ 明确报"未跑＋原因"**——它是账号导出、**不入库**（隐私口径），
+        在别人机器上不在场是**常态**，所以**不许算红**，但也**绝不许退化成"通过/跳过"**；
+      * **"输入在但换了" ⇒ 红**（sha16 与登记值不等）；
+      * 登记值本身缺失（实物在场却没登记）⇒ **红**——那是**我方文件**的缺陷（`docs/input-identities.md`）。
+    """
+    exp = expected if expected is not None else load_input_identities().get("skland_roster_sha16")
+    reg = load_input_identities()
+    if paths is None:
+        paths = sorted(ROOT.glob(SKLAND_GLOB))
+    src = reg.get("skland_roster_source", "（未登记来源约定）")
+    measured = {"glob": SKLAND_GLOB, "glob_n": len(paths),
+                "files": [str(p) for p in paths], "expected_sha16": exp,
+                "registry": str(IDENTITY_DOC), "source_convention": src}
+    judge = ("① 实物不在 ⇒ **未跑＋原因**（账号导出不入库，不在场是常态，不计红也不许记成通过）；"
+             "② 实物在而 sha16 ≠ 登记值 ⇒ **红**（换了输入就是换了口径）；"
+             "③ 实物在而登记缺失 ⇒ **红**（登记处是我方文件，缺项是缺陷）")
+    if not paths:
+        return {"key": "skland_identity", "name": "森空岛名册身份（输入实物 sha16 == 登记值）",
+                "status": NORUN, "seconds": 0.0, "measured": measured, "blocking": False,
+                "judge": judge,
+                "note": f"**输入不在场**（缺口，不计入判定）：`{SKLAND_GLOB}` 下没有文件。"
+                        f"它是账号导出、不入库 ⇒ 别人机器上不在场是常态。取回：{src}"}
+    if not exp or exp in ("未登记", "(未登记)"):
+        return {"key": "skland_identity", "name": "森空岛名册身份（输入实物 sha16 == 登记值）",
+                "status": FAIL, "seconds": 0.0, "measured": measured, "blocking": True,
+                "judge": judge,
+                "note": f"**登记缺失**（缺口）：实物在场（{len(paths)} 份）而 `{IDENTITY_DOC.name}` "
+                        f"里没有 `skland_roster_sha16` ⇒ 无法断言输入身份。"
+                        f"登记命令：`python tools/acceptance.py --register-roster`"}
+    got = {p.name: (sha256_file(p) or "")[:16] for p in paths}
+    measured["got_sha16"] = got
+    bad = {n: h for n, h in got.items() if h != exp}
+    if bad:
+        return {"key": "skland_identity", "name": "森空岛名册身份（输入实物 sha16 == 登记值）",
+                "status": FAIL, "seconds": 0.0, "measured": measured, "blocking": True,
+                "judge": judge,
+                "note": f"**输入在但换了**（结论）：{bad} ≠ 登记值 {exp}"
+                        f" ⇒ 换了名册就是换了口径，**数字与基线不可比**"}
+    return {"key": "skland_identity", "name": "森空岛名册身份（输入实物 sha16 == 登记值）",
+            "status": PASS, "seconds": 0.0, "measured": measured, "blocking": True,
+            "judge": judge,
+            "note": ""}
+
+
+def register_roster_identity() -> int:
+    """把当场的实物 sha16 写进登记表（**只写 `docs/`，不碰实物、不进 `fixtures/`**）。"""
+    paths = sorted(ROOT.glob(SKLAND_GLOB))
+    if not paths:
+        print(f"⛔ 实物不在场（`{SKLAND_GLOB}` 为空）⇒ **没有可登记的值**。"
+              f"登记需要一个在场值，不能凭空写一个数。")
+        return 2
+    got = {p.name: (sha256_file(p) or "")[:16] for p in paths}
+    vals = sorted(set(got.values()))
+    if len(vals) != 1:
+        print(f"⛔ 实物不唯一（{got}）⇒ 不登记：登记值必须唯一，否则判据没有意义。")
+        return 3
+    txt = IDENTITY_DOC.read_text(encoding="utf-8") if IDENTITY_DOC.exists() else ""
+    new, n = re.subn(r"(?m)^skland_roster_sha16\s*=\s*.*$", f"skland_roster_sha16 = {vals[0]}", txt)
+    if n == 0:
+        print(f"⛔ 登记表里没有 `skland_roster_sha16` 那一行（{IDENTITY_DOC}）⇒ 不擅自新增，先补表。")
+        return 4
+    IDENTITY_DOC.write_text(new, encoding="utf-8")
+    print(f"✅ 已登记：skland_roster_sha16 = {vals[0]}（{len(paths)} 份实物，{got}）")
+    return 0
+
+
 def guard_new_items(exe: str | None = None) -> int:
     """两条新判据的**反向守卫**：逐条人为破坏 ⇒ **必须红，且红得指得准**。
 
@@ -783,8 +880,41 @@ def guard_new_items(exe: str | None = None) -> int:
             print(f"  [两态可分] 「不在」与「不对」措辞不同：{'✅ 分开报' if distinct else '❌ 混成一态'}")
     finally:
         _sh.rmtree(tmpd2, ignore_errors=True)
+    print("【反向守卫 4/4】skland_identity：三态**全测**——在场且对⇒绿／在场但换了⇒红／不在⇒未跑（≠通过）")
+    #: ⚠ 这条守卫**自带夹具**：真名册（`data/skland/roster_*.json`）是账号导出、**不入库**，
+    #: 本机**不在场是常态** ⇒ 守卫**不许依赖它存在**（否则守卫自己会退化成"找不到"）。
+    #: 三态逐条断言，其中第 ③ 态要断言的正是 PM 那句：**"不在"绝不许退化成"通过/跳过"**。
+    tmpd3 = Path(tempfile.mkdtemp(prefix="ak-skland-"))
+    try:
+        real = tmpd3 / "roster_fixture.json"
+        real.write_text(json.dumps({"uid": "fixture", "opers": [{"charId": "char_103_angel"}]},
+                                   ensure_ascii=False), encoding="utf-8")
+        own = (sha256_file(real) or "")[:16]
+        it_ok = skland_identity_item(paths=[real], expected=own)
+        ok_ok = it_ok["status"] == PASS
+        bad += 0 if ok_ok else 1
+        print(f"  [在场且对] ⇒ {it_ok['status']}　sha16={own}　⇒ {'✅ 该绿就绿' if ok_ok else '❌ 控制组没绿'}")
+        it_ch = skland_identity_item(paths=[real], expected="0" * 16)
+        ok_ch = it_ch["status"] == FAIL
+        bad += 0 if ok_ch else 1
+        print(f"  [在场但换了] ⇒ {it_ch['status']}　{it_ch['note'][:70]}")
+        print(f"      ⇒ {'✅ 红得起来（换了输入＝换了口径）' if ok_ch else '❌ 没红'}")
+        it_no = skland_identity_item(paths=[], expected=own)
+        ok_no = it_no["status"] == NORUN and "不在场" in it_no["note"] and \
+            not it_no.get("blocking", True)
+        bad += 0 if ok_no else 1
+        print(f"  [不在场] ⇒ {it_no['status']}（blocking={it_no.get('blocking')}）"
+              f"　{it_no['note'][:66]}")
+        print(f"      ⇒ {'✅ 未跑＋原因，且不计红——但它不是「通过」' if ok_no else '❌ 退化成了通过/跳过'}")
+        it_reg = skland_identity_item(paths=[real], expected="未登记")
+        ok_reg = it_reg["status"] == FAIL and "登记缺失" in it_reg["note"]
+        bad += 0 if ok_reg else 1
+        print(f"  [在场但登记缺失] ⇒ {it_reg['status']}　{it_reg['note'][:66]}")
+        print(f"      ⇒ {'✅ 红得起来（登记处是我方文件）' if ok_reg else '❌ 没红'}")
+    finally:
+        _sh.rmtree(tmpd3, ignore_errors=True)
     print("=" * 88)
-    print("✅ 三条守卫都成立" if bad == 0 else f"❌ {bad} 条不成立")
+    print("✅ 四条守卫都成立" if bad == 0 else f"❌ {bad} 条不成立")
     return 0 if bad == 0 else 1
 
 
@@ -1075,9 +1205,21 @@ def write_report(items: list[dict], drops: list[dict], changes: list[dict],
         elif it["key"] == "parity":
             cur = "退役（仅登记）"
             prev = "—"
-        else:
-            cur = "见下方未跑说明"
+        elif it["key"] in ("roster_identity", "skland_identity"):
+            cur = (f"实物 `{Path(str(m.get('path'))).name}`　sha16={fmt(m.get('got_sha16'))}"
+                   f"　登记值={('、'.join(m.get('recorded_sha16') or []) or fmt(m.get('expected_sha16')))}")
             prev = "—"
+        else:
+            #: ⚠ 原文这里写死"见下方未跑说明"——于是**通过**的项（如 `exe_staleness`、`fresh_checkout_build`）
+            #: 在报告里带着一句"未跑说明"，**文字与状态互相打脸**。缺渲染分支不等于"未跑"。
+            #: 改成：把 `measured` 里的标量照原样铺出来（宁可是原始键值，也不要说一句假话）。
+            _scal = [(k, v) for k, v in m.items()
+                     if isinstance(v, (str, int, float, bool)) and v not in (None, "", [])]
+            cur = "；".join(f"{k}={v}" for k, v in _scal[:4]) if _scal else "（本项无标量实测栏）"
+            prev = "—"
+        if it["status"] == NORUN and it["key"] in ("battle", "verify", "roster_identity",
+                                                   "skland_identity"):
+            cur = "未跑：" + (it["note"].split("；")[0][:90] or "（无说明）")
         _st = it["status"] + ("（**不计入判定**）" if not it.get("counted", True) else "")
         L.append(f"| {i} | {it['name']} | {_st} | {cur} | {prev} | {it['judge']} |")
     L.append("")
@@ -1234,8 +1376,11 @@ def main() -> int:
                     help="闸门放行抽查只跑前 N 份计划（默认全部）")
     ap.add_argument("--update-baseline", action="store_true")
     ap.add_argument("--guard-new-items", action="store_true",
-                    help="只跑两条新判据（fresh_checkout_build / exe_staleness）的反向守卫，"
-                         "不跑整道门")
+                    help="跑四条新判据（fresh_checkout_build / exe_staleness / roster_identity / "
+                         "skland_identity）的反向守卫，不跑整道门")
+    ap.add_argument("--register-roster", action="store_true",
+                    help="把当场的森空岛名册 sha16 写进 docs/input-identities.md 的登记块"
+                         "（需要一个在场值；实物不在场时拒绝登记，不凭空写数）")
     ap.add_argument("--force-baseline", action="store_true",
                     help="这一轮不是全绿时也强行覆盖基线（会留下 history 记录）")
     ap.add_argument("--by", default=SESSION)
@@ -1244,6 +1389,9 @@ def main() -> int:
 
     if args.guard_new_items:
         return guard_new_items(None)
+
+    if getattr(args, "register_roster", False):
+        return register_roster_identity()
 
     t0 = time.time()
     fp0 = fingerprint()
@@ -1278,6 +1426,15 @@ def main() -> int:
     _m = it["measured"]
     print(f"[1c] 名册身份：{it['status']}　实物 {_m.get('path')}"
           f"　sha16={_m.get('got_sha16')}　基线记录={_m.get('expected_sha16')}"
+          + (f"　{it['note']}" if it["note"] else ""))
+    #: PM 2026-09-20 00:29 裁定：森空岛名册**登记身份、不入库**，三态（不在⇒未跑＋原因／在但换了⇒红／
+    #: 不许退化成跳过）。它与 check_verify 是两份不同的输入，却同一个病：**只住在易失目录里**。
+    it = skland_identity_item()
+    items.append(it)
+    _m = it["measured"]
+    print(f"[1d] 森空岛名册身份：{it['status']}（{'不计入判定' if not it.get('blocking', True) else '计入判定'}）"
+          f"　实物 {_m.get('glob_n')} 份　登记值={_m.get('expected_sha16')}"
+          f"　实物 sha16={_m.get('got_sha16') or '—'}"
           + (f"　{it['note']}" if it["note"] else ""))
     #: PM 2026-09-19 23:27 新增：**仪器新鲜度**——"我手里的尺子是不是我造的那把"
     it = exe_staleness_item(exe, (ins.get("measured") or {}).get("src_sig"))
