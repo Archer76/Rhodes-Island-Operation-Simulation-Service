@@ -400,6 +400,17 @@ def main() -> int:
     from ak_tactic.simgo import find_binary
     from ak_tactic.simgo.client import Simgo, compare
     import golden_go as G
+    from engine_pin import EngineBuildError, ensure_pinned
+
+    #: ⚠ **自建自钉**：`find_binary()` 在 `52c89a4` 之后未设 `RIOS_SIM_BIN` 即抛。
+    #: 在它之前，未钉时台账会把 `str(find_binary())` 记成字符串 `"None"`——**那是账本里的一笔假账**
+    #: （栏位名像路径、值是 "None"，读的人会以为"这台机器上的引擎在 None 路径"）。
+    #: 本工具要跑 Go 读数，就必须自己造一枚再钉住；构建失败**直接失败**，绝不退回既有 exe。
+    try:
+        exe, exe_sha_now, src_sig = ensure_pinned()
+    except EngineBuildError as e:
+        print(f"⛔ {e}")
+        return 3
 
     # ⚠ 名册是**别名**：磁盘上叫 `roster_max_modelled.json`，而且可能落在姊妹
     # checkout（`ak-tactic-head/out/`）里。复用 golden_go 的查找（它踩过这个坑）。
@@ -472,11 +483,23 @@ def main() -> int:
         exe_size = exe_path.stat().st_size
     except Exception:                                            # noqa: BLE001
         exe_sha, exe_size = "未知", 0
+    #: **基线自身记着的那枚仪器**：这一栏能被人看懂，全靠"基线那枚是哪个"写在旁边
+    base_engine = {}
+    try:
+        _b = json.loads((ROOT / "fixtures" / "golden_go.json").read_text(encoding="utf-8"))
+        _one = next(iter(_b.values()))
+        base_engine = {"engine_bin": _one.get("engine_bin"),
+                       "engine_bin_sha16": _one.get("engine_bin_sha16"),
+                       "engine_bin_mtime": _one.get("engine_bin_mtime"),
+                       "roster_sha16": _one.get("roster_sha16")}
+    except Exception:                                            # noqa: BLE001
+        pass
     dirty = source_dirty()
     Path(args.json).write_text(json.dumps(
         {"at": time.strftime("%Y-%m-%d %H:%M:%S"),
          "engine_env_bin": str(exe_path), "engine_env_bin_sha16": exe_sha,
          "engine_env_bin_bytes": exe_size, "source_dirty": dirty,
+         "engine_source_sig": src_sig, "baseline_engine": base_engine,
          "tree": str(ROOT), "tree_head": tree_head(ROOT / "out" / "x.json"),
          "counts": {"ok": len(okay), "drift": len(drift), "gate": len(gate),
                     "norun": len(norun),
@@ -508,6 +531,14 @@ def write_md(recs: list[dict], path: Path, exe, exe_sha: str = "?", exe_size: in
              f"**`{exe_sha}`**、{exe_size:,} 字节（未设变量的轮次一律标「二进制身份未知」，"
              f"不得与本表混用）")
     L.append(f"  - **来源三件套**：每条带 `plan_path`（绝对）／所属检出树／该树 HEAD，见下一节")
+    L.append("  - **基线自身记着的那枚仪器**：`fixtures/golden_go.json` 每条都带 "
+             "`engine_bin` / `engine_bin_sha16` / `engine_bin_mtime` / `roster_sha16`"
+             "（**与基线记录不同时只报不判**：那是仪器差，不是模型漂移；"
+             "同一份源码两次构建哈希就不同 ⇒ `sha16` 只能证明「是不是那一次构建」，"
+             "源码身份要看 `source_sig`）")
+    L.append("  - **留证仪器（历史读数用）**：身份与它复现的读数**唯一登记处**＝"
+             "`tools/guard_engine_bin.py::LEGACY_INSTRUMENTS`（入库、可 diff、随守卫逐位核对）；"
+             "本表**只放指针不复制数字**——两处各写一份，一改就对不上")
     L.append(f"  - **`source_dirty`**：本轮 **{dirty}** 条未提交改动"
              f"（实测同一棵树在两次运行之间从 60 变 61 ⇒ **本表只对当时那份工作树成立，"
              f"不对任何提交成立**）")

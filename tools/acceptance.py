@@ -66,6 +66,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools"
 OUT = ROOT / "out" / "acceptance"
+GIT = "git"
 LOGS = OUT / "logs"
 REPORT = ROOT / "docs" / "acceptance-report.md"
 BASELINE = ROOT / "docs" / "acceptance-baseline.json"
@@ -443,7 +444,10 @@ TRACEBACK = re.compile(r"^(?P<kind>\w*(?:Error|Exception)):\s*(?P<msg>.+)$", re.
 
 
 def water_item(key: str, name: str, script: str, baseline_key: str,
-               timeout: int = 3600) -> dict:
+               timeout: int = 3600, counted: bool = True) -> dict:
+    """`counted=False` ⇒ **只跑不判**：照跑、照打印、照进报告，但**不进通过/失败/未跑计数**，
+    也不参与 rc 与水位下降判定（`check_battle` 用：它测的是**已退出产品路径的原版引擎自身**，
+    留痕有价值、当判据会被误读成产品的绿——PM 2026-09-19 裁定）。"""
     r = run([sys.executable, str(TOOLS / script)], timeout=timeout)
     r["cmd"] = ["python", f"tools/{script}"]
     log_raw(key, r)
@@ -466,13 +470,215 @@ def water_item(key: str, name: str, script: str, baseline_key: str,
     return {"key": key, "name": name, "status": status, "measured": measured,
             "seconds": round(r["seconds"], 1),
             "judge": "套件全过（无失败项），且项数不低于基线",
-            "note": note, "_baseline_key": baseline_key}
+            "note": note, "_baseline_key": baseline_key, "counted": counted}
 
 
 # ---------------------------------------------------------------- 第 5 项：闸门盲区审计
 
 AUDIT_LINE = re.compile(r"已登记且守卫成立：(\d+) 条；\*\*未登记：(\d+)\*\*；"
                         r"\*\*守卫失效：(\d+)\*\*")
+
+
+def fresh_checkout_item(guard: bool = False) -> dict:
+    """**从 HEAD 干净解出一棵树** → `go build ./...` + `go test ./...` 必须 rc=0。
+
+    为什么必须有这一条：`rios-sim.exe` 在 `.gitignore` 里，**各会话都从工作树构建** ⇒
+    每一道门看到的永远是一棵**能编译的树**。**HEAD 本身坏掉，没有任何判据看得见**——
+    实测：`mech/snow.go` 引用的 `var Trace` 在 HEAD 的 `mech/mech.go` 里 0 次出现。
+    **这一条看不见的不是一个字段，是整个仓库。**
+
+    反向守卫（`guard=True`）：在这棵临时树里把 `var Trace` 那一行拿走 ⇒ **必须红**。
+    临时树**用完即删**（`git worktree remove --force`，失败也不留）。
+    """
+    import shutil
+    import tempfile
+
+    go = shutil.which("go") or "go"
+    tmp = Path(tempfile.mkdtemp(prefix="ak-fresh-"))
+    tree = tmp / "tree"
+    got: dict = {"guard": guard}
+    try:
+        r = run([GIT, "worktree", "add", "--detach", str(tree), "HEAD"], timeout=300)
+        got["worktree_rc"] = r["rc"]
+        if r["rc"] != 0:
+            return {"key": "fresh", "name": "从 HEAD 干净解树构建（fresh_checkout_build）",
+                    "status": NORUN, "measured": got, "seconds": 0.0, "blocking": True,
+                    "judge": "`git worktree add --detach <tmp> HEAD` → `go build ./...` + "
+                             "`go test ./...` 均 rc=0",
+                    "note": f"解不出树：{(r['err'] or r['out'])[-200:]}"}
+        t0 = time.time()
+        if guard:
+            #: 反向守卫：把 `var Trace` 那行拿走（它就是 snow.go 编不过的原因）
+            mech = tree / "rios-sim" / "mech" / "mech.go"
+            if mech.exists():
+                lines = mech.read_text(encoding="utf-8").splitlines(keepends=True)
+                keep = [ln for ln in lines if not ln.lstrip().startswith("var Trace")]
+                got["guard_removed_lines"] = len(lines) - len(keep)
+                mech.write_text("".join(keep), encoding="utf-8")
+        b = run([go, "build", "./..."], cwd=tree / "rios-sim", timeout=1800)
+        got["build_rc"] = b["rc"]
+        got["build_err"] = (b["err"] or "")[-800:]
+        t = None
+        if b["rc"] == 0:
+            t = run([go, "test", "./..."], cwd=tree / "rios-sim", timeout=3600)
+            got["test_rc"] = t["rc"]
+            got["test_err"] = (t["err"] or "")[-800:]
+        else:
+            got["test_rc"] = None
+            got["test_err"] = "build 未过，跳过 test"
+        log_raw("fresh-guard" if guard else "fresh", b if b["rc"] != 0 else (t or b))
+        ok = got["build_rc"] == 0 and got.get("test_rc") == 0
+        msg = (got["build_err"] or got["test_err"] or "").strip().splitlines()
+        status = PASS if ok else FAIL
+        return {"key": "fresh", "name": "从 HEAD 干净解树构建（fresh_checkout_build）",
+                "status": status, "measured": got, "seconds": round(time.time() - t0, 1),
+                "judge": "`git worktree add --detach <tmp> HEAD` → `go build ./...` + "
+                         "`go test ./...` 均 rc=0（**判的是提交，不是工作树**）",
+                "note": "" if ok else (f"build rc={got['build_rc']} / test rc={got.get('test_rc')}；"
+                                       + ("；".join(msg[:3])[:300] if msg else ""))}
+    finally:
+        run([GIT, "worktree", "remove", "--force", str(tree)], timeout=300)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def exe_staleness_item(exe: str | None, src_sig: str | None = None) -> dict:
+    """**判据：任何一次读数，所用 exe 的 mtime 若早于本树最新的 `.go` 源，即红。**
+
+    根因一句话：**`RIOS_SIM_BIN` 未设 ⇒ 静默落到一枚预编译的旧 exe**。实测那次事故里，
+    两份"全绿/一处红"的读数**只差一个环境变量**：共享 exe（构建于 19:08、落后 16 个提交）
+    报 `hsex8_max` 814.0333s/591046.1，当轮私有构建报 221.6667s/282276.8。
+    ⇒ 这条判据看不见的既不是某个字段、也不是整个仓库，而是
+    **「我手里的尺子是不是我造的那把」**。
+
+    四个数一起打印：**exe 路径 / sha16 / mtime / 本树最新 `.go` 的 mtime**。
+    """
+    src = sorted((ROOT / "rios-sim").glob("**/*.go"))
+    newest = max(src, key=lambda p: p.stat().st_mtime) if src else None
+    nm = newest.stat().st_mtime if newest else 0.0
+    cands: list[tuple[str, Path]] = []
+    if exe:
+        cands.append(("本次门读数所用（私有构建）", Path(exe)))
+    envb = (os.environ.get("RIOS_SIM_BIN") or "").strip()
+    if envb and Path(envb).exists():
+        cands.append(("RIOS_SIM_BIN", Path(envb)))
+    shared = ROOT / "rios-sim" / "rios-sim.exe"
+    if shared.exists():
+        cands.append(("**未钉时的默认路径**（共享 exe）", shared))
+    rows, stale = [], []
+    for label, p in cands:
+        try:
+            m = p.stat().st_mtime
+            h = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+        except OSError:
+            rows.append({"label": label, "path": str(p), "error": "读不到"})
+            continue
+        behind = (nm - m) / 60.0
+        row = {"label": label, "path": str(p), "sha16": h,
+               "mtime": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(m)),
+               "behind_min": round(behind, 1), "stale": m < nm}
+        rows.append(row)
+        if row["stale"]:
+            stale.append(row)
+    return {"key": "exe", "name": "仪器新鲜度：所用 exe 不得早于本树最新 `.go`（exe_staleness）",
+            "status": FAIL if stale else PASS,
+            "measured": {"newest_go": newest.name if newest else None,
+                         "newest_go_mtime": time.strftime("%Y-%m-%d %H:%M:%S",
+                                                          time.localtime(nm)) if newest else None,
+                         "rows": rows, "stale_n": len(stale), "source_sig": src_sig},
+            "seconds": 0.0,
+            "judge": "所用 exe 的 mtime **不早于**本树最新 `.go` 源；否则这次的读数**不可归因**"
+                     "（先钉/重建二进制再读红绿）。⚠ `sha16` 只能证明「**是不是那一次构建**」，"
+                     "**不能证明「是哪份源码」**——实测同一份源码两次构建哈希就不同"
+                     "（`b88b28ce6d0ca14f` ↔ `98fe111bce6c4ff0`）；源码身份看 `source_sig`",
+            "note": "" if not stale else "；".join(
+                f"{r['label']} {r['sha16']} 构建于 {r['mtime']}，"
+                f"落后最新 .go（{newest.name} {time.strftime('%H:%M:%S', time.localtime(nm))}）"
+                f"{r['behind_min']} 分钟" for r in stale)}
+
+
+def guard_new_items(exe: str | None = None) -> int:
+    """两条新判据的**反向守卫**：逐条人为破坏 ⇒ **必须红，且红得指得准**。
+
+    * `fresh_checkout_build`：在临时树里把 `var Trace` 那行拿走 ⇒ 必须变红。
+    * `exe_staleness`：`touch` 一个 `.go`（**只改 mtime、一个字节都不改**）⇒ 必须变红
+      **并点名那枚落后 exe**；跑完把 mtime 还原。
+    """
+    bad = 0
+    print("=" * 88)
+    print("【反向守卫 1/2】fresh_checkout_build：临时树里拿掉 `var Trace` ⇒ 必须红")
+    it = fresh_checkout_item(guard=True)
+    ok1 = it["status"] == FAIL
+    bad += 0 if ok1 else 1
+    print(f"  {it['status']}　build rc={it['measured'].get('build_rc')}　"
+          f"拿掉行数={it['measured'].get('guard_removed_lines')}")
+    print(f"  ⇒ {'✅ 红得起来' if ok1 else '❌ **没红**——这条判据是空的'}")
+    if it["note"]:
+        print(f"  错误首行：{[ln for ln in it['note'].split('；') if ln][:2]}")
+
+    print("【反向守卫 2/2】exe_staleness：**自带做旧夹具**（不依赖仓库里恰好躺着一枚旧 exe）")
+    #: ⚠ 老写法依赖"共享树里那枚 19:08 的旧 exe 存在"——那枚后来被删了。
+    #: **依赖外部文件存在**的守卫会从"红得起来"退化成"找不到文件"，而**"找不到"会被读成"通过"**
+    #: （PM 与后端2 2026-09-19 23:38 点名）。改成：夹具自己造、路径自己钉，三种情形逐条断言。
+    import shutil as _sh
+    import tempfile
+    tmpd = Path(tempfile.mkdtemp(prefix="ak-stale-"))
+    src_exe = Path(exe) if exe and Path(exe).exists() else None
+    if src_exe is None:
+        _m = sorted((OUT).glob("rios-sim-*.exe"), key=lambda p: p.stat().st_mtime)
+        src_exe = _m[-1] if _m else None
+    if src_exe is None:
+        print("  ⚠ 本机没有可复制的 exe 做夹具 ⇒ 这条守卫**未跑**（不冒充通过）")
+        _sh.rmtree(tmpd, ignore_errors=True)
+        return bad + 1
+    fresh = tmpd / "fixture-fresh.exe"
+    stale = tmpd / "fixture-stale.exe"
+    _sh.copy2(src_exe, fresh)
+    _sh.copy2(src_exe, stale)
+    now = time.time()
+    os.utime(fresh, (now, now))                       # 新的：应与源码齐平
+    os.utime(stale, (now - 3 * 3600, now - 3 * 3600))  # 做旧 3 小时
+    victim_src = sorted((ROOT / "rios-sim").glob("**/*.go"))
+    victim = max(victim_src, key=lambda p: p.stat().st_mtime)
+    st = victim.stat()
+    try:
+        #: 控制组：**夹具本身必须是"不旧"的**，否则下面那条红证明不了任何事
+        it_c = exe_staleness_item(str(fresh))
+        okc = it_c["status"] == PASS
+        bad += 0 if okc else 1
+        print(f"  [控制组] 新夹具、不动 .go ⇒ {it_c['status']}"
+              f"　{'✅ 绿得起来（说明判据不是恒红）' if okc else '❌ 恒红 ⇒ 判据没有分辨力'}")
+        #: 敏感性：同一枚夹具 + touch 一个 .go（内容一字不改）⇒ 必须红并点名**那枚夹具**
+        #: ⚠ 第一版把 .go 的 mtime 也设成同一个 `now`，于是两边**恰好相等** ⇒ 判据（"早于"）
+        #: 正确地不红，而这个**假红**是我自己的守卫写错了（守卫也要有分辨力，不能靠"差不多"）。
+        #: 改成把 .go 的 mtime 明确设成 `now + 60s`：**时间关系确定**，不依赖浮点分辨率。
+        os.utime(victim, (now + 60, now + 60))
+        it_s = exe_staleness_item(str(fresh))
+        named = [r for r in it_s["measured"].get("rows", []) if r.get("stale")]
+        ok_s = it_s["status"] == FAIL and any(str(fresh) == r.get("path") for r in named)
+        bad += 0 if ok_s else 1
+        print(f"  [敏感性] 同一枚夹具 + `touch {victim.name}` ⇒ {it_s['status']}"
+              f"　点名夹具={'✅' if any(str(fresh) == r.get('path') for r in named) else '❌'}"
+              f"　⇒ {'✅ 红得起来且指得准' if ok_s else '❌ 没红/没点名'}")
+        for r in named:
+            print(f"      ⛔ {r['label']}　{r['sha16']}　{r['mtime']}（落后 {r['behind_min']} 分钟）")
+    finally:
+        os.utime(victim, (st.st_atime, st.st_mtime))
+        #: 做旧夹具：**不做 touch 也应该红**（它自己就旧于源码）——这一条不依赖任何仓库状态
+        it_st = exe_staleness_item(str(stale))
+        ok_st = it_st["status"] == FAIL and any(
+            str(stale) == r.get("path") for r in it_st["measured"].get("rows", []) if r.get("stale"))
+        bad += 0 if ok_st else 1
+        print(f"  [做旧夹具本身] {stale.name}（mtime 回拨 3 小时）⇒ {it_st['status']}"
+              f"　{'✅ 旧即红、且点名夹具' if ok_st else '❌ 没红/没点名'}")
+        _sh.rmtree(tmpd, ignore_errors=True)
+        back = victim.stat().st_mtime
+        print(f"  [还原] {victim.name} mtime "
+              f"{'✅ 与起始一致' if abs(back - st.st_mtime) < 1e-6 else '❌ 不一致'}")
+        it3 = exe_staleness_item(exe)
+        print(f"  [还原后复跑] {it3['status']}（应与破坏前一致）")
+    print("=" * 88)
+    print("✅ 两条守卫都成立" if bad == 0 else f"❌ {bad} 条不成立")
+    return 0 if bad == 0 else 1
 
 
 def audit_item() -> dict:
@@ -765,7 +971,8 @@ def write_report(items: list[dict], drops: list[dict], changes: list[dict],
         else:
             cur = "见下方未跑说明"
             prev = "—"
-        L.append(f"| {i} | {it['name']} | {it['status']} | {cur} | {prev} | {it['judge']} |")
+        _st = it["status"] + ("（**不计入判定**）" if not it.get("counted", True) else "")
+        L.append(f"| {i} | {it['name']} | {_st} | {cur} | {prev} | {it['judge']} |")
     L.append("")
     L.append("## 二、仪器身份（先验仪器，再谈结论）")
     L.append("")
@@ -919,11 +1126,17 @@ def main() -> int:
     ap.add_argument("--sample", type=int, default=None,
                     help="闸门放行抽查只跑前 N 份计划（默认全部）")
     ap.add_argument("--update-baseline", action="store_true")
+    ap.add_argument("--guard-new-items", action="store_true",
+                    help="只跑两条新判据（fresh_checkout_build / exe_staleness）的反向守卫，"
+                         "不跑整道门")
     ap.add_argument("--force-baseline", action="store_true",
                     help="这一轮不是全绿时也强行覆盖基线（会留下 history 记录）")
     ap.add_argument("--by", default=SESSION)
     ap.add_argument("--why", default="")
     args = ap.parse_args()
+
+    if args.guard_new_items:
+        return guard_new_items(None)
 
     t0 = time.time()
     fp0 = fingerprint()
@@ -944,6 +1157,18 @@ def main() -> int:
     print(f"[1] 金标准：{it['status']}　一致 {it['measured'].get('consistent')}/"
           f"{it['measured'].get('baseline_plans')}　{it['seconds']:.0f}s"
           + (f"　{it['note']}" if it["note"] else ""))
+    #: PM 2026-09-19 23:27 新增：**仪器新鲜度**——"我手里的尺子是不是我造的那把"
+    it = exe_staleness_item(exe, (ins.get("measured") or {}).get("src_sig"))
+    items.append(it)
+    print(f"[1b] 仪器新鲜度：{it['status']}　本树最新 .go="
+          f"{it['measured'].get('newest_go')} {it['measured'].get('newest_go_mtime')}"
+          f"　源码身份 source_sig={it['measured'].get('source_sig')}")
+    for row in it["measured"].get("rows", []):
+        if "error" in row:
+            print(f"      {row['label']}：读不到 {row['path']}")
+        else:
+            print(f"      {row['label']}　{row['sha16']}　{row['mtime']}"
+                  + (f"　⛔ 落后 {row['behind_min']} 分钟" if row["stale"] else "　✅ 不旧于源码"))
 
     if args.quick:
         items.append({"key": "gate", "name": "闸门放行抽查（go_fallbacks）",
@@ -965,47 +1190,61 @@ def main() -> int:
             #: `check_battle.py` **直接 import `ak_tactic.battle`** 并断言**原版自己的数**
             #: （24 处 `Verifier()` **零 `.run()`** ⇒ 引擎根本不参与）。原版已退出产品路径，
             #: 所以这 816 项的绿**只说明「原版没退化」，不说明 Go 如何**。
-            #: 留作历史水位还是撤下——**等裁定**，我不擅自撤水位。
+            #: **PM 2026-09-19 23:22 裁定「只跑不判」**：打印数、留在报告里、**不进判定**。
             ("battle", "自检 check_battle（**原版引擎自身**的回归套件，已退出产品路径）",
              "check_battle.py", "check_battle_passed"),
             ("verify", "自检 check_verify（验证器，主体＝Go）", "check_verify.py",
              "check_verify_passed")):
-        it = water_item(key, name, script, bkey)
+        it = water_item(key, name, script, bkey, counted=(key != "battle"))
         if key == "battle":
-            it["judge"] = ("原版引擎自身的回归（816 项）；⚠ **不替 Go 背书**——"
-                           "原版已退出基线地位（博士 2026-09-19 裁定）")
+            it["judge"] = ("**本项不计入判定**（PM 2026-09-19 裁定「只跑不判」）：测的是"
+                           "**原版引擎自身**的回归；⚠ **不替 Go 背书**——原版已退出基线地位"
+                           "（博士 2026-09-19 裁定）。留下只为留痕：原版有没有退化仍需看得见")
         items.append(it)
-        print(f"[{len(items) - 1}] {name}：{it['status']}　通过 "
-              f"{it['measured'].get('passed')} 项　{it['seconds']:.0f}s"
+        print(f"[{len(items) - 1}] {name}：{it['status']}"
+              f"{'（本项不计入判定）' if not it.get('counted', True) else ''}"
+              f"　通过 {it['measured'].get('passed')} 项　{it['seconds']:.0f}s"
               + (f"　{it['note']}" if it["note"] else ""))
+
+    it = fresh_checkout_item()
+    items.append(it)
+    print(f"[{len(items) - 1}] 从 HEAD 干净解树构建（fresh_checkout_build）：{it['status']}　"
+          f"build rc={it['measured'].get('build_rc')}　test rc={it['measured'].get('test_rc')}"
+          f"　{it['seconds']:.0f}s" + (f"　{it['note'][:160]}" if it["note"] else ""))
 
     it = audit_item()
     items.append(it)
-    print(f"[5] 闸门盲区审计：{it['status']}　未登记 "
+    print(f"[{len(items) - 1}] 闸门盲区审计：{it['status']}　未登记 "
           f"{it['measured'].get('unregistered')}　守卫失效 "
           f"{it['measured'].get('guard_broken')}　自检="
           f"{it['measured'].get('selftest_ok')}")
 
     it = capability_item()
     items.append(it)
-    print(f"[6] 闸门能力清单：{it['status']}　已读取 {it['measured'].get('read')} / "
+    print(f"[{len(items) - 1}] 闸门能力清单：{it['status']}　已读取 {it['measured'].get('read')} / "
           f"已定义未读 {it['measured'].get('defined_unread')} / "
           f"未送 {it['measured'].get('unsent')}")
 
     it = parity_retired_item()
     items.append(it)
-    print(f"[7] 对拍入口：{it['status']}（已退役，仅登记）")
+    print(f"[{len(items) - 1}] 对拍入口：{it['status']}（已退役，仅登记）")
 
     fp1 = fingerprint()
     base = load_baseline()
     now = current_water(items)
-    drops, changes = compare_water(now, base)
+    drops_all, changes = compare_water(now, base)
+    #: **「只跑不判」的项不进判定**：既不算通过/失败/未跑，也不产生水位下降
+    #: （PM 2026-09-19 裁定：`check_battle` 测的是已退出产品路径的原版引擎）。
+    #: ⚠ 但它**仍然记进基线**（留痕：原版有没有退化要看得见），只是不参与红绿。
+    uncounted = {i["key"] for i in items if not i.get("counted", True)}
+    drops = [d for d in drops_all if d["key"] not in uncounted]
 
     #: ⛔ **基线不许由红的那一轮建立**。本轮实测踩到过：在途重构让金标准瞬时断裂，
     #: 我带着 `--update-baseline` 跑，于是把 `golden_consistent=None` 写成了新基线——
     #: 等于亲手把标准降下来，下一轮反而全绿。基线只能由**全绿**的那一轮覆盖。
-    fails_ = [i for i in items if i["status"] == FAIL]
-    noruns_ = [i for i in items if i["status"] == NORUN and i.get("blocking", True)]
+    fails_ = [i for i in items if i["status"] == FAIL and i.get("counted", True)]
+    noruns_ = [i for i in items if i["status"] == NORUN and i.get("counted", True)
+               and i.get("blocking", True)]
     rc_preview = 1 if (fails_ or drops) else (2 if noruns_ else 0)
     if args.update_baseline:
         if not args.why.strip():
@@ -1021,11 +1260,18 @@ def main() -> int:
 
     rc = write_report(items, drops, changes, base, fp0, fp1, args, time.time() - t0)
     print("=" * 78)
-    fails = [i for i in items if i["status"] == FAIL]
-    noruns = [i for i in items if i["status"] == NORUN and i.get("blocking", True)]
-    print(f"通过 {len(items) - len([i for i in items if i['status'] != PASS])}"
-          f" / 失败 {len(fails)} / 未跑 {len([i for i in items if i['status'] == NORUN])}"
-          f"　退出码 {rc}　总耗时 {(time.time() - t0) / 60:.1f} 分钟")
+    fails = [i for i in items if i["status"] == FAIL and i.get("counted", True)]
+    noruns = [i for i in items if i["status"] == NORUN and i.get("counted", True)
+              and i.get("blocking", True)]
+    counted = [i for i in items if i.get("counted", True)]
+    print(f"通过 {len([i for i in counted if i['status'] == PASS])}"
+          f" / 失败 {len(fails)} / 未跑 {len([i for i in counted if i['status'] == NORUN])}"
+          f"　（**判定项 {len(counted)} 项**）　退出码 {rc}　总耗时 {(time.time() - t0) / 60:.1f} 分钟")
+    if uncounted:
+        for i in items:
+            if i["key"] in uncounted:
+                print(f"⊘ **本项不计入判定**：{i['name']}（跑出 {i['measured'].get('passed')} 项，"
+                      f"仅留痕、不进红绿）")
     if drops:
         print("⛔ 水位下降：" + "；".join(f"{d['key']} {d['was']}→{d['now']}" for d in drops))
     for i in fails:
