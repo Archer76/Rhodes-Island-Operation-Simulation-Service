@@ -124,7 +124,7 @@ def run_python(plan: Plan, roster: Roster, *, max_time: float | None = 900.0,
     """
     frames: list[dict] = []
     attacks: list[dict] = []
-    orig = simmod.BattleSimulator._environment_tick
+    orig = simmod.BattleSimulator._snow_tick
     want = TARGET if target is None else target
 
     #: 每只敌人一个**稳定序号**，用来补上比对键缺的那一半。
@@ -179,7 +179,20 @@ def run_python(plan: Plan, roster: Roster, *, max_time: float | None = 900.0,
             ))
 
     def env(self, dt, t):
-        # 帧首（与 Go 的痕迹点同一时刻）：计时器是**上一帧出手之后**的状态。
+        # ⚠⚠ **观测点必须与 Go 的 POS 痕迹同帧位置，否则比出来的差是"观察点的差"。**
+        #
+        # 实测踩过一次：这里原来挂在 `_environment_tick` 上（原版主循环 **3.7**），
+        # 而 Go 的 POS 痕迹在**敌人推进循环内**（`rios-sim/sim.go:772`），
+        # 它之后才是 `mechanisms.SnowTick`（`:901`）。原版主循环是
+        # `advance`(:2725) → `_snow_tick`(:2737, **3.5**) → … → `_environment_tick`(:2752, **3.7**)。
+        # 于是凡是在 3.2→3.7 之间发生的事（积雪、祝福、气、弹道、锤、p3r、环境）
+        # 都会被读成"差一帧"。`hsex8_max` 上就现了一次：`t=65.8` 原版 hp=3773.6、
+        # Go hp=4400.0，看着像"Go 少挨了 626.4"，其实 Go 的痕迹自己写着
+        # `SNOWENTRY t=65.8000 … dmg=626.4 → hp=3773.600`——**两边都算了**，
+        # 只是我站在积雪**之后**看原版、站在积雪**之前**看 Go。
+        #
+        # 现在改挂 `_snow_tick`（3.5）的**入口**：此时敌人已经推进完、
+        # 积雪伤害还没落，与 Go 的 POS 位置对齐。
         scan(self, t, "loop")
         return orig(self, dt, t)
 
@@ -201,7 +214,9 @@ def run_python(plan: Plan, roster: Roster, *, max_time: float | None = 900.0,
                 ))
         return r
 
-    simmod.BattleSimulator._environment_tick = env
+    #: ⚠ 挂 `_snow_tick`（3.5）而**不是** `_environment_tick`（3.7）：理由见 `env` 上方那段。
+    #: 两者的调用频率都是每帧一次，所以帧数不变；变的只是**站在帧内哪一步看**。
+    simmod.BattleSimulator._snow_tick = env
     simmod.BattleSimulator._enemies_attack = atk
     try:
         from ak_tactic.verify import Verifier
@@ -220,7 +235,7 @@ def run_python(plan: Plan, roster: Roster, *, max_time: float | None = 900.0,
         #: 我这轮先试过转发，实测炸在 `BattleSimulator.__init__` 上，已撤回。
         v = Verifier(engine="python").run(plan, roster=roster)
     finally:
-        simmod.BattleSimulator._environment_tick = orig
+        simmod.BattleSimulator._snow_tick = orig
         simmod.BattleSimulator._enemies_attack = orig_atk
     print(f"[python] {v.kills}杀 {v.leaks}漏 {v.elapsed:.6f}s "
           f"帧记录={len(frames)} 出手={len(attacks)}")
