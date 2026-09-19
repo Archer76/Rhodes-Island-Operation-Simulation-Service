@@ -169,8 +169,83 @@ SpecInputs.from_stage(stage, lib, range_provider, *, env, schedule, switches, ..
 | E 类排程五件套 | ✅ 已读 `verify.py:393-397/465-479/487` |
 | F 类常量 | ✅ 已读 `frontend/inputs.py:112-138` |
 | 死字段 `_goal_cells` | ✅ 已实测 `sim.py` 0 命中；**未**验证是否有别处给 sim 补设该属性 |
-| **端到端"不靠 sim 造出同一份规格"** | ❌ **未做**。本表只是来源盘点，**不是**"已经能断"的证明 |
+| **端到端"不靠 sim 造出同一份规格"** | ✅ **已做**（2026-09-19，`5314067`）。见 §六 |
 
 ⚠ **最后一行是本表的边界**：盘点完来源 ≠ 迁移完成。真正的判据是
 "用 `from_stage` 造出的规格与用 `from_sim` 造出的**逐字节相同**"，
 那要用 17 份金标准做证据（`out/golden_go.json` 的 `spec_sha`）。
+
+---
+
+## 六、`from_stage` 已落地 + 23 项的**消费点与敏感性**（2026-09-19 补）
+
+`SpecInputs.from_stage(...)` 已实现（`ak_tactic/frontend/inputs.py`，提交 `5314067`），
+判据工具 `tools/spec_from_stage_check.py`。
+
+### 6.1 判据结果（三向，全部通过）
+
+```
+from_sim ≡ from_stage ：17/17        from_sim ≡ 金标准 ：17/17
+反向守卫：破坏 max_time / snow_fields / farmland 任一 ⇒ 17 份全部转红
+逐字段敏感性：见下表最后一列
+```
+
+⚠ 比的**不只是**新旧两条路径——还比**金标准里预先落盘的那个 `spec_sha`**。
+只比前两者会漏掉"两边一起错、错得一样"。
+
+### 6.2 逐字段表（23 项）
+
+| 键名 | 类型 | 默认值 | Go 侧消费点 | 改它 `spec_sha` 变吗 |
+|---|---|---|---|---|
+| `stage` | `Any` | — | `spec.py` 15 处 | 跳过（换它等于换一关） |
+| `enemy_at` | `fn?` | `None` | `spec.py:878` | **抛异常**（=被读且不容忍这个值） |
+| `species_provider` | `fn?` | `None` | `spec.py:881` | ⚠ 不变（**待查**，疑走兜底分支） |
+| `range_provider` | `fn?` | `None` | `spec.py:394,697` | **会变** |
+| `fps` | `int` | `30` | `spec.py:1156` | 不变（走 `env`） |
+| `speed_scale` | `float` | `1.0` | `spec.py:1157` | 不变（走 `env`） |
+| `ranged_enemies` | `bool` | `True` | `spec.py:1158` | 不变（走 `env`） |
+| `enemy_windup` | `float` | `0.5` | `spec.py:1159` | 不变（走 `env`） |
+| `environment_difficulty` | `str` | `"NORMAL"` | — | 不变 |
+| `max_time` | `float` | `0.0` | — | **会变** |
+| `devices` | `list` | `[]` | `spec.py:177` | ⚠ 不变（**待查**，疑被装置序列化跳过） |
+| `snow_fields` | `list?` | `None` | `spec.py:168` | **会变** |
+| `farmland` | `Any` | `None` | — | **会变** |
+| `total_attack` | `Any` | `None` | — | **会变** |
+| `deployments` | `list?` | `None` | `spec.py:379` | 不变（显式 `schedule` 在场时是兜底） |
+| `device_deployments` | `list?` | `None` | — | 不变（同上） |
+| `skill_uses` | `list` | `[]` | — | 不变（同上） |
+| `retreats` | `list` | `[]` | — | 不变（同上） |
+| `summon_deployments` | `list` | `[]` | — | 不变（同上） |
+| `team_auras` | `Any` | `None` | — | 不变 |
+| `goal_cells` | `Any` | `None` | `spec.py:405` | 不变（**已知死字段**，见 §三） |
+| `snow_freeze` | `bool` | `True` | — | 不变 |
+| `heal_mode` | `str` | `"range"` | — | 不变 |
+
+### 6.3 ⚠ "不变"**不是**"没用"——至少三类原因，处置各不相同
+
+1. **走另一条路传入**：`fps` / `speed_scale` / `ranged_enemies` / `enemy_windup` /
+   `environment_difficulty` 这 5 项，`build_spec(inp, env=env)` 读的是 **`env`**。
+   ⇒ 在**当前调用形状**（`verify.py` 显式传 `env`）下，`inp` 上这几项是**冗余副本**。
+   ⚠ **但这不等于可以删**：别的调用方可能不传 `env`。**裁定项，未定。**
+2. **只是兜底**：排程五件套——显式 `schedule` 在场时 `spec.py:141` 优先用它（§二 E 类同判）。
+3. **真死字段**：`goal_cells`（§三已记，`_goal_cells` 在原版 `sim.py` 里 0 命中）。
+
+### 6.4 ⚠ 本表**明确不知道**的两件事（不许当已知）
+
+* `devices`：`spec.py:177` 确实读 `inp.devices`，但追加一个裸 `object()` 后 `spec_sha` 未变。
+  疑被装置序列化那一步跳过，**未取证**。
+* `species_provider`：`spec.py:881` 确实读它，但改成 `None` 后 `spec_sha` 未变。
+  疑走了兜底分支，**未取证**。
+
+⚠ 还有一处**没做成的事**：`from_stage` 仍然 `import battle.devices` /
+`battle.environment` / `battle.sim`——它断掉的是"**读一台正在跑的机器**"，
+**不是**"不依赖 `battle/`"。把那三个构造器搬出 `battle/` 是另一件事。
+
+### 6.5 ⚠ 与"基线改用 Go"裁定的关系（2026-09-19 博士裁定）
+
+裁定的含义是"Python 原版**退出基线地位**"，并明确 **`ak_tactic/battle/` 不要删**。
+⇒ 本表的**迁移动机**（摘除依赖）因此**降级**；但 `from_stage` 本身**继续有效**，
+理由与基线是谁无关：它修的是"规格读的是一台**会变的机器**"这个正确性问题
+（`snow_fields` / `team_auras` 开局恒空，正是**闸门盲区**的来源）。
+⚠ 本表里凡出现"切过去 / 迁移完成"的措辞，读作**技术上的等价性证明**，
+**不是**"即将删除 `battle/`"。
