@@ -46,6 +46,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 from ak_tactic.plan import Plan, Roster                      # noqa: E402
 from ak_tactic.simgo import build_spec                       # noqa: E402
 from ak_tactic.verify import Verifier                        # noqa: E402
+from ak_tactic.frontend.inputs import SpecInputs
 
 OUT = ROOT / "out"
 GOLDEN = OUT / "golden_go.json"
@@ -80,7 +81,7 @@ class SpecCapture(Verifier):
         **工具的红被读成代码的红**，正是本项目反复吃亏的那类假信号。
         """
         try:
-            self.spec = build_spec(sim, allow_devices=True)
+            self.spec = build_spec(SpecInputs.from_sim(sim), allow_devices=True)
         except Exception as e:                                # noqa: BLE001
             #: 抄不到不是这一路的事——照实记下，让基类继续把这一局跑完。
             self.spec_error = f"{type(e).__name__}: {e}"

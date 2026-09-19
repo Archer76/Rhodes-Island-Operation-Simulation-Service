@@ -23,6 +23,7 @@ from ak_tactic.battle.unit import OperatorUnit                      # noqa: E402
 from ak_tactic.gamedata import EnemyLibrary, GameDataSource, load_stage  # noqa: E402
 from ak_tactic.operator import OperatorCalculator                   # noqa: E402
 from ak_tactic.simgo import Simgo, build_spec, find_binary          # noqa: E402
+from ak_tactic.frontend.inputs import SpecInputs
 
 STAGES = ["1-7", "2-1", "SR-6", "HS-EX-4"]
 
@@ -89,7 +90,7 @@ def main() -> int:
         runs = []
         for _ in range(5):
             t0 = time.perf_counter()
-            spec = build_spec(spec_sim, stage_label=code, allow_devices=True,
+            spec = build_spec(SpecInputs.from_sim(spec_sim), stage_label=code, allow_devices=True,
                               allow_skills=True)
             runs.append((time.perf_counter() - t0) * 1000)
         build_ms = statistics.median(runs)

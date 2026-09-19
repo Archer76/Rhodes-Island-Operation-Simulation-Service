@@ -51,6 +51,7 @@ from ak_tactic.simgo import build_spec, find_binary            # noqa: E402
 from ak_tactic.simgo.client import Simgo                       # noqa: E402
 from ak_tactic.simgo.verifier import GoVerifier                # noqa: E402
 from ak_tactic.verify import Verifier                          # noqa: E402
+from ak_tactic.frontend.inputs import SpecInputs
 
 
 def resolve(name: str) -> Path:
@@ -93,7 +94,7 @@ class GoCapture(GoVerifier):
         self.held = None
 
     def _run_other_engine(self, *, sim, plan, stage, deployed, title):
-        self.held = (sim, build_spec(sim, allow_devices=True))
+        self.held = (sim, build_spec(SpecInputs.from_sim(sim), allow_devices=True))
         raise SystemExit(0)
 
 

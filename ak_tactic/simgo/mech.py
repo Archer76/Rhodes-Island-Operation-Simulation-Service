@@ -63,7 +63,7 @@ FARMLAND_ID = "huai_shu_li.farmland"
 SNOW_ID = "snow.field"
 
 
-def names_for(sim: Any) -> list[str]:
+def names_for(inp: Any) -> list[str]:
     """这一关需要 Go 侧挂上哪些机制。**由规格生成这一侧自己判**，不由调用方点。
 
     理由：调用方（对拍台/搜索）只知道自己给了什么阵容，不知道这一关地图里有什么；
@@ -71,11 +71,11 @@ def names_for(sim: Any) -> list[str]:
     **Go 侧什么都不做却照样给判决**——正是机制层立规矩要防的那种错。
     """
     out: list[str] = []
-    if getattr(sim, "farmland", None) is not None:
+    if getattr(inp, "farmland", None) is not None:
         out.append(FARMLAND_ID)
     # 积雪：按**排程**判，不按运行期的 `snow_fields`——后者在跑之前恒为空。
     from .spec import snow_spec                              # 循环导入，故延迟
-    if snow_spec(sim):
+    if snow_spec(inp):
         out.append(SNOW_ID)
     return out
 
@@ -177,7 +177,7 @@ UNMODELLED_ENEMY_ABILITIES: dict[str, dict[str, Any]] = {
 }
 
 
-def port_reasons(sim: Any) -> list[str]:
+def port_reasons(inp: Any) -> list[str]:
     """这一关的**关卡机制**里，有哪些是 Go 侧还没接线的？逐条给理由。
 
     粒度是"哪一样东西"而不是"这关不行"：闸门要能指出该补哪一块，否则
@@ -202,7 +202,7 @@ def port_reasons(sim: Any) -> list[str]:
     return []
 
 
-def _spawns_of(sim: Any) -> list[Any]:
+def _spawns_of(inp: Any) -> list[Any]:
     """这一关会出现的每一种敌人（按 `_spawn` 建一次对象，纯读）。
 
     ⚠ **不再走 `sim._spawn`**：那只是"按路线号查表 + 造对象"。
@@ -211,14 +211,14 @@ def _spawns_of(sim: Any) -> list[Any]:
     """
     from . import spec as _spec
 
-    routes = _spec._route_tables(sim.stage)
+    routes = _spec._route_tables(inp.stage)
     out = []
-    for t, sp in sim.stage.timeline():
+    for t, sp in inp.stage.timeline():
         try:
             pts, w, legs = routes.get(sp.route_index, ([], 0.0, []))
             #: 有分段计划时，开头的待命已经是计划里的 wait 段，别再设一遍
             #: （与 `sim._spawn` 同一句判断）。
-            out.append(_spec._view(sim, enemy_id=sp.enemy_id, level=sp.level,
+            out.append(_spec._view(inp, enemy_id=sp.enemy_id, level=sp.level,
                                    route=pts, legs=legs, t=float(t),
                                    wait=0.0 if legs else w))
         except Exception:                                       # noqa: BLE001
@@ -226,8 +226,8 @@ def _spawns_of(sim: Any) -> list[Any]:
     return out
 
 
-def _any_spawn_has(sim: Any, attr: str) -> bool:
-    for e in _spawns_of(sim):
+def _any_spawn_has(inp: Any, attr: str) -> bool:
+    for e in _spawns_of(inp):
         if getattr(e, attr, 0):
             return True
     return False
@@ -241,7 +241,7 @@ def _cells_pairs(cells: Any) -> list[list[int]]:
     return [[int(x), int(y)] for x, y in sorted(cells)]
 
 
-def _pile_device_spec(sim, d) -> dict[str, Any] | None:
+def _pile_device_spec(inp, d) -> dict[str, Any] | None:
     """天桩装置 → **它那条召唤链的四跳模板**（装置 → 甲 → 乙 → 天标）。
 
     四跳里三跳是"谁造谁"，全在原版的代码里、不在正文里猜：
@@ -274,7 +274,7 @@ def _pile_device_spec(sim, d) -> dict[str, Any] | None:
     from . import spec as _spec
 
     try:
-        child_key, _route = pile_spec(sim.stage, d)
+        child_key, _route = pile_spec(inp.stage, d)
     except Exception:                                          # noqa: BLE001
         return None
     if not child_key:
@@ -286,8 +286,8 @@ def _pile_device_spec(sim, d) -> dict[str, Any] | None:
             #: ⚠ 以前是 `sim._build_enemy(key, sim._summon_level(key), ...)`——
             #: 那两个都只是转调新家（`enemy_view` / `summon_level`），
             #: 这里直接调，少经过一层模拟器。
-            return _spec._view(sim, enemy_id=key,
-                               level=summon_level(sim.stage, key),
+            return _spec._view(inp, enemy_id=key,
+                               level=summon_level(inp.stage, key),
                                route=positions, legs=[], t=0.0, wait=0.0)
         except Exception:                                      # noqa: BLE001
             return None
@@ -295,7 +295,7 @@ def _pile_device_spec(sim, d) -> dict[str, Any] | None:
     parent = build(child_key, [(float(cell[0]), float(cell[1]))])
     if parent is None:
         return None
-    pspec = _spec._unit_spec(sim, parent)
+    pspec = _spec._unit_spec(inp, parent)
     pspec["static"] = True
     #: 「不可阻挡」是甲的**常驻天赋**（原版 `sim.py:4637` 的
     #: `child.unblockable = True`，与监测状态无关——注释原文：
@@ -329,15 +329,15 @@ def _pile_device_spec(sim, d) -> dict[str, Any] | None:
     if diver_key:
         diver = build(diver_key, [(float(cell[0]), float(cell[1]))])
         if diver is not None:
-            dspec = _spec._unit_spec(sim, diver)
+            dspec = _spec._unit_spec(inp, diver)
             dspec["static"] = False           # 乙会扑向干员，不是自缚
             dspec["self_bind"] = float(PILE_SELF_BIND)
             dspec["hit_radius"] = 0.5         # 原版"贴到目标格"的判据
-            mark_key = pile_mark_key(sim.stage, diver)
+            mark_key = pile_mark_key(inp.stage, diver)
             if mark_key:
                 mark = build(mark_key, [(float(cell[0]), float(cell[1]))])
                 if mark is not None:
-                    mspec = _spec._unit_spec(sim, mark)
+                    mspec = _spec._unit_spec(inp, mark)
                     mspec["static"] = True
                     mspec["unblockable"] = True
                     mspec["attach_damage"] = float(
@@ -357,14 +357,14 @@ def _pile_device_spec(sim, d) -> dict[str, Any] | None:
     }
 
 
-def farmland_spec(sim: Any) -> dict[str, Any] | None:
+def farmland_spec(inp: Any) -> dict[str, Any] | None:
     """从**当前**模拟器状态抽一份田地规格；这一关没有环境系统则返回 None。
 
     取的是"此刻"的状态，所以调用时机是**开局初始化之后**（预置的阻流阀
     已经在 `BattleSimulator.__init__` 里断过田了）。若在别处调用，
     拿到的是那一刻的分组，这一点写在返回值里（`groups` 是当前分组）。
     """
-    fs = getattr(sim, "farmland", None)
+    fs = getattr(inp, "farmland", None)
     if fs is None:
         return None
     p = fs.params
@@ -378,7 +378,7 @@ def farmland_spec(sim: Any) -> dict[str, Any] | None:
             "cache": float(f.cache),
         })
     devices = []
-    for d in getattr(sim, "_devices", None) or []:
+    for d in inp.devices or []:
         kind = kind_of(getattr(d, "key", None))
         # 运行期真的要动的装置才送。
         #
@@ -390,7 +390,7 @@ def farmland_spec(sim: Any) -> dict[str, Any] | None:
         #    由对拍台的装置证据控制（只关 `_device_tick`／`_pile_tick` 再看判决）负责，
         #    证据不成立时闸门整关拒跑——不会静默少算。
         if kind == "pile":
-            one = _pile_device_spec(sim, d)
+            one = _pile_device_spec(inp, d)
             if one is not None:
                 devices.append(one)
             continue

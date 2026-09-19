@@ -32,6 +32,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from ak_tactic.battle import environment as env     # noqa: E402
 from ak_tactic.simgo import mech                    # noqa: E402
+from ak_tactic.frontend.inputs import SpecInputs
 
 OUT = ROOT / "rios-sim" / "mech" / "farmland_golden_test.go"
 
@@ -324,7 +325,7 @@ func sigKeys(m map[string][3]float64) []string {
 
 def main() -> int:
     fs = build()
-    spec = mech.farmland_spec(_FakeSim(fs))
+    spec = mech.farmland_spec(SpecInputs.from_sim(_FakeSim(fs)))
     steps = run()
     spec_json = json.dumps(spec, ensure_ascii=False, separators=(",", ":"))
     steps_json = json.dumps(steps, ensure_ascii=False, separators=(",", ":"))

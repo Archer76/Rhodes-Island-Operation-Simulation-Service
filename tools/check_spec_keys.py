@@ -44,6 +44,7 @@ if str(ROOT) not in sys.path:
 from ak_tactic.gamedata import EnemyLibrary, GameDataSource, load_stage   # noqa: E402
 from ak_tactic.battle.sim import BattleSimulator                          # noqa: E402
 from ak_tactic.simgo import build_spec                                    # noqa: E402
+from ak_tactic.frontend.inputs import SpecInputs
 
 #: 规格里会出现、但**不是**结构体字段的键：机制名（`mech.Load` 按名字取规格）。
 ALLOWED = {"huai_shu_li.farmland"}
@@ -135,7 +136,7 @@ def main() -> int:
             sim = C.BattleSimulator(stage, enemy_at=C.lib_get(stage))
             for d in C.plan_for(sim, stage, squad, C.CALC):
                 sim.plan(d)
-            spec = build_spec(sim, allow_devices=True)
+            spec = build_spec(SpecInputs.from_sim(sim), allow_devices=True)
         except Exception as exc:                                  # noqa: BLE001
             print(f"⊘ {code}：建规格失败（{type(exc).__name__}: {exc}）——跳过")
             continue
