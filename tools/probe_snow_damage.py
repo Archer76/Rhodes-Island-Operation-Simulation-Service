@@ -48,8 +48,10 @@ class Thief(GoVerifier):
         super().__init__(*a, **kw)
         self.held = None
 
-    def _run_other_engine(self, *, sim, plan, stage, deployed, title):
-        self.held = (sim, build_spec(SpecInputs.from_sim(sim), allow_devices=True))
+    def _run_other_engine(self, *, sim, plan, stage, deployed, title,
+                          schedule=None, env=None):
+        self.held = (sim, build_spec(SpecInputs.from_sim(sim), allow_devices=True,
+                                     schedule=schedule, env=env))
         raise SystemExit(0)
 
 
@@ -60,7 +62,8 @@ class PyProbe(Verifier):
         super().__init__(*a, **kw)
         self.sim = None
 
-    def _run_other_engine(self, *, sim, plan, stage, deployed, title):
+    def _run_other_engine(self, *, sim, plan, stage, deployed, title,
+                          schedule=None, env=None):
         self.sim = sim
         res = sim.run(max_time=900.0)
         self.res = res

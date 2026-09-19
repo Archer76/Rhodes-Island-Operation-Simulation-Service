@@ -55,7 +55,8 @@ class Thief(GoVerifier):
         super().__init__(*a, **kw)
         self.held = None
 
-    def _run_other_engine(self, *, sim, plan, stage, deployed, title):
+    def _run_other_engine(self, *, sim, plan, stage, deployed, title,
+                          schedule=None, env=None):
         self.held = (sim, plan, stage, deployed)
         raise SystemExit(0)
 
