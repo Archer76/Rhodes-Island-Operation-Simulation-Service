@@ -103,6 +103,15 @@ def run_python(plan: Plan, roster: Roster, *, max_time: float | None = None
                 sk_first=bool(getattr(e, "skill_atk_first", False)),
                 sluggish=e.sluggish_timer, frozen=bool(e.frozen),
                 blocked=e.blocked_by is not None, src=src,
+                # 移速的六个乘区**分开记**：只记"这一帧走了多少"没法回答
+                # "是谁把速度改了"（原版 advance 的六项连乘）。
+                speed_mult=getattr(e, "speed_multiplier", 1.0),
+                haste=getattr(e, "haste_multiplier", 1.0),
+                slow_pct=getattr(e, "slow_pct", 0.0),
+                lock_slow=getattr(e, "lock_slow", 1.0),
+                move_speed=getattr(e, "move_speed", 0.0),
+                root=getattr(e, "root_timer", 0.0),
+                idle=getattr(e, "idle_timer", 0.0),
             ))
 
     def env(self, dt, t):
@@ -256,6 +265,10 @@ def main() -> int:
     ap.add_argument("--spans", action="store_true", help="打印全部停帧区间（很长）")
     ap.add_argument("--tail", type=int, default=0, help="打印末尾 N 帧")
     ap.add_argument("--enemy", default="", help="只摊开这一只敌人的逐帧表（键形如 去蚀@22.0）")
+    ap.add_argument("--first", type=int, default=0,
+                    help="另打最早 N 条分歧（找『分歧从哪一帧起』）")
+    ap.add_argument("--persist", type=int, default=6,
+                    help="--first 用：连续多少条坐标都分开才算『真分开』")
     ap.add_argument("--table", action="store_true",
                     help="逐手对拍水位表（k=1..8，只打判决）")
     args = ap.parse_args()
@@ -285,11 +298,60 @@ def main() -> int:
             rows.append((k, a, b))
         elif abs(a - b) > args.tol:
             rows.append((k, a, b))
+    if args.first:
+        # 「分歧从哪一帧起」= **坐标本身**第一次分开（且此后不再合上）。
+        # ⚠ 别拿"位移差"当这个判据：某帧位移不同可能只是那一帧多停了一下，
+        # 下一帧又追平（HS-EX-8 单手作业上就是 4 帧两两抵消）。位置分开才是真分开。
+        print(f"--- 坐标首次分开（容差 {args.tol:g}，要求此后至少 {args.persist} 帧不再合上）---")
+        keys_all = sorted(set(pyat) | set(goat), key=lambda x: (x[1], x[0][1]))
+        run = 0
+        reported = 0
+        for k in keys_all:
+            xa = pyat.get(k)
+            xb = goat.get(k)
+            if xa is None or xb is None:
+                continue
+            if abs(xa["x"] - xb["x"]) > args.tol or abs(xa["y"] - xb["y"]) > args.tol:
+                run += 1
+                if run == 1:
+                    buffered = [(k, xa, xb)]
+                else:
+                    buffered.append((k, xa, xb))
+                if run >= args.persist and reported < args.first:
+                    reported += 1
+                    k0, a0, b0 = buffered[0]
+                    print(f"[{reported}] {k0[0]}@{k0[1]}  t={k0[1]:.4f} "
+                          f"x py={a0['x']:.7f} go={b0['x']:.7f} "
+                          f"差={a0['x'] - b0['x']:+.7f}  "
+                          f"hp py={a0['hp']:.1f} go={b0['hp']:.1f}")
+                    for kk, aa, bb in buffered[1:6]:
+                        print(f"      t={kk[1]:.4f} x py={aa['x']:.7f} go={bb['x']:.7f} "
+                              f"差={aa['x'] - bb['x']:+.7f}")
+                    # 只报**第一处**；后面的等这一处解释清楚了再看
+                    break
+            else:
+                run = 0
+                buffered = []
     print(f"\n窗口 {args.lo}-{args.hi}s，{len(keys)} 条 (敌人,帧) 记录；"
           f"位移差 > {args.tol:g} 的有 {len(rows)} 条")
+    if args.first:
+        # 只打**最早**的几条：分歧从哪一帧起，比"一共差了多少条"有用得多。
+        print(f"--- 最早的 {args.first} 条位移差 ---")
+        for (ident, t), a, b in sorted(rows, key=lambda r: r[0][1])[:args.first]:
+            xa = pyat.get((ident, t), {})
+            xb = goat.get((ident, t), {})
+            print(f"{ident[0]}@{ident[1]} t={t:9.4f} "
+                  f"py Δ={a if a is not None else -1:10.7f} "
+                  f"go Δ={b if b is not None else -1:10.7f}   "
+                  f"x py={xa.get('x', float('nan')):.7f} "
+                  f"go={xb.get('x', float('nan')):.7f} "
+                  f"差={xa.get('x', 0) - xb.get('x', 0):+.7f}   "
+                  f"sluggish py={xa.get('sluggish', float('nan')):.3f} "
+                  f"blocked py={xa.get('blocked')} go={xb.get('blocked')}")
+        print("--- 全部 ---")
     for (ident, t), a, b in rows:
         pa = pyat.get((ident, t), {}).get("pause")
-        pb = goat.get(((ident), t), {}).get("pause")
+        pb = goat.get((ident, t), {}).get("pause")
         print(f"{ident[0]}@{ident[1]} t={t:9.4f} "
               f"py Δ={a if a is not None else -1:10.7f} "
               f"go Δ={b if b is not None else -1:10.7f}   "
