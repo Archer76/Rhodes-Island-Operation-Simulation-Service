@@ -89,6 +89,43 @@ python tools\two_spelling_audit.py --cache out\acceptance\batch4-scan3.json --ve
 **反向守卫**（两条都真换策略，不是换定序）：基线取「该序列**前 k 位**」而非整条序列（换 `order` 只是同一贪心的平局抖动，零信息量）。
 **控制组**：合成 20 位干员宇宙、一个键被 10 位共需 ⇒ 贪心首位必须命中它、增益 ≥10 ✅ 通过。
 
+### 三之一、★ 贪心目标函数（**写成文字，供复核**）
+
+> 这一节是 2026-09-20 补的，起因是一次**复现失败**：验收会话按「每步取最大**新增需求对条数**」重跑，得到 **99/251** 和另一份 10 人名单，与本文的 **112/251** 对不上。差**全在一处**——收益是**权重和**，不是条数。**在此之前，这份文档的选人依据对读者（包括我自己）是不可复核的：一份读它的人复现不出结论的文档，不是依据，是结论的转述。**
+
+**每一步**：在尚未选中的干员里，取 `gain` 最大的一位：
+
+```
+gain(cid) = Σ wt[k]   对每个 k ∈ 该干员的第 1 类键，且 k 尚未被已选者覆盖
+wt[k]     = 需要键 k 的**干员数**（本行空间口径）
+```
+
+1. **平局依次比**：① `gain` 大者胜；② 自身第 1 类键**条数多**者胜；③ 在**干员表序**中先出现者胜。
+   * 表序＝`WORKSPACE_OPS_SQL`（`is_operator=1 AND is_not_obtainable=0`）的**返回顺序**，**不是 `sorted()`**；
+   * 比较用**严格大于**，所以并列时先到者保留。
+2. **收益为 0 也不停手**：循环一直选到凑满 k 位（只跳过已选中的）。⇒ 需求集为空时它会按表序凑出 10 位，**那不是「最优名单」，是「问题已消失」**。
+3. 覆盖口径：`pairs = Σ(cid) |keys1(cid) ∩ 已覆盖键|`；`total = Σ(cid) |keys1(cid)|`；**完全解锁**＝`keys1` 非空且 ⊆ 已覆盖 的干员数。
+
+**最小复现**（照这段跑，应得 `112/251`、完全解锁 `19`、覆盖 `84` 键，名单逐位相同）：
+
+```python
+import json, sys; sys.path.insert(0, "tools")
+import audit_coverage as AC                       # ★ 复用它自己的实现，不要再写一份
+blob = json.loads(open("out/acceptance/batch4-scan3.json", encoding="utf-8").read())["data"]
+ops = AC.all_operators(); names = dict(ops); order = [c for c, _ in ops]
+needs = {c: set(d["keys1"]) for c, d in blob.items() if c in names and d["port"] == []}
+wt = {}
+for v in needs.values():
+    for k in v:
+        wt[k] = wt.get(k, 0) + 1                    # ★ 省掉这一步就退化成「按条数」⇒ 99/251
+picks, trace = AC.greedy_pick(needs, wt, order, 10)
+print([names[c] for c in picks], AC.coverage_of(needs, {k for c in picks for k in needs[c]}))
+# ⇒ ['贝洛内','耶拉','蕾缪安','维伊','薇薇安娜','淬羽赫默','煌','隐德来希','斩业星熊','谬因'] (112, 251, 19)
+```
+
+**两个易错点**（都实测过）：① `order` 必须是**表序**，换 `sorted(order)` 会换人；② `wt` 不可省。
+★ 本节的复现是**用工具自己的函数**跑通的，而不是「另写一份逻辑碰巧对上」——两份实现必然分叉（工具侧提交 `af1e8a6` 那次的教训）。
+
 ## 四、按族选的覆盖曲线与可共享性
 
 | 前 N 个族 | 需求对 | 占比 |

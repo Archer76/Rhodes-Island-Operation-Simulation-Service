@@ -28,7 +28,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import sqlite3
 import sys
 from collections import Counter
 from pathlib import Path
@@ -37,6 +36,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from ak_tactic.operator.skill import _classify  # noqa: E402
+import audit_coverage as AC  # noqa: E402  ★ 贪心/覆盖/名册**只保留工具那一份实现**
+                               #   （本文件第一版自己写了一个，规则不同 ⇒ 控制组红：99 vs 112）
 
 OPS_SQL = "SELECT char_id, name FROM operator WHERE is_operator=1 AND is_not_obtainable=0"
 
@@ -93,26 +94,6 @@ def variants(key: str) -> set[str]:
     return {x for x in out if x}
 
 
-def greedy(needs: dict[str, set[str]], k: int) -> list[str]:
-    """博士策略的贪心：每步取"新增需求对最多"的干员，平局按 charId 升序。"""
-    need = dict(needs)
-    picked: list[str] = []
-    have: set[str] = set()
-    for _ in range(k):
-        best, best_gain = None, -1
-        for cid in sorted(need):
-            if cid in picked:
-                continue
-            gain = len(need[cid] - have)
-            if gain > best_gain:
-                best, best_gain = cid, gain
-        if best is None or best_gain <= 0:
-            break
-        picked.append(best)
-        have |= need[best]
-    return picked
-
-
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--from-cache", required=True)
@@ -124,8 +105,8 @@ def main() -> int:
     data = blob["data"]
     ident = blob.get("ident", {})
 
-    con = sqlite3.connect(ROOT / "data" / "akdb.sqlite")
-    names = dict(con.execute(OPS_SQL))
+    ops = AC.all_operators()          #: 工具的名册与顺序（含 order_all 用的表序）
+    names = dict(ops)
     rows = set(names)
 
     #: 需求集：只算第 1 类（与选人同口径）
@@ -185,7 +166,11 @@ def main() -> int:
     A_RULED = ["贝洛内", "耶拉", "蕾缪安", "维伊", "薇薇安娜", "淬羽赫默", "煌", "隐德来希", "斩业星熊", "谬因"]
     print("--- 控制组：未收窄的过闸行空间上重跑贪心，必须复现 PM 裁过的 A 名单 ---")
     needs_gate = {c: v for c, v in needs_full.items() if c in port_ok}
-    picks_ctl = greedy(needs_gate, a.batch)
+    wt_gate: dict[str, int] = {}
+    for v in needs_gate.values():
+        for kk in v:
+            wt_gate[kk] = wt_gate.get(kk, 0) + 1
+    picks_ctl, _tr = AC.greedy_pick(needs_gate, wt_gate, [c for c, _n in ops], a.batch)
     inv_names = {v: k for k, v in names.items()}
     ruled = [inv_names[n] for n in A_RULED if n in inv_names]
     cov_ruled = sum(1 for c, v in needs_gate.items() for k in v if k in set().union(*[needs_gate[x] for x in ruled]))
@@ -214,9 +199,24 @@ def main() -> int:
             }, ensure_ascii=False, indent=1), encoding="utf-8")
             print(f"（JSON 已落盘：{a.json}）")
         return 0
-    print("--- 收窄后重跑贪心（同一个贪心，只换需求集）---")
+    #: ★ 2026-09-20 自纠：`needs_narrow` 原本定义在下面的 print 之后，我新加的退化守卫
+    #: 却引用它 ⇒ `UnboundLocalError`（与后端2 那次 `data_all` 只在 `--only-port` 分支
+    #: 绑定是同一病理：**新增分支必须把默认档也真跑一次**，`73e53f57`。此处先绑定后使用）。
     needs_narrow = {c: {k for k in v if k in keys_hit_gate or k in hit} for c, v in needs_gate.items()}
-    picks_new = greedy(needs_narrow, a.batch)
+    n_pairs = sum(len(v) for v in needs_narrow.values())
+    if n_pairs == 0:
+        print("--- 收窄后重跑贪心：**退化，名单不可读** ---")
+        print(f"    收窄后需求集只剩 {len(keys_hit_gate)} 键 / {n_pairs} 对 ⇒ 任何干员的收益都是 0，")
+        print("    而贪心**收益 0 也不停手**（选到凑满 k 位）⇒ 它会按表序把最靠前的 10 位选出来，")
+        print("    ★ 那不是「收窄后的最优名单」，是「问题在这个行空间里已经消失」的证据。**A 名单未动**")
+        print()
+        return 0
+    print("--- 收窄后重跑贪心（同一个贪心，只换需求集）---")
+    wt_new: dict[str, int] = {}
+    for v in needs_narrow.values():
+        for kk in v:
+            wt_new[kk] = wt_new.get(kk, 0) + 1
+    picks_new, _tr2 = AC.greedy_pick(needs_narrow, wt_new, [c for c, _n in ops], a.batch)
     print(f"  收窄后名单：{'、'.join(names[c] for c in picks_new)}")
     in_new = [c for c in picks_new if c not in picks_ctl]
     out_old = [c for c in picks_ctl if c not in picks_new]
