@@ -203,6 +203,7 @@ ak-tactic/
 | 两条数据源的实测结论与坑 | [`docs/prts-wiki.md`](docs/prts-wiki.md)、[`docs/gamedata.md`](docs/gamedata.md) |
 | **全部数据源与博士交办的页面**（来源台账，防上下文丢失） | [`docs/data-sources.md`](docs/data-sources.md) |
 | 元素损伤（元素值 / 爆条 / 两列爆发效果） | [`docs/element-damage.md`](docs/element-damage.md)、[`docs/mechanics-dictionary.md`](docs/mechanics-dictionary.md) |
+| 闸门条目 × Go 落地状态（静态盘点，含两类假信号） | [`docs/gate-inventory.md`](docs/gate-inventory.md) |
 | 正文怎么编译成公式项 | [`docs/formula-model.md`](docs/formula-model.md)、[`docs/formula-maintenance.md`](docs/formula-maintenance.md)、[`docs/enemy-formula.md`](docs/enemy-formula.md) |
 | 公式取源对照与量纲 | [`docs/formula-sources.md`](docs/formula-sources.md)、[`docs/formula-units.md`](docs/formula-units.md) |
 | 地图机制、关卡环境与装置 | [`docs/mechanics.md`](docs/mechanics.md)、[`docs/environment.md`](docs/environment.md)、[`docs/activity.md`](docs/activity.md) |
