@@ -152,22 +152,26 @@ STEPS: list[Step] = [
 
 # ---------------------------------------------------------------- 本脚本内的两步
 
-def _flatten_op_briefs() -> tuple[bool, str]:
+def _flatten_op_briefs() -> tuple[str, str]:
     """把备注库展平成人读语料。
 
     ⚠ **格式由本脚本定义**：原 `data/op-briefs.txt`（561 KB / 3249 行）在
     2026-09-20 丢失，而**全仓找不到它的生产者**（`grep -r briefs` 只命中
     `.gitignore` 与 `docs/data-sources.md`）。所以这里**不是"复原"，是新定义**，
     谁要用它的格式请以本函数为准。
+
+    返回 `(ok|skipped|failed, 说明)`。★ **前置缺失是 skipped 不是 failed**——
+    空状态实跑（2026-09-20）正是栽在这里：备注库不在时它报 failed，
+    害得 `--offline` 空跑 rc=1，把"按需跳过"误报成"故障"。
     """
     db = DATA / "prts-notes.sqlite"
     if not db.exists():
-        return False, "跳过：data/prts-notes.sqlite 不存在"
+        return "skipped", "跳过：data/prts-notes.sqlite 不存在（先把那一步跑出来）"
     c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
         cols = {r[1] for r in c.execute("pragma table_info(fact)")}
         if not {"char_id", "kind", "value"} <= cols:
-            return False, f"fact 表列不对：{sorted(cols)}"
+            return "failed", f"fact 表列不对：{sorted(cols)}"
         rows = c.execute(
             "select char_id, kind, value from fact order by char_id, kind").fetchall()
     finally:
@@ -179,29 +183,29 @@ def _flatten_op_briefs() -> tuple[bool, str]:
         out.append(f"{cid}\t{kind}\t{flat}")
     target = DATA / "op-briefs.txt"
     target.write_text("\n".join(out) + "\n", encoding="utf-8")
-    return True, f"已写 {target.name}：{len(rows)} 条 + 2 行表头"
+    return "ok", f"已写 {target.name}：{len(rows)} 条 + 2 行表头"
 
 
-def _rebuild_ranges() -> tuple[bool, str]:
+def _rebuild_ranges() -> tuple[str, str]:
     """重建 `data/ranges.json`：代号从 akdb 取，网格从 prts.wiki 取。
 
     走的是**既有 API**（`ak_tactic.prts.RangeRegistry`），不自己解析 SVG。
     """
     akdb = DATA / "akdb.sqlite"
     if not akdb.exists():
-        return False, "跳过：data/akdb.sqlite 不存在（代号要从它的 attack_range 取）"
+        return "skipped", "跳过：data/akdb.sqlite 不存在（代号要从它的 attack_range 取）"
     c = sqlite3.connect(f"file:{akdb}?mode=ro", uri=True)
     try:
         cols = {r[1] for r in c.execute("pragma table_info(attack_range)")}
         col = "code" if "code" in cols else ("range_id" if "range_id" in cols else None)
         if col is None:
-            return False, f"attack_range 里找不到代号列：{sorted(cols)}"
+            return "failed", f"attack_range 里找不到代号列：{sorted(cols)}"
         codes = sorted({r[0] for r in c.execute(f"select distinct {col} from attack_range")
                         if r[0]})
     finally:
         c.close()
     if not codes:
-        return False, "attack_range 里一个代号都没有"
+        return "failed", "attack_range 里一个代号都没有"
 
     sys.path.insert(0, str(ROOT))
     from ak_tactic.prts import RangeRegistry                      # noqa: PLC0415
@@ -218,16 +222,17 @@ def _rebuild_ranges() -> tuple[bool, str]:
     msg = f"代号 {len(codes)} 个：取到 {got} 个，落盘 {reg.index_path.name}"
     if failed:
         msg += f"；⚠ 取不到 {len(failed)} 个：" + "、".join(failed[:8])
-    return (not failed), msg
+        return "failed", msg
+    return "ok", msg
 
 
-def _report_external() -> tuple[bool, str]:
+def _report_external() -> tuple[str, str]:
     """外部输入不重建——只如实报告在不在。"""
     box = DATA / "operbox"
     skl = DATA / "skland"
     nb = len(list(box.glob("*"))) if box.exists() else 0
     ns = len(list(skl.glob("*"))) if skl.exists() else 0
-    return True, (f"外部输入（**不可重建**）：operbox/ {nb} 个文件、skland/ {ns} 个文件"
+    return "ok", (f"外部输入（**不可重建**）：operbox/ {nb} 个文件、skland/ {ns} 个文件"
                   "——缺了不影响本脚本 rc，但名册会退档")
 
 
@@ -252,11 +257,12 @@ def _run_step(step: Step, *, offline_only: bool) -> Result:
               "_rebuild_ranges": _rebuild_ranges,
               "_report_external": _report_external}[step.func]
         try:
-            ok, msg = fn()
+            status, msg = fn()
         except Exception as e:                                     # noqa: BLE001
             return Result(step.key, "failed", time.time() - t0, f"{type(e).__name__}: {e}")
-        # 外部输入没有"成功/失败"可言，永远记 ok（信息在 msg 里）
-        status = "ok" if (ok or step.kind == "external") else "failed"
+        if status not in ("ok", "skipped", "failed"):
+            return Result(step.key, "failed", time.time() - t0,
+                          f"内部函数返回了不认识的状态 {status!r}")
         return Result(step.key, status, time.time() - t0, msg)
 
     # ⚠ 子进程**让它的 stdout/stderr 直接继承**（不抓管道）：
@@ -319,30 +325,93 @@ def _row_counts() -> list[tuple[str, str, int, str]]:
     return out
 
 
-def _reconcile() -> tuple[list[str], list[str]]:
-    """返回 (问题清单, 提示清单)。问题 ⇒ rc=1。"""
+#: 库 ↔ "产出它的那一步"。★ **没跑的那一步不为它的缺失负责**——
+#: `--offline` / `--only` 时，别的库本来就不该在；报成"缺表"就是假红。
+DB_OWNER: dict[str, str] = {
+    "akdb.sqlite": "akdb.sqlite",
+    "enemydb.sqlite": "enemydb.sqlite",
+    "prts-notes.sqlite": "prts-notes.sqlite",
+}
+
+
+def _reconcile(ran: dict[str, str]) -> tuple[list[str], list[str]]:
+    """`ran`：步骤 key → 状态（ok/failed/skipped/notrun）。返回 (问题, 提示)。问题 ⇒ rc=1。"""
     problems: list[str] = []
     notes: list[str] = []
     counts = _row_counts()
     seen: dict[str, dict[str, int]] = {}
-    for db, t, n, why in counts:
+    for db, t, n, _why in counts:
         seen.setdefault(db, {})[t] = n
+
     for db, musts in MUST_HAVE_ROWS.items():
+        owner = DB_OWNER.get(db, "")
+        st = ran.get(owner, "notrun")
+        if st in ("skipped", "notrun"):
+            notes.append(f"{db} 没建 —— 它的那一步（`{owner}`）本次"
+                         + ("**被 `--offline` 跳过**" if st == "skipped"
+                            else "**没在 `--only` 里**"))
+            continue
         got = seen.get(db)
         if got is None:
-            problems.append(f"{db} 建不出来（表都没读到）")
+            problems.append(f"{db} 建不出来（表都没读到），而它的那一步报的是 {st}")
             continue
         for t in musts:
             if t not in got:
                 problems.append(f"{db} 少了表 `{t}`（必须在）")
             elif got[t] == 0:
                 problems.append(f"{db}.{t} **0 行**（必须在，空了说明这一步没做成）")
+
     for db, allows in MAY_BE_EMPTY.items():
+        if ran.get(DB_OWNER.get(db, ""), "notrun") in ("skipped", "notrun"):
+            continue
         got = seen.get(db) or {}
         for t, reason in allows.items():
             if got.get(t) == 0:
                 notes.append(f"{db}.{t} 是 0 行 —— {reason}")
     return problems, notes
+
+
+def _gamedata_count() -> tuple[int, int]:
+    """`data/gamedata/` 的文件数与字节数。★ 它**按需增长**，不是不变量。"""
+    gd = DATA / "gamedata"
+    if not gd.exists():
+        return 0, 0
+    files = [f for f in gd.rglob("*") if f.is_file()]
+    return len(files), sum(f.stat().st_size for f in files)
+
+
+
+def _inventory() -> list[str]:
+    """`data/` 的目录清单：文件/目录 + 大小；sqlite 再补**逐表行数**。
+
+    ★ 单独做成一个可打印的东西，是为了让"重建前 vs 重建后"的对照**能被别人复现**，
+    而不是只活在某一次汇报里。用法：跑之前 `--snapshot` 存一份，跑完再存一份，对比即可。
+    """
+    out: list[str] = []
+    if not DATA.exists():
+        return ["（data/ 不存在）"]
+    for p in sorted(DATA.iterdir(), key=lambda x: x.name):
+        if p.is_dir():
+            files = [f for f in p.rglob("*") if f.is_file()]
+            size = sum(f.stat().st_size for f in files)
+            out.append(f"  [目录] {p.name + '/':<26} {len(files):>6} 个文件  {size:>14,} B")
+        else:
+            out.append(f"  [文件] {p.name:<26} {'':>6}            {p.stat().st_size:>14,} B")
+    out.append("")
+    out.append("  逐表行数：")
+    for db, t, n, why in _row_counts():
+        if t == "—":
+            out.append(f"    {db:<20} {why}")
+            continue
+        flag = "⛔" if n < 0 else ("⚠ 空" if n == 0 else "  ")
+        out.append(f"    {flag} {db:<20} {t:<20} {n:>8}" + (f"  ← {why}" if why else ""))
+    # 外部输入单独点名：它们**不在**这份清单的重建范围里
+    for name, note in (("operbox", "玩家从 MAA 导出，不可重建"),
+                       ("skland", "要登录态，不可离线重建")):
+        p = DATA / name
+        n = len([f for f in p.rglob("*") if f.is_file()]) if p.exists() else 0
+        out.append(f"    ⚠ {name + '/':<20} {'':<20} {n:>8}  ← {note}")
+    return out
 
 
 # ---------------------------------------------------------------- main
@@ -359,7 +428,29 @@ def main() -> int:
     ap.add_argument("--offline", action="store_true", help="只跑不需要联网的步骤")
     ap.add_argument("--dry-run", action="store_true", help="只报计划，不动手")
     ap.add_argument("--list", action="store_true", help="逐项列出来源/耗时/是否联网")
+    ap.add_argument("--snapshot", action="store_true",
+                    help="只打印 data/ 清单（文件＋大小＋逐表行数），不动手；"
+                         "跑重建前后各存一份即可做对照")
+    ap.add_argument("--only", metavar="KEYS",
+                    help="只跑这些步骤（逗号分隔；用 --list 看有哪些 key）。"
+                         "用于按需放行联网步骤，不必整跑")
     args = ap.parse_args()
+
+    wanted: set[str] | None = None
+    if args.only:
+        wanted = {x.strip() for x in args.only.split(",") if x.strip()}
+        unknown = wanted - {s.key for s in STEPS}
+        if unknown:
+            print(f"⛔ 不认识的步骤：{sorted(unknown)}", file=sys.stderr)
+            print(f"   可用：{[s.key for s in STEPS]}", file=sys.stderr)
+            return 2
+
+    if args.snapshot:
+        print(f"data/ 清单（快照）—— {DATA}")
+        print("=" * 78)
+        for line in _inventory():
+            print(line)
+        return 0
 
     if args.list:
         print("data/ 派生物一览（来源 / 是否联网 / 耗时 / 失败长什么样）")
@@ -389,6 +480,8 @@ def main() -> int:
     print("  ⚠ 本脚本**只加不删**：它不删除任何文件；重建 = 覆盖写。")
     results: list[Result] = []
     for s in STEPS:
+        if wanted is not None and s.key not in wanted:
+            continue
         print(f"\n---- {s.key}｜{s.title} ----")
         print(f"     来源：{s.source}")
         print(f"     前提：{s.needs}　预计：{s.eta}")
@@ -417,7 +510,14 @@ def main() -> int:
             extra = f"　← {why}" if why else ""
             print(f"    {flag} {t:<20} {n:>8}{extra}")
 
-    problems, notes = _reconcile()
+    problems, notes = _reconcile({r.key: r.status for r in results})
+
+    ngd, sgd = _gamedata_count()
+    print("\n  ⚠ data/gamedata/：%d 个文件、%s MB —— **按需缓存**，没有重建命令，"
+          % (ngd, f"{sgd / 1048576:.1f}"))
+    print("     **它不是一个不变量**：访问哪个键就落哪一份，所以别把「共 N 份」写进判据。")
+    print("     合规红线：它被 .gitignore 忽略 ⇒ 留在缓存里就不分发；"
+          "**任何 level_*.json 都不得 git add**（THIRD-PARTY.md）。")
 
     print("\n" + "=" * 78)
     print("== 汇总 ==")
