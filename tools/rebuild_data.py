@@ -214,7 +214,11 @@ def _rebuild_ranges() -> tuple[str, str]:
     from ak_tactic.prts.client import PrtsError                   # noqa: PLC0415
     from ak_tactic.prts.grid import RangeParseError               # noqa: PLC0415
 
-    reg = RangeRegistry()
+    # ★ `fresh=True`：**不读旧索引**，每个代号都从 SVG 重新解析。
+    #   ⚠ 不传它的话，已在盘上的代号会被 `_load()` 装进内存、`get()` 直接返回，
+    #   **改了解析器也传不到它们身上**——那不是重建，是**把自己的输出当权威**
+    #   （2026-09-20 实测：改了站位格解析后重跑，63 个老代号原样不动）。
+    reg = RangeRegistry(fresh=True)
     got = 0
     # ★ **两档分开**（PM 2026-09-20 裁定，本任务第六次同族）：
     #   · `not_on_source`（源上没有）——**这不是失败**，是"这一项在源上不存在"，

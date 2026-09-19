@@ -21,11 +21,18 @@ class RangeRegistry:
     """代号 → AttackRange。内存 + 磁盘两级缓存。"""
 
     def __init__(self, client: PrtsClient | None = None,
-                 index_path: Path | str | None = None) -> None:
+                 index_path: Path | str | None = None, *, fresh: bool = False) -> None:
         self.client = client or default_client()
         self.index_path = Path(index_path) if index_path else RANGE_INDEX
         self._mem: dict[str, AttackRange] = {}
-        self._load()
+        #: `fresh=True` ⇒ **不读旧索引**，每个代号都从 SVG 重新解析。
+        #: ★ **重建命令必须用它。** 否则已在盘上的代号会被 `_load()` 装进 `_mem`、
+        #:   `get()` 直接返回，**改了解析器也传不到它们身上**——
+        #:   那不是重建，是**"把自己的输出当权威"**（2026-09-20 实测：改了站位格
+        #:   解析后重跑，63 个老代号原样不动）。
+        self.fresh = fresh
+        if not fresh:
+            self._load()
 
     # ------------------------------------------------------------ 磁盘
 
@@ -43,16 +50,17 @@ class RangeRegistry:
                 rows=d["rows"],
                 self_cell=tuple(d["self_cell"]),
                 cells=frozenset(tuple(c) for c in d["cells"]),
+                # ★ 旧索引文件没有这一键 ⇒ 记 `unknown`（**不猜**成 `use#1`：
+                #   "不知道当时怎么取到的"与"当时走的是画法 A"是两件事）。
+                self_source=d.get("self_source", "unknown"),
             )
 
     def save(self) -> None:
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            code: {"cols": r.cols, "rows": r.rows,
-                   "self_cell": list(r.self_cell),
-                   "cells": sorted([list(c) for c in r.cells])}
-            for code, r in self._mem.items()
-        }
+        # ★ 走 `AttackRange.index_entry()` 这**唯一的序列化出口**。
+        #   2026-09-20 就是在这里**另拼了一份 dict**，于是刚加的 `self_source`
+        #   没落进文件（差异清单里显示成 `来源=?`）——**同一个东西写了两处、只改了一处**。
+        payload = {code: r.index_entry() for code, r in self._mem.items()}
         self.index_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
 
