@@ -17,6 +17,12 @@ from pathlib import Path
 from typing import Any
 
 from .battle import BattleSimulator, Deployment, RangeProvider
+#: ⚠ **排程的载体**，住 `frontend/`（不依赖 `battle/`）。本轮起 `run()` 把排程
+#: **同时**写进它和模拟器：迁移期两边都对得上（`Schedule.diff` 可核），
+#: 切过去之后只留它。见 `frontend/schedule.py` 的模块文档串。
+from .frontend.schedule import Schedule
+from .frontend.operator_view import operator_view
+from .frontend.stage_env import FPS as _FPS, stage_env
 from .battle.talents import find_glider_mobility, find_power_attack, squad_cost_bonus
 from .battle.traits import (apply_splash_talent, read_combo_attack,
                             read_hp_drain, read_trait_splash)
@@ -136,12 +142,23 @@ class Verifier:
 
     def __init__(self, *, source: GameDataSource | None = None,
                  effect_source: str = "merge", verbose: bool = False,
-                 use_range_table: bool = True, engine: str = "python") -> None:
-        #: 用哪一份模拟器跑战斗。**默认永远是 `"python"`**（`battle/sim.py` 是权威
-        #: 实现）；`"go"` 指的是 `rios-sim` 那一份 Go 模拟器，接入点在
-        #: `ak_tactic/simgo/verifier.py`。换引擎必须显式点名——它快一个量级，但
-        #: 只在对拍全绿的那些关卡上被放行，规格不支持时会**当场退回 Python**
-        #: 并在判决的 `diagnosis` 里写清楚，绝不静默换。
+                 use_range_table: bool = True, engine: str = "go") -> None:
+        #: 用哪一份模拟器跑战斗。
+        #:
+        #: ⚠ **默认已改成 `"go"`**（博士 2026-09-19 裁定：怀黍离全部关卡对拍通过
+        #: 之后把默认模拟器切到 Go 版，Python 那份退为对拍基准、不再作为运行时引擎）。
+        #: 裁定原文与门槛见 `docs/` 与进度文件的对应小节；切换前的判据是
+        #: `tools/parity_plan.py` 17 份计划四项全归零 ＋ `tools/check_mech_parity.py`
+        #: 三判据（一致 + 反证 + 落位咬到机制）无失败。
+        #:
+        #: * `"go"` —— `rios-sim` 那一份，接入点在 `ak_tactic/simgo/verifier.py`。
+        #:   规格不支持时会**当场退回 Python** 并在判决的 `diagnosis` 里写清楚，
+        #:   绝不静默换（这条不因默认值改变而改变）。
+        #: * `"python"` —— `battle/sim.py`，**权威实现**。它现在只该被两类调用点
+        #:   显式点名：① 对拍基准（`tools/parity_plan.py::PyCapture`）；
+        #:   ② `check_battle.py` 那套自检（期望值是照 Python 写死的）。
+        #:   ⚠ 仓里凡是"必须拿到 Python 结果"的地方，都要**显式**传 `engine="python"`：
+        #:   默认值一改，裸 `Verifier()` 就全变成 Go 了，而那是**静默**的语义变化。
         self.engine = engine
         self.source = source or GameDataSource()
         self.calc = OperatorCalculator()
@@ -197,6 +214,29 @@ class Verifier:
         return (self.calc._load_chars().get(char_id) or {}).get(
             "position") == "MELEE"
 
+    def _unit_key(self, entry: dict[str, Any]) -> tuple:
+        """一次练度的缓存键——`_unit_cache` 与 `unit_kw` 共用这一份算法。
+
+        ⚠ 抽出来是因为它**必须只有一处**：两处各写一遍，将来改了口径
+        （比如多一个字段进键）就会出现"缓存命中不了"或者更糟——
+        "两个不同的练度命中同一条"。
+        """
+        return (entry["char_id"], entry["elite"], entry["level"],
+                int(entry.get("trust") or 0), entry.get("potential", 1),
+                entry.get("module") or None,
+                int(entry.get("module_level") or 0))
+
+    def unit_kw(self, entry: dict[str, Any]) -> dict[str, Any]:
+        """一次练度的**构造参数**（不是造好的单位）。
+
+        规格层要的是这一份（`frontend/operator_view.py` 拿它做视图），
+        而 `unit()` 要的是活的对象——两者同源，所以缓存的是 `kw` 本身。
+        """
+        key = self._unit_key(entry)
+        if key not in self._unit_cache:
+            self.unit(entry)          # 走一遍原路，顺带把 kw 存进缓存
+        return self._unit_cache[key]
+
     def unit(self, entry: dict[str, Any]) -> OperatorUnit:
         """练度 → 战斗单位。
 
@@ -218,10 +258,7 @@ class Verifier:
           所以与特性文本分开找。
         """
         cid = entry["char_id"]
-        key = (cid, entry["elite"], entry["level"],
-               int(entry.get("trust") or 0), entry.get("potential", 1),
-               entry.get("module") or None,
-               int(entry.get("module_level") or 0))
+        key = self._unit_key(entry)
         # 缓存的是**构造参数**，不是造好的单位。
         # 模拟器会原地改写 OperatorUnit（hp / alive / hits / damage_taken），
         # 把同一个对象交给第二局，第二局就是接着上一局的残局打——
@@ -353,6 +390,32 @@ class Verifier:
         cost = float(stage.options.initial_cost) + sum(
             squad_cost_bonus(t) for *_, t in squad)
 
+        #: ⚠ **排程同时写两份**：`sched`（新家、不依赖 `battle/`）与 `sim`
+        #: （原版、迁移期仍是基线）。两边方法名与参数**逐字相同**，所以只是多一行；
+        #: 一致性可用 `sched.diff(sim)` 核。等 `battle/` 删掉时，把 `sim.*` 那几行
+        #: 去掉、把 `sched` 递下去就完事——不用再想排程该放哪。
+        sched = Schedule()
+
+        #: ⚠ **关卡静态那 8 项**（`fps` / `speed_scale` / `ranged_enemies` /
+        #: `enemy_windup` / `cost_init` / `cost_max` / `cost_time` / `life`）
+        #: 在这里、从**原始构造参数**算出来交给换引擎那一侧。
+        #:
+        #: 为什么要在这儿算：参数**只有本函数手上有**（它们是 `**switches`）。
+        #: `build_spec` 之前是回头去问模拟器要 `sim.speed_scale` 这类值——那是
+        #: **派生后**的结果（已经乘过关卡的 `move_multiplier`、夹过零），
+        #: 反推不回原始参数；靠猜默认值则会在非默认关卡上悄悄分叉。
+        #:
+        #: 口径与 `BattleSimulator.__init__`（`sim.py:418-440`）逐字一致——
+        #: `stage_env` 就是照那几行搬的。不传 switches 的常见路径得到同一个值。
+        env = stage_env(
+            stage,
+            environment_difficulty=str(
+                switches.get("environment_difficulty", "NORMAL") or "NORMAL"),
+            fps=switches.get("fps", _FPS),
+            speed_scale=switches.get("speed_scale", 1.0),
+            ranged_enemies=switches.get("ranged_enemies", True),
+            enemy_windup=switches.get("enemy_windup", 0.5))
+
         # ---- 排时刻 + 落位合法性守卫
         # 费用模型与 run_sr6 / MAA 自动作战同规则：钱够了就下。给了显式时刻的，
         # 按那一刻结账（费用随经过的时间自然回满再扣）。
@@ -387,19 +450,32 @@ class Verifier:
                         f"{at / rate:.1f}s）——**这一手在游戏里做不出来**")
                 cost = max(0.0, cost - op.deploy_cost)
             now = at
-            sim.plan(Deployment(at, op, pos, d.direction, skill=d.skill,
-                                skill_mastery=d.mastery,
-                                auto_skill=d.auto_skill, talents=tal))
+            #: ⚠ 一个 `Deployment` **对象**交给两边——不是各造一个内容相同的。
+            #: 两边拿到同一批对象，`sched.diff(sim)` 比出来的才是**排程**的差，
+            #: 而不是"两次构造是否一致"。
+            dep = Deployment(at, op, pos, d.direction, skill=d.skill,
+                             skill_mastery=d.mastery,
+                             auto_skill=d.auto_skill, talents=tal,
+                             #: ⚠ 给规格层备一份**视图**（`frontend/operator_view.py`）：
+                             #: `op` 是活的 `OperatorUnit`，跑起来会被就地改写
+                             #: （`hp` / `alive` / `hits` / `damage_taken`…），
+                             #: 而 `build_spec` 要的是**开局那一组字段**。
+                             #: 视图每次部署新造一个（很便宜），所以它不会被跑帧碰到。
+                             operator_view=operator_view(self.unit_kw(entry)))
+            sched.plan(dep)
+            sim.plan(dep)
             deployed[d.operator] = (at, pos, d, entry)
 
         # 撤退与手动开技能都**按坐标**排（模拟器的接口就是坐标）——
         # 所以要先按下标把人映射回自己的落点。
         for r in plan.retreats:
             _at, pos, _d, _e = deployed[r.operator]
+            sched.retreat(pos, r.time)
             sim.retreat(pos, r.time)
         for s in plan.skills:
             _at, pos, _d, _e = deployed[s.operator]
             # 只是**请求**：技力不够就等够了再开，判定在 _skill_tick 里。
+            sched.use_skill(pos, s.time)
             sim.use_skill(pos, s.time)
 
         if self.engine != "python":
@@ -407,7 +483,8 @@ class Verifier:
             #: 这里**只留一个挂载点**：怎么跑完一场战斗、怎么把结果变成判决，
             #: 全归 `simgo` 那一层——本文件不该知道 Go 的存在。
             v = self._run_other_engine(sim=sim, plan=plan, stage=stage,
-                                      deployed=deployed, title=title)
+                                      deployed=deployed, title=title,
+                                      schedule=sched, env=env)
             if cost_notes:
                 v.diagnosis.extend(cost_notes)
             return v
@@ -418,13 +495,28 @@ class Verifier:
             v.diagnosis.extend(cost_notes)
         return v
 
-    def _run_other_engine(self, *, sim, plan, stage, deployed, title):
-        """换引擎时的出口。基类**没有**这个能力，所以照实报错。
+    def _run_other_engine(self, *, sim, plan, stage, deployed, title,
+                          schedule=None, env=None):
+        """换引擎时的出口。
 
-        留这个默认实现（而不是 `raise NotImplementedError` 就完事）是为了让
-        "有人给 `engine=` 传了个没实现的字符串"这句话说得清楚：
-        它必须是 `"python"`，要么就得由子类（`simgo.GoVerifier`）提供出口。
+        `"go"` 走 `simgo` 那一层；其余字符串照实报错。
+
+        ⚠ **这里必须自己接住 `"go"`，不能只留一句报错**。默认引擎已经切成 `"go"`
+        （见 `__init__` 的注释），而 Go 的出口本来只挂在 `GoVerifier`（混入
+        `GoEngineMixin`）上——于是全仓那些**裸 `Verifier()`** 会崩在这里，
+        而不是跑 Go。实测撞到过：`Verifier().run(...)` 直接抛
+        「engine='go' 没有实现」。
+
+        `ensure_go_engine` 是**惰性**的：只在真的要跑 Go 时把混入类那几个方法
+        绑到本实例上。`verify.py` 不能 import `simgo`（`simgo.verifier` 反过来
+        import 了 `verify`），函数内 import 绕开这条循环边。
         """
+        if self.engine == "go":
+            from ak_tactic.simgo.verifier import ensure_go_engine
+            ensure_go_engine(self)
+            # 绑完之后 `self._run_other_engine` 解析到混入类那一份（实例属性优先）。
+            return self._run_other_engine(sim=sim, plan=plan, stage=stage,
+                                          deployed=deployed, title=title)
         raise ValueError(
             f"engine={self.engine!r} 没有实现：只有 'python'（权威实现）以及"
             f"由 ak_tactic.simgo.GoVerifier 提供的出口")

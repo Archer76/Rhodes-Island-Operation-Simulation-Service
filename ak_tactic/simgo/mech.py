@@ -38,7 +38,7 @@ from ..battle.devices import BLOCKER_KEY, PILE_KEY, PUMP_KEY
 
 __all__ = [
     "KINDS", "kind_of", "farmland_spec", "from_spec", "spec_summary",
-    "spec_farmland_cells", "names_for", "port_reasons",
+    "spec_farmland_cells", "names_for", "port_reasons", "SNOW_ID",
 ]
 
 #: 装置 key → 规格里的 `kind`。**用 key 判，不用名字**（名字是中文、会随版本改）。
@@ -51,6 +51,17 @@ KINDS: dict[str, str] = {
 #: 机制名（Python 与 Go 之间的契约，改名等于改协议）。
 FARMLAND_ID = "huai_shu_li.farmland"
 
+#: 积雪（圣聆初雪天赋「无垠的雪景」）。
+#:
+#: 它放进机制层而不是写进 `OperatorSpec`，理由是**状态归属**：雪是"跨帧累积的
+#: 一张格→层数表"，还有"首敌离场整格清雪"这类跨单位的状态。这与田地同源，
+#: 所以照 `huai_shu_li.farmland` 的规矩来：Python 送规格、Go 跑状态机。
+#:
+#: ⚠ 它的**创建时机**与田地不同：田地是开局就有的（`sim.farmland`），
+#: 雪是**干员部署那一刻**才建的（`sim.py:3396`）。闸门因此看不见它——
+#: 见 `spec.py::snow_spec` 那段说明。
+SNOW_ID = "snow.field"
+
 
 def names_for(sim: Any) -> list[str]:
     """这一关需要 Go 侧挂上哪些机制。**由规格生成这一侧自己判**，不由调用方点。
@@ -62,6 +73,10 @@ def names_for(sim: Any) -> list[str]:
     out: list[str] = []
     if getattr(sim, "farmland", None) is not None:
         out.append(FARMLAND_ID)
+    # 积雪：按**排程**判，不按运行期的 `snow_fields`——后者在跑之前恒为空。
+    from .spec import snow_spec                              # 循环导入，故延迟
+    if snow_spec(sim):
+        out.append(SNOW_ID)
     return out
 
 
@@ -97,6 +112,70 @@ ENEMY_BEHAVIOR_ATTRS: dict[str, str] = {
     "modes": "BOSS 换弱点形态",
 }
 
+#: ⚠ **第三类：连字段都没有的敌人能力。**
+#:
+#: 前两张表都是**字段驱动**的（"这个字段非零 ⇒ 那段代码这一局会跑"）。可有一类
+#: 能力**在原版里也没拿到字段**——它们只活在图鉴正文里，`EnemyUnit` 上连一个
+#: 属性都没有。字段驱动的闸门对它们**永远是沉默的**：不是"查过了没问题"，
+#: 而是"这条判据看不见所断言之物"（本项目吃过多次的那个坑）。
+#:
+#: ## 为什么它们**不进闸门**
+#:
+#: 闸门的职责是"不让 Go **相对原版**少算一层"。下面这些能力**原版的战斗层也没建模**
+#: （判据见每条 `py_tokens`：在 `ak_tactic/battle/` 里扫这些词，命中 0 才是当前状态）。
+#: 两台引擎同样不建模 ⇒ 对拍成立 ⇒ 拒跑是**无理由拒跑**，只会把整关挡在门外，
+#: 而"拒跑"与"跑了但不一致"是两种完全不同的红（`spec.py:119-123` 有同款论证）。
+#:
+#: ## 那它登记来干什么
+#:
+#: 防**将来那一半**：哪天有人把其中一条接进原版战斗层、而 Go 没跟上，
+#: 上面两张字段表多半也接不住（新实现未必落在一个新字段上）。
+#: `tools/audit_unmodelled_abilities.py` 每次都会**重算** `py_tokens` 的命中数：
+#: 一旦某条在原版战斗层里出现了，它就翻红，要求"要么把它移进闸门，要么把 Go 补上"。
+#: 这与 `ENEMY_BEHAVIOR_FIELDS` 的守卫是同一套手法（理由会过期而没人知道，
+#: 所以理由必须带一个能重算的守卫）。
+#:
+#: `carriers` 是**按名字**写的（不是 enemy_id）：同一只怪在不同关里有 `_2` 之类
+#: 的变体后缀，`enemy_1390_dhsbr` 与 `enemy_1390_dhsbr_2` 是同一只。
+UNMODELLED_ENEMY_ABILITIES: dict[str, dict[str, Any]] = {
+    "隐匿": {
+        "text": "位于受病害污染的田地上时隐匿",
+        "carriers": ("秽", "除秽", "田鼷", "硬毫田鼷"),
+        "py_tokens": ("隐匿", "invisible"),
+        "note": "原版那 5 处全在公式编译器（`enemy_formula.py:240/404/406`、"
+                "`formula.py:752`），是把正文解析成公式项的地方；"
+                "战斗索敌里一处都没有。",
+    },
+    "吸收浅水": {
+        "text": "吸收浅水（「玷 / 勿玷」第一句）",
+        "carriers": ("玷", "勿玷"),
+        "py_tokens": ("浅水",),
+        "note": "`ak_tactic/battle/devices.py:25` 那唯一一处是**泵站正文的文档字符串**"
+                "（「将身后一格的浅水泵至前方」），不是对「吸收浅水」的实现。",
+    },
+    "阻挡门槛": {
+        "text": "只能被阻挡数大于等于 3 的单位阻挡",
+        "carriers": ("田鼷力士", "田鼷猛士", "田鼷飞贼", "田鼷大盗"),
+        "py_tokens": ("block_cnt_min", "阻挡数大于等于", "阻挡数 >="),
+        "note": "原版战斗层的「阻挡数」9 处全是**干员侧**（替身 / 阻挡范围 / 技能）；"
+                "`unit.py:977` 敌人那个 `block_cnt` 是「敌人自己挡几个人」，是另一件事。",
+    },
+    "受伤奔跑": {
+        "text": "受到伤害后奔跑，移动速度短暂大幅提升",
+        "carriers": ("田鼷力士", "田鼷猛士", "田鼷飞贼", "田鼷大盗"),
+        "py_tokens": ("奔跑",),
+        "note": "两台引擎都是零处。",
+    },
+    "拆阀高伤": {
+        "text": "经过阻流阀时对其造成高额伤害",
+        "carriers": ("田鼷力士", "田鼷猛士", "田鼷飞贼", "田鼷大盗"),
+        "py_tokens": ("拆掉阻流阀", "阻流阀被", "阀被拆"),
+        "note": "⚠ 这一条**有半边已经接住**：阻流阀是玩家放的装置，"
+                "计划里一放就被 `装置部署` 那条闸门拦下（`spec.py:105`）。"
+                "登记的是「敌人拆阀」这个行为本身在原版战斗层里也没有独立实现。",
+    },
+}
+
 
 def port_reasons(sim: Any) -> list[str]:
     """这一关的**关卡机制**里，有哪些是 Go 侧还没接线的？逐条给理由。
@@ -124,11 +203,24 @@ def port_reasons(sim: Any) -> list[str]:
 
 
 def _spawns_of(sim: Any) -> list[Any]:
-    """这一关会出现的每一种敌人（按 `_spawn` 建一次对象，纯读）。"""
+    """这一关会出现的每一种敌人（按 `_spawn` 建一次对象，纯读）。
+
+    ⚠ **不再走 `sim._spawn`**：那只是"按路线号查表 + 造对象"。
+    路线分段与 `spec.py` 用**同一个** `_route_tables`（都调 `eta.route_plans`），
+    造对象走 `spec._view`（`enemy_view`，不写任何地方）。
+    """
+    from . import spec as _spec
+
+    routes = _spec._route_tables(sim.stage)
     out = []
-    for t, sp in getattr(sim, "_spawns", None) or []:
+    for t, sp in sim.stage.timeline():
         try:
-            out.append(sim._spawn(sp.enemy_id, sp.level, sp.route_index, float(t)))
+            pts, w, legs = routes.get(sp.route_index, ([], 0.0, []))
+            #: 有分段计划时，开头的待命已经是计划里的 wait 段，别再设一遍
+            #: （与 `sim._spawn` 同一句判断）。
+            out.append(_spec._view(sim, enemy_id=sp.enemy_id, level=sp.level,
+                                   route=pts, legs=legs, t=float(t),
+                                   wait=0.0 if legs else w))
         except Exception:                                       # noqa: BLE001
             continue
     return out
@@ -172,11 +264,15 @@ def _pile_device_spec(sim, d) -> dict[str, Any] | None:
     数值（污浊满值、召唤延迟、自缚秒数）**一律从原版的常量里读**，不在 Go 里写死：
     它们是"原文里的数字"，改口径时改的是这一处。
     """
+    #: ⚠ 这三个常量（召唤延迟 / 污浊满值 / 自缚秒数）还住在 `battle/sim.py`。
+    #: 它们是**数值**不是行为，读它们不进 `battle/` 的任何函数体——
+    #: 但仍是 `battle/` 的一部分，等那几处常量也搬进 `frontend/` 才能断干净。
     from ..battle import sim as _sim_mod
+    from ..frontend.enemy_rules import pile_mark_key, pile_spec, summon_level
     from . import spec as _spec
 
     try:
-        child_key, _route = sim._pile_spec(d)
+        child_key, _route = pile_spec(sim.stage, d)
     except Exception:                                          # noqa: BLE001
         return None
     if not child_key:
@@ -185,8 +281,12 @@ def _pile_device_spec(sim, d) -> dict[str, Any] | None:
 
     def build(key: str, positions: list[tuple[float, float]]):
         try:
-            return sim._build_enemy(key, sim._summon_level(key), positions, [],
-                                    0.0, 0.0)
+            #: ⚠ 以前是 `sim._build_enemy(key, sim._summon_level(key), ...)`——
+            #: 那两个都只是转调新家（`enemy_view` / `summon_level`），
+            #: 这里直接调，少经过一层模拟器。
+            return _spec._view(sim, enemy_id=key,
+                               level=summon_level(sim.stage, key),
+                               route=positions, legs=[], t=0.0, wait=0.0)
         except Exception:                                      # noqa: BLE001
             return None
 
@@ -195,6 +295,20 @@ def _pile_device_spec(sim, d) -> dict[str, Any] | None:
         return None
     pspec = _spec._unit_spec(sim, parent)
     pspec["static"] = True
+    #: 「不可阻挡」是甲的**常驻天赋**（原版 `sim.py:4637` 的
+    #: `child.unblockable = True`，与监测状态无关——注释原文：
+    #: "不可阻挡与自缚是它的常驻天赋"）。
+    #:
+    #: ⚠ **必须在规格里写死，不能指望 `_unit_spec` 从对象上读。** 那一行是
+    #: 原版在 `_pile_tick` **运行期**写上的，而 `_pile_device_spec` 是
+    #: **开战前**建的快照，此刻对象上还是默认值 `False`——与上面 `invincible`
+    #: 那条注释同一个坑（那里已经踩过一次）。
+    #:
+    #: 漏了它的后果不是"甲能被挡"这么轻：甲一旦进了 `op.blocking`，
+    #: 索敌的**第一段规则**（先打自己挡住的）就会把主目标判给它——
+    #: `hsex07` t=73.6 泥岩因此改打甲（667.28）而不是原版的除秽（767.28），
+    #: 后续 73.6 / 75.2 两次出手也整个错位，判决差出 杀 -1 / 用时 -1.0s。
+    pspec["unblockable"] = True
     #: 监测状态＝"这只甲带 `CheckAwake.`"。⚠ 不能读 `parent.monitor`：那两个位是
     #: 原版在 `_pile_tick` **里**写上的（`child.monitor = awake_value > 0`），
     #: 此刻刚建出来的对象上还是默认值——实测第一版就是这么把 `invincible`
@@ -217,7 +331,7 @@ def _pile_device_spec(sim, d) -> dict[str, Any] | None:
             dspec["static"] = False           # 乙会扑向干员，不是自缚
             dspec["self_bind"] = float(getattr(_sim_mod, "PILE_SELF_BIND", 1.0))
             dspec["hit_radius"] = 0.5         # 原版"贴到目标格"的判据
-            mark_key = sim._pile_mark_key(diver)
+            mark_key = pile_mark_key(sim.stage, diver)
             if mark_key:
                 mark = build(mark_key, [(float(cell[0]), float(cell[1]))])
                 if mark is not None:

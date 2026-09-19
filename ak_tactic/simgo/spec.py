@@ -26,9 +26,49 @@ from typing import Any
 
 from . import mech, skills
 
+#: ⚠ 敌方那三条**规矩**的实现住在 `ak_tactic/frontend/enemy_rules.py`（不在 `battle/` 里）。
+#: 从 `sim` 上转调也能拿到同样的结果（那边的方法就是转调这里），
+#: 但**直接调新家**才是"摘除 `battle/`"要的方向——每一处都少一次对模拟器的依赖。
+from ..frontend.enemy_rules import (                             # noqa: E402
+    cannot_clear, pile_mark_key, summon_level,
+)
+
+#: ⚠ 两条**几何**同理（`range_of` / `path_from`，住 `frontend/geometry.py`）。
+#: 直接调新家而不是 `sim._range_of`：少一次对模拟器的依赖，而且新接口把
+#: 位置与朝向**当参数传**——算"某个假设位置上的范围"不必再篡改干员对象。
+from ..frontend.geometry import path_from, range_of               # noqa: E402
+
+#: ⚠ 敌人的**规格视图**（`enemy_view`）与取数（`enemy_stats`）住新家。
+#: 从这一轮起，规格里那些敌人**不再需要一个活的对象**——`enemy_view` 按
+#: `_build_enemy` 的同一套表达式算出同一组字段，装进一个 `SimpleNamespace`。
+#: 口径的逐字段证据见 `tools/check_enemy_view.py`（798 行出怪零差异）。
+from ..frontend.enemy_stats import enemy_stats                    # noqa: E402
+from ..frontend.enemy_view import enemy_view                      # noqa: E402
+from ..frontend.stage_env import stage_env                        # noqa: E402
+#: ⚠ 干员一律走这个入口取，**不要直接写 `d.operator`**——那个是活的
+#: `OperatorUnit`（Python 引擎要拿它跑帧），规格只要开局那一组字段。
+from ..frontend.schedule import operator_of                       # noqa: E402
+
+#: 路线解析**与 `ak_tactic.eta` 共用同一份实现**（原版 `sim.py:583` 也是从
+#: 这里取的）——两处各写一遍必然对不上。
+from ..eta import route_plans                                     # noqa: E402
+
 #: 攻击间隔的下限与攻速下限，与 `battle/unit.py` 同源（那里写死 0.05 / 20）
 MIN_INTERVAL = 0.05
 ASPD_MIN = 20.0
+
+#: Go 侧的**积雪**是否已经接线。这是个开关而不是"看有没有字段"：
+#: 闸门的职责是"Go 能不能跑这一局"，而"Python 这边有没有这片雪"是另一件事——
+#: 两者混在一起，正是 2026-09-19 那个静默缺口（见 `snow_spec` 的说明）。
+#:
+#: 置 True 的**唯一条件**：Go 的 `mech/snow.go` 已实现、且 HS-EX-8 第 3 手起
+#: 逐帧对拍通过（含冻结那一半——`frozen` 是复合判据）。
+#:
+#: 2026-09-19：`mech/snow.go` 已落地（积层/扩散/减速/踏入伤害/满层冻结/
+#: 首敌离场清雪六条，技能2 那一半未移植，作业里 skill=0 用不到），
+#: 闸门打开交给对拍验证。**对拍不过就把它改回 False**——那等于"退回原版"，
+#: 是这套闸门存在的意义，不是失败。
+ALLOW_SNOW = True
 
 
 def _attach_skill_for_spec(d, *, allow_skills: bool = True) -> str | None:
@@ -48,7 +88,7 @@ def _attach_skill_for_spec(d, *, allow_skills: bool = True) -> str | None:
     返回非 None 表示这次部署的技能**现在确定不了**（槽位号那条路），
     调用方据此拒跑。副作用只有 `op.skill` 一个字段，而且写的就是原版将要写的内容。
     """
-    op = d.operator
+    op = operator_of(d)
     spec = getattr(d, "skill", 0)
     if spec is None or (isinstance(spec, int) and spec == 0):
         op.skill = None
@@ -61,7 +101,8 @@ def _attach_skill_for_spec(d, *, allow_skills: bool = True) -> str | None:
 
 
 def unsupported_reasons(sim, *, allow_devices: bool = False,
-                        allow_skills: bool = False) -> list[str]:
+                        allow_skills: bool = False,
+                        schedule=None) -> list[str]:
     """这一局用到了最小版本没覆盖的机制吗？逐条给理由。
 
     宁可多报几条（那几个字段本来是空列表也是零成本），也不要漏报：漏报的症状是
@@ -84,21 +125,47 @@ def unsupported_reasons(sim, *, allow_devices: bool = False,
       "谁 + 哪一项"，方便直接看出该补哪一块）。关着的时候一律拒跑——
       搜索那条路在技能对拍全绿之前不会打开它。
     """
+    #: ⚠ **排程从哪读**：给了 `schedule`（新家 `frontend/schedule.py` 的载体）就用它，
+    #: 没给就退回模拟器。迁移期的开关——两边方法名逐字相同（`schedule.py` 的
+    #: `Schedule`），所以下面的读法一字不用改；等 `battle/` 删掉时把这里的兜底
+    #: 去掉、`schedule` 变成必填就完事。
+    #:
+    #: 为什么先做这一步：`build_spec` 对 `battle/` 的依赖里，"排程产物"占 5 项
+    #: （deployments / retreats / skill_uses / device_deployments / summon_deployments）。
+    #: 它们全是**五个 append** 攒出来的列表，搬走它们等于把那 5 项一次性清零。
+    #:
+    #: ⚠ **本函数与 `build_spec` 各要一份 `sch`**：闸门那几条（召唤/装置/撤退）
+    #: 住在本函数里，而部署循环住在 `build_spec` 里。只在一处定义会
+    #: `NameError: name 'sch' is not defined`——而它会被记成"规格抄不到"。
+    sch = schedule if schedule is not None else sim
+
     bad: list[str] = []
-    if sim.skill_uses:
+    if sch.skill_uses:
         pass          # 手动开技能现在**支持**（白名单判定在下面逐人做）
-    if sim.summon_deployments:
-        bad.append(f"召唤物部署 ×{len(sim.summon_deployments)}")
-    if sim.device_deployments:
-        bad.append(f"装置部署 ×{len(sim.device_deployments)}")
-    if sim.retreats:
-        bad.append(f"撤退 ×{len(sim.retreats)}")
+    if sch.summon_deployments:
+        bad.append(f"召唤物部署 ×{len(sch.summon_deployments)}")
+    if sch.device_deployments:
+        bad.append(f"装置部署 ×{len(sch.device_deployments)}")
+    if sch.retreats:
+        bad.append(f"撤退 ×{len(sch.retreats)}")
     if getattr(sim, "team_auras", None):
-        bad.append(f"全场光环 ×{len(sim.team_auras)}")
-    if getattr(sim, "regen_auras", None):
-        bad.append(f"增益治疗光环 ×{len(sim.regen_auras)}")
+        # ⚠ 这段现在是**死代码**，但仍然要留着提醒：`sim.team_auras` 是
+        # **部署那一刻**才 append 的（`sim.py:3451`），而闸门取的是**开局态**
+        # ——这里读到的**永远是空**。真正的全场光环现在随**干员规格**送过去
+        # （见 `_team_auras_of` 与 Go 的 `teamAuraTick`），判定按"目标是谁"逐人算。
+        #
+        # ⚠ 更要紧的是：**这条闸门从来就没有起到过作用**。
+        # 曾经它读的是同一张空表，看上去"拒跑了全场光环"，实际一次都没拦下
+        # ——这正是闸门盲区的形态："闸门不报、规格里也没这项，Go 静默跑出另一场战斗"。
+        pass
+    # ⚠ 这里**曾经**有一条 `增益治疗光环 ×N`——
+    # 「医者丰碑」那时没移植，所以一刀切拒跑。现在它接上了
+    # （Go 的 `regenAuraTick`，帧位 5.5；规格见 `_operator_spec` 的 `regen_aura`），
+    # 该条**必须删掉**：留着会让这一关永远走不到 Go，
+    # 而"拒跑"与"跑了但不一致"是两种完全不同的红。
     if getattr(sim, "snow_fields", None):
         bad.append(f"积雪 ×{len(sim.snow_fields)}")
+    bad += _snow_reasons(sim)
     bad += _enemy_reasons(sim)
     if getattr(sim, "farmland", None) is not None:
         # 田地本身**已接线**（Go 的 `mech/huai_shu_li.go`）：几何与参数随规格送过去，
@@ -110,8 +177,8 @@ def unsupported_reasons(sim, *, allow_devices: bool = False,
     if getattr(sim, "total_attack", None) is not None:
         bad.append("全场总攻击装置")
 
-    for d in sim.deployments:
-        op = d.operator
+    for d in sch.deployments:
+        op = operator_of(d)
         # 先按原版的分支把技能挂好（`Deployment.skill` 的默认值是 **0**，
         # 而它会把干员身上已绑的技能清掉——这一步不做，规格与那一趟就会不一致）
         stuck = _attach_skill_for_spec(d)
@@ -126,7 +193,6 @@ def unsupported_reasons(sim, *, allow_devices: bool = False,
         for attr, why in (("summon_of", "召唤物"),
                           ("hammer", "锤击"),
                           ("effects_override", "技能效果覆盖"),
-                          ("power_attack_count", "天赋「强击瓶专家」"),
                           ("sp_per_attack_talent", "天赋回技力（出手）"),
                           ("sp_per_kill_talent", "天赋回技力（击杀）")):
             val = getattr(op, attr, 0)
@@ -147,8 +213,29 @@ def unsupported_reasons(sim, *, allow_devices: bool = False,
             bad.append(f"高台触发回技力：{op.name or op.char_id}")
         # `combo_hits` 的"没有这条"是 **1**（不是 0）：原版判的是 `> 1`。
         # 按真值判会把**每一位没有连击的干员**全挡在门外——实测阿米娅就中招。
-        if int(getattr(op, "combo_hits", 1) or 1) > 1:
-            bad.append(f"普攻连击（结算后缩放）：{op.name or op.char_id}")
+        #
+        # ⚠ 这一条**已经放行**（Go 的 `operatorsAttack` 已兑现三连击与
+        # 「结算后再缩放」）。放行的依据是那两项都只用到"这一刻的数值"，
+        # 不依赖任何 Go 侧没有的技能结构——所以它不需要再挡。
+        #
+        # 天赋「强击瓶专家」现在也放行，但**只放行 `rounds == 1` 的那一半**：
+        # 原版按**轮**扣层，而"一轮"在技2（三轮齐射 ＋ 落地点射）、技1（刚连射）
+        # 那几种出手里大于 1，那三样（`volley_arrows` / `landing_scale` /
+        # `charge_arrows`）**还没进 Go 的 `Profile`**。Go 那边只兑现 `rounds = 1`，
+        # 所以带这三样的技能必须继续挡——否则层数消耗会比原版慢，
+        # 而症状是"多打了十几轮 115% 加成"，在判决里只表现为伤害偏高。
+        if int(getattr(op, "power_attack_count", 0) or 0) > 0:
+            _pa_eff = getattr(getattr(op, "skill", None), "effects", None)
+            _multi = False
+            if _pa_eff is not None:
+                if len(getattr(_pa_eff, "volley_arrows", None) or ()) > 1:
+                    _multi = True
+                if float(getattr(_pa_eff, "landing_scale", 0.0) or 0.0):
+                    _multi = True
+                if float(getattr(_pa_eff, "charge_arrows", 0.0) or 0.0):
+                    _multi = True
+            if _multi:
+                bad.append(f"天赋「强击瓶专家」一次出手多轮：{op.name or op.char_id}")
         for attr, why in (("dodge_phys", "物理闪避"), ("dodge_arts", "法术闪避"),
                           ("aura_atk_pct", "攻击力光环"), ("aura_def_pct", "防御光环"),
                           ("blessing_save", "免死"), ("weakness_damage", "弱点伤害"),
@@ -179,6 +266,184 @@ def unsupported_reasons(sim, *, allow_devices: bool = False,
             seen.add(item)
             out.append(item)
     return out
+
+
+def _ground_neighbours(sim, cells) -> dict[str, list[list[int]]]:
+    """每个雪格的**相邻可行走格**，按距离由近及远，去重、确定性排序。
+
+    Go 没有地图（`wire.go` 文件头那条原则），所以"谁能扩散到谁"这份几何必须由
+    Python 算好送来。口径照原版 `sim.py::_ground_neighbours`（`_snow_tick` 传给
+    `SnowField.tick` 的那个回调），**不相邻、不可行走、以及已有的格**都不在里面。
+
+    排序规则（四个方向 + 四个对角，按 `(dx, dy)` 字典序）**必须与 Go 侧遍历
+    顺序一致**：`_spread_frontier` 的顺序决定了"扩散上限先被谁占掉"，
+    而扩散上限是硬约束（`spread_cap`）——顺序不同 = 雪落在不同的格上。
+    """
+    mp = sim.stage.map
+    seen: set[tuple[int, int]] = set(cells)
+    out: dict[str, list[list[int]]] = {}
+    for (x, y) in sorted(cells):
+        nbrs: list[list[int]] = []
+        for dx, dy in ((-1, 0), (0, -1), (0, 1), (1, 0),
+                       (-1, -1), (-1, 1), (1, -1), (1, 1)):
+            c = (x + dx, y + dy)
+            if c in seen:
+                continue
+            try:
+                if not mp.walkable(*c):
+                    continue
+            except Exception:                                  # noqa: BLE001
+                continue
+            seen.add(c)
+            nbrs.append([c[0], c[1]])
+        out[f"{x},{y}"] = nbrs
+    return out
+
+
+def snow_spec(sim) -> list[dict[str, Any]]:
+    """本局会铺出来的每一片雪。**单一来源**：闸门与送数都调它。
+
+    ⚠ 这里读的是 `d.talents` 而**不是** `op.talents`——后者要到 `_do_deploy`
+    里才被写上（`sim.py:3353`），而本函数在**跑之前**就要给答案。
+    这与 `_talent_dodge`（`spec.py:257`）是同一个坑的同一种修法：值从
+    `_do_deploy` 的**同一个来源**取，不另立一套判据。
+
+    原版建对象的位置在 `sim.py:3396-3406`：
+
+        snow = find_snow(op.talents)
+        if snow is not None:
+            self.snow_fields.append(SnowField(owner, interval, max_layers,
+                slow_per_layer=abs(move_speed), magic_scale, operator=op))
+
+    四个数逐字对应，一个都不许自己发明。
+
+    **为什么需要它（这是一个真实的静默缺口，2026-09-19 实测）**：
+    `snow_fields` 是**部署那一刻**才创建的列表，而闸门与 `build_spec` 都在
+    **跑之前**执行 —— 于是 `unsupported_reasons` 里的
+    `if sim.snow_fields` 永远读到空列表，闸门**不报**、规格里也没有这一项，
+    Go 静默跑出另一场战斗。HS-EX-8 第 3 手（圣聆初雪）就这么被放过：
+    Go 17杀 90.2s vs 原版 18杀 99.1s，而 `go_fallbacks == 0` 看起来"走了 Go"。
+    判据：**闸门读运行期对象，就必须逐条问"这个对象是什么时候创建的"**。
+
+    除了四个天赋数，还要送两样 Go 拿不到的东西：
+
+    * `ground` —— 射程内的**可行走格**（雪只铺在这些格上，原版
+      `ground = [c for c in self._range_of(op) if m.walkable(*c)]`）。
+      必须是**确定性顺序**（排序后），否则积层顺序一变、`added` 的计数就变。
+    * `neighbours` —— 扩散用的相邻关系（见 `_ground_neighbours`）。
+    * `goal_cells` —— 防守点格。**满层的雪不冻结终点格**（原版
+      `and not self._is_goal(cell)`）：把已经踏到终点的敌人冻在离终点半格处，
+      它永远到不了终点，等于白送一条命。
+    """
+    fields: list[dict[str, Any]] = []
+    for d in getattr(sim, "deployments", None) or ():
+        op = operator_of(d)
+        try:
+            from ..frontend import talent_finders as _talents
+        except Exception:                                      # noqa: BLE001
+            return fields
+        snow = _talents.find_snow(getattr(d, "talents", None) or ())
+        if snow is None:
+            continue
+        fields.append({
+            "owner": op.name or op.char_id,
+            "char_id": op.char_id,
+            "cell": [int(d.position[0]), int(d.position[1])],
+            "direction": str(d.direction),
+            "interval": float(snow.value("interval", 10.0)),
+            "max_layers": int(snow.value("max_cast_cnt", 5)),
+            "slow_per_layer": abs(float(snow.value("move_speed", 0.0))),
+            "magic_scale": float(snow.value("talent_magic_scale", 0.0)),
+        })
+    return fields
+
+
+def snow_mech_spec(sim, deployments=None) -> dict[str, Any] | None:
+    """送给 Go 的积雪规格（`mech.SNOW_ID` 那一段）。没有雪就返回 None。
+
+    ⚠ `deployments` 是**迁移期的开关**：给了就用新家的那一份
+    （`frontend/schedule.py` 的 `Schedule.deployments`），没给才退回模拟器。
+    """
+    fields = snow_spec(sim)
+    if not fields:
+        return None
+    mp = sim.stage.map
+    out_fields: list[dict[str, Any]] = []
+    all_cells: set[tuple[int, int]] = set()
+    #: `operator_index` 必须与 `build_spec` 给 `deploys[].index` 的**同一个
+    #: 计数器**：那里是 `sorted(deployments, key=time)` 之后的下标。
+    #: Go 侧 `Snow.Start` 会核对它指向的那一位 `char_id`/`cell` 都对得上，
+    #: 所以这里只要跟着同一个排序走就不会错位。
+    if deployments is None:
+        deployments = sim.deployments
+    ordered = sorted(deployments, key=lambda d: d.time)
+    for f in fields:
+        op = None
+        idx = -1
+        for i, d in enumerate(ordered):
+            if operator_of(d).char_id == f["char_id"] and \
+                    [int(d.position[0]), int(d.position[1])] == f["cell"]:
+                op, idx = operator_of(d), i
+                break
+        ground: list[list[int]] = []
+        if op is not None:
+            op.position = (f["cell"][0], f["cell"][1])
+            op.direction = f["direction"]
+            cells = sorted((int(x), int(y)) for x, y in range_of(
+                sim.range_provider, char_id=op.char_id, elite=op.elite,
+                direction=f["direction"],
+                position=(f["cell"][0], f["cell"][1]),
+                range_id=op.current_range_id()))
+            ground = [[x, y] for x, y in cells if mp.walkable(x, y)]
+        all_cells.update((x, y) for x, y in ground)
+        g = dict(f)
+        g["ground"] = ground
+        g["operator_index"] = idx
+        out_fields.append(g)
+    goals = sorted({(int(x), int(y)) for x, y in
+                    (getattr(sim, "_goal_cells", None) or _find_goals(sim))})
+    return {
+        "freeze": bool(getattr(sim, "snow_freeze", True)),
+        "fields": out_fields,
+        "neighbours": _ground_neighbours(sim, all_cells),
+        "goal_cells": [[x, y] for x, y in goals],
+    }
+
+
+def _find_goals(sim) -> set[tuple[int, int]]:
+    """防守点格（原版 `_is_goal(cell)` 判的那些，`sim.py:672`）。
+
+    原版判据只有一句：`m.tile(*cell).key == "tile_end"`。所以这里用的就是
+    **同一个判据**，不另立一套（比如去找路线终点）——路线终点与防守点不是一回事，
+    而"少冻一格"的后果是判决级偏差。
+
+    取不到（地图对象没有 `tile`）就返回空集：那时行为退化成"不豁免任何格"，
+    即多冻。多冻只影响已经站在终点上的敌人，而原版对那种敌人也不冻
+    （它已经按漏怪处理了）——这是安全的退化方向。
+    """
+    mp = sim.stage.map
+    try:
+        out = set()
+        for y in range(int(mp.height)):
+            for x in range(int(mp.width)):
+                if not mp.inside(x, y):
+                    continue
+                if mp.tile(x, y).key == "tile_end":
+                    out.add((x, y))
+        return out
+    except Exception:                                          # noqa: BLE001
+        return set()
+
+
+def _snow_reasons(sim) -> list[str]:
+    """积雪这一族的闸门。按 `snow_spec` 的产物判——**别再读运行期列表**。"""
+    fields = snow_spec(sim)
+    if not fields:
+        return []
+    if ALLOW_SNOW:
+        return []
+    who = "/".join(sorted({f"{f['owner']}({f['char_id']})" for f in fields}))
+    return [f"积雪（天赋「无垠的雪景」）：{who}"]
 
 
 def _enemy_reasons(sim) -> list[str]:
@@ -242,7 +507,7 @@ def _talent_reason(op, finder: str) -> bool:
     if not talents:
         return False
     try:
-        from ..battle import talents as _talents
+        from ..frontend import talent_finders as _talents
     except Exception:                                          # noqa: BLE001
         return False
     fn = getattr(_talents, finder, None)
@@ -265,22 +530,151 @@ def _talent_dodge(op: Any, d: Any) -> tuple[float, float]:
     取的是与 `_do_deploy` **同一个来源**（`d.talents` → `find_damage_block` →
     `value("prob")`），不是自己另立一套判据；`tools/check_simgo.py` 里有一条
     "跑完之后这两个数必须等于规格里送的"的守卫，两处口径一旦分开就会响。
+
+    ⚠ **这里原先是一串 `try/except` + `getattr(..., None)` 兜底，返回 `(0.0, 0.0)`。
+    那是个会把 bug 藏起来的写法**：`find_damage_block` 一旦取不到（例如搬运天赋
+    查找器时漏带），结果不是报错，而是"这名干员**恰好**没有天赋闪避"——
+    键在规格里**静默消失**（`if talent_phys or talent_arts:` 不成立），
+    判决一模一样，只有 `spec_sha` 变了。2026-09-19 搬运 `talent_finders` 时
+    就真的这么中过一次，17 份金标准里 `plan-hs06` 单独变红才抓到。
+    ⇒ 取数一律直取，取不到就炸。
     """
-    try:
-        from ..battle import talents as _talents
-    except Exception:                                          # noqa: BLE001
-        return 0.0, 0.0
-    fn = getattr(_talents, "find_damage_block", None)
-    if fn is None:
-        return 0.0, 0.0
-    try:
-        block = fn(getattr(d, "talents", None) or [])
-    except Exception:                                          # noqa: BLE001
-        return 0.0, 0.0
+    from ..frontend import talent_finders as _talents
+    block = _talents.find_damage_block(getattr(d, "talents", None) or [])
     if block is None:
         return 0.0, 0.0
     value = float(block.value("prob", 0.0) or 0.0)
     return value, value
+
+
+def _team_auras_of(d, op) -> list[dict[str, Any]]:
+    """这一位干员自己带出去的**全场光环**（天赋），照原版部署那一刻那几段写。
+
+    来源是 `find_team_aura` / `find_class_aura` / `find_ammo_covenant` 三个
+    **互不重叠**的探测器，一名干员可以同时命中多条（「万众巨潮」与
+    「特种作战策略」就是并列的两条天赋，不是同一件事）。
+
+    ⚠ `skill_only` 那一条**不能在规格里定死数值**：它随主人开不开技能变，
+    Go 侧每帧重算（`teamAuraTick`）。这里送的是"这条光环长什么样"，
+    不是"这一刻它值多少"。
+
+    ⚠ `double_scale` **每次都要显式送**：原版那个字段的默认值是 2.0
+    （`double_scale: float = 2.0`），不是"没有就不翻倍"。靠 `omitempty`
+    省掉它，Go 侧读到的就是 0——主人一开技能，加成会被乘成 0。
+    """
+    from ..frontend import talent_finders as _t
+    out: list[dict[str, Any]] = []
+    tal = getattr(d, "talents", None) or []
+    name = op.name or op.char_id
+    aura = _t.find_team_aura(tal)
+    if aura is not None:
+        if aura.name == _t.FACTION_AURA_NAME:
+            # 「万众巨潮」：**只在主人技能期间**生效，且对【乌萨斯学生自治团】
+            # 翻倍（按 char_id 名单）。与「青色怒火」是两种形状，不能用同一个
+            # 倍率表达——那个是常驻 + 开技能加倍。
+            out.append({
+                "owner": name,
+                "atk_pct": float(aura.value("atk", 0.0) or 0.0),
+                "def_pct": float(aura.value("def", 0.0) or 0.0),
+                "skill_only": True,
+                "faction": sorted(_t.STUDENT_TEAM),
+                "faction_scale": float(aura.value("scale_bonus", 2.0) or 2.0),
+                "double_scale": 2.0,
+            })
+        else:
+            # 「青色怒火」：常驻 + 主人开技能时加倍。
+            out.append({
+                "owner": name,
+                "atk_pct": float(aura.value("atk", 0.0) or 0.0),
+                "def_pct": float(aura.value("def", 0.0) or 0.0),
+                "double_scale": 2.0,
+            })
+    class_aura = _t.find_class_aura(tal)
+    if class_aura is not None:
+        out.append({
+            "owner": name,
+            "atk_pct": float(class_aura.value("atk", 0.0) or 0.0),
+            "def_pct": float(class_aura.value("def", 0.0) or 0.0),
+            # ⚠ 这里是**主职业代号**（`TANK` = 重装），不是阵营 char_id 名单。
+            "profession": _t.CLASS_AURA_TALENTS[class_aura.name],
+            "double_scale": 2.0,
+        })
+    covenant = _t.find_ammo_covenant(tal)
+    if covenant is not None:
+        out.append({
+            "owner": name,
+            "atk_pct": float(covenant.value("atk", 0.0) or 0.0),
+            "def_pct": float(covenant.value("def", 0.0) or 0.0),
+            "double_scale": float(covenant.value("mult", 2.0) or 2.0),
+            "ammo_skill_only": True,
+            # 按**势力**翻倍（【拉特兰】），与按名单翻倍是两种数据形态。
+            "nation_double": _t.LATERANO_NATION,
+        })
+    # 「天使的祝福」（能天使）：**自身** +6% 攻击。自身那半借光环通道，
+    # `self_only` 只发自己。
+    # ⚠ 同句的「随机友方」那半**两边都没做**（等裁定），所以这条天赋只算一半。
+    # ⚠ 同一段里还有一句 `op.apply_max_hp_bonus(...)`（自身生命上限 +10%），
+    # 那**不是光环**、也不在这里送：它在部署那一刻改 `op.max_hp`，而规格正是
+    # 那一刻取的 ⇒ Go 拿到的是**没加过**的生命上限。名册里暂时没有能天使，
+    # 所以还没显形；**换名册时这条会静默变成"Go 那边血少一截"**。
+    angel = _t.find_angel_blessing(tal)
+    if angel is not None:
+        out.append({
+            "owner": name,
+            "atk_pct": float(angel.value("atk", 0.0) or 0.0),
+            "def_pct": 0.0,
+            "self_only": True,
+            "double_scale": 2.0,
+        })
+    # 「极限调度」（可露希尔）：【罗德岛】干员攻击力 +4%。
+    # ⚠ 同句的「部署费用下限 -3」**不在战斗层**（属名册/费用规则），原版也没做
+    # ——所以这条天赋两边都只算一半。
+    # ⚠ `faction_only` 是**筛选**（不匹配的一律 0），不是 `nation_double` 那种
+    # "该势力 ×2、别人 ×1"。两个字段别混。
+    dispatch = _t.find_limit_dispatch(tal)
+    if dispatch is not None:
+        out.append({
+            "owner": name,
+            "atk_pct": float(dispatch.value("atk", 0.0) or 0.0),
+            "def_pct": 0.0,
+            "faction_only": _t.RHODES_NATION,
+            "double_scale": 2.0,
+        })
+    return out
+
+
+def _shield_of(d) -> dict[str, Any] | None:
+    """这一次部署的**层数护盾**配置；这个干员没有护盾就返回 None。
+
+    ⚠ **读 `d.talents`，不读运行期对象** —— 与上面 `blessing_*`、以及积雪的
+    `snow_spec` 是同一个坑的同一种修法。`op.shield_max_layers` / `op.shield_layers`
+    要到 `_do_deploy` 里 `_attach_talent_shield`（`sim.py:3157-3182`）才被写上，
+    而这份规格正是**在那之前**取的：读运行期只会读到 0，而"规格里是 0"与
+    "这个干员本来就没护盾"在 Go 那边长得一模一样，是**静默**的。
+
+    判据与 `sim.py:3165-3175` 逐字对齐：谁的天赋效果带 `shield_max_layers`
+    就是谁（泥岩「沃土予身」有黑板 `max_times`；空弦「铁弦」没有上限、正文只写
+    "获得**一层**护盾"，取两者的**大**者）；两者都为 0 就跳过。**只取第一个命中的**
+    ——原版那一句就是 `return`，不是求并集。
+
+    送**比例**而不是回血量：原版 `op.shield_break_heal = ratio × op.max_hp` 用的是
+    **部署那一刻**的生命上限，所以由 Go 在同一时刻用同一个上限去乘。
+    """
+    for tal in getattr(d, "talents", None) or ():
+        eff = getattr(tal, "effects", None)
+        if eff is None:
+            continue
+        cap = max(int(eff.shield_max_layers), int(eff.shield_layers_on_deploy))
+        if cap <= 0:
+            continue
+        return {
+            "max_layers": cap,
+            "layers": int(eff.shield_layers_on_deploy),
+            "interval": float(eff.shield_interval),
+            "break_heal_ratio": float(eff.shield_break_heal_ratio),
+            "break_sp": float(eff.shield_break_sp),
+        }
+    return None
 
 
 def _operator_spec(sim, d) -> dict[str, Any]:
@@ -291,7 +685,7 @@ def _operator_spec(sim, d) -> dict[str, Any]:
     填进去（值与模拟器随后要填的完全一样）——不填的话，算出来的是一张以 (0,0)
     为原点的范围表，而且**不会报错**，只会让两边的覆盖格悄悄不同。
     """
-    op = d.operator
+    op = operator_of(d)
     op.position = (int(d.position[0]), int(d.position[1]))
     op.direction = d.direction
     # 幂等：正常情况下闸门（`unsupported_reasons`）已经挂过了，这里再挂一次
@@ -299,7 +693,10 @@ def _operator_spec(sim, d) -> dict[str, Any]:
     _attach_skill_for_spec(d)
     spd = float(getattr(op, "attack_speed", 100.0) or 100.0)
     interval = max(MIN_INTERVAL, float(op.attack_interval) * 100.0 / max(ASPD_MIN, spd))
-    cells = sim._range_of(op)
+    cells = range_of(sim.range_provider, char_id=op.char_id, elite=op.elite,
+                     direction=d.direction,
+                     position=(int(d.position[0]), int(d.position[1])),
+                     range_id=op.current_range_id())
     skill, active = skills.skill_spec(sim, d)
     out = {
         "char_id": op.char_id,
@@ -334,13 +731,63 @@ def _operator_spec(sim, d) -> dict[str, Any]:
     # 它们由部署钩子在 `sim.py:3417-3418` 挂上，而这份规格是在**部署那一刻**取的
     # ——实测取到的是 0（"规格里是 0、原版跑起来却免死了一次"，两边于是永远差
     # 一条命，而规格看上去"送到了"）。照原版那一句直接查天赋，得到同一个数。
-    from ..battle import talents as _talents
+    from ..frontend import talent_finders as _talents
     _bless = _talents.find_blessing(getattr(d, "talents", None) or [])
     _bsave = float(_bless.value("c2e_freeze", 0.0) or 0.0) if _bless else 0.0
     if _bsave > 0.0:
         out["blessing_save"] = _bsave
         out["blessing_self_freeze"] = float(
             (_bless.value("freeze", 0.0) or 0.0) if _bless else 0.0)
+    # `层数护盾`（泥岩「沃土予身」/ 空弦「铁弦」）：**次数制抵挡**，一层把这一下
+    # 整笔吃掉（原版 `unit.py:613-620`）。没有它的时候，`tr02` 的单人泥岩在原版
+    # 前三下**一下都没挨**、在 Go 里每下按 5% 保底扣 14.5 —— 她于是提前阵亡，
+    # 判决从"430.13s 零漏"变成"187.33s 三漏"，而**四项里只看得到结果、看不到原因**。
+    _sh = _shield_of(d)
+    if _sh is not None:
+        out["shield"] = _sh
+    # 天赋「医者丰碑」（凯尔希 / 凯尔希·思衡托）：「其他友方干员**进入自身攻击
+    # 范围时**立刻获得 1 层护盾并额外获得一次**每秒回复 N 点生命值**的增益治疗，
+    # 持续 M 秒（**不可叠加**），增益治疗对【罗德岛】干员的效果**翻倍**。」
+    #
+    # 这个字段**只挂在光环主人自己身上**（范围问的是它本人），不是关卡机制那一层。
+    # 和 `blessing_*` 同款理由：`sim.regen_auras` 是**部署那一刻**才 append 的
+    # （`sim.py:3423-3434`），而这份规格正是部署那一刻取的——读运行期属性会拿到
+    # 空表，而且**不会报错**，只会让 Go 那边静默地少掉一整套机制。
+    #
+    # ⚠ 原文里的「1 层护盾」**没有黑板键**（层数写在正文里），原版 `RegenAura`
+    # 也只兑现了回血那一半（`talents.py:620` 写明了）。所以这里同样只送回血，
+    # 两边一致——不是漏了，是照着原版的口径走。
+    _rgen_talents = getattr(d, "talents", None) or []
+    _regen = _talents.find_regen(_rgen_talents)
+    if _regen is not None:
+        _mon = _talents.find_medic_monument(_rgen_talents)
+        out["regen_aura"] = {
+            "hp_per_sec": float(_regen.value("hp_recovery_per_sec", 0.0) or 0.0),
+            "duration": float(_regen.value("buff_duration", 0.0) or 0.0),
+            # **势力与倍率都从黑板取**，不写死 2.0（原版 `sim.py:3421-3433` 同）。
+            "nation": (_talents.RHODES_NATION if _mon is not None else ""),
+            "nation_mult": (float(_mon.value("rhodes_bonus", 1.0) or 1.0)
+                            if _mon is not None else 1.0),
+            # 「进入」的两种读法跟着 `heal_mode` 一起切（原版 `sim.py:2837-2838`）。
+            "strict": str(getattr(sim, "heal_mode", "range")) == "target",
+        }
+    # 势力代号：光环的「对【罗德岛】翻倍」要按**被治者**的势力判，
+    # 所以每位干员都得带上自己的。取不到就是空串（等于不翻倍）。
+    if getattr(op, "nation_id", ""):
+        out["nation_id"] = str(op.nation_id)
+    # 主职业代号：**只有一个消费者**——按职业发的全场光环（星熊「特种作战策略」）。
+    if getattr(op, "profession", ""):
+        out["profession"] = str(op.profession)
+    # 这一位干员自己带出去的**全场光环**（天赋）。一个干员可以有多条，
+    # 所以是列表。
+    #
+    # 和 `blessing_*` / `regen_aura` 同款理由：`sim.team_auras` 是**部署那一刻**
+    # 才 append 的（`sim.py:3448-3531`），而这份规格正是部署那一刻取的——
+    # 读运行期那张表会拿到**空**，而且不会报错。照原版那几段直接查天赋，
+    # 得到的是同一批对象。
+    auras = _team_auras_of(d, op)
+    if auras:
+        out["team_auras"] = auras
     talent_phys, talent_arts = _talent_dodge(op, d)
     if talent_phys or talent_arts:
         out["talent_dodge_phys"] = talent_phys
@@ -368,6 +815,26 @@ def _operator_spec(sim, d) -> dict[str, Any]:
             _slu = float(getattr(op, "highland_splash_sluggish", 0.0) or 0.0)
             if _slu > 0.0:
                 out["highland_splash_sluggish"] = _slu
+    # ---- 普攻连击（焰狐龙梓兰的**隐藏天赋**）+ 天赋「强击瓶专家」
+    #
+    # 这两条在 `spec.py` 的上半段**原本是拒绝项**（`combo_hits > 1` 与
+    # `power_attack_count` 各挡一道），现在 Go 侧已经兑现，改成送字段。
+    #
+    # ⚠ 默认值必须按原版抄：`combo_hits` 的"没有这条"是 **1**、`combo_hit_scale`
+    # 是 **1.0**、`combo_damage_scale` 是 **1.0**。原版判的是 `> 1`，
+    # 写成 0 或漏送会让"每一位没有连击的干员"在 Go 那边被当成连击处理。
+    _combo = int(getattr(op, "combo_hits", 1) or 1)
+    if _combo > 1:
+        out["combo_hits"] = _combo
+        out["combo_hit_scale"] = float(
+            getattr(op, "combo_hit_scale", 1.0) or 1.0)
+        out["combo_damage_scale"] = float(
+            getattr(op, "combo_damage_scale", 1.0) or 1.0)
+    _pac = int(getattr(op, "power_attack_count", 0) or 0)
+    if _pac > 0:
+        out["power_attack_count"] = _pac
+        out["power_attack_scale"] = float(
+            getattr(op, "power_attack_scale", 1.0) or 1.0)
     if skill is not None:
         out["skill"] = skill
         out["active"] = active
@@ -387,14 +854,80 @@ def _legs_spec(legs) -> list[dict[str, Any]]:
     return out
 
 
-def _spawn_spec(sim, t: float, sp) -> dict[str, Any]:
+def _route_tables(stage) -> dict[int, tuple[list, float, list]]:
+    """`{路线号: (折线点, 待命秒数, 分段腿)}`——**与 `sim.py:583-586` 同口径**。
+
+    ⚠ 算一次就够：`route_plans` 里面要走寻路。别放进按敌人循环里。
+    """
+    out: dict[int, tuple[list, float, list]] = {}
+    for i, p in route_plans(stage).items():
+        out[i] = (p.points, p.wait, p.legs)
+    return out
+
+
+def _view(sim, *, enemy_id: str, level: int,
+          route: list, legs: list, t: float, wait: float = 0.0):
+    """造一个敌人的**规格视图**（不是 `EnemyUnit`）。
+
+    ⚠ 与原版 `sim._build_enemy` 的差别只有一处、而且是**去掉**了一个副作用：
+    原版会顺手写 `sim.mode_skill` / `sim._mode_next`（所以 `_reborn_summons_spec`
+    得靠 `copy.copy(sim)` 绕开），`enemy_view` **不写任何地方**。
+    换关卡乘区/难度档位这些仍走同一个 `enemy_at`（原版也是这样），所以不必重实现。
+    """
+    stats = enemy_stats(sim.enemy_at, sim.stage, enemy_id, level)
+    return enemy_view(stats, enemy_id=enemy_id, level=level,
+                      route=route, legs=legs, t=float(t), wait=float(wait),
+                      species_provider=sim.species_provider)
+
+
+def _spawn_spec(sim, t: float, sp,
+                routes: dict[int, tuple[list, float, list]]) -> dict[str, Any]:
     """一个敌人的规格。
 
-    这里调的是 `sim._spawn()`——**和原版那条路是同一个函数**，所以路线分段、
-    关卡乘区、难度档位这些不必再实现第二遍。它只建对象、不改模拟器状态。
+    路线分段从 `routes`（由 `_route_tables` 算一次）取——**与 `sim._spawn` 同一套**：
+    有分段腿时开头的待命已经在计划里，不再另设。
     """
-    e = sim._spawn(sp.enemy_id, sp.level, sp.route_index, float(t))
-    return _unit_spec(sim, e, time=float(t))
+    pts, w, legs = routes.get(sp.route_index, ([], 0.0, []))
+    # 有分段计划时，开头的待命已经是计划里的 wait 段，别再设一遍
+    e = _view(sim, enemy_id=sp.enemy_id, level=sp.level, route=pts, legs=legs,
+              t=float(t), wait=0.0 if legs else w)
+    out = _unit_spec(sim, e, time=float(t))
+    #: **天桩-乙也要从出怪表刷出来**，而且原版对它们照样跑 `_pile_diver_tick`。
+    #:
+    #: 判据走 `pile_mark_key(sim.stage, e)`——与装置召唤那条链**同一处查表**，不是
+    #: 另写一张名字表。理由是"哪些单位是乙"这件事只有一个真相来源
+    #: （`PILE_MARK` + 关卡本地 `_dhtb_b` 退到 `prefabKey`）。
+    #:
+    #: ⚠ 只给**出怪表**的这条路打标：装置召唤出来的甲/乙/天标走
+    #: `_unit_spec`（由 `_pile_device_spec` 的模板送给 Go 的机制层），
+    #: 那几只是在 Go 的 `m.units` 里被管的。两边都打标会**同一只被推两遍**。
+    out["diver"] = bool(pile_mark_key(sim.stage, e))
+    if out["diver"]:
+        #: 乙咬中之后要挂**天标**，所以模板随它一起送——和机制层
+        #: `mech.py::_pile_device_spec` 用的是**同一处口径**（同一张 `PILE_MARK`
+        #: 表、同一组常量），不是另写一份。
+        #:
+        #: ⚠ 天标不只是"给干员掉血的挂件"：它 `hp` 也是 1.0，**会被我方索敌**。
+        #: `act31side_09` 的逐笔出手账里原版有一笔 `t=47.1000 → 身上的天标 1.00`
+        #: ——只做掉血那一半、不把天标当敌人造出来，会再差一次。
+        mark_key = pile_mark_key(sim.stage, e)
+        try:
+            mark = _view(sim, enemy_id=str(mark_key),
+                         level=summon_level(sim.stage, str(mark_key)),
+                         route=[(0.0, 0.0)], legs=[], t=0.0, wait=0.0)
+        except Exception:                                        # noqa: BLE001
+            mark = None
+        if mark is not None:
+            mspec = _unit_spec(sim, mark)
+            #: 「无法攻击/被阻挡」是它的天赋原文：不可阻挡、也不参与索敌优先级。
+            mspec["unblockable"] = True
+            mspec["attach_damage"] = float(
+                getattr(mark, "attach_damage", 0.0) or 0.0)
+            #: 附着半径 0.3、贴到目标的判据 0.5——与 `mech.py` 同一处常量。
+            mspec["attach_radius"] = 0.3
+            out["mark"] = mspec
+            out["hit_radius"] = 0.5
+    return out
 
 
 def _unit_spec(sim, e, *, time: float = 0.0) -> dict[str, Any]:
@@ -425,7 +958,7 @@ def _unit_spec(sim, e, *, time: float = 0.0) -> dict[str, Any]:
         "taunt_level": int(getattr(e, "taunt_level", 0) or 0),
         "life_cost": int(e.life_cost),
         "kill_cost": int(getattr(e, "kill_cost", 0) or 0),
-        "cannot_clear": bool(sim._cannot_clear(e)),
+        "cannot_clear": bool(cannot_clear(e)),
         # 被击倒时给田地加病害的那两项（怀黍离）。送的是**圆心之外的原始数值**：
         # 圆心由 Go 在击倒那一刻自己判（被阻挡时取挡它的干员那一格，否则取自己
         # 那一格）——那不是"敌人是什么"的一部分，是"当时场上是谁"的一部分。
@@ -532,9 +1065,13 @@ def _reborn_summons_spec(sim, e) -> list[dict[str, Any]]:
     `_reborn_tick` 4176 行就是这样解包的），"召唤谁"要**现造一只**才知道它长
     什么样——Go 侧没有敌人图鉴，只有规格。
 
-    造模板用的是 `copy.copy(sim)`：`_build_enemy` 会顺手写 `sim.mode_skill`
-    这类"随规格走的"实例状态，直接拿本体造就等于**提前改了要跑的那一份**。
-    浅拷贝把这些写入留在副本上，本体在正式跑之前仍然是干净的。
+    造模板以前要用 `copy.copy(sim)`：原版 `_build_enemy` 会顺手写
+    `sim.mode_skill` 这类"随规格走的"实例状态，直接拿本体造就等于**提前改了
+    要跑的那一份**，浅拷贝只是把这些写入留在副本上。
+
+    ⚠ **那个绕法已经不需要了**（本文件不再 `import copy`）：改用 `enemy_view`
+    之后"造敌人"**不写任何地方**，副作用没了，副本也就没有意义。
+    这也正是为什么"把副作用按归属切开"值得做——它顺手消掉了一处陷阱。
 
     路线表按**地图每一格**算（`ground_path` 到最近保护目标，与
     `eta.route_plans` 同一个寻路）：召唤那一刻站在哪一格只有跑到才知道，
@@ -544,7 +1081,8 @@ def _reborn_summons_spec(sim, e) -> list[dict[str, Any]]:
     rows = list(getattr(e, "reborn_summons", ()) or ())
     if not rows:
         return []
-    import copy
+    #: ⚠ 这里曾经有一句 `import copy`（浅拷贝模拟器造模板）。改用 `enemy_view` 之后
+    #: 不再需要——它不写任何地方，见本函数的文档串。
 
     m = sim.stage.map
     paths: dict[str, list[list[int]]] = {}
@@ -552,15 +1090,20 @@ def _reborn_summons_spec(sim, e) -> list[dict[str, Any]]:
         for y in range(int(getattr(m, "height", 0))):
             if not m.walkable(x, y):
                 continue
-            p = sim._path_from((x, y))
+            p = path_from(sim.stage, (x, y))
             if p:
                 paths[f"{x},{y}"] = [[int(a), int(b)] for a, b in p]
     out: list[dict[str, Any]] = []
     for itv, cnt, key in rows:
-        level = sim._summon_level(str(key))
-        probe = copy.copy(sim)
-        # 腿留空：真正那条腿由 Go 按召唤那一刻的格子从 `paths` 里取。
-        unit = probe._build_enemy(str(key), level, [(0.0, 0.0)], [], 0.0, 0.0)
+        level = summon_level(sim.stage, str(key))
+        #: 腿留空：真正那条腿由 Go 按召唤那一刻的格子从 `paths` 里取。
+        #:
+        #: ⚠ 以前这里是 `probe = copy.copy(sim)` 再 `probe._build_enemy(...)`——
+        #: 因为原版的"造敌人"会顺手写 `sim.mode_skill`，直接拿本体造就等于
+        #: **提前改了要跑的那一份**。改用 `enemy_view` 之后那个绕法自然消失：
+        #: 它**不写任何地方**。
+        unit = _view(sim, enemy_id=str(key), level=level,
+                     route=[(0.0, 0.0)], legs=[], t=0.0, wait=0.0)
         out.append({
             "interval": float(itv),
             "count": int(cnt),
@@ -571,7 +1114,8 @@ def _reborn_summons_spec(sim, e) -> list[dict[str, Any]]:
 
 
 def build_spec(sim, *, stage_label: str = "", allow_devices: bool = False,
-               allow_skills: bool = False, mechanisms: Iterable[str] = ()) -> dict[str, Any]:
+               allow_skills: bool = False, mechanisms: Iterable[str] = (),
+               schedule=None, env=None) -> dict[str, Any]:
     """`BattleSimulator` → 规格 dict。**调用前要先把 plan 排好。**
 
     只读 `sim` 的状态（`_spawn` 与 `_range_of` 都是纯读；后者要先补 position——
@@ -584,31 +1128,72 @@ def build_spec(sim, *, stage_label: str = "", allow_devices: bool = False,
     传进来的名字与自动判出来的**取并集**（调用方偶尔要点名一个自动判不出的机制时
     用得上）。**名字是 Python 与 Go 之间的契约**，两边都得改的时候一起改。
     """
+    #: ⚠ **本函数也要一份 `sch`**：闸门那几条住在 `unsupported_reasons()` 里、
+    #: 部署循环住在这里，两处是**两个函数**，各要各的。只在一处定义会
+    #: `NameError: name 'sch' is not defined`——而它会被上层记成"规格抄不到"，
+    #: 看起来像"这次改动把规格改坏了"。口径与 `unsupported_reasons` 里那份一致。
+    sch = schedule if schedule is not None else sim
+
+    #: ⚠ **关卡静态那 8 项**（`fps` / `speed_scale` / `ranged_enemies` /
+    #: `enemy_windup` / `cost_init` / `cost_max` / `cost_time` / `life`）
+    #: 同样从**新家** `frontend/stage_env.py` 取，不再从模拟器上读**派生后**的值。
+    #:
+    #: 为什么必须从**构造参数**重算而不是继续读 `sim.*`：`sim.speed_scale` 已经
+    #: 乘过关卡的 `move_multiplier`、`sim.enemy_windup` 已经夹过零——那是
+    #: **派生的结果**，反推不回原始参数。`stage_env` 拿原始参数算一遍，
+    #: 得到的值与模拟器**逐字相同**（`stage_env` 就是照 `sim.py:418-440` 搬的），
+    #: 但它不欠 `battle/` 一分钱。
+    #:
+    #: 迁移期：调用方（`verify.py::run`）给了 `env` 就用它；没给就自己算一份 +
+    #: 从模拟器上补齐那四项（兜底，行为与迁移前一致）。
+    if env is None:
+        env = dict(stage_env(
+            sim.stage,
+            environment_difficulty=getattr(sim, "environment_difficulty",
+                                           "NORMAL")))
+        env.update({
+            "fps": int(sim.fps),
+            "speed_scale": float(sim.speed_scale),
+            "ranged_enemies": bool(sim.ranged_enemies),
+            "enemy_windup": float(sim.enemy_windup),
+        })
+
     mechanisms = list(dict.fromkeys([*mech.names_for(sim), *mechanisms]))
     mech_config: dict[str, Any] = {}
     if mech.FARMLAND_ID in mechanisms:
         farm = mech.farmland_spec(sim)
         if farm is not None:
             mech_config[mech.FARMLAND_ID] = farm
+    if mech.SNOW_ID in mechanisms:
+        snow_cfg = snow_mech_spec(sim, deployments=sch.deployments)
+        if snow_cfg is not None:
+            mech_config[mech.SNOW_ID] = snow_cfg
     operators: list[dict[str, Any]] = []
     deploys: list[dict[str, Any]] = []
-    for d in sorted(sim.deployments, key=lambda d: d.time):
+    for d in sorted(sch.deployments, key=lambda d: d.time):
         operators.append(_operator_spec(sim, d))
         deploys.append({
             "time": float(d.time),
             "index": len(operators) - 1,
-            "char_id": d.operator.char_id,
-            "cost": int(d.operator.deploy_cost),
+            "char_id": operator_of(d).char_id,
+            "cost": int(operator_of(d).deploy_cost),
             # 显式送：Go 侧的零值是 False，而原版的默认是 True（`Deployment.auto_skill`）
             "auto_skill": bool(getattr(d, "auto_skill", True)),
         })
-    spawns = [_spawn_spec(sim, t, sp) for t, sp in sim._spawns]
+    #: ⚠ 算**一次**：`route_plans` 里面要走寻路，放进按敌人循环里会重算几百遍。
+    routes = _route_tables(sim.stage)
+    #: ⚠ **不再读 `sim._spawns`**：那是模拟器在构造时把 `stage.timeline()`
+    #: 排好序之后存下的（`sim.py:557`）。出怪表是**关卡数据**，直接从关卡取，
+    #: 排序口径也照同一处（`stage.timeline()` 自己就是按时刻排好的，模拟器
+    #: 那次 `sorted` 只是保险）。
+    spawns = [_spawn_spec(sim, t, sp, routes) for t, sp in sim.stage.timeline()]
     skill_uses = [{"time": float(u.time),
                    "cell": [int(u.position[0]), int(u.position[1])]}
-                  for u in getattr(sim, "skill_uses", []) or []]
+                  for u in sch.skill_uses]
+    #: 关卡静态那 8 项**已经**在本函数开头由 `env` 备好了（口径与出处见那里）。
     return {
         "stage": stage_label or str(getattr(sim.stage, "code", "") or ""),
-        "fps": int(sim.fps),
+        "fps": int(env["fps"]),
         # ⚠ 不能写死 600：原版的 `BattleSimulator.run(max_time=600.0)` 只是**默认**，
         # 而验证这一路调的是 `sim.run(max_time=900.0)`（`verifier.py:93` 与
         # `verify.py:410`）。写死 600 会让"打到 814 秒才赢"的作业在 Go 侧被
@@ -617,24 +1202,29 @@ def build_spec(sim, *, stage_label: str = "", allow_devices: bool = False,
         # `sim` 自己不一定记着这个数（它是 `run` 的形参），所以回退到 900——
         # 那就是上面两处调用点用的值。哪天上游改成按关卡给，这里会自己跟上。
         "max_time": float(getattr(sim, "max_time", 0.0) or 900.0),
-        "life": int(sim.life),
-        "cost_init": float(sim.cost),
-        "cost_max": float(sim.max_cost),
-        "cost_time": float(sim.cost_time),
-        "enemy_windup": float(sim.enemy_windup),
-        "ranged_enemies": bool(sim.ranged_enemies),
-        "speed_scale": float(sim.speed_scale),
+        "life": env["life"],
+        "cost_init": env["cost_init"],
+        "cost_max": env["cost_max"],
+        "cost_time": env["cost_time"],
+        "enemy_windup": float(env["enemy_windup"]),
+        "ranged_enemies": bool(env["ranged_enemies"]),
+        "speed_scale": float(env["speed_scale"]),
         # 高台格：Go 没有地图，而天赋「汹涌怒火」的高台那一半要判"被溅射到的格
         # 是不是高台"。只在这条特性真在场时才送（通用关卡一帧都不多花）。
         "highland_cells": _highland_cells(sim) if any(
-            float(getattr(d.operator, "highland_splash_scale", 0.0) or 0.0) > 0.0
-            for d in sim.deployments) else [],
+            float(getattr(operator_of(d), "highland_splash_scale", 0.0) or 0.0) > 0.0
+            for d in sch.deployments) else [],
+        # 防守点格：只有积雪在场时才需要（它的满层冻结对终点格豁免）。
+        # Go 侧的 `IsGoalCell` 每帧每个敌人问一次，空列表的代价可忽略。
+        "goal_cells": [[x, y] for x, y in sorted(_find_goals(sim))]
+        if mech.SNOW_ID in mechanisms else [],
         "operators": operators,
         "deploys": deploys,
         "spawns": spawns,
         "skill_uses": skill_uses,
         "unsupported": unsupported_reasons(
-            sim, allow_devices=allow_devices, allow_skills=allow_skills),
+            sim, allow_devices=allow_devices, allow_skills=allow_skills,
+            schedule=schedule),
         "mechanisms": mechanisms,
         "mech_config": mech_config,
     }

@@ -39,7 +39,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
-from .environment import bb_number, find_rune, mask_applies
+from .blackboard import bb_number, find_rune, mask_applies
 
 __all__ = [
     "ATTR_MUL_KEY", "TALENT_MUL_KEY", "SKILL_MUL_KEY", "LIFEPOINT_KEY",

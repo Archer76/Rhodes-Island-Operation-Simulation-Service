@@ -1,4 +1,4 @@
-"""把 Go 那份模拟器接进**验证/搜索**这条流水线（默认仍走原版）。
+"""把 Go 那份模拟器接进**验证/搜索**这条流水线（默认已是 Go，博士 2026-09-19 裁定）。
 
 ## 分工
 
@@ -14,7 +14,10 @@
 
 ## 三条纪律
 
-1. **默认 python**。换引擎要显式 `engine="go"`。
+1. **默认已是 go**（博士 2026-09-19 裁定：怀黍离全部关卡对拍通过后切换，Python 那份
+   退为对拍基准、不再作运行时引擎）。⚠ 因此 `Verifier` 的基类必须**自己接住 `"go"`**
+   ——见 `ensure_go_engine` 的注释：默认值改过去而出口只挂在本模块的混入类上时，
+   全仓的裸 `Verifier()` 会当场崩在"基类没有这个能力"上，而不是跑 Go。
 2. **不支持就退回，并且说出来**。规格里出现没移植的字段时 Go 会拒跑
    （`spec.unsupported`），这里当场退回原版，并在 `diagnosis` 里写一行说明——
    静默换引擎等于让搜索结果没法归因。
@@ -78,14 +81,15 @@ class GoEngineMixin:
 
     # ------------------------------------------------------------ 换引擎出口
 
-    def _run_other_engine(self, *, sim, plan, stage, deployed, title):
+    def _run_other_engine(self, *, sim, plan, stage, deployed, title,
+                          schedule=None, env=None):
         """`Verifier.run` 在 `engine != "python"` 时调到这里。
 
         ⚠ 规格必须在**跑之前**取：`build_spec` 读的是 `sim.life` / `sim.cost`
         这些"此刻"的字段，跑完之后 `life` 已经是 0，Go 收到一份 life=0 的规格会
         当场判负、一帧都不跑（这个坑实测撞过）。
         """
-        spec = build_spec(sim, allow_devices=True)
+        spec = build_spec(sim, allow_devices=True, schedule=schedule, env=env)
         unsupported = list(spec.get("unsupported") or [])
         if unsupported:
             # 没移植的东西——**退回原版**，并且写清楚。
@@ -139,6 +143,38 @@ class GoEngineMixin:
         if got.get("ms") is not None:
             v.diagnosis.append(f"Go 侧自称这一场用了 {float(got['ms']):.1f} ms。")
         return v
+
+
+def ensure_go_engine(obj: Any) -> None:
+    """把一个**裸 `Verifier`** 就地补成"能跑 Go"的那一份。
+
+    ## 为什么必须有它
+
+    `Verifier` 的默认引擎已经切成 `"go"`（博士 2026-09-19 裁定），可 Go 的出口
+    本来**只挂在 `GoVerifier`（混入 `GoEngineMixin`）上**。于是全仓那些裸
+    `Verifier()` 会**崩**在 `_run_other_engine` 的"基类没有这个能力"上，
+    而不是跑 Go——**默认值一改就全仓崩**，这是实测撞到的，不是推的。
+
+    ## 为什么绑实例、而不是改类或改继承
+
+    * `verify.py` **不能** import `simgo`（`simgo.verifier` 反过来 import 了
+      `verify`），循环。绑实例是惰性的，绕开了这条边。
+    * 只有真正要跑 Go 的实例才付这份代价；而且 `GoVerifier` 那条路**完全不受影响**
+      （它的类上本来就有这三个方法，绑上去的只是同名同实现）。
+
+    绑的是混入类那三个方法 + 它 `__init__` 里那几个计数器。⚠ 漏掉任何一个，
+    症状都是"跑到一半 AttributeError"，所以下面用一张表统一做，不手抄。
+    """
+    import types
+
+    for name in ("_go_client", "_run_other_engine", "_verdict_from_go"):
+        setattr(obj, name, types.MethodType(getattr(GoEngineMixin, name), obj))
+    if "_go" not in obj.__dict__:
+        obj._go = None
+    #: 与 `GoEngineMixin.__init__` 逐项对齐：跑过的场次、累计耗时、退回原版的次数。
+    for attr, init in (("go_runs", 0), ("go_seconds", 0.0), ("go_fallbacks", 0)):
+        if attr not in obj.__dict__:
+            setattr(obj, attr, init)
 
 
 class GoVerifier(GoEngineMixin, Verifier):
