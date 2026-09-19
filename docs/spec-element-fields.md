@@ -73,7 +73,7 @@
 | `ba.dt.burning` | 灼燃损伤 | 78× | `elemFire`（FIRE） |
 | `ba.dt.apoptosis` | 凋亡损伤 | 27× | `elemDark`（DARK） |
 | `ba.dt.rampage` | 狂躁损伤 | 3× | `elemAnger`（ANGER） |
-| `ba.dt.element` | 元素损伤（**通用**，非第六种） | 5× | ⚠ 无对应；**须裁定** |
+| `ba.dt.element` | 元素损伤（**通用**，非第六种） | 5× | **拒跑**（通告 #7 五：不许静默按 0） | ⚠ 无对应；出现即拒跑，不得当第六种元素 |
 | `ba.dt.stun` | 晕眩（**不是元素损伤**） | 3× | ⚠ 不得当元素处理 |
 
 **这张表是承重墙**：Go 的常量名（SANITY/WATER/FIRE/DARK/ANGER）与数据侧 id 是**两套词**，
@@ -97,6 +97,8 @@
    例：L710 `force`、L1274 `stun_prob`、L1283 `attack@prob`）。
    ⇒ 结论：**规格必须把敌人的 `blackboard` 原样送进来**，前缀不解释、不改写；
    "什么时候结算"由读它的那个机制决定，不由前缀字符串决定。
+   ⚠ **拼写错误必须原样保留**（通告 #7 二）：`GetEnmey.` 原文如此，**不许顺手改成 `GetEnemy.`**
+   ——键名对不上的后果是**静默取空**，比报错难查得多。
    ⚠ 仍**未验证**的是：`aura.` / `Wake2Sleep.` / `GetEnmey.`（原文如此拼写）各自对应哪个机制——
    这决定"持续伤害接成一次伤害"这类错误能否避免，属**接线阶段**必须逐敌人核的事。
 3. `burst_cooldown` 与 `burst_duration` 在 Go 里共用 `elementBurst.Duration` 一个字段。

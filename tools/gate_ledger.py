@@ -54,6 +54,48 @@ SIBLING = str(ROOT.parent / "ak-tactic-head")
 ROSTER = "roster_max_modelled"
 
 
+def fixture_globs() -> list[str]:
+    """判据集的**单一入口**。
+
+    通告 #6 四裁定：判据集入版本控制（`fixtures/`），`out/` 降级为临时产物。
+    所以这里优先 `fixtures/`；只有它还没就绪（不存在或为空）时才回退 `out/`，
+    免得迁移期间工具直接跑不动。回退发生时**打一行提示**，别让"读的是旧目录"无声无息。
+    """
+    fx = ROOT / "fixtures"
+    if fx.is_dir() and glob.glob(str(fx / "*.json")):
+        return [str(fx / "*.json")]
+    print(f"  ⚠ fixtures/ 未就绪，回退读 {ROOT / 'out'}（通告 #6 四的迁移尚未完成）")
+    return [str(ROOT / "out" / "*.json")]
+
+
+def dirty_count(tree: str) -> int:
+    """该检出**未提交**的改动条数。
+
+    为什么要记它：引擎源码可以带未提交改动而跑——那时"全绿"只对这一份**工作树**成立，
+    不对任何提交成立（记忆 `ed34c994` 那类假绿/假红同源）。不计入来源就是又一个"身份不明"。
+    """
+    try:
+        import subprocess
+        r = subprocess.run(["git", "-C", tree, "status", "--porcelain"],
+                           capture_output=True, text=True, timeout=30)
+        return len([ln for ln in r.stdout.splitlines() if ln.strip()])
+    except Exception:  # noqa: BLE001
+        return -1
+
+
+def env_binary_hash() -> str:
+    """`RIOS_SIM_BIN` 指向的二进制哈希（没设就报未设，不猜默认路径）。"""
+    p = os.environ.get("RIOS_SIM_BIN")
+    if not p:
+        return "<未设 RIOS_SIM_BIN>"
+    try:
+        import hashlib
+        with open(p, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()[:16].upper()
+    except Exception as exc:  # noqa: BLE001
+        return f"<取不到: {type(exc).__name__}>"
+
+
 def tree_head(tree: str) -> str:
     """取某棵检出的 HEAD（短哈希）；取不到就如实返回原因，不猜。"""
     try:
@@ -117,6 +159,8 @@ def main() -> int:
         r["tree"] = tree
         r["tree_head"] = heads.get(tree, "?")
         r["is_current_tree"] = (tree == str(ROOT))
+        r["source_dirty"] = dirty_count(tree)
+        r["engine_env_bin"] = env_binary_hash()
         r["seconds"] = round(time.time() - t0, 1)
         rows.append(r)
         uns = r.get("unsupported") or []
