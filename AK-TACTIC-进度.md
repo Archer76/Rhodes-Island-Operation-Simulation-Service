@@ -1382,3 +1382,81 @@ activity.py:376  from .battle.devices import parse_devices
 
 搬 `devices` + `environment`（一起，一步）→ 导入面归零 → 然后才是
 `build_spec` 收 `SpecInputs`。
+
+### 3.48 摘除 battle/ round 18：devices + environment 搬进 frontend/，★ **导入面归零**（提交 80e3f84）
+
+#### 一、结果
+
+```
+simgo/ 对 battle/ 的模块级导入：10 处 → 5 处 → 1 处 → 0 处
+```
+
+⚠ 归零的是**导入面**（"battle/ 被删之后 simgo/ 会不会断"），
+**不是整个摘除目标**。还剩：`build_spec` 收 `SpecInputs`、`check_battle.py` 与
+15 个探针的处置、以及最后删 `battle/` 本身。
+
+#### 二、做法
+
+`battle/devices.py`（414 行）与 `battle/environment.py`（738 行）**一起搬**，
+因为 `environment.py` 依赖 `devices.py`，而 `devices.py` 只依赖
+`frontend/mech_consts`（方向干净、无 `battle/` 内部依赖）。
+原件留**转出壳**。
+
+#### 三、壳为什么要 `__getattr__`
+
+壳里是 `from ..frontend.X import *` + PEP 562 的模块级 `__getattr__`。
+
+`import *` **只转 `__all__` 里的名字**，而 `environment.pump_once`
+就**不在** `__all__` 里、却真的被 `sim.py` 点着：
+
+```
+实测：外部从 battle.environment 取用的 7 个名字里
+      **1 个（pump_once）落在 __all__ 之外**
+```
+
+⇒ 少了这层 `__getattr__`，这一处会在**跑到那一行时**才 `ImportError`
+——就是"改名时漏了一个"那类错。它**不是**本项目禁止的"带默认值的兜底"：
+取不到照样 `AttributeError`，只是把查找转发到新家。
+
+#### 四、新增判据：消费者体检（`tools/check_battle_shims.py`）
+
+搬模块之后，"新家对不对"有金标准盯；但"**旧地址还有没有人用、用了还解析得到吗**"
+原本**没有判据**。这个工具补上：
+
+```
+扫到 56 个从 battle/ 转出壳取名字的点（含 activity.py 的字符串锚点）
+  battle.devices      被取用 14 个名字，逐条同一对象
+  battle.environment  被取用  7 个名字，逐条同一对象（含 __all__ 之外的 pump_once）
+✅ 全部转出壳：56 个取用点、2 个子模块，逐条同一对象
+```
+
+⚠ 工具自己会报**覆盖率**（"扫到 56 个点"），扫到 0 个就说"判据跑空了、不能当成通过"。
+
+#### 五、`activity.py` 的锚点：实测而非推断
+
+`activity.py`（**不是本会话的文件，我不改**）里有三个字符串锚点。
+壳让它们继续解析——这一条**实测过**：
+
+```
+ak_tactic.battle.devices:BLOCKER_KEY    -> 'trap_139_dhtl'
+ak_tactic.battle.devices:PUMP_KEY       -> 'trap_140_dhsb'
+ak_tactic.battle.environment:RUNES_KEY  -> 'env_system_new'
+```
+
+⚠ 只验了"**解析得到**"，没验"用它跑起来还对"——那需要 activity 模块自己的判据。
+
+#### 六、验证
+
+```
+① 导入面：**0 处**
+② 消费者体检：56 个取用点逐条同一对象
+③ 金标准：✅ 17 份与基线逐项一致，spec_sha 逐字不变
+④ 全仓自检：通过 816 项，无失败
+⑤ 摘除面可达闭包 0 个函数；闸门审计无未登记盲区；go build ./... 通过
+```
+
+#### 下一轮
+
+导入面既已归零，下一块就是**规格层自己**：`build_spec` 收 `SpecInputs`
+（round 13 量过：11 处属性读，其中 `sim.stage` 4 处、`range_provider` 2 处，
+其余 `_devices`/`deployments`/`enemy_at`/`species_provider`/`snow_fields`/`max_time`）。
