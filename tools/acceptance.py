@@ -1221,9 +1221,16 @@ def fmt(v) -> str:
 
 def write_report(items: list[dict], drops: list[dict], changes: list[dict],
                  base: dict, fp0: dict, fp1: dict, args, seconds: float) -> int:
+    #: ⚠ **「未跑」有四个口径，本轮全都在同一份产物里出现过**（2026-09-20 修）：
+    #: 全部 4 / 计入判定 `counted` 3 / 阻塞 `blocking` 2 / `counted ∧ blocking` 1。
+    #: 而**驱动 rc 的**必须是 `counted ∧ blocking`（「只跑不判」的 `check_battle` 不许驱动 rc，
+    #: 已登记不计入判定的森空岛名册也不许）。此前控制台**印**的是 `counted`（3）、**算** rc 用的是
+    #: `counted ∧ blocking`（1），报告里又按 `blocking`（2）算 rc ⇒ 一份产物里 3 和 1 同时出现，
+    #: 且"印出来的那个数"不驱动 rc。⇒ 现在只留这一处定义，谁都从这里取。
+    _nr_all, _nr_cnt, _nr_blk = norun_basis(items)
     fails = [i for i in items if i["status"] == FAIL]
     noruns = [i for i in items if i["status"] == NORUN]
-    blocking_norun = [i for i in noruns if i.get("blocking", True)]
+    blocking_norun = _nr_blk
     rc = 1 if (fails or drops) else (2 if blocking_norun else 0)
 
     now = current_water(items)
@@ -1242,14 +1249,15 @@ def write_report(items: list[dict], drops: list[dict], changes: list[dict],
     #: **第一版修错了**：只按 `blocking` 过滤 ⇒ 得 2，仍与控制台对不上——
     #: 判定口径是 **`counted ∧ blocking`**（`check_battle` 是「只跑不判」：`counted=False`、
     #: `blocking` 仍是 True）。⇒ 这里**照抄控制台那三个表达式**，两边不可能再漂。
-    _p_judged = len([i for i in items if i["status"] == PASS and i.get("counted", True)])
-    _f_judged = len([i for i in items if i["status"] == FAIL and i.get("counted", True)])
-    _n_judged = len([i for i in items if i["status"] == NORUN and i.get("counted", True)
-                     and i.get("blocking", True)])
-    _n_reg = len(noruns) - _n_judged
+    _n_all, _n_cnt, _n_blk = norun_basis(items)
+    #: 判定三数照抄控制台那三个集合（`counted` 过滤后的 PASS/FAIL ＋ `counted∧blocking` 的 NORUN），
+    #: 否则报告与控制台仍会各算一套——这一轮已经因为"两处各写一遍"漂了三次。
+    _cnt_items = [i for i in items if i.get("counted", True)]
+    _p_judged = len([i for i in _cnt_items if i["status"] == PASS])
+    _f_judged = len([i for i in _cnt_items if i["status"] == FAIL])
     L.append(f"- 判定：**通过 {_p_judged} / 失败 {_f_judged} / "
-             f"未跑 {_n_judged}**（判定项；口径＝`counted ∧ blocking`，与控制台同一集合；"
-             f"另有 **{_n_reg}** 项未跑但不计入判定），"
+             f"未跑 {len(_n_blk)}**（判定项；口径＝`counted ∧ blocking`，与控制台同一集合；"
+             f"未跑另两口径仅供参考：全部 {len(_n_all)}／计入判定 {len(_n_cnt)}），"
              f"退出码 **{rc}**，总耗时 {seconds / 60:.1f} 分钟")
     L.append(f"- 测量对象：HEAD `{fp1['head']}`，脏文件 {fp1['dirty_n']} 条")
     if drift:
@@ -1431,6 +1439,22 @@ def write_report(items: list[dict], drops: list[dict], changes: list[dict],
     (OUT / "report-latest.json").write_text(
         json.dumps(detail, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     return rc
+
+
+def norun_basis(items: list) -> tuple:
+    """「未跑」的**唯一**口径来源（四个集合一次算清，别处不许再自己过滤一遍）。
+
+    * `alln`＝所有未跑（含已登记不计入判定的）；
+    * `cnt` ＝计入判定的未跑（`counted`）；
+    * `blk` ＝**驱动 rc** 的未跑（`counted ∧ blocking`）。
+
+    ⚠ 驱动 rc 的必须是 `blk`：`check_battle` 是「只跑不判」（`counted=False`、`blocking` 仍 True），
+    已登记的森空岛名册是 `blocking=False` —— 两者都不许把 rc 顶成 2，但它们**都**该印出来给人看。
+    """
+    alln = [i for i in items if i["status"] == NORUN]
+    cnt = [i for i in alln if i.get("counted", True)]
+    blk = [i for i in cnt if i.get("blocking", True)]
+    return alln, cnt, blk
 
 
 def update_baseline(now: dict, base: dict, by: str, why: str, head: str) -> None:
@@ -1654,9 +1678,11 @@ def main() -> int:
     noruns = [i for i in items if i["status"] == NORUN and i.get("counted", True)
               and i.get("blocking", True)]
     counted = [i for i in items if i.get("counted", True)]
+    _c_all, _c_cnt, _c_blk = norun_basis(items)
     print(f"通过 {len([i for i in counted if i['status'] == PASS])}"
-          f" / 失败 {len(fails)} / 未跑 {len([i for i in counted if i['status'] == NORUN])}"
-          f"　（**判定项 {len(counted)} 项**）　退出码 {rc}　总耗时 {(time.time() - t0) / 60:.1f} 分钟")
+          f" / 失败 {len(fails)} / 未跑 {len(_c_blk)}（**驱动 rc**；口径＝counted∧blocking）"
+          f"　（**判定项 {len(counted)} 项**；未跑另两口径：计入判定 {len(_c_cnt)}／全部 {len(_c_all)}）"
+          f"　退出码 {rc}　总耗时 {(time.time() - t0) / 60:.1f} 分钟")
     if uncounted:
         for i in items:
             if i["key"] in uncounted:
