@@ -209,8 +209,14 @@ def main() -> int:
         print(f"    收窄后需求集只剩 {len(keys_hit_gate)} 键 / {n_pairs} 对 ⇒ 任何干员的收益都是 0，")
         print("    而贪心**收益 0 也不停手**（选到凑满 k 位）⇒ 它会按表序把最靠前的 10 位选出来，")
         print("    ★ 那不是「收窄后的最优名单」，是「问题在这个行空间里已经消失」的证据。**A 名单未动**")
-        print()
-        return 0
+        print("  ⇒ **按 PM 通则当错误：退出码 2，不产出任何名单**（名单有 10 位 ≠ 有 10 个候选人）")
+        if a.json:
+            Path(a.json).write_text(json.dumps({
+                "error": "empty-need-set", "keys_hit_gate": sorted(keys_hit_gate),
+                "pairs": 0, "note": "输入为空时任何非空输出都必须当错误（PM 通则 2026-09-20）",
+            }, ensure_ascii=False, indent=1), encoding="utf-8")
+            print(f"（JSON 记录错误态：{a.json}）")
+        return 2
     print("--- 收窄后重跑贪心（同一个贪心，只换需求集）---")
     wt_new: dict[str, int] = {}
     for v in needs_narrow.values():
