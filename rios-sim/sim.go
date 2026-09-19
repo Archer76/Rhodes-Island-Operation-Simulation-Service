@@ -1247,8 +1247,23 @@ func (c *simCtx) HitEnemy(index int, raw float64, damageType string, src int) fl
 		}
 	}
 	if traceOn {
-		trace("HITENEMY t=%.4f enemy=%s raw=%.3f type=%s dealt=%.3f hp=%.3f",
-			*c.time, e.spec.Name, raw, damageType, dealt, e.hp)
+		// `resbase` / `resdown` / `res` 三列是给"**冻结 −15**"这条动态改写的可观测量
+		// （`enemy.res()` 是**动态读**，不写 `spec.RES`，所以 `PM2RES`/`PHITRES` 那两行覆盖不到它）。
+		// 它们回答的是同一个问题的三半：本来多少、被拿掉多少、实际用了多少。
+		//
+		// ⚠ 为什么要在这里加而不是在 `res()` 里：`res()` 是**无 ctx** 的纯方法，
+		// 这个文件的约定是"ctx 侧留痕"；而且 `res()` 会被每次伤害结算调用，
+		// 逐帧打会淹掉痕迹（记忆：痕迹被噪声淹没比没有痕迹更糟）。
+		//
+		// 出处：深水用例上 `t=81.1333` 起首处分岔就是这条——同一次 SNOWENTRY、raw 相同（696），
+		// 减伤因子一边 ×0.9（按 RES 10）、一边 ×1.05（按 RES −5），差额 104.38 与血量差逐位吻合。
+		// `resdown=15` 一出现，就说明这一笔吃到了那条改写。
+		cx, cy := e.cell()
+		base := e.spec.RES
+		eff := e.res()
+		trace("HITENEMY t=%.4f enemy=%s idx=%d ecell=%d,%d raw=%.3f type=%s resbase=%.2f resdown=%.2f res=%.2f frozen=%t dealt=%.3f hp=%.3f",
+			*c.time, e.spec.Name, e.index, cx, cy, raw, damageType,
+			base, base-eff, eff, e.friendlyFrozen(), dealt, e.hp)
 	}
 	return dealt
 }
