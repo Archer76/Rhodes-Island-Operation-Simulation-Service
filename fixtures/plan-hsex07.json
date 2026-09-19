@@ -1,0 +1,46 @@
+{
+  "stage": "act31side_ex07",
+  "title": "4 人",
+  "deploys": [
+    {
+      "operator": "怒潮凛冬",
+      "position": [7, 3],
+      "direction": "Down",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "凯尔希·思衡托",
+      "position": [5, 3],
+      "direction": "Right",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "可露希尔",
+      "position": [7, 5],
+      "direction": "Up",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "泥岩",
+      "position": [7, 4],
+      "direction": "Up",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    }
+  ]
+}

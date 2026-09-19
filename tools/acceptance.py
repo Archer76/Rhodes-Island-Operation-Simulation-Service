@@ -27,7 +27,7 @@
 | # | 项 | 判据 |
 |---|---|---|
 | 0 | 仪器自检 | 当前源码能构建出 Go 二进制；共享 exe 是否落后于源码（只报不判） |
-| 1 | 金标准 | 与 `out/golden_go.json` 逐项一致（含 spec_sha），且基线文件未被改写 |
+| 1 | 金标准 | 与 `fixtures/golden_go.json` 逐项一致（含 spec_sha），且**已有条目**未被改写 |
 | 2 | 闸门放行抽查 | 每份计划 `go_runs≥1` 且 `go_fallbacks==0` 且 `spec_error` 为空 |
 | 3 | 自检 check_battle | 无失败项，且项数不低于基线 |
 | 4 | 自检 check_verify | 同上 |
@@ -70,7 +70,8 @@ LOGS = OUT / "logs"
 REPORT = ROOT / "docs" / "acceptance-report.md"
 BASELINE = ROOT / "docs" / "acceptance-baseline.json"
 CLAIMS = ROOT / "docs" / "acceptance-claims.md"
-GOLDEN = ROOT / "out" / "golden_go.json"
+GOLDEN = ((ROOT / "fixtures" / "golden_go.json") if (ROOT / "fixtures").is_dir()
+          else (ROOT / "out" / "golden_go.json"))
 SHARED_EXE = ROOT / "rios-sim" / "rios-sim.exe"
 SESSION = "session-1a45cfee-9a65-4830-a327-03ac84285bfb"
 
@@ -226,6 +227,35 @@ GOLDEN_BAD = re.compile(r"有\s*(\d+)\s*份不一致")
 PER_PLAN_ERR = re.compile(r"^\s+plan-\S+\.json\s+❌\s+(?P<err>\S+)", re.M)
 
 
+def baseline_audit() -> dict:
+    """把 `fixtures/golden_go.json` 与**版本控制里那一份**逐条目比。
+
+    为什么不用 sha：sha 只能报"变了"，报不出**改了什么**——而"新增了两份夹具"与
+    "已有 17 份的数被改了"是性质完全相反的两件事（前者是判据集长大，后者是标准被挪）。
+    通告 #6 四要堵的洞正是后者：「有人重跑覆盖基线，没有任何人会发现」。
+    """
+    import subprocess
+    out = {"tracked": False, "added": [], "removed": [], "changed": []}
+    rel = GOLDEN.relative_to(ROOT).as_posix()
+    try:
+        p = subprocess.run(["git", "-C", str(ROOT), "show", f"HEAD:{rel}"],
+                           capture_output=True, encoding="utf-8", timeout=60)
+        if p.returncode != 0:
+            return out
+        committed = json.loads(p.stdout)
+    except Exception:                                            # noqa: BLE001
+        return out
+    out["tracked"] = True
+    cur = json.loads(GOLDEN.read_text(encoding="utf-8")) if GOLDEN.exists() else {}
+    keys = ["kills", "leaks", "elapsed", "damage", "spec_sha"]
+    out["added"] = sorted(set(cur) - set(committed))
+    out["removed"] = sorted(set(committed) - set(cur))
+    out["changed"] = sorted(n for n in set(cur) & set(committed)
+                            if any(committed[n].get(k) != cur[n].get(k) for k in keys))
+    out["plans"] = len(cur)
+    return out
+
+
 def golden_check(exe: str | None) -> dict:
     exe_sha = sha256_file(GOLDEN) or ""
 
@@ -287,7 +317,7 @@ def golden_check(exe: str | None) -> dict:
         note = f"没有识别到判定行（rc={r['rc']}）：{(r['err'] or r['out'])[-200:]}"
 
 
-    #: ⚠ 基线文件本身被改写 = 有人偷偷重设了标准。不报出来的话，下一次 --check 必绿。
+    #: sha 仍然记着（跨轮次看"基线文件动过没有"最省事），但**判定不再只看它**。
     prev_sha = None
     if BASELINE.exists():
         try:
@@ -295,16 +325,29 @@ def golden_check(exe: str | None) -> dict:
                 "golden_baseline_sha256")
         except Exception:                                        # noqa: BLE001
             prev_sha = None
-    if prev_sha and exe_sha and exe_sha[:16] != prev_sha[:16]:
+    #: ⚠ "基线文件被改写"这条护栏只比 sha 是不够的——本轮实测它把**我自己按通告 #6 四
+    #: 做的合法迁移**（判据集迁进 `fixtures/`、新增两份夹具）报成了失败，而它只说
+    #: "哈希变了"，说不出**改了什么**。改法：直接与**版本控制里那一份**比条目
+    #: ——**新增**与**已有条目被改**是两件性质完全不同的事，必须分开报。
+    measured["baseline_audit"] = baseline_audit()
+    ba = measured["baseline_audit"]
+    if ba["changed"]:
         status = FAIL
         note = (note + "；" if note else "") + (
-            f"⛔ 金标准基线文件 out/golden_go.json 已被改写"
-            f"（{prev_sha[:16]} → {exe_sha[:16]}）——须解释谁改的、为什么")
-    measured["baseline_changed"] = bool(prev_sha and exe_sha and exe_sha[:16] != prev_sha[:16])
+            f"⛔ 金标准基线里**已有 {len(ba['changed'])} 份条目的数被改了**"
+            f"（{', '.join(ba['changed'][:4])}{'…' if len(ba['changed']) > 4 else ''}）"
+            f"——须解释谁改的、为什么；判据是「改动必须被解释」，不是「哈希不许变」")
+    elif ba["added"] or ba["removed"]:
+        extra = (f"（判据集变动：新增 {len(ba['added'])} 份"
+                 f"{'、少了 ' + str(len(ba['removed'])) + ' 份' if ba['removed'] else ''}）")
+        note = (note + extra) if note else extra
+    measured["baseline_changed"] = bool(ba["changed"])
+    measured["baseline_sha_changed"] = bool(
+        prev_sha and exe_sha and exe_sha[:16] != prev_sha[:16])
 
     return {"key": "golden", "name": "金标准（规格哈希 + 判决四数）", "status": status,
             "measured": measured, "seconds": round(r["seconds"], 1),
-            "judge": "与 out/golden_go.json 逐项一致（含 spec_sha），且基线文件未被改写",
+            "judge": "与 fixtures/golden_go.json 逐项一致（含 spec_sha），且已有条目未被改写",
             "note": note}
 
 
@@ -330,7 +373,9 @@ def gate_probe(exe: str | None, sample: int | None) -> dict:
 
     try:
         roster_file = G._find("roster_max_modelled")
-        plans = sorted((ROOT / "out").glob("plan-*.json"))
+        #: 与金标准**同一份判据集**（`G.plan_files()` 会优先 `fixtures/`，按 schema 认，
+        #: 不按文件名）——两处口径不一致时，"金标准 19 份 vs 抽查 17 份"会让人以为是回归。
+        plans = G.plan_files()
         if sample:
             plans = plans[:sample]
     except Exception as e:                                       # noqa: BLE001
@@ -792,9 +837,23 @@ def write_report(items: list[dict], drops: list[dict], changes: list[dict],
              "⚠ 已入库的 `tools/parity_plan.py`（4fe187b）实测**跑不起来**"
              "（`GoCapture._run_other_engine` 不接受 `schedule`，见台账）——"
              "谁要引它当证据，先自己跑通。")
-    L.append("- **17 份计划没走到的路径**：金标准只覆盖这些计划上真跑出来的路径；"
+    _g = next((it for it in items if it["key"] == "golden"), None)
+    n_plans = ((_g or {}).get("measured") or {}).get("baseline_plans") or 0
+    L.append(f"- **判据集里 {n_plans or '全部'} 份作业没走到的路径**：金标准只覆盖这些作业上真跑出来的路径；"
              "没被走到的分支，它不说话——**覆盖不到机制的判据只会沉默，不会否证**。"
              "所以金标准绿 ≠ 所有机制都对。")
+    L.append("- **深水限定语**：「本树现有用例全绿」**不等于**「这些关没问题」——"
+             "能走到长线的只有迁入的 `hsex8_max`（八人满练度），其余大多是几十秒的浅用例。")
+    L.append("- **深水差异成立**（`hsex8_max`）：原版 83杀/1漏/814.0333s vs Go 48杀/3漏/"
+             "221.6667s，三台仪器一致。⚠ 它**不是**本门判定项**之一**（本门只问"
+             "「Go 与基线一致」，而这条差是**已知且已登记**的），但**深水限定语照带**："
+             "「现有用例全绿」≠「这些关没问题」。")
+    L.append("- **仪器切换的静默假绿已自查**：本门链上（本文件 / `golden_go.py` / "
+             "`parity_ledger.py`）**无裸 `Verifier()`**——唯一要原版的地方显式钉了 "
+             "`engine=\"python\"`。两处**相关但不是缺陷**的留痕见 `docs/acceptance-claims.md`："
+             "`check_battle.py` 24 处裸 `Verifier()` 但**零 `.run()`**（引擎不参与）；"
+             "`check_verify.py` 6 处裸 `Verifier().run()` ⇒ **自 09-19 起它断言的主体是 Go**"
+             "（它测的是验证器自身，跑 Go 是对的，但那 71 项**不替原版背书**）。")
     L.append("- **保真**（两台引擎一起错）：本门问的是「Go 与基线一致」，"
              "**不问**「像不像真游戏」。`UNMODELLED_ENEMY_ABILITIES` 那 5 条属保真课题，"
              "不在本门判定内（裁定 `77fce667` 设的门槛只在一致性这一层）。")
@@ -960,8 +1019,8 @@ def main() -> int:
         print(f"⛔ {i['name']}：{i['note']}")
     for i in noruns:
         print(f"⊘ {i['name']} 未跑：{i['note'][:120]}")
-    print("⚠ 本门不覆盖：逐关对拍（工具已删除）、17 份计划未走到的路径、保真层"
-          "（两台引擎一起错）——详见报告第八节")
+    print(f"⚠ 本门不覆盖：{n_plans or '判据集'} 份作业未走到的路径、保真层（两台引擎一起错）、"
+          f"深水限定语——详见报告第八节")
     print(f"报告：{REPORT.relative_to(ROOT)}")
     return rc
 

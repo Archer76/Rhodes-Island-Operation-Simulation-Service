@@ -1,0 +1,36 @@
+{
+  "stage": "act31side_ex08",
+  "title": "3 人",
+  "deploys": [
+    {
+      "operator": "星熊",
+      "position": [11, 2],
+      "direction": "Up",
+      "skill": 0,
+      "elite": 2,
+      "level": 60,
+      "potential": 1,
+      "module_level": 0
+    },
+    {
+      "operator": "银灰",
+      "position": [11, 4],
+      "direction": "Up",
+      "skill": 0,
+      "elite": 1,
+      "level": 80,
+      "potential": 1,
+      "module_level": 0
+    },
+    {
+      "operator": "阿米娅",
+      "position": [10, 1],
+      "direction": "Down",
+      "skill": 0,
+      "elite": 2,
+      "level": 80,
+      "potential": 6,
+      "module_level": 0
+    }
+  ]
+}

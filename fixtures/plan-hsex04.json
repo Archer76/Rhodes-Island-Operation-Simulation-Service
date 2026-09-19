@@ -1,0 +1,46 @@
+{
+  "stage": "act31side_ex04",
+  "title": "4 人",
+  "deploys": [
+    {
+      "operator": "能天使",
+      "position": [7, 2],
+      "direction": "Down",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "可露希尔",
+      "position": [5, 2],
+      "direction": "Down",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "焰狐龙梓兰",
+      "position": [6, 6],
+      "direction": "Up",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "凯尔希·思衡托",
+      "position": [8, 5],
+      "direction": "Left",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    }
+  ]
+}

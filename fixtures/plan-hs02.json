@@ -1,0 +1,26 @@
+{
+  "stage": "act31side_02",
+  "title": "2 人",
+  "deploys": [
+    {
+      "operator": "能天使",
+      "position": [8, 4],
+      "direction": "Up",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "焰狐龙梓兰",
+      "position": [6, 2],
+      "direction": "Right",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    }
+  ]
+}
