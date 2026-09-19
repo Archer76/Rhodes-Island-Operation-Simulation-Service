@@ -1,0 +1,82 @@
+{
+  "established": {
+    "at": "2026-09-19 21:45:51",
+    "by": "session-1a45cfee-9a65-4830-a327-03ac84285bfb（验收与守卫）",
+    "head": "fb0d1658cc7d",
+    "reason": "首轮实测建立基线：金标准17/17、check_battle 816、check_verify 71、审计9登记(扫出7)/0未登记、selftest通过"
+  },
+  "water": {
+    "golden_plans": 17,
+    "golden_consistent": 17,
+    "golden_baseline_sha256": "87107fda15fa6a57",
+    "check_battle_passed": 816,
+    "check_verify_passed": 71,
+    "audit_registered_known": 9,
+    "audit_registered_active": 2,
+    "audit_unregistered": 0,
+    "audit_guard_broken": 0,
+    "cap_read": 10,
+    "cap_defined_unread": 1,
+    "cap_unsent": 16
+  },
+  "history": [
+    {
+      "at": "2026-09-19 21:45:51",
+      "head": "fb0d1658cc7d",
+      "by": "session-1a45cfee-9a65-4830-a327-03ac84285bfb（验收与守卫）",
+      "why": "首轮实测建立基线：金标准17/17、check_battle 816、check_verify 71、审计9登记(扫出7)/0未登记、selftest通过",
+      "water": {
+        "golden_plans": 17,
+        "golden_consistent": 17,
+        "golden_baseline_sha256": "87107fda15fa6a57",
+        "check_battle_passed": 816,
+        "check_verify_passed": 71,
+        "audit_registered_known": 9,
+        "audit_registered_active": 7,
+        "audit_unregistered": 0,
+        "audit_guard_broken": 0
+      }
+    },
+    {
+      "at": "2026-09-19 21:50:41",
+      "head": "b05fee48d328",
+      "by": "session-1a45cfee-9a65-4830-a327-03ac84285bfb（验收与守卫）",
+      "why": "按项目经理通告#2 落地：第四项换为闸门能力清单（gate_inventory 三态）、对拍项退役仅登记；并记入 e0e7991 独立复核与 parity_plan 跑不起来的发现",
+      "water": {
+        "golden_plans": 17,
+        "golden_consistent": null,
+        "golden_baseline_sha256": "87107fda15fa6a57",
+        "check_battle_passed": 816,
+        "check_verify_passed": 71,
+        "audit_registered_known": 9,
+        "audit_registered_active": 0,
+        "audit_unregistered": null,
+        "audit_guard_broken": null,
+        "cap_read": 10,
+        "cap_defined_unread": 1,
+        "cap_unsent": 16
+      }
+    },
+    {
+      "at": "2026-09-19 21:57:15",
+      "head": "38c04eb4f768",
+      "by": "session-1a45cfee-9a65-4830-a327-03ac84285bfb（验收与守卫）",
+      "why": "重建基线：上一轮被在途重构的瞬时断裂污染（金标准报 AttributeError、审计撞 activity.py 写锁），两处均为仪器问题；本轮已加「同种异常→重跑一次再定性」与「红轮不许改基线」两条修正",
+      "water": {
+        "golden_plans": 17,
+        "golden_consistent": 17,
+        "golden_baseline_sha256": "87107fda15fa6a57",
+        "check_battle_passed": 816,
+        "check_verify_passed": 71,
+        "audit_registered_known": 9,
+        "audit_registered_active": 2,
+        "audit_unregistered": 0,
+        "audit_guard_broken": 0,
+        "cap_read": 10,
+        "cap_defined_unread": 1,
+        "cap_unsent": 16
+      }
+    }
+  ],
+  "rule": "水位不写死：本轮实测值写在这里，下一轮拿实测值比它。降了（HIGHER_IS_BETTER 那几项）= 回归，必须红；上升或变化须在 history 里留下 who/why，否则报告标『无解释』。"
+}
