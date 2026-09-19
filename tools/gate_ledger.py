@@ -137,6 +137,14 @@ def main() -> int:
     trees = [str(ROOT)] + ([SIBLING] if args.all_trees else [])
     heads = {t: tree_head(t) for t in trees}
     print(f"本树 HEAD={heads[str(ROOT)]}；旁支={heads.get(SIBLING, '未启用')}")
+    _bin = env_binary_hash()
+    print(f"引擎二进制={_bin}")
+    if _bin.startswith("<"):
+        print("  ⚠ 二进本身份未知：未设 RIOS_SIM_BIN 时走的是 find_binary() 的默认定位，"
+              "记忆 ed34c994 记过这一类假绿/假红。")
+        print("  ⚠ 本次所有数字都带上「二进制身份未知」这一限定语，不许与设了 RIOS_SIM_BIN 的那批混着引用。")
+    if dirty_count(str(ROOT)) > 0:
+        print(f"  ⚠ 本树有 {dirty_count(str(ROOT))} 处未提交改动 ⇒ 数字只对这份工作树成立，不对任何提交成立。")
 
     plans = scan_plans(all_trees=args.all_trees)
     if args.stage:
@@ -169,6 +177,8 @@ def main() -> int:
         ds = ("—" if not d else
               f"杀{d[0]:+d} 漏{d[1]:+d} 用时{d[2]:+.3f} 伤{d[3]:+,.0f}")
         mark = "" if r["is_current_tree"] else "  ⚠旁支树"
+        if str(r.get("engine_env_bin", "")).startswith("<"):
+            mark += "  ⚠二进本身份未知"
         print(f"  [{i}/{len(plans)}] {stage:26} {state:4} {ds}   ({r['seconds']}s){mark}")
 
     out_json = Path(args.out_dir) / "gate-ledger.json"
