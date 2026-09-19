@@ -44,13 +44,32 @@ PLAN_GLOBS = [
     str(ROOT / "out" / "*.json"),
     str(ROOT.parent / "ak-tactic-head" / "out" / "*.json"),
 ]
+
+#: ⚠ 默认**只跑本树**。`ak-tactic-head` 是一个**落后的旁支检出**（实测比本树落后 78
+#: 个提交），拿它的夹具配本树构建的引擎去跑，得到的差**不能当成引擎的差**——
+#: 那是"夹具身份不明"。要连它一起跑必须显式 `--all-trees`，且每行都会带上来源树与
+#: 那棵树的 HEAD，供人判断能不能混着看。（这条是 RIOS终端UI_2 2026-09-19 用
+#: `plan_path` 取证出来的，差点被读成本树的回归。）
+SIBLING = str(ROOT.parent / "ak-tactic-head")
 ROSTER = "roster_max_modelled"
 
 
-def scan_plans() -> list[tuple[str, str]]:
+def tree_head(tree: str) -> str:
+    """取某棵检出的 HEAD（短哈希）；取不到就如实返回原因，不猜。"""
+    try:
+        import subprocess
+        r = subprocess.run(["git", "-C", tree, "rev-parse", "--short", "HEAD"],
+                           capture_output=True, text=True, timeout=20)
+        return r.stdout.strip() or f"<git 返回空: {r.stderr.strip()[:40]}>"
+    except Exception as exc:  # noqa: BLE001
+        return f"<取不到: {type(exc).__name__}>"
+
+
+def scan_plans(all_trees: bool = False) -> list[tuple[str, str]]:
     """返回 [(stage, 作业路径)]，跳过名单/名册这类不是作业的 JSON。"""
+    globs = PLAN_GLOBS if all_trees else PLAN_GLOBS[:1]
     out = []
-    for pat in PLAN_GLOBS:
+    for pat in globs:
         for p in sorted(glob.glob(pat)):
             try:
                 d = json.loads(Path(p).read_text(encoding="utf-8"))
@@ -68,10 +87,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", default="", help="只跑 stage 名含此子串的关卡")
     ap.add_argument("--limit", type=int, default=0, help="最多跑几关（试跑用）")
+    ap.add_argument("--all-trees", action="store_true",
+                    help="连落后的旁支检出 ak-tactic-head 一起跑（默认不跑）")
     ap.add_argument("--out-dir", default=str(ROOT / "out"))
     args = ap.parse_args()
 
-    plans = scan_plans()
+    trees = [str(ROOT)] + ([SIBLING] if args.all_trees else [])
+    heads = {t: tree_head(t) for t in trees}
+    print(f"本树 HEAD={heads[str(ROOT)]}；旁支={heads.get(SIBLING, '未启用')}")
+
+    plans = scan_plans(all_trees=args.all_trees)
     if args.stage:
         plans = [(s, p) for s, p in plans if args.stage in s]
     if args.limit:
@@ -86,7 +111,12 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             r = {"ok": False, "why": f"{type(exc).__name__}: {exc}", "stage": stage,
                  "plan": os.path.basename(path)}
+        tree = SIBLING if os.path.abspath(path).startswith(
+            os.path.abspath(SIBLING)) else str(ROOT)
         r["plan_path"] = path
+        r["tree"] = tree
+        r["tree_head"] = heads.get(tree, "?")
+        r["is_current_tree"] = (tree == str(ROOT))
         r["seconds"] = round(time.time() - t0, 1)
         rows.append(r)
         uns = r.get("unsupported") or []
@@ -94,7 +124,8 @@ def main() -> int:
         d = r.get("diff")
         ds = ("—" if not d else
               f"杀{d[0]:+d} 漏{d[1]:+d} 用时{d[2]:+.3f} 伤{d[3]:+,.0f}")
-        print(f"  [{i}/{len(plans)}] {stage:26} {state:4} {ds}   ({r['seconds']}s)")
+        mark = "" if r["is_current_tree"] else "  ⚠旁支树"
+        print(f"  [{i}/{len(plans)}] {stage:26} {state:4} {ds}   ({r['seconds']}s){mark}")
 
     out_json = Path(args.out_dir) / "gate-ledger.json"
     out_json.write_text(json.dumps(rows, ensure_ascii=False, indent=2),
