@@ -87,8 +87,8 @@ ROWS: list[tuple[str, str, str, str]] = [
      "逃跑与无法被阻挡都不发生：敌人站在原地打，我方承伤静默偏高"),
     ("敌人", "寒冷", "rios-sim/sim.go::applyCold",
      "攻速 −30 不发生、也永远变不成冻结 ⇒ 减速链整段断（表现为我方少受伤害）"),
-    ("敌人", "停顿", "rios-sim/sim.go::speedFor",
-     "移速 −80% 不生效 ⇒ 推进时间整段变短（这类错最会伪装成「我方更强」）"),
+    ("敌人", "停顿", "rios-sim/sim.go::runSim",
+     "【停顿】＝拦移动、**不禁攻击**（原版 `unit.py:1533` 早退）不生效 ⇒ 敌人该停不停、推进时间整段变短"),
     # ── 敌人平面：伤害与减伤
     ("敌人", "脆弱", "rios-sim/fragile.go::fragileState",
      "增伤不生效：敌人**少受伤害**，且不报错，只表现为「打不动」"),
@@ -259,7 +259,8 @@ WIRED_WHY: dict[str, str] = {
         "ApplyResistance／Effective 的出现只落在 `refraction.go` 自身（:54/:66/:80/:88/:97/:111），"
         "**没有第二个文件伸手来拿** ⇒ 与本行登记的「调用点缺失」相符；"
         "守卫：`rios-sim/refraction_test.go` 6 例（:11 InactiveAddsNothing、:22 ActiveAddsCallerDelta、"
-        ":37 DeltaIsNotHardcoded、:56 SilencedStopsWorking、:71 RecoversWhenModeSaysSo、:90 LatchesWhenModeSaysSo）",
+        ":37 DeltaIsNotHardcoded、:56 SilencedStopsWorking、:71 RecoversWhenModeSaysSo、:90 LatchesWhenModeSaysSo）"
+        "。锚点指向的是哪个量：`refractionState` 就是「折射」这个状态本身（类型定义位 :54），本仓没有第二个同名量",
     "脆弱":
         "定义位 `rios-sim/fragile.go:39` type fragileState struct（:44 Add／:52 Tick／:72 Ratio／:100 Apply）；"
         "**消费点：零**——非测试 `.go` 里 fragileState 只出现在 `fragile.go` 自身。"
@@ -268,14 +269,18 @@ WIRED_WHY: dict[str, str] = {
         "（记忆 1bd38acb 那一族：同名不同义）；"
         "守卫：`rios-sim/fragile_test.go` 6 例（:18 SameNameTakesMaxNotSum、:31 SameNameOrderIndependent、"
         ":44 DistinctNamesAdd、:55 TimersAreIndependent、:74 IgnoresNonPositiveInput、"
-        ":86 ApplyLeavesNonPositiveDamageAlone）",
+        ":86 ApplyLeavesNonPositiveDamageAlone）"
+        "。锚点指向的是哪个量：`fragileState` 就是单位身上那一整套脆弱（类型定义位 :39），"
+        "⚠ 与积雪的田地集合**同名不同义**（见上），别把两者混成一个量",
     "恐惧（含自惧）":
         "定义位 `rios-sim/fear.go:103` fearCells（同文件 :134 fearTargets／:162 pick／:199 fearOffset／"
         ":219 activeLure）；**消费点：零**——非测试 `.go` 里这些符号只出现在 `fear.go` 自身 "
         "⇒ 与本行登记的「调用点缺失」相符；"
         "守卫：`rios-sim/fear_test.go` 6 例（:14 SectorIsAwayFromSource、:41 SectorCenterIsTheHitPosition、"
         ":58 NoCellsWhenSourceMeetsHitOrIsSelf、:69 CellsApplyAllFourConditions、"
-        ":104 TargetsPickLocalThenFallbackAndPermanentRemoval、:139 OffsetIsASquareNotACircle）",
+        ":104 TargetsPickLocalThenFallbackAndPermanentRemoval、:139 OffsetIsASquareNotACircle）"
+        "。锚点指向的是哪个量：`fearCells` 是「当次恐惧的可达地块池」的建表入口（:103），"
+        "逃跑落点与「永久剔除」都由它推出——本行判的就是这一层，不是移动执行的最终落点",
     "寒冷":
         "定义位 `rios-sim/sim.go:2683` func (e *enemy) applyCold(secs float64, friendly bool)"
         "（判据见 :2675「施加【寒冷】秒数；已在寒冷中则转为【冻结】」）；"
@@ -285,19 +290,29 @@ WIRED_WHY: dict[str, str] = {
         "**没有任何 Cold/ApplyCold** ⇒ 连「机制施加寒冷」的那道门都还不存在；"
         "守卫：`rios-sim/status_test.go` 3 例（:24 ColdSlowsEnemyAttack、:101 ApplyColdConvertsToFreeze、"
         ":126 ApplyColdRejectsNonPositive），另 `res_frozen_test.go:23` 记的是冻结那条复合判据的另一半"
-        "（`frozenSnow` 无条件算友方）",
+        "（`frozenSnow` 无条件算友方）"
+        "。锚点指向的是哪个量：`applyCold` 就是「施加【寒冷】秒数、已在寒冷中则转冻结」的唯一入口（:2683）——"
+        "本行判的是这一支，不是积雪那支满层冻结",
     "停顿":
-        "⚠ **本行的锚点指的是邻居；我没改**（锚点属判据结构，改动要 PM 裁，见本轮汇报）："
-        "锚点 `rios-sim/sim.go::speedFor`(:1087) 读的是 `speedReq`，而 `speedReq` 的**唯一写入者**是 "
-        "`rios-sim/mech/snow.go:442` ctx.ScaleEnemySpeed（接口 `mech/mech.go:290`）——"
-        "那是**积雪的移速倍率**通道，`snow.go:441` 自己也注明「grep ScaleEnemySpeed 只有这里」，"
-        "我独立 grep 复核：**只有这一处**。"
-        "引擎里的【停顿】是**另一个量**：字段 `sim.go:174 sluggishTimer`（判据原文与「少走 秒数×移速 格」"
-        "的解释写在 :167-174），**消费点 `sim.go:736`**（advance 里 `if e.sluggishTimer > 0` 先递减再挡推进；"
-        ":761 也参与「这一帧能不能动」的判据），**唯一写入点 `sim.go:2143`**"
-        "（干员高台溅射 HighlandSplashSluggish 取 max）。"
-        "守卫：**零覆盖**——`*_test.go` 里 `speedFor`／`speedReq` 无命中，`sluggish` 只有 "
-        "`status_test.go:40` 一句「与 sluggishTimer 同一类」的注释 ⇒ 与本行登记的「守卫缺失」相符",
+        "★ **本行已按 PM 2026-09-20 的决定程序第 1~2 步改过锚点**（原锚点 `sim.go::speedFor` 指的是邻居）。"
+        "**【第一步·这个量是什么，带取证】** 名字「停顿」对应的是 `sluggish_timer`，量纲 **秒**，语义＝"
+        "**拦移动、但照样能开火**：原版 `ak_tactic/battle/unit.py:1533-1537`（`advance()` 里"
+        "`if self.sluggish_timer > 0 or self.idle_timer > 0: return`，注释原话「【停顿】/【待机】不能移动。"
+        "停顿还能开火」）＋ `ak_tactic/battle/sim.py:4101`（「技能附带的【停顿】：不能移动，但照样能开火」）。"
+        "置位三处：`sim.py:3819-3821`（高台溅射）、`sim.py:4102-4104`（技能 `control[\"sluggish\"]`）、"
+        "`sim.py:2181`（替身切换）；每帧递减 `sim.py:2685-2686`。"
+        "⚠ **它不是移速乘法**：乘法那一支是积雪私有的 `speed_multiplier`（`sim.py:1153-1160`）与 `lock_slow` 层表"
+        "（`unit.py:1162-1165`）。⇒ 记忆里「停顿＝移速 −80%」那句与原版实现对不上，「停顿＝拦推进、非速度乘法」那句对得上。"
+        "**规格送的是哪个量**：`ak_tactic/simgo/spec.py:810-818` `out[\"highland_splash_sluggish\"] = _slu`"
+        "（干员规格键名 `highland_splash_sluggish`，单位秒，源自特性 `attack@sluggish`＝0.5s；`traits.py:66-68` 注明精1 该键为 0）。"
+        "**【第二步·为什么锚点换成它】** Go 侧的字段 `sim.go:174 sluggishTimer`、递减 `:736-738`、"
+        "**真实消费点＝推进闸门 `sim.go:760-769`**（`&& e.sluggishTimer <= 0` 才调 `advance(...)`），"
+        "这三段都在 `runSim`（`sim.go:452`）体内；唯一写入点 `sim.go:2143`（干员高台溅射取 max）。"
+        "⚠ **没拿 `sim.go::sluggishTimer` 当锚点**：字段不是顶层定义，我实跑判据本体 `anchor_ok()` ⇒ "
+        "判「锚点失效」（结构化字段不在 func/type/var/const 之列）——拿它当锚点会制造**永久假红**，"
+        "而永久假红会把真正的锚点失效淹掉。"
+        "**守卫**：`*_test.go` 里 `sluggish`／`speedFor`／`speedReq` **零命中**（`status_test.go:40` 只有一句"
+        "「与 sluggishTimer 同一类」的注释）⇒ 与本行登记的「守卫缺失」相符；**「零覆盖」是这条判据该抓出来的结论，不是麻烦。**",
 }
 
 
