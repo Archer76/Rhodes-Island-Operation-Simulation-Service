@@ -35,6 +35,15 @@ type Spec struct {
 	//: 不在表里就当没高台（高台溅射那一段因此整段不发生）。
 	HighlandCells [][2]int `json:"highland_cells,omitempty"`
 
+	//: 防守点格（`tile_end`）。Go 没有地图，而积雪的**满层冻结**要判
+	//: "这一格是不是终点"——终点格豁免（原版 `sim.py:1155` 的 `not self._is_goal`）。
+	//: 不在表里就当没有终点格（见 `simCtx.IsGoalCell`）。
+	//:
+	//: ⚠ 只有真会用到它的机制在场时才需要送：通用关卡送空列表的代价是
+	//: `IsGoalCell` 每次线性扫一个空切片，可忽略；**漏送**的代价是"终点格也被
+	//: 冻"，那会让漏怪数变少——方向明确、但仍是判决级偏差。
+	GoalCells [][2]int `json:"goal_cells,omitempty"`
+
 	Operators []OperatorSpec `json:"operators"`
 	Deploys   []DeploySpec   `json:"deploys"`
 	Spawns    []SpawnSpec    `json:"spawns"`
@@ -64,6 +73,68 @@ type Spec struct {
 	MechConfig map[string]json.RawMessage `json:"mech_config,omitempty"`
 }
 
+// RegenAuraSpec 是天赋「医者丰碑」的增益治疗光环（原版 `talents.RegenAura`）。
+//
+// 「进入自身攻击范围」**包括部署进射程**——游戏里干员落地那一刻就是在范围里，
+// 天赋照样触发，所以原版在部署当帧就判一次，不等它"走进来"。
+type RegenAuraSpec struct {
+	//: 每秒回复量（黑板 `hp_recovery_per_sec`）。
+	HPPerSec float64 `json:"hp_per_sec"`
+	//: 增益持续秒数（黑板 `buff_duration`）。**从吃到那一刻起算**。
+	Duration float64 `json:"duration"`
+	//: 对某个势力翻倍时，该势力的代号（`rhodes` = 【罗德岛】）。空 = 不翻倍。
+	Nation string `json:"nation,omitempty"`
+	//: 翻倍倍率（黑板 `rhodes_bonus`），**不写死 2.0**。
+	NationMult float64 `json:"nation_mult,omitempty"`
+	//: 「进入」的严格读法：只算**光环落地之后**才进场的友方。
+	//: 跟着原版的 `heal_mode` 一起切（`sim.py:2837-2838`）。
+	//:
+	//: ⚠ 这条歧义是**实质性**的，不是实现细节：严格读法下"本来就在范围里"的人
+	//: 吃不到这份治疗。SR-EX-8 上它会决定最优解是四人还是三人。
+	Strict bool `json:"strict,omitempty"`
+}
+
+// TeamAuraSpec 是一条**全场光环**（原版 `talents.TeamAura`，`talents.py:646`）。
+//
+// 与 `RegenAuraSpec` 的关键差别：那个是**射程内**才生效、要问主人的 `Range`；
+// 这个是**全场**、不看位置，所以没有"进入"那一刻的歧义，判定只需要"目标是谁"。
+//
+// 生效与否则是主人**开不开技能**的函数（有的常驻、有的只在技能期间），
+// 所以每帧都要重算一次——不能像 `regen_aura` 那样在吃到的那一刻一次定死。
+type TeamAuraSpec struct {
+	//: 光环主人的名字（只用于日志与对拍，判定按 `operator` 对象走）。
+	Owner string `json:"owner,omitempty"`
+	//: 攻击力 / 防御力比例。**同层相加**（进 `(1 + Σ%)` 那个括号），不连乘。
+	AtkPct float64 `json:"atk_pct"`
+	DefPct float64 `json:"def_pct"`
+	//: 「技能期间**才**生效」。false = 常驻（青色怒火）。
+	SkillOnly bool `json:"skill_only,omitempty"`
+	//: 只发给主人**自己**（能天使「天使的祝福」的自身那半）。
+	//: 判等用**同一对象**，**不按 char_id**——同一关里可以有同名干员。
+	SelfOnly bool `json:"self_only,omitempty"`
+	//: **筛选**：只发给这个势力的人（`rhodes` = 【罗德岛】）。空 = 不按势力筛。
+	//: ⚠ 与 `NationDouble`（翻倍：该势力 ×2、别人 ×1）**是两种语义**，别合并。
+	FactionOnly string `json:"faction_only,omitempty"`
+	//: **筛选**：只发给这个主职业的人（`TANK` = 重装）。**不吃倍率**，
+	//: 也不看主人开不开技能（星熊那条是常驻的）。
+	Profession string `json:"profession,omitempty"`
+	//: **筛选**：只发给「携带弹药类技能」的人（新约能天使「铳弹协约」）。
+	//: 判据是那个人**当前装备的技能**是 `AMMO` 型，与技能开没开无关。
+	AmmoSkillOnly bool `json:"ammo_skill_only,omitempty"`
+	//: **翻倍**：对某个势力的人效果 ×`DoubleScale`（`laterano` = 【拉特兰】）。
+	NationDouble string `json:"nation_double,omitempty"`
+	//: 主人**开着技能**时的加倍倍率（描述写「加倍」即 2.0）。
+	//: ⚠ 它是**默认值**（原版 `double_scale: float = 2.0`），不是"没有就不翻倍"——
+	//: 所以规格里**每次都要显式送**，不能靠 omitempty 省掉。
+	DoubleScale float64 `json:"double_scale"`
+	//: 按 **char_id 名单**翻倍（万众巨潮的【乌萨斯学生自治团】）。
+	//: 与 `NationDouble` 是两种数据形态：那个按势力字段判、成员随新干员增加，
+	//: 这个是写死的名单。
+	Faction []string `json:"faction,omitempty"`
+	//: 名单内那批人的翻倍倍率（黑板 `scale_bonus`）。
+	FactionScale float64 `json:"faction_scale,omitempty"`
+}
+
 // OperatorSpec 是一名**已经在场上**的干员的全部数值。
 //
 // 数值是"无技能状态下"的定值：技能激活在最小版本里不支持（`unsupported` 会挡住），
@@ -84,14 +155,17 @@ type OperatorSpec struct {
 	//: （黑板 `c2e_freeze`）——**未移植**：Go 侧还没有敌人冻结状态。所以这条
 	//: 天赋在 Go 里只兑现了"免死+自冻结"，两边不必一致。
 	BlessingSelfFreeze float64 `json:"blessing_self_freeze,omitempty"`
-	ATK                float64 `json:"atk"`
-	DEF                float64 `json:"def"`
-	RES                float64 `json:"res"`
-	AttackInterval     float64 `json:"interval"`
-	DamageType         string  `json:"damage_type"`
-	BlockCnt           int     `json:"block_cnt"`
-	DeployCost         int     `json:"deploy_cost"`
-	RedeployTime       float64 `json:"redeploy_time"`
+	//: 层数护盾（泥岩「沃土予身」/ 空弦「铁弦」）。没有就是 `nil`——
+	//: 与"有护盾但层数是 0"是两回事，所以用指针而不是零值。
+	Shield         *ShieldSpec `json:"shield,omitempty"`
+	ATK            float64     `json:"atk"`
+	DEF            float64     `json:"def"`
+	RES            float64     `json:"res"`
+	AttackInterval float64     `json:"interval"`
+	DamageType     string      `json:"damage_type"`
+	BlockCnt       int         `json:"block_cnt"`
+	DeployCost     int         `json:"deploy_cost"`
+	RedeployTime   float64     `json:"redeploy_time"`
 
 	//: 天赋给的**常驻闪避比例**（原版 `op.talent_dodge_phys/arts`，
 	//: 来源是 `battle/talents.py::find_damage_block`——库里目前只有星熊「战术装甲」）。
@@ -104,10 +178,56 @@ type OperatorSpec struct {
 
 	//: 攻击范围（**绝对格**，已按落点与朝向展开；技能改范围在最小版本里不支持）
 	Range [][2]int `json:"range"`
+	//: 干员**所属势力**（`operator.nation_id`，如 `rhodes`）。与 `team_id` 不是
+	//: 一回事：那是**小队**。消费者有两个：「医者丰碑」的"对【罗德岛】
+	//: 干员的效果翻倍"，以及全场光环里"只发给/翻倍某个势力"那两条
+	//: ——**两者判的都是吃效果那个人的势力**，所以每位干员都要带。
+	NationID string `json:"nation_id,omitempty"`
+	//: 主职业代号（`operator.profession`，如 `TANK` = 重装）。**只有一个消费者**：
+	//: 按职业发的全场光环（星熊「特种作战策略」，`talents.CLASS_AURA_TALENTS`）。
+	//: 与 `nation_id`（势力）是两回事：那个是"哪个势力"，这个是"哪个职业"。
+	Profession string `json:"profession,omitempty"`
+	//: 这一位干员自己带出去的**全场光环**（天赋）。一个干员可以有多条
+	//: （「万众巨潮」与「特种作战策略」是并列的两条天赋，不是同一件事）。
+	//:
+	//: ⚠ 与 `regen_aura` 不同：那个是**射程内**才生效、要问 `Range`；
+	//: 这个是**全场**、不看位置，所以判定只需要"目标是谁"。
+	TeamAuras []TeamAuraSpec `json:"team_auras,omitempty"`
+	//: 天赋「医者丰碑」（凯尔希 / 凯尔希·思衡托）的**增益治疗光环**。
+	//: 原文：「其他友方干员**进入自身攻击范围时**立刻获得 1 层护盾并额外获得一次
+	//: **每秒回复 N 点生命值**的增益治疗，持续 M 秒（**不可叠加**），增益治疗对
+	//: 【罗德岛】干员的效果**翻倍**。」
+	//:
+	//: ⚠ 原文里的「1 层护盾」**没有黑板键**，原版 `RegenAura` 也只兑现回血那一半
+	//: （`talents.py:620`）——这里同样只做回血，两边一致。
+	//:
+	//: 帧位在**技能之后、我方出手之前**（原版 5.5，`sim.py:2834-2840`）：
+	//: 本帧刚上场的干员当帧就能吃到，本帧刚吃到的治疗也在本帧出手前落账。
+	RegenAura *RegenAuraSpec `json:"regen_aura,omitempty"`
 	//: 医疗：这个人的**平A 是治疗**（原版 `OperatorUnit.heals`）。
 	//: 但技能可以把这一击改成伤害（凯尔希·思衡托技2「攻击变为射出医疗单元」）——
 	//: 判据是技能自己有没有写攻击倍率，见 `operatorsAttack`。
 	Heals bool `json:"heals,omitempty"`
+	//: 普攻连击（焰狐龙梓兰的**隐藏天赋**）：一次普攻打 `ComboHits` 击，每击倍率
+	//: `ComboHitScale`，**计算防御/法抗之后**再整笔乘 `ComboDamageScale`。
+	//:
+	//: ⚠ 两个"不是 1"的判据必须按原版抄：`ComboHits` 的"没有这条"是 **1**
+	//: （原版判 `> 1`），`ComboHitScale` 是 **1.0**。按 0 判会把每一位没有连击
+	//: 的干员都当成三连击。
+	//:
+	//: 只在**这一次出手是普攻**时生效——判据看技能有没有改写这一击的攻击倍率
+	//: （`abs(atkScale − 1.0) < 1e-9`），不看技能开没开。
+	ComboHits        int     `json:"combo_hits,omitempty"`
+	ComboHitScale    float64 `json:"combo_hit_scale,omitempty"`
+	ComboDamageScale float64 `json:"combo_damage_scale,omitempty"`
+	//: 天赋「强击瓶专家」（焰狐龙梓兰 天赋1）：部署后**首次**开技起，接下来
+	//: `PowerAttackCount` **轮**攻击的攻击力乘 `PowerAttackScale`。
+	//:
+	//: ⚠ `Count` 数的是**攻击动作（一轮）**，不是箭矢：prts 备注写明"于弹道脱手
+	//: 前对当次连击的所有弹道生效"，且"每轮技能三/四/五连击、每次二技能的降落
+	//: 攻击、每次三技能的龙之箭均消耗 1 次"。所以一轮只扣一层。
+	PowerAttackCount int     `json:"power_attack_count,omitempty"`
+	PowerAttackScale float64 `json:"power_attack_scale,omitempty"`
 	//: 职业特性溅射（撼地者那四位共用的一条特性；判据是特性黑板上同时有
 	//: `attack@ability_range_radius` 与 `attack@atk_scale_2`，已由 Python 解好）。
 	//:
@@ -203,6 +323,11 @@ type SkillSpec struct {
 	Infinite bool `json:"infinite"`
 	//: 弹药类的总发数（0 = 不是弹药类）；打光就结束
 	Ammo int `json:"ammo"`
+	//: 持续时间类型（`NONE` / `AMMO` / …）。**唯一的消费者**是全场光环里那条
+	//: 「**携带**弹药类技能的干员 +9%」（`TeamAuraSpec.AmmoSkillOnly`）——
+	//: 它判的是"装备的是不是弹药技能"，**与技能开没开无关**，所以不能拿
+	//: `Ammo > 0` 顶替：那个是"打光就结束"的运行时表现。
+	DurationType string `json:"duration_type,omitempty"`
 	//: 整场只能开一次（开过就不再开，哪怕技力又满了）
 	OncePerBattle bool `json:"once_per_battle"`
 
@@ -230,6 +355,27 @@ type SkillUseSpec struct {
 // 重放"的血量与冷却都算错）。**能不能落下由 Go 在那一刻判**（费用与再部署冷却），
 // 判不过就照着原版的做法记一笔并不放——两边都得判，否则"排了但没落地"这一路会
 // 悄悄分成两种结果。
+// ShieldSpec 是干员的**层数护盾**（原版 `OperatorUnit.shield_*` 那一族，
+// `unit.py:412-421`；授予与节拍见 `sim.py:3157-3205`，伤判见 `unit.py:613-620`）。
+//
+// ⚠ **送的是比例不是回血量**：原版 `op.shield_break_heal = ratio × op.max_hp`
+// 是在**部署那一刻**用当时的生命上限算死的。送比例、由 Go 在同一个时刻乘它
+// 自己的 `maxHP()`，两边才会用同一个上限——送绝对值就等于把那个时刻的 `max_hp`
+// 固化进规格，日后任何改上限的机制（如「天使的祝福」）都会让两边对不上。
+type ShieldSpec struct {
+	//: 上限（原版 `max(max_times, times)`：泥岩有黑板 `max_times`，
+	//: 空弦只有正文里的"一层"，取两者的**大**者，见 `sim.py:3172`）。
+	MaxLayers int `json:"max_layers"`
+	//: **部署时**给几层（原版 `shield_layers_on_deploy`）。
+	Layers int `json:"layers"`
+	//: 「每 N 秒加一层」的间隔；0 = 不再补层。
+	Interval float64 `json:"interval"`
+	//: 破裂回血比例（原版 `shield_break_heal_ratio`，泥岩「沃土予身」是 0.2）。
+	BreakHealRatio float64 `json:"break_heal_ratio"`
+	//: 破裂给技力（空弦「铁弦」的 `sp`=7）。
+	BreakSP float64 `json:"break_sp"`
+}
+
 type DeploySpec struct {
 	Time   float64 `json:"time"`
 	Index  int     `json:"index"`
@@ -391,6 +537,24 @@ type SpawnSpec struct {
 
 	Legs []LegSpec `json:"legs"`
 
+	//: **天桩-乙**（原版 `sim._pile_mark_key(e)` 非空）。
+	//:
+	//: ⚠ 关键事实：乙**也会从出怪表刷出来**（`act31side_09` 的 38 条出怪行里
+	//: 有 24 条是 `enemy_1399_dhtb`），而原版对它们照样跑 `_pile_diver_tick`
+	//: ——`_pile_tick` 的第 ② 段是**遍历全体敌人**按类型分派
+	//: （`sim.py:4651-4659`），`_pile_mark_key` 不区分"装置召唤的"还是
+	//: "出怪表刷的"。实测：`act31side_09` 里 `_pile_diver_tick` 被调了
+	//: **15802** 次，全部落在 `enemy_1399_dhtb` 身上。
+	//:
+	//: 这一段的行为是**每帧重设路线**——丢掉出怪表给的腿，直线扑向最近的
+	//: 存活干员（`sim.py:4781-4785`）。没移植时的症状极具迷惑性：
+	//: 乙会老老实实沿出怪表的腿走到图外**漏掉**，判决表现为"我方一次都没出手"
+	//: ——看着像索敌坏了，其实是敌人压根没走到。
+	//:
+	//: 只给**出怪表**这条路上的敌人打标。装置召唤的甲/乙/天标由机制层的
+	//: `pileUnit` 管（`huai_shu_li.go`），两边都打会**同一只被推两遍**。
+	Diver bool `json:"diver,omitempty"`
+
 	//: ---- 天桩链（怀黍离装置「天桩」的四跳，原版 `_pile_tick` 3884-4130）
 	//:
 	//: 这一组里没有一条是新口径：四跳全部照原版的代码路径来，数值一律从规格
@@ -441,6 +605,16 @@ type Verdict struct {
 	SpawnsPlaced   int     `json:"spawns_placed"`
 	SpawnsTotal    int     `json:"spawns_total"`
 	TimedOut       bool    `json:"timed_out"`
+
+	//: **跑满时间上限时场上还剩谁**，`(名字, 清不掉)` —— 与
+	//: `BattleResult.leftover_units` 同形。
+	//:
+	//: 为什么必须有：结束判据是「出怪表走完 **且** 场上没有活跃敌人」。
+	//: 一旦某只敌人**既打不死、又不会离场**，这一局就永远收不了场——
+	//: 症状是**杀、漏、伤害全对，只有用时等于时间上限**。
+	//: 没有这一项，那种局面在 Go 的判决里**一个字的线索都没有**，
+	//: 只能看到"用时 +80 秒"然后去猜。
+	Remnants [][2]any `json:"remnants,omitempty"`
 
 	//: 漏怪的逐笔明细 `(时刻, 名字, 扣命)`——与 `BattleResult.leak_events` 同形
 	LeakEvents [][3]any `json:"leak_events"`

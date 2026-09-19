@@ -51,6 +51,35 @@ func skillTick(ops []*operator, dt, t float64, spec *Spec, cost *float64,
 		if !op.alive() {
 			continue
 		}
+		// 【冻结】按帧递减（原版 `sim.py:2038-2041`）。干员侧的冻结 = **缴械**、
+		// **不动阻挡**，所以它有自己的字段，不能并进别的计时器。
+		//
+		// ⚠ 必须放在下面 `if sk == nil { continue }` **之前**：原版就在
+		// `op.skill is None` 那道 continue 之前递减。放后面的话，**没带技能的
+		// 干员被冻住就永远解不开**——而这类偏差在判决上完全看不出来。
+		if op.freezeTimer > 0 {
+			op.freezeTimer = math.Max(0.0, op.freezeTimer-dt)
+		}
+		// 「每 N 秒获得 1 层护盾」（泥岩「沃土予身」）**与技能无关**，所以必须
+		// 放在下面 `if sk == nil { continue }` **之前**——原版就是这么排的
+		// （`sim.py:2042-2045`，注释里写明"放后面会让没带技能的泥岩整场不长护盾，
+		// 而且是静默的"）。
+		//
+		// 满层时这一次"获得"**作废、计时照走不攒着**：正文只说"每 9 秒获得 1 层
+		// （最多 3 层）"，没说满层挂起（原版 `_shield_tick` 的 while 循环同义）。
+		if op.shieldInterval > 0 && op.shieldMaxLayers > 0 {
+			op.shieldTimer += dt
+			for op.shieldTimer >= op.shieldInterval {
+				op.shieldTimer -= op.shieldInterval
+				if op.shieldLayers < op.shieldMaxLayers {
+					op.shieldLayers++
+					if traceOn && op.sim != nil {
+						trace("SHIELD t=%.4f op=%s grant %d/%d", t, op.spec.Name,
+							op.shieldLayers, op.shieldMaxLayers)
+					}
+				}
+			}
+		}
 		sk := op.spec.Skill
 		if sk == nil {
 			continue
@@ -123,6 +152,15 @@ func activate(op *operator, t float64, spec *Spec, cost *float64,
 		op.skillTimer = sk.Duration
 	}
 	op.ammoLeft = sk.Ammo
+	// 天赋「强击瓶专家」：**部署后首次开启技能时**，接下来 N 轮攻击的攻击力
+	// 倍率提升。判据是"本局的第几次开技"，而 `spCharges` 在**下一行**才自增，
+	// 所以这里读到的 0 就是首次（原版 `sim.py:2448` 同一位置、同一写法）。
+	//
+	// 每次开技都重置一遍也无妨——它只在 `== 0` 时触发，之后的技能不动它，
+	// 剩余层数照常往下走（这正是原版的行为：层数是**跨技能**消耗的）。
+	if op.spCharges == 0 && op.spec.PowerAttackCount > 0 {
+		op.powerAttackLeft = float64(op.spec.PowerAttackCount)
+	}
 	op.spCharges++
 	// 技能给的生命上限（原版 `sim.py:2498` → `unit.py:947`）：
 	// 「上限和当前血量一起涨」——`hp += 基准 × pct`，这里用绝对值反推：
@@ -246,18 +284,28 @@ func (o *operator) profile() *Profile {
 	return nil
 }
 
+// atk 是这名干员**这一刻**的攻击力面板（原版 `OperatorUnit.current_atk()`）。
+//
+// 全场光环那一段**必须加成、不能在技能面板上连乘**：原版写的是
+// `self.atk * (1 + 技能增益 + … + aura_atk_pct)`——光环的贡献是
+// `self.atk × aura_atk_pct`，底子是**不含技能增益**的那个数。
+// 写成 `p.ATK * (1 + aura)` 会多出一项 `p.ATK × 技能增益 × aura`，
+// 技能一开就对不上（本次的关卡里技能恒关，所以那个错会**一直藏着**）。
 func (o *operator) atk() float64 {
+	base := o.spec.ATK
 	if p := o.profile(); p != nil {
-		return p.ATK
+		base = p.ATK
 	}
-	return o.spec.ATK
+	return base + o.spec.ATK*o.auraAtkPct
 }
 
 func (o *operator) defense() float64 {
+	base := o.spec.DEF
 	if p := o.profile(); p != nil {
-		return p.DEF
+		base = p.DEF
 	}
-	return o.spec.DEF
+	// 同 `atk()`：光环的底子是 `spec.DEF`，不是技能面板。
+	return base + o.spec.DEF*o.auraDefPct
 }
 
 func (o *operator) res() float64 {
