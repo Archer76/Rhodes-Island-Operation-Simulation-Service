@@ -1139,6 +1139,15 @@ def build_spec(inp, *, stage_label: str = "", allow_devices: bool = False,
     #: `enemy_windup` / `cost_init` / `cost_max` / `cost_time` / `life`）
     #: 同样从**新家** `frontend/stage_env.py` 取，不再从模拟器上读**派生后**的值。
     #:
+    #: ⚠ **两个数别混**：`env` 承载、并在本函数末尾被消费的是这 **8** 项
+    #: （`stage_env.ENV_KEYS` 就是这 8 个；取用点 `spec.py:1197`／`:1206-1212`）；
+    #: 而 `env` **缺席**时改由 `inp` 现取的是**另外 5** 项
+    #: （`fps`／`speed_scale`／`ranged_enemies`／`enemy_windup` ＋ `environment_difficulty`，
+    #: 见 `:1150-1160`）。后者只有 5，是因为 `cost_init`／`cost_max`／`cost_time`／`life`
+    #: **根本不是 `SpecInputs` 的字段**（`SpecInputs` 实测 23 个字段，这四个不在其中）
+    #: ⇒ **「8」与「5」量的是两个不同的量，别把后者当前者**
+    #: （依据：2026-09-20 后端2 复核，三组坐标同 `tools/parity_ledger.py` 该处登记）。
+    #:
     #: 为什么必须从**构造参数**重算而不是继续读 `sim.*`：`sim.speed_scale` 已经
     #: 乘过关卡的 `move_multiplier`、`sim.enemy_windup` 已经夹过零——那是
     #: **派生的结果**，反推不回原始参数。`stage_env` 拿原始参数算一遍，
@@ -1192,6 +1201,8 @@ def build_spec(inp, *, stage_label: str = "", allow_devices: bool = False,
                    "cell": [int(u.position[0]), int(u.position[1])]}
                   for u in sch.skill_uses]
     #: 关卡静态那 8 项**已经**在本函数开头由 `env` 备好了（口径与出处见那里）。
+    #: ⚠ 这个 **8** 指 `env` 承载并被消费的量；「`env` 缺席时由 `inp` 现取的 **5** 项」
+    #: 是**另一个量**，别混（坐标见 `:1138` 那一段）。
     return {
         "stage": stage_label or str(getattr(inp.stage, "code", "") or ""),
         "fps": int(env["fps"]),

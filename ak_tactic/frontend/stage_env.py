@@ -3,13 +3,19 @@
 
 ## 它替换掉什么
 
-`build_spec` 现在从**活的 `BattleSimulator`** 上读这 8 项
-（`spec.py:1062-1078`）：
+本模块出现**之前**，`build_spec` 从**活的 `BattleSimulator`** 上读这 8 项（那是旧路径，
+不写旧行号——它会随文件长度漂）；本模块落地后 `build_spec` 改从 `env` 取，
+取用点在 `spec.py:1197`／`:1206-1212`，而那份 `env` 正是本模块的产出：
 
 ```
 fps  speed_scale  ranged_enemies  enemy_windup
 cost_init  cost_max  cost_time  life
 ```
+
+⚠ **这 8 个键就是本模块的 `ENV_KEYS`**（`:58-59`）。**别与「`env` 缺席时由 `inp`
+现取的 5 项」混**——那 5 项是 `fps`／`speed_scale`／`ranged_enemies`／`enemy_windup`
+＋ `environment_difficulty`（`spec.py:1150-1160`）；只有 5 是因为
+`cost_init`／`cost_max`／`cost_time`／`life` **不是 `SpecInputs` 的字段**。
 
 而它们在 `sim.py` 那边的来源是 `sim.py:418-489`——**全是派生**，
 没有一项需要引擎跑起来：
