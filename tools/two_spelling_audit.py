@@ -80,6 +80,16 @@ OBSERVABLE: dict[str, tuple[str, str]] = {
     "cost": ("费用", "部署费用"),
     "max_hp": ("active.max_hp", "血量"),
     "height_offset": ("**待取证**", "**量纲未知，先别接**"),
+    "prob": ("触发概率", "命中/触发次数；**方向须一次对照实验**"),
+    "projectile_range": ("弹道射程（Go 侧弹道机制）", "**须一次对照实验**（机制在 `rios-sim/` 侧）"),
+    "atk_magic": ("法术附加伤害", "**须按正文取证**（是否与普攻同一次结算）"),
+    "burn.atk_scale": ("灼燃那一族的倍率", "**须按正文取证**"),
+    "chain.atk_scale": ("链式那一族的倍率", "**须按正文取证**"),
+    "chain.atk_scale_2": ("链式第二倍率槽", "**须按正文取证**"),
+    "chain.max_target": ("链式目标数", "**须按正文取证**"),
+    "damage_addition": ("附加伤害", "**须按正文取证**"),
+    "take_extra_enemy_key": ("额外目标（按 enemy_key 取）", "**须按正文取证**"),
+    "token_key": ("召唤物/子单位 id", "**须按正文取证**（`endswith` 读法只覆盖裸键）"),
 }
 
 #: 这些 `core` 的「另一侧」是**字符串**（范围代号、标记），不是能相减的数。
@@ -502,11 +512,12 @@ def write_md(rep: list[dict], lits: set[str], out: pathlib.Path, by: str,
         L.append("")
 
     L.append("## 三、B 档：假欠账（有消费点，但两侧同值）\n")
-    L.append("| core | 欠账侧 | 同值/不同值 | 干员行 | 裁定理由 |")
-    L.append("|---|---|---|---|---|")
+    L.append("| core | 欠账侧 | 同值/不同值 | 干员行 | 可见量与方向 | 裁定理由 |")
+    L.append("|---|---|---|---|---|---|")
     for d in b:
         L.append(f"| `{d['core']}` | `{'`、`'.join(d['unread'])}` | "
-                 f"{d['same_value']}/{d['diff_value']} | {len(d['chars'])} | {d['verdict_why']} |")
+                 f"{d['same_value']}/{d['diff_value']} | {len(d['chars'])} | "
+                 f"{d['observable']}：{d['direction']} | {d['verdict_why']} |")
 
     L.append("\n## 四、E 档：口径·后缀匹配读法（`is_read` 看不见的那一类）\n")
     L.append("审计的 `is_read()`（`tools/audit_coverage.py:50-69`）只试三种字面量：整键、"
@@ -520,6 +531,7 @@ def write_md(rep: list[dict], lits: set[str], out: pathlib.Path, by: str,
         L.append(f"* **后缀读法命中**：" + "、".join(f"`{x}`" for x in d["suffix_reads"][:6]) +
                  ("（无）" if not d["suffix_reads"] else ""))
         L.append(f"* **`$` 侧 vs 裸侧**：同值 {d['same_value']} / 不同值 {d['diff_value']}")
+        L.append(f"* **可见量与方向**：{d['observable']}　——　{d['direction']}")
         L.append(f"* **样例**：" + "；".join(
             f"{r['name']}·{r['owner']} → " + ", ".join(
                 f"`{k}`={v['value'] if v['value'] is not None else repr(v['valueStr'])}"
@@ -528,12 +540,13 @@ def write_md(rep: list[dict], lits: set[str], out: pathlib.Path, by: str,
         L.append("")
 
     L.append("## 五、C 档：要新读点（**有干员行的排前面**——这是第四批会碰到的）\n")
-    L.append("| core | 干员行 | 欠账侧 | 总行数 | 样例干员 | 裁定理由 |")
-    L.append("|---|---|---|---|---|---|")
+    L.append("| core | 干员行 | 欠账侧 | 总行数 | 样例干员 | 可见量与方向 | 裁定理由 |")
+    L.append("|---|---|---|---|---|---|---|")
     for d in sorted(cc, key=lambda x: (not x["has_op"], -len(x["chars"]), x["core"]))[:70]:
         L.append(f"| `{d['core']}` | {'**有**' if d['has_op'] else '无'} | "
                  f"`{'`、`'.join(d['unread'][:3])}` | {d['n_rows']} | "
-                 f"{'、'.join(d['chars'][:3]) or '（无）'} | {d['verdict_why']} |")
+                 f"{'、'.join(d['chars'][:3]) or '（无）'} | "
+                 f"{d['observable']}：{d['direction']} | {d['verdict_why']} |")
     if len(cc) > 70:
         L.append(f"| … | | 其余 {len(cc) - 70} 个见 JSON | | | |")
 

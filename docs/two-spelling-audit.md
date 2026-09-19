@@ -5,7 +5,7 @@
 ## 生成方式（元数据，便于复核）
 
 * 工具：`tools/two_spelling_audit.py`；运行者：**RIOS后端2**
-* 所属树 HEAD：`0b03868`；工作区（`ak_tactic/`＋`tools/`）**dirty**
+* 所属树 HEAD：`b6d86ba`；工作区（`ak_tactic/`＋`tools/`）**dirty**
 * 键空间对拍（vs 审计 `keys_of()`）：抽 16 位（等距）逐位相同的 16 位
 * **判据来源**：`tools/audit_coverage.py:50-69` 的 `is_read()`（整键 → 方括号条件名 → `key.rsplit('@', 1)[-1]`）；键空间＝DB 黑板行摊平后**另存 `$键名`**（`ak_tactic/operator/talent.py:139-147`）。
 
@@ -33,9 +33,9 @@
 
 ## 三、B 档：假欠账（有消费点，但两侧同值）
 
-| core | 欠账侧 | 同值/不同值 | 干员行 | 裁定理由 |
-|---|---|---|---|---|
-| `prob` | `$prob` | 4/0 | 1 | `$prob` 与裸 `attack@prob`/`prob` **同值**（实测 4 处同值、0 处不同值）；而且 `$prob` 只出现在**装置**行，干员侧（Misery）根本没有 `$` 侧 ⇒ 假欠账 |
+| core | 欠账侧 | 同值/不同值 | 干员行 | 可见量与方向 | 裁定理由 |
+|---|---|---|---|---|---|
+| `prob` | `$prob` | 4/0 | 1 | 触发概率：该概念的**字符串侧**（`$` 写法）没人读；接上后 触发概率 由正文决定要不要变 | `$prob` 与裸 `attack@prob`/`prob` **同值**（实测 4 处同值、0 处不同值）；而且 `$prob` 只出现在**装置**行，干员侧（Misery）根本没有 `$` 侧 ⇒ 假欠账 |
 
 ## 四、E 档：口径·后缀匹配读法（`is_read` 看不见的那一类）
 
@@ -46,21 +46,22 @@
 * **裁定理由**：裸 `talent@token_key` 的数字是 0、真值在 `valueStr`（真 token id），`$` 侧与它**同值** ⇒ 同一量的两种写法；且 `ak_tactic/gamedata/enemy.py:481` 用 `k.endswith("token_key")` **后缀匹配**读它 ⇒ 审计的字面量尺子看不见这种读法
 * **后缀读法命中**：`ak_tactic/gamedata/enemy.py:481`
 * **`$` 侧 vs 裸侧**：同值 17 / 不同值 0
+* **可见量与方向**：召唤物/子单位 id　——　该概念的**字符串侧**（`$` 写法）没人读；接上后 召唤物/子单位 id 由正文决定要不要变
 * **样例**：圣聆初雪·skchr_sbell2_2 → `talent@token_key`=0.0, `$talent@token_key`='token_10058_sbell2_icetgt'；圣聆初雪·skchr_sbell2_2 → `talent@token_key`=0.0, `$talent@token_key`='token_10058_sbell2_icetgt'
 
 ## 五、C 档：要新读点（**有干员行的排前面**——这是第四批会碰到的）
 
-| core | 干员行 | 欠账侧 | 总行数 | 样例干员 | 裁定理由 |
-|---|---|---|---|---|---|
-| `projectile_range` | **有** | `$attack@projectile_range`、`$projectile_range`、`attack@projectile_range` | 50 | 引星棘刺｜char_1039_thorn2、机械师｜char_4230_mcnist、艾拉｜char_4123_ela | 4 位干员（引星棘刺／机械师／艾拉…）、50 行；本树**没有任何** `projectile_range` 读点 ⇒ 要新读点；弹道机制在 `rios-sim/` 侧（机制层） |
-| `atk_magic` | **有** | `atk_magic`、`attack@atk_magic` | 10 | 雷狼龙S空爆｜char_1049_catap2 | 雷狼龙S空爆 1 位、10 行；无读点 ⇒ 要新读点（法术附加伤害那一族） |
-| `attack_range_id` | **有** | `$attack@attack_range_id`、`attack@attack_range_id` | 10 | 予愿安洁莉娜｜char_1015_aglna2 | 予愿安洁莉娜 1 位、10 行；**已按判据③判红**：`x-4` ＝ 周围 8 格、接进 `_range_override` 会让范围 19 格 → 9 格，与正文「扩大」**方向相反** ⇒ **不许接**（`docs/uncertainties.md` 第三十节） |
-| `burn.atk_scale` | **有** | `attack@burn.atk_scale`、`burn.atk_scale` | 10 | 火哨｜char_493_firwhl | 火哨 1 位、10 行；无读点 ⇒ 要新读点 |
-| `chain.atk_scale` | **有** | `attack@chain.atk_scale`、`chain.atk_scale` | 1 | 乌啾｜char_4224_turdus | 乌啾；无读点 ⇒ 要新读点（链式那一家族） |
-| `chain.atk_scale_2` | **有** | `attack@chain.atk_scale_2`、`chain.atk_scale_2` | 4 | 乌啾｜char_4224_turdus | 乌啾；无读点 ⇒ 要新读点 |
-| `chain.max_target` | **有** | `attack@chain.max_target`、`chain.max_target` | 1 | 乌啾｜char_4224_turdus | 乌啾；无读点 ⇒ 要新读点 |
-| `damage_addition` | **有** | `attack@damage_addition`、`damage_addition` | 10 | 戴菲恩｜char_4110_delphn | 戴菲恩 1 位、10 行；无读点 ⇒ 要新读点 |
-| `take_extra_enemy_key` | **有** | `$take_extra_enemy_key`、`take_extra_enemy_key` | 1 | 隐德来希｜char_4010_etlchi | 隐德来希 1 位；无读点 ⇒ 要新读点 |
+| core | 干员行 | 欠账侧 | 总行数 | 样例干员 | 可见量与方向 | 裁定理由 |
+|---|---|---|---|---|---|---|
+| `projectile_range` | **有** | `$attack@projectile_range`、`$projectile_range`、`attack@projectile_range` | 50 | 引星棘刺｜char_1039_thorn2、机械师｜char_4230_mcnist、艾拉｜char_4123_ela | 弹道射程（Go 侧弹道机制）：该概念的**字符串侧**（`$` 写法）没人读；接上后 弹道射程（Go 侧弹道机制） 由正文决定要不要变 | 4 位干员（引星棘刺／机械师／艾拉…）、50 行；本树**没有任何** `projectile_range` 读点 ⇒ 要新读点；弹道机制在 `rios-sim/` 侧（机制层） |
+| `atk_magic` | **有** | `atk_magic`、`attack@atk_magic` | 10 | 雷狼龙S空爆｜char_1049_catap2 | 法术附加伤害：**须按正文取证**（是否与普攻同一次结算） | 雷狼龙S空爆 1 位、10 行；无读点 ⇒ 要新读点（法术附加伤害那一族） |
+| `attack_range_id` | **有** | `$attack@attack_range_id`、`attack@attack_range_id` | 10 | 予愿安洁莉娜｜char_1015_aglna2 | 规格 range 格表：该概念的**字符串侧**（`$` 写法）没人读；接上后 规格 range 格表 由正文决定要不要变 | 予愿安洁莉娜 1 位、10 行；**已按判据③判红**：`x-4` ＝ 周围 8 格、接进 `_range_override` 会让范围 19 格 → 9 格，与正文「扩大」**方向相反** ⇒ **不许接**（`docs/uncertainties.md` 第三十节） |
+| `burn.atk_scale` | **有** | `attack@burn.atk_scale`、`burn.atk_scale` | 10 | 火哨｜char_493_firwhl | 灼燃那一族的倍率：**须按正文取证** | 火哨 1 位、10 行；无读点 ⇒ 要新读点 |
+| `chain.atk_scale` | **有** | `attack@chain.atk_scale`、`chain.atk_scale` | 1 | 乌啾｜char_4224_turdus | 链式那一族的倍率：**须按正文取证** | 乌啾；无读点 ⇒ 要新读点（链式那一家族） |
+| `chain.atk_scale_2` | **有** | `attack@chain.atk_scale_2`、`chain.atk_scale_2` | 4 | 乌啾｜char_4224_turdus | 链式第二倍率槽：**须按正文取证** | 乌啾；无读点 ⇒ 要新读点 |
+| `chain.max_target` | **有** | `attack@chain.max_target`、`chain.max_target` | 1 | 乌啾｜char_4224_turdus | 链式目标数：**须按正文取证** | 乌啾；无读点 ⇒ 要新读点 |
+| `damage_addition` | **有** | `attack@damage_addition`、`damage_addition` | 10 | 戴菲恩｜char_4110_delphn | 附加伤害：**须按正文取证** | 戴菲恩 1 位、10 行；无读点 ⇒ 要新读点 |
+| `take_extra_enemy_key` | **有** | `$take_extra_enemy_key`、`take_extra_enemy_key` | 1 | 隐德来希｜char_4010_etlchi | 额外目标（按 enemy_key 取）：该概念的**字符串侧**（`$` 写法）没人读；接上后 额外目标（按 enemy_key 取） 由正文决定要不要变 | 隐德来希 1 位；无读点 ⇒ 要新读点 |
 
 ## 六、D 档：装置·召唤物行（非干员，供引擎侧参考）
 
