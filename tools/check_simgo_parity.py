@@ -29,7 +29,8 @@ from ak_tactic.battle import BattleSimulator, Deployment            # noqa: E402
 from ak_tactic.battle.unit import OperatorUnit                      # noqa: E402
 from ak_tactic.gamedata import EnemyLibrary, GameDataSource, load_stage  # noqa: E402
 from ak_tactic.operator import OperatorCalculator                   # noqa: E402
-from ak_tactic.simgo import Simgo, build_spec, compare, find_binary  # noqa: E402
+from ak_tactic.simgo import (EngineBinaryUnpinned, Simgo, build_spec,
+                             compare, require_binary)                # noqa: E402
 from ak_tactic.frontend.inputs import SpecInputs
 
 #: 对拍用的关卡（都不带装置、都不是活动中那些特殊机制关）
@@ -134,13 +135,27 @@ def run_case(src, lib, calc, code: str, label: str, squad) -> tuple[bool, str]:
     return False, f"{head}\n        差异：{got['diff']}"
 
 
+def _force_utf8_stdout() -> None:
+    """输出重定向时消息也必须可读（口径⑤）：否则报错里的中文路径按 GBK 落盘、看的人读不出来。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")     # type: ignore[union-attr]
+        except Exception:                            # noqa: BLE001
+            pass
+
+
 def main() -> int:
+    _force_utf8_stdout()
     only = [a for a in sys.argv[1:] if not a.startswith("-")]
     codes = only or STAGES
-    exe = find_binary()
-    if exe is None:
-        print("跳过：没找到 rios-sim 的可执行文件（cd rios-sim && go build）")
-        return 0
+    try:
+        exe = require_binary()
+    except EngineBinaryUnpinned as e:
+        # ⚠ 这里原本是「跳过：没找到 rios-sim 的可执行文件 → return 0」。那是一条**rc=0 的假绿出口**：
+        #    一台都没跑，而在读数上与「全部对拍一致」长得一模一样（PM 2026-09-19）。
+        #    现在**没有"跳过"这条出口**：未钉住/钉错 ⇒ 报出那条能直接粘的命令、点名路径，rc=2。
+        print(f"⛔ {e}", file=sys.stderr)
+        return 2
 
     src = GameDataSource()
     lib = EnemyLibrary(source=src)
