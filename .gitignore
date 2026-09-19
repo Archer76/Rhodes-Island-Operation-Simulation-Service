@@ -4,6 +4,16 @@ __pycache__/
 .venv/
 
 # ---- 数据缓存：可再生的纯派生物 ----
+# ⚠ **别指望这些文件一直在。** 它们在本文件里全被忽略，所以 **`git clean -xdf`
+#    会把它们连同 `gamedata/` 一起删掉**——2026-09-20 凌晨就整批消失过一次
+#    （`prts-notes.sqlite`/`op-briefs.txt`/`enemydb.sqlite`/`ranges.json`/`operbox/`，
+#    回收站是空的）。**删了不要紧，一条命令重建**：
+#        python tools/rebuild_data.py
+#    每项的来源 / 耗时 / 要不要联网 / 失败长什么样，见 `docs/data-sources.md` 第五节。
+#    ⚠ 例外三条，重建脚本**只报在不在、不假装能重建**：
+#      · `data/gamedata/`——**不是派生物**，要从镜像重新下载（它是所有离线步骤的源头）；
+#      · `data/operbox/`——玩家自己从 MAA 导出的文件；
+#      · `data/skland/`——要登录态。
 data/cache/
 data/gamedata/
 data/ranges.json
