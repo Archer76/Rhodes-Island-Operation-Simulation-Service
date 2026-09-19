@@ -118,6 +118,13 @@ BUILD_SECONDS = 3.0
 AURA_HIT_RADIUS = 0.5
 
 #: 屏幕方向 → (dx, dy)，MAA 口径（原点左上、y 向下）。
+#:
+#: ⚠⚠ **本表是 UPPER（`"LEFT"` / `"RIGHT"` / `"UP"` / `"DOWN"`）**，
+#: 与 `ak_tactic/frontend/geometry.py` 那张 **Title Case**（`"Right"` / `"Left"` / …）
+#: **是两张不同的表**——装置的朝向是 UPPER，干员的 `direction` 是 Title Case。
+#: **别把两张并成一张**：并了不报错，只会让查不到的那一半静默落回
+#: `DIRECTIONS.get(..., (1, 0))` 的默认值，即**方向反了**。
+#: （本轮曾在 `unit.py` 上踩过这个坑，见 `AK-TACTIC-进度.md` §3.34。）
 DIRECTIONS = {
     "LEFT": (-1, 0),
     "RIGHT": (1, 0),

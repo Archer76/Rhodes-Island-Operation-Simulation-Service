@@ -49,6 +49,10 @@ from __future__ import annotations
 import dataclasses
 from typing import Any
 
+#: ⚠ 干员一律走这个入口取，**不要直接写 `d.operator`**——那个是活的
+#: `OperatorUnit`（Python 引擎要拿它跑帧），技能规格只要开局那一组字段。
+from ..frontend.schedule import operator_of
+
 #: 允许非默认的 `buffs` 键
 #:
 #: `attack_interval` 是**加算秒数**的攻速修正（`SkillLevel.attack_interval`：
@@ -266,7 +270,7 @@ def skill_spec(sim, d) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     `d` 是这次部署（`Deployment`）——技能等级已经由调用方绑到 `d.operator.skill`
     上了（原版在 `_bind_skill` 里绑，见 `spec.build_spec` 的说明）。
     """
-    op = d.operator
+    op = operator_of(d)
     sk = getattr(op, "skill", None)
     if sk is None:
         return None, None
@@ -291,6 +295,12 @@ def skill_spec(sim, d) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         "duration": 0.0 if dur is None else float(dur),
         "infinite": dur is None,
         "ammo": ammo,
+        # 持续时间类型（`AMMO` = 弹药类）。**只有一个消费者**：队友天赋里那条
+        # 「**携带**弹药类技能的干员攻击力 +9%」（新约能天使「铳弹协约」，
+        # `ammo_skill_only`）——它判的是"这个人装备的是不是弹药技能"，
+        # **与技能开没开无关**（正文写的是「携带」）。所以这个字段必须送，
+        # 不能拿 `ammo > 0` 顶替：那个是"打光就结束"的运行时表现，语义不同。
+        "duration_type": str(getattr(sk, "duration_type", "NONE") or "NONE"),
         "once_per_battle": bool(getattr(eff, "once_per_battle", False)),
         "cost_gain": float(getattr(eff, "buffs", {}).get("cost", 0.0)),
     }

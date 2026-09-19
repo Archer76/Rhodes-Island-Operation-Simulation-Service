@@ -34,6 +34,19 @@ from typing import Any, Iterable, Iterator
 
 from .devices import DIRECTIONS, PUMP_KEY, behind_of
 
+#: ⚠ **黑板取值原语已经搬走**，搬到 `ak_tactic/frontend/blackboard.py`（原样搬，不重写）。
+#:
+#: 搬的理由是依赖方向：`stage_mul.py` 用它们，而 `stage_mul` 要搬去 `frontend/`
+#: 与 `build_spec` 同住（`docs/spec-extraction-surface.md`）。若让新家反过来
+#: import 本模块，就等于"新家依赖要删掉的 `battle/`"，白搬。
+#:
+#: 这里**继续转出**同一个函数对象（下面 `__all__` 里那四个名字不变），
+#: 所以 `environment.bb_number(...)` / `from .environment import bb_number`
+#: 这类既有写法**一个字都不用改**。
+from ..frontend.blackboard import (                          # noqa: E402
+    bb_number, bb_text, find_rune, mask_applies,
+)
+
 __all__ = [
     "DIFFICULTIES", "RUNES_KEY", "FARMLAND_EXCLUDED_KEYS",
     "POLLUT_MIN", "POLLUT_MAX", "CACHE_INTERVAL", "CACHE_PER_TICK",
@@ -106,54 +119,15 @@ PUMP_RANGE_BONUS = 2
 
 # ================================================================ 一、runes 黑板
 
-def mask_applies(mask: str | None, difficulty: str) -> bool:
-    """这条 rune 在当前难度下生效吗。
-
-    `ALL` 必须认——`act31side_08` 用的就是它，不认则整条环境系统静默消失。
-    """
-    return mask in ("ALL", "", None) or mask == difficulty
-
-
-def find_rune(runes: Iterable[dict], key: str,
-              difficulty: str = "NORMAL") -> dict | None:
-    """按 `difficultyMask` **消歧**后取 rune，取不到返回 None。
-
-    ⚠ **禁止取第一条**：同一关常有多条同名 rune（`act31side_ex08` 的
-    `env_system_new` 有 NORMAL 与 FOUR_STAR 两条，黑板数值相同但
-    `init_pollut_value` 不同——`1,1:0` vs `4,4:100`）。取错了不会报错，
-    只是污染点画在了别处。
-    """
-    hit = None
-    for r in runes:
-        if r.get("key") == key and mask_applies(r.get("difficultyMask"), difficulty):
-            hit = r                      # 同键同难度若仍有多条，取最后一条
-    return hit
-
-
-def bb_number(entries: Iterable[dict] | None, key: str) -> float | None:
-    """从黑板上取**数值**——值住 `value`，不是 `valueStr`。
-
-    这是本项目记录在案的一次真错：只读 `valueStr` 会得出「五个参数全是 None」，
-    进而误判「环境系统不在 gamedata 里」。
-    """
-    for e in entries or ():
-        if e.get("key") == key:
-            v = e.get("value")
-            if isinstance(v, (int, float)):
-                return float(v)
-            return None
-    return None
-
-
-def bb_text(entries: Iterable[dict] | None, key: str) -> str | None:
-    """从黑板上取**字符串**——值住 `valueStr`（`key` / `init_pollut_value` 走这条）。"""
-    for e in entries or ():
-        if e.get("key") == key:
-            v = e.get("valueStr")
-            if isinstance(v, str) and v.strip():
-                return v.strip()
-            return None
-    return None
+#: 四个取值原语（`mask_applies` / `find_rune` / `bb_number` / `bb_text`）
+#: **已经搬到 `ak_tactic/frontend/blackboard.py`**，本模块在文件头从那里 import 并
+#: 继续转出——所以本模块的公开面**没有变化**。
+#:
+#: ⚠ 搬迁是**原样搬**：`find_rune` 的"禁止取第一条"与 `bb_number` 的
+#: "数值住 `value` 不是 `valueStr`"这两条，各自对应一次真实踩过的错，
+#: 而它们的差异只在**同键多条 rune** 时才分叉——当前流水线恒为 NORMAL
+#: （`Verifier` 不传 `environment_difficulty`），FOUR_STAR 那条是**沉默区**。
+#: 也就是说：重写错了，没有任何判据会响。所以只许搬，不许改。
 
 
 def parse_init_pollut(text: str | None, map_height: int) -> dict[tuple[int, int], float]:
