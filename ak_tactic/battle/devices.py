@@ -42,12 +42,13 @@ __all__ = [
     "device_hp", "device_cost", "branch_id_of", "initial_device_tokens",
 ]
 
-#: 阻流阀：3 秒后建成 → 自身地块不再算田地。
-BLOCKER_KEY = "trap_139_dhtl"
-#: 泵站：在身后格与前方格之间搬病害。
-PUMP_KEY = "trap_140_dhsb"
-#: 天桩：登场时在自身位置召唤一名「天桩-甲」；所在地块的甲退场时自身死亡。
-PILE_KEY = "trap_146_dhdcr"
+#: ⚠ 这三个装置键的**定义已搬到 `ak_tactic/frontend/mech_consts.py`**，
+#: 这里只做转出——`spec.py`/`mech.py` 送规格时要用它们，而为了三个字符串
+#: 去 import 这个 413 行的运行期模块，就是把 `battle/` 钉在依赖图上。
+#: 一份定义、两个消费者。
+from ..frontend.mech_consts import (                        # noqa: E402
+    BLOCKER_KEY, PILE_KEY, PUMP_KEY,
+)
 
 DEVICE_NAMES = {
     BLOCKER_KEY: "阻流阀",

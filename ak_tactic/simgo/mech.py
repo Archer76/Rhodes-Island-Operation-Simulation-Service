@@ -34,7 +34,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..battle import environment as env
-from ..battle.devices import BLOCKER_KEY, PILE_KEY, PUMP_KEY
+from ..frontend.mech_consts import BLOCKER_KEY, PILE_KEY, PUMP_KEY
 
 __all__ = [
     "KINDS", "kind_of", "farmland_spec", "from_spec", "spec_summary",
@@ -264,11 +264,13 @@ def _pile_device_spec(sim, d) -> dict[str, Any] | None:
     数值（污浊满值、召唤延迟、自缚秒数）**一律从原版的常量里读**，不在 Go 里写死：
     它们是"原文里的数字"，改口径时改的是这一处。
     """
-    #: ⚠ 这三个常量（召唤延迟 / 污浊满值 / 自缚秒数）还住在 `battle/sim.py`。
-    #: 它们是**数值**不是行为，读它们不进 `battle/` 的任何函数体——
-    #: 但仍是 `battle/` 的一部分，等那几处常量也搬进 `frontend/` 才能断干净。
-    from ..battle import sim as _sim_mod
+    #: ⚠ 这三条常数（召唤延迟 / 污浊满值 / 自缚秒数）**已搬进 `frontend/mech_consts.py`**。
+    #: 此前这里是 `getattr(_sim_mod, "PILE_SUMMON_DELAY", 1.25)` ——
+    #: 而那个默认值**恰好等于真值**，于是"取不到"永远看不出来
+    #: （把 `_sim_mod` 那行整个删掉，行为一模一样）。这类兜底已去掉，改成直取。
     from ..frontend.enemy_rules import pile_mark_key, pile_spec, summon_level
+    from ..frontend.mech_consts import (PILE_POLLUT_FULL, PILE_SELF_BIND,
+                                        PILE_SUMMON_DELAY)
     from . import spec as _spec
 
     try:
@@ -320,8 +322,8 @@ def _pile_device_spec(sim, d) -> dict[str, Any] | None:
         getattr(parent, "awake_summon_ratio", 0.0) or 0.0)
     pspec["awake_summon_cnt"] = int(getattr(parent, "awake_summon_cnt", 0) or 0)
     pspec["awake_enemy_key"] = str(getattr(parent, "awake_enemy_key", "") or "")
-    pspec["summon_delay"] = float(getattr(_sim_mod, "PILE_SUMMON_DELAY", 1.25))
-    pspec["pollut_full"] = float(getattr(_sim_mod, "PILE_POLLUT_FULL", 100.0))
+    pspec["summon_delay"] = float(PILE_SUMMON_DELAY)
+    pspec["pollut_full"] = float(PILE_POLLUT_FULL)
 
     diver_key = str(getattr(parent, "awake_enemy_key", "") or "")
     if diver_key:
@@ -329,7 +331,7 @@ def _pile_device_spec(sim, d) -> dict[str, Any] | None:
         if diver is not None:
             dspec = _spec._unit_spec(sim, diver)
             dspec["static"] = False           # 乙会扑向干员，不是自缚
-            dspec["self_bind"] = float(getattr(_sim_mod, "PILE_SELF_BIND", 1.0))
+            dspec["self_bind"] = float(PILE_SELF_BIND)
             dspec["hit_radius"] = 0.5         # 原版"贴到目标格"的判据
             mark_key = pile_mark_key(sim.stage, diver)
             if mark_key:
