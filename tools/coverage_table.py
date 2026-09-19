@@ -543,6 +543,36 @@ def self_test() -> int:
     noev = [r[1] for r in ROWS if r[1] in WIRED and not WIRED_WHY.get(r[1])]
     print(f"  {'⚠' if noev else '✅'} 已登记可追回依据 {len(ROWS) - len(noev)}/{len(ROWS)} 行"
           f"{('；未登记（前轮判定，本轮未复核）：' + '、'.join(noev)) if noev else ''}")
+    # ★★ 上面三条（留白／孤立行名／依据缺失）的**反向守卫**。
+    #    PM 2026-09-19 定：「留白 0 行」这条下次还要在——**靠人记着不算在，靠注入才算**。
+    #    做法与 --mutate 同型：在**内存副本**上把数据改坏，断言那三条判据真的会红。
+    #    ⚠ 它证明的是"检测器在合成输入上有效"，**不证明**真实数据那条路是通的
+    #      ——后者的证据是上面 good7/good8 在**真实数据**上的结论，两条一起才算完。
+    pop_name = next((r[1] for r in ROWS if r[1] in WIRED), None)
+    inj_blank = dict(WIRED)
+    if pop_name:
+        inj_blank.pop(pop_name)
+    miss_inj = [r[1] for r in ROWS if r[1] not in inj_blank]
+    good7b = bool(miss_inj)
+    bad += 0 if good7b else 1
+    print(f"  {'✅' if good7b else '⛔'} 反向守卫：抽掉一条判定后「不许留白」必须点名："
+          f"{miss_inj[:1] or '（没红 ⇒ 这条判据红不起来）'}")
+    orp_inj = sorted((set(WIRED) | {"这个行名不存在_反向守卫"}) - {r[1] for r in ROWS})
+    good8b = bool(orp_inj)
+    bad += 0 if good8b else 1
+    print(f"  {'✅' if good8b else '⛔'} 反向守卫：塞一个不存在的行名后「不许孤立」必须点名："
+          f"{orp_inj or '（没红 ⇒ 这条判据红不起来）'}")
+    ev_name = next((r[1] for r in ROWS if r[1] in WIRED and WIRED_WHY.get(r[1])), None)
+    if ev_name:
+        inj_why = dict(WIRED_WHY)
+        inj_why.pop(ev_name)
+        ne_inj = [r[1] for r in ROWS if r[1] in WIRED and not inj_why.get(r[1])]
+        good11b = ev_name in ne_inj
+        bad += 0 if good11b else 1
+        print(f"  {'✅' if good11b else '⛔'} 反向守卫：抹掉一条依据后「未登记」必须点名到它："
+              f"{ne_inj[:1] or '（没红）'}")
+    else:
+        print("  ⚠ 依据缺失那条没有可注入的样本（0 行登记了依据）——注入不了，别把它当验过")
     # ★ 来源三件套：**两边都要试**——只试一边的话，"提示恒出现"与"提示恒不出现"都算过。
     clean_txt = "\n".join(provenance_lines((0, []), "abc1234", "main"))
     good9 = ("source_dirty=0" in clean_txt) and ("⚠" not in clean_txt)
