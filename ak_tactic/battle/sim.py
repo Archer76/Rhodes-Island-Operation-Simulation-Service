@@ -50,6 +50,37 @@ from typing import Callable, Iterable
 
 from ..eta import leading_wait, route_plans
 from ..gamedata.enemy import PROSE_SUMMON_EDGES
+
+#: ⚠ 这三条**规矩**的实现已搬到 `ak_tactic/frontend/enemy_rules.py`（原样搬，不重写）。
+#: 本模块下面那三个同名方法只转调——一份实现、两个消费者（模拟器与 `build_spec`）。
+#: 它们是 `tools/spec_deps.py` 量出的 7 个 `sim.<方法>` 调用里**唯一不需要造对象**的三个，
+#: 所以先摘它们。
+from ..frontend.enemy_rules import (
+    cannot_clear as _cannot_clear,
+    pile_mark_key as _pile_mark_key,
+    pile_spec as _pile_spec,
+    summon_level as _summon_level,
+)
+
+#: ⚠ 两条**几何**的实现也已搬到 `ak_tactic/frontend/geometry.py`（原样搬，不重写）：
+#: `range_of`（干员攻击格集合）与 `path_from`（到最近保护目标的路）。
+#: 本模块那两个同名方法只转调。搬它们顺带修掉一处坏味道：原版为了算
+#: "某个**假设位置**上的范围"要先篡改干员对象，新接口把位置与朝向当参数传。
+from ..frontend.geometry import path_from, range_of
+
+#: ⚠ 敌人数值的取法也已搬走：`enemy_stats`（纯，整体搬）与
+#: `mode_skill_from_stats`（**只搬纯的那半**——算出黑板，不带写 `self.mode_skill`
+#: 的副作用）。副作用的归属理由见 `_note_mode_skill` 的文档串。
+from ..frontend.enemy_stats import (                              # noqa: E402
+    enemy_stats, mode_skill_from_stats,
+)
+#: 排程的两个数据结构已搬去新家（纯 dataclass，没有代价）。**同名转出**——
+#: 本模块、`battle/__init__.py`、`verify.py` 的既有 import 全部照旧，
+#: 拿到的是**同一批对象**。搬它们的理由见 `frontend/schedule.py` 的模块文档串。
+from ..frontend.schedule import (                                 # noqa: E402
+    Deployment as frontend_Deployment,
+    SkillUse as frontend_SkillUse,
+)
 from .damage import DamageType, resolve_damage
 from .talents import (CLASS_AURA_TALENTS, FACTION_AURA_NAME, STUDENT_TEAM,
                       RegenAura, SnowField, TeamAura, find_blessing,
@@ -76,7 +107,12 @@ from .unit import POSITION_TOL, EnemyUnit, OperatorUnit, point_at
 __all__ = ["BattleSimulator", "BattleResult", "Deployment", "SkillUse",
            "SummonDeployment"]
 
-FPS = 30
+from ..frontend.stage_env import FPS
+"""每秒帧数。
+
+⚠ **一份来源**：定义住在 `ak_tactic/frontend/stage_env.py`，本模块从这里转出。
+那里也要用同一个数（规格里的 `fps` 字段），两处各写一个 30 的话，
+哪天要改就会只改一处。"""
 
 #: 无限持续的技能用这个值当倒计时，省得每次都判 None
 _INFINITE = float("inf")
@@ -132,13 +168,15 @@ TOTAL_ATTACK_KEY = "trap_335_totalattack"
 # `ex08` 三关的支线里写的正是 `enemy_1398_dhdcr_2`（失控天桩-甲），
 # 03/04/07/tr01/tr02 五关写的是关卡本地的 `enemy_1398_dhdcr_b`。
 #: 装置 key → 它召唤的甲的 key（**退路**，正常走 `_pile_spec` 的结构化查询）
-PILE_CHILD = {
-    k: v[0] for k, v in PROSE_SUMMON_EDGES.items() if k.startswith("trap_")
-}
-#: 乙的 key → 它命中时召唤的天标的 key（这一跳**仍然只能查表**：乙的黑板是空的）
-PILE_MARK = {
-    k: v[0] for k, v in PROSE_SUMMON_EDGES.items() if k.startswith("enemy_")
-}
+#:
+#: ⚠ 两张表都**从 `frontend/enemy_rules.py` 取**（那里由 `PROSE_SUMMON_EDGES` 推出来）：
+#: `PILE_MARK` 要跟着 `pile_mark_key` 一起搬，`PILE_CHILD` 与它同源同命，
+#: 留在两边各推一遍的话，哪天 `PROSE_SUMMON_EDGES` 改了就会只改一处。
+#:
+#: 本模块仍然把它们当自己的模块级名字用（`_pile_spec` 读 `PILE_CHILD`），
+#: 所以下面这行是**转出**，不是"改用法"。
+from ..frontend.enemy_rules import PILE_CHILD as PILE_CHILD     # noqa: E402
+from ..frontend.enemy_rules import PILE_MARK as PILE_MARK       # noqa: E402
 #: 甲激活后每损失一批生命，召唤的**延迟秒数**。原文是「1~1.5s 的随机延迟」，
 #: 模拟器必须可复现（同一份作业每次跑出同一结果），故取中值 1.25s，不掷骰。
 PILE_SUMMON_DELAY = 1.25
@@ -173,37 +211,14 @@ def _leading_wait(route) -> float:
 
 # ---------------------------------------------------------------- 计划动作
 
-@dataclass
-class Deployment:
-    """一次部署。
-
-    :param skill: 用第几个技能。可以是槽位号 1/2/3（0 = 不带技能，需要
-        `BattleSimulator(skill_book=...)` 才能解析），也可以直接给一个
-        `SkillLevel` 对象。
-    :param skill_level: 技能的普通等级 1–7
-    :param skill_mastery: 专精等级 0–3
-    :param auto_skill: 手动技能在技力满了之后要不要自动开
-    """
-
-    time: float
-    operator: OperatorUnit
-    position: tuple[int, int]
-    direction: str = "Right"
-    skill: object = 0
-    skill_level: int = 7
-    skill_mastery: int = 0
-    auto_skill: bool = True
-    #: 已判定生效的天赋（`ak_tactic.operator.talent.Talent` 列表）。
-    #: 模拟器只对**显式建模过**的天赋做事，见 `ak_tactic.battle.talents`。
-    talents: list = field(default_factory=list)
-
-
-@dataclass
-class SkillUse:
-    """一次手动开技能。"""
-
-    time: float
-    position: tuple[int, int]
+#: ⚠ `Deployment` 与 `SkillUse` 的定义**已搬到 `ak_tactic/frontend/schedule.py`**
+#: （原样搬，纯数据，没有代价）。这里只是转出——`battle/__init__.py` 与
+#: `verify.py` 等处的既有 import 全部照旧，拿到的是**同一批对象**。
+#:
+#: 搬它们的理由见那边的模块文档串：`battle/` 在排程这件事上只出**五个 append**，
+#: 真正的排程逻辑（费用模型、落地时刻）本来就在 `verify.py::run` 里。
+Deployment = frontend_Deployment
+SkillUse = frontend_SkillUse
 
 
 @dataclass
@@ -381,12 +396,17 @@ class BattleSimulator:
         environment_difficulty: str = "NORMAL",
     ):
         self.stage = stage
+        #: ⚠ **只新增、不改行为**：把构造时用的难度记下来，好让 `build_spec` 能
+        #: 用它去算 `life` / `cost_time`（`frontend/stage_env.py`）——那两个量
+        #: 在非 NORMAL 档下与普通档不同，而模拟器此前**没有把它存成属性**，
+        #: 于是规格构建器无从知道该按哪一档算。
+        self.environment_difficulty = environment_difficulty
         self.enemy_at = enemy_at
         #: 关卡 `runes` 里的**敌人修饰层**（`enemy_attribute_mul` /
         #: `enemy_talent_blackb_mul` / `enemy_skill_blackb_mul`），按难度消歧。
         #: 包在 `enemy_at` 的出口上，所以模拟器里每一处取敌人属性的地方都过它。
-        from .stage_mul import (cost_recovery_scale, global_lifepoint,
-                                parse_rune_muls, wrap_enemy_at)
+        from ..frontend.stage_mul import (cost_recovery_scale, global_lifepoint,
+                                         parse_rune_muls, wrap_enemy_at)
         self.rune_muls = parse_rune_muls(
             (getattr(stage, "raw", None) or {}).get("runes"), environment_difficulty)
         if self.rune_muls:
@@ -639,26 +659,18 @@ class BattleSimulator:
     # -------------------------------------------------------- 辅助
 
     def _range_of(self, op: OperatorUnit, elite: int | None = None) -> set[tuple[int, int]]:
-        """干员当前的攻击格集合——技能改了范围就用技能给的那个代号。"""
-        elite = op.elite if elite is None else elite
-        rid = op.current_range_id()
-        if self.range_provider is not None:
-            try:
-                try:
-                    cells = self.range_provider(op.char_id, elite, op.direction,
-                                                op.position, range_id=rid)
-                except TypeError:
-                    # 自定义的 range_provider 未必接受 range_id
-                    cells = self.range_provider(op.char_id, elite, op.direction,
-                                                op.position)
-                if cells:
-                    return cells
-            except Exception:
-                pass
-        # 退化：自身格 + 朝向前方三格
-        fx, fy = op.facing
-        ox, oy = op.position
-        return {(ox, oy)} | {(ox + fx * i, oy + fy * i) for i in (1, 2, 3)}
+        """干员当前的攻击格集合——技能改了范围就用技能给的那个代号。
+
+        ⚠ **实现已搬到 `ak_tactic/frontend/geometry.py`**（原样搬，不重写），
+        本方法只把干员身上的几个字段取出来转给它。两条兜底行为（provider 不收
+        `range_id` 关键字、provider 抛异常）见那边的正文。
+        """
+        return range_of(self.range_provider,
+                        char_id=op.char_id,
+                        elite=op.elite if elite is None else elite,
+                        direction=op.direction,
+                        position=op.position,
+                        range_id=op.current_range_id())
 
     # -------------------------------------------------------- 天赋：积雪
 
@@ -1447,29 +1459,20 @@ class BattleSimulator:
     def _note_mode_skill(self, stats, t: float) -> None:
         """记下这个敌人的换形态技能（`Skill_Revelation`）的黑板。
 
-        从 `skills_raw` 里读，不写死数字：cd 30 / init 25 / idle 5 / disarmed 7
-        都是这一关的实际取值，换关卡换数值也不会失准。
+        ⚠ **纯的那部分（算出黑板）已搬到 `ak_tactic/frontend/enemy_stats.py`**
+        （`mode_skill_from_stats`，含 `trigger` 语义的来历）。
+
+        ⚠ **副作用留在本方法里**——它写 `self.mode_skill` / `self._mode_next`，
+        即"造一个敌人"会顺手改模拟器状态。`spec.py` 因此要靠 `copy.copy(sim)`
+        绕开（见那边 `_reborn_summons_spec` 的说明）。**那个副作用不许跟着搬走**，
+        否则"造模板"会提前改掉"要跑的那一份"，而且看不出来。
         """
-        for sk in (getattr(stats, "skills_raw", None) or ()):
-            if str(sk.get("prefabKey") or "") != "Skill_Revelation":
-                continue
-            bb = {b.get("key"): b.get("value") for b in (sk.get("blackboard") or [])}
-            tbb = getattr(stats, "talent_blackboard", None) or {}
-            if self.mode_skill is None:
-                self.mode_skill = {
-                    "cd": float(sk.get("cooldown") or 0.0),
-                    "init": float(sk.get("initCooldown") or 0.0),
-                    "idle": float(bb.get("idle_duration") or 0.0),
-                    "disarm": float(bb.get("disarmed_duration") or 0.0),
-                    # 换形态要攒几次「条件」——`Mode_A/trigger_cnt` 与
-                    # `Mode_B/trigger_cnt` 都写着 2。这个字段的语义是从同类敌人
-                    # 反推出来的：`enemy_10190_pppham`（几点了钟）的
-                    # `PowerAttackTrigger.trigger_cnt = 2`，对应描述
-                    # 「**数次攻击后**使目标晕眩」——即"条件满足几次才触发"。
-                    "trigger": float(tbb.get("Mode_A.trigger_cnt")
-                                     or tbb.get("Mode_B.trigger_cnt") or 0.0),
-                }
-                self._mode_next = t + float(self.mode_skill["init"])
+        bb = mode_skill_from_stats(stats)
+        if bb is None:
+            return
+        if self.mode_skill is None:
+            self.mode_skill = bb
+            self._mode_next = t + float(self.mode_skill["init"])
 
     def _spawn(self, enemy_id: str, level: int, route_index: int, t: float) -> EnemyUnit:
         pts = self._route_points.get(route_index) or []
@@ -1520,52 +1523,26 @@ class BattleSimulator:
     def _summon_level(self, enemy_key: str) -> int:
         """被召唤的敌人用哪一档数值。
 
-        先看这一关的 `enemyDbRefs` 有没有点名它（有就按那一档），
-        没有就用 0 档——**不猜**。召唤体往往不在关卡的出怪表里，
-        所以这条回退路径是常态而不是异常。
+        ⚠ **实现已搬到 `ak_tactic/frontend/enemy_rules.py`**（原样搬，不重写），
+        本方法只转调——一份实现、两个消费者（这里与 `build_spec`）。
         """
-        for ref in (getattr(self.stage, "enemy_refs", None) or []):
-            if str(ref.get("id") or "") == enemy_key:
-                try:
-                    return int(ref.get("level") or 0)
-                except (TypeError, ValueError):
-                    return 0
-        return 0
+        return _summon_level(self.stage, enemy_key)
 
     def _path_from(self, cell: tuple[int, int]) -> list[tuple[int, int]]:
         """从 `cell` 走到**最近的可达保护目标**的那条路。
 
-        逐目标试 `ground_path`（它不可达时返回空），取第一条走通的——
-        「最近」按路径长度而不是直线距离算：绕远路的直线距离可能更近。
+        ⚠ **实现已搬到 `ak_tactic/frontend/geometry.py`**（原样搬，不重写），
+        本方法只转调。「最近」按**路径长度**而非直线距离算，理由见那边正文。
         """
-        m = self.stage.map
-        best: list[tuple[int, int]] = []
-        for goal in m.end_points:
-            p = m.ground_path(cell, goal)
-            if not p:
-                continue
-            if not best or len(p) < len(best):
-                best = list(p)
-        return best
+        return path_from(self.stage, cell)
 
     def _enemy_stats(self, enemy_id: str, level: int):
         """取敌人数值，**支持关卡自带的敌人定义**（``enemyDbRefs`` 里 ``useDb: false``）。
 
-        那些 id（怀黍离的 ``enemy_1398_dhdcr_b`` / ``enemy_1399_dhtb_b``）不在
-        属性库里，整份数据写在关卡文件里，只有 ``prefabKey`` 指向的那个在库里。
-        库那一步取不到时，才走本地覆盖；本地也没有就照原样把异常抛出去——
-        静默返回一个空数值会让召唤链"看起来跑了、其实什么都没算"。
+        ⚠ **实现已搬到 `ak_tactic/frontend/enemy_stats.py`**（原样搬，不重写），
+        本方法只转调。取不到时**照原样抛异常**（不静默返回空数值）的理由见那边正文。
         """
-        try:
-            return self.enemy_at(enemy_id, level)
-        except Exception:
-            local = self.stage.local_enemies().get(enemy_id)
-            if not local:
-                raise
-            owner = getattr(self.enemy_at, "__self__", None)
-            if owner is None or not hasattr(owner, "with_overwrite"):
-                raise
-            return owner.with_overwrite(enemy_id, local, level)
+        return enemy_stats(self.enemy_at, self.stage, enemy_id, level)
 
     def _build_enemy(self, enemy_id: str, level: int, pts: list, legs: list,
                      t: float, wait: float) -> EnemyUnit:
@@ -2596,21 +2573,10 @@ class BattleSimulator:
     def _cannot_clear(e: EnemyUnit) -> bool:
         """这个单位**有没有可能被清掉**——要么被打死，要么走到目标点。
 
-        「既打不死、又不会离场」的单位清不掉：只要把它算进完成判据，
-        这一局就永远结束不了（跑满时间上限、0 星）。目前只有怀黍离的天桩-甲
-        满足，两条依据都写在数据里：
-
-        * **打不死**：监测形态持有「无敌、不死」，落成 `always_invincible`
-          （`unit.py` 里那个字段的正文来历就是这个）；激活状态会摘掉它，
-          但那时甲会**每秒自损 1% 最大生命**，自己会死——所以照旧算数。
-        * **不会离场**：它天赋第一句是「自缚」，模拟器给它的是一条**单点路线**
-          （`route_length == 0`；`reached_end` 要求长度 > 0，单点路线永不判漏）。
-
-        两个条件**同时**成立才算"清不掉"。只满足一个的不算：能走的无敌单位
-        会自己走掉（照样能结束这一局），会死的自缚单位会被打死。
+        ⚠ **实现已搬到 `ak_tactic/frontend/enemy_rules.py`**（原样搬，不重写），
+        这里只转调。判据的两条依据（打不死 ＋ 不会离场，**并且**）见那边的正文。
         """
-        return (bool(getattr(e, "always_invincible", False))
-                and float(getattr(e, "route_length", 0.0)) == 0.0)
+        return _cannot_clear(e)
 
     def run(self, max_time: float = 600.0) -> BattleResult:
         dt = 1.0 / self.fps
@@ -4266,7 +4232,7 @@ class BattleSimulator:
             if op is None or op.hp <= 0 or op.retreated:
                 continue
             e.attack_timer += dt
-            if e.attack_timer < e.attack_interval:
+            if e.attack_timer < e.effective_interval():
                 continue
             e.attack_timer = 0.0
             e.hits += 1
@@ -4356,7 +4322,7 @@ class BattleSimulator:
                 continue
             e.skill_atk_timer += dt
             need = (e.skill_atk_init if e.skill_atk_first
-                    else (e.skill_atk_interval or e.attack_interval))
+                    else e.effective_interval(e.skill_atk_interval or e.attack_interval))
             if e.skill_atk_timer < need:
                 continue
             e.skill_atk_timer = 0.0
@@ -4546,35 +4512,19 @@ class BattleSimulator:
 
         整条都查不到时退回 `PILE_CHILD`（并返回 None），模拟照跑。
         """
-        bid = str(getattr(device, "branch_id", "") or "")
-        # 装置 key 末段 → 支线前缀（`trap_146_dhdcr` → `branch_dhdcr`）。
-        # 这一道把**没有支线语义**的装置挡在外面：阻流阀/泵站推不出
-        # `branch_dhtl` / `branch_dhsb`，于是它们不会误领天桩那条支线
-        # （踩过：不挡的话 act31side_08 的 26 个装置会各召唤一名甲）。
-        # 惰性导入：`battle` 的导入链**不牵 gamedata**（自检与 TUI 只用前者）
-        from ..gamedata.stage import branch_prefix
-        branch = self.stage.branch_for(bid, prefix=branch_prefix(device.key))
-        for act in self.stage.branch_actions(branch):
-            if not act.enemy_key:
-                continue
-            return act.enemy_key, self.stage.extra_route(act.route_index)
-        if device.key not in PILE_CHILD:
-            return "", None
-        return PILE_CHILD[device.key], None
+        # ⚠ **实现已搬到 `ak_tactic/frontend/enemy_rules.py::pile_spec`**
+        # （原样搬，不重写）——它只用 `self.stage`，其余全是结构化字段查询。
+        # 本方法只转调：一份实现、两个消费者（`mech.py` 与这里）。
+        return _pile_spec(self.stage, device)
 
     def _pile_mark_key(self, diver: "EnemyUnit") -> str:
         """天桩-乙 → 它砸下的**身上的天标**。
 
-        乙的天赋黑板是**空的**（`talentBlackboard: []`），"砸下什么"只写在
-        正文里，所以走文件头 `PILE_MARK` 那张表；关卡本地的 ``…_dhtb_b``
-        先退到它的 ``prefabKey``（``enemy_1399_dhtb``）再查表。
-        这是天桩链里**唯一**还需要查表的一跳，已登记在
-        `docs/verdicts-pending.md`。
+        ⚠ **实现已搬到 `ak_tactic/frontend/enemy_rules.py`**（原样搬，不重写），
+        本方法只转调。查表口径（`PROSE_SUMMON_EDGES` → `PILE_MARK`，
+        以及 ``…_dhtb_b`` 退到 `prefabKey` 那一跳）见那边的正文。
         """
-        key = PILE_MARK.get(diver.enemy_id)
-        if key:
-            return key
-        return PILE_MARK.get(self.stage.local_enemy_prefab(diver.enemy_id), "")
+        return _pile_mark_key(self.stage, diver)
 
     def _pile_tick(self, dt: float, t: float) -> None:
         """天桩链：装置召唤甲 → 甲监测/激活 → 乙扑咬 → 天标附着。

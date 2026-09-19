@@ -19,9 +19,21 @@ __all__ = [
 ]
 
 #: 朝向 → 单位向量。y 向下为正，所以「上」是 (0, -1)。
-DIRECTIONS: dict[str, tuple[int, int]] = {
-    "Right": (1, 0), "Left": (-1, 0), "Up": (0, -1), "Down": (0, 1),
-}
+#:
+#: ⚠ **定义已搬到 `ak_tactic/frontend/geometry.py`**（原样搬，Title Case 那张），
+#: 本模块只转出——那边 `range_of` 的退化范围要按朝向推前方三格，
+#: 而 `frontend/` **不许 import `battle/`**，所以只能由这边让它。
+#: `OperatorUnit.facing` 与 `unit.DIRECTIONS` 这类既有写法**一个字都不用改**。
+#:
+#: ⚠⚠ **别和 `battle/devices.py` 那张 UPPER 表合并**：两张表的键大小写不同、
+#: 消费者也不同（干员是 `"Right"`、装置是 `"RIGHT"`）。合并后不报错，
+#: 只会让查不到的一半静默落回默认值 `(1, 0)`——即**方向反了**。
+from ..frontend.geometry import (                              # noqa: E402
+    DIRECTIONS as DIRECTIONS,
+    current_range_id as frontend_current_range_id,
+    facing as frontend_facing,
+    path_length as frontend_path_length,
+)
 
 #: 攻速下限（2026-09-16 博士裁定：wiki 写 20、xulai1001/akdata 写 10，取 20）。
 #: 与 `ak_tactic.operator.skill.ASPD_MIN` 是同一个口径——这里再写一遍只是为了
@@ -30,6 +42,15 @@ ASPD_MIN = 20.0
 
 #: 攻击间隔下限，与 `SkillEffects.attack_interval` 的 `max(0.05, …)` 同源。
 MIN_INTERVAL = 0.05
+
+#: 【寒冷】带来的攻击速度折减。
+#:
+#: 出处：**PRTS《敌人一览/数据》** 页面 tooltip——「寒冷：**攻击速度下降 30**，
+#: 如果在持续时间内再次受到寒冷效果则会变为冻结」（2026-09-19 博士提供该页）。
+#: 此前这一条是"拿不到数"的欠账（`docs/uncertainties.md` 第九节、「异常效果」页
+#: 只写"攻击速度降低"不给数、`excel/buff_table.json` 两个公开镜像都 404），
+#: 所以 `EnemyUnit.cold_timer` 只记时长不记效果；现在补上，见 `effective_interval()`。
+COLD_ASPD_DOWN = 30.0
 
 #: 「已经走进某格中心附近」的距离容差（格），`EnemyUnit.is_at` 用。
 #:
@@ -41,8 +62,12 @@ POSITION_TOL = 0.35
 
 
 def path_length(points: list[tuple[float, float]]) -> float:
-    """折线总长（格）。"""
-    return sum(math.dist(a, b) for a, b in zip(points, points[1:]))
+    """折线总长（格）。
+
+    ⚠ **定义已搬到 `ak_tactic/frontend/geometry.py`**（原样搬），这里只转出——
+    那边 `route_length`（`enemy_view` 要用）在没有分段腿时要退回按折线算。
+    """
+    return frontend_path_length(points)
 
 
 def point_at(points: list[tuple[float, float]], travelled: float) -> tuple[float, float]:
@@ -739,7 +764,8 @@ class OperatorUnit(Combatant):
 
     @property
     def facing(self) -> tuple[int, int]:
-        return DIRECTIONS.get(self.direction, (1, 0))
+        """⚠ **实现已搬到 `ak_tactic/frontend/geometry.py`**（原样搬），这里只转调。"""
+        return frontend_facing(self.direction)
 
     @property
     def free_block_slots(self) -> int:
@@ -926,10 +952,11 @@ class OperatorUnit(Combatant):
         return base + earned
 
     def current_range_id(self) -> str | None:
-        """开技能期间被改写的攻击范围代号，没有就是 None。"""
-        if self.skill_active and self.skill is not None:
-            return getattr(self.skill, "range_id", None)
-        return None
+        """开技能期间被改写的攻击范围代号，没有就是 None。
+
+        ⚠ **实现已搬到 `ak_tactic/frontend/geometry.py`**（原样搬），这里只转调。
+        """
+        return frontend_current_range_id(self.skill, self.skill_active)
 
     def active_attack_type(self) -> str:
         """当前伤害类型——技能期间可能被强制改写，〈替身〉形态另有口径。"""
@@ -1025,12 +1052,14 @@ class EnemyUnit(Combatant):
 
     #: 剩余【寒冷】秒数。
     #:
-    #: ⚠ **只记时长，不记效果**——见 `docs/uncertainties.md` 第九节：
-    #: 寒冷的数值效果是"攻击速度降低"，但**降低多少我拿不到**。PRTS 的
-    #: 「异常效果」页只写"攻击速度降低；在特定条件下转变为冻结"，不给数；
-    #: 会说这是 Buff 实现；客户端的 `excel/buff_table.json` 在两个公开镜像上
-    #: 都是 404（未公开）。所以这里如实只记状态、不当 0 用，也不编一个数。
-    #: 待博士找到数据源后，只需在这里补一条攻速折减。
+    #: ⚠ **数值效果 2026-09-19 补上**（原文写的是"降低多少我拿不到"）：PRTS
+    #: 《敌人一览/数据》的 tooltip 给出「攻击速度下降 30」，折减落在
+    #: `effective_interval()` 里。此前只记时长不记效果——「异常效果」页只写
+    #: "攻击速度降低"不给数，`excel/buff_table.json` 两个公开镜像又都 404。
+    #:
+    #: ⚠ 还有两半**未建模**，别当成 0（都出自同一份 tooltip）：
+    #: ①「持续时间内**再次**受到寒冷效果则会变为冻结」的升级判定；
+    #: ② 冻结期间「敌方被冻结时，**法术抗性 -15**」。
     cold_timer: float = 0.0
 
     #: 剩余【停顿】秒数（技能黑板里的 `sluggish`）。停顿 = **不能移动**，
@@ -1348,6 +1377,23 @@ class EnemyUnit(Combatant):
         super().__post_init__()
         if self.route:
             self.position = self.route[0]
+
+    def effective_interval(self, base: float | None = None) -> float:
+        """出手间隔，含【寒冷】的攻速折减。
+
+        与干员侧**同一条公式**：`间隔 = 基础间隔 × 100 / max(ASPD_MIN, 总攻速)`。
+        寒冷 = 攻速 −30（出处见 `COLD_ASPD_DOWN`），所以中招时是 `× 100/70`。
+
+        ⚠ 没中招时 `× 100/100` **恒等于原值**——这是刻意的：本次改动是补上效果，
+        不是顺手改基线。实装当天 Python 侧没有任何地方给 `cold_timer` 赋正值，
+        因此对既有对拍零影响。
+
+        `base` 给"按另一条基准算"的场合用（敌人技能自己的出手间隔
+        `skill_atk_interval`）；不传就是普攻间隔 `attack_interval`。
+        """
+        iv = self.attack_interval if base is None else base
+        aspd = 100.0 - (COLD_ASPD_DOWN if self.cold_timer > 0.0 else 0.0)
+        return iv * 100.0 / max(ASPD_MIN, aspd)
 
     def apply_push(self, dx: float, dy: float) -> None:
         """把敌人从**当前所在处**推开 `(dx, dy)` 格（推拉机制的唯一入口）。
