@@ -43,7 +43,7 @@
 | 键名 | 类型 | 默认值 | 闸门语义 | Go 侧消费点 |
 |---|---|---|---|---|
 | `blackboard`（**原样映射**） | object（string→number） | `{}` | **拒跑**：键族里出现 `ep_damage*` 却**没送这张表**时拒跑 | 需新增一层"按前缀查表"的取值器，喂给 `elementDamage` |
-| …其中 `*ep_damage_ratio` | number | 无 | 数值＜1 多为比例，实测也有 `1.5` ⇒ **比例是"乘以什么"必须取证后才许用** | `elementDamage` 的 `amount` |
+| …其中 `*ep_damage_ratio` | number | 无 | **乘的是 ATK**（已取证，见 §四.1）；实测也有 `1.5` ⇒ 不许假定 ≤1 | `elementDamage` 的 `amount` = `ATK × ratio` |
 | …其中 `*ep_damage_value` | number | 无 | **绝对值**（`ScreamDebuff.ep_damage_value=30.0`） | 同上，**直接当 amount** |
 | …其中 `*ep_damage_scale` | number | `1` | 倍率式 | 乘在 amount 上 |
 | `element_kind` | enum（`ba.dt.*`） | 无 | **拒跑**：有损伤就必给 | `elementKind`（须做 §三 的映射） |
@@ -81,11 +81,24 @@
 
 ## 四、未验证项（本版的诚实边界）
 
-1. **`ep_damage_ratio` 的"比例"乘的是什么**：未取证。实测有 `1.5`（`GetEnmey.`，安眠伴随兽）
-   ⇒ **不能假定它 ≤1**，也不能假定"比例×攻击力"。取证入口：`ak_tactic/formula` 的敌人侧编译
-   （`python -m ak_tactic formula --enemy "<正文>"`）与该敌人的技能正文。
-2. **前缀的语义**：`aura.` / `Wake2Sleep.` / `GetEnmey.`（原文拼写如此）是**机制来源**还是**触发时机**，
-   未取证。它决定了"什么时候结算"——**不查清就接，会把持续伤害接成一次伤害**。
+1. **`ep_damage_ratio` 乘的是什么 ⇒ 已取证：乘的是 ATK。**
+   仓库公式层三条文案规则都归到 `source="ATK", scale=0, form="atk_scale"`（`ak_tactic/formula.py:464-474`）：
+   「攻击附带造成**伤害X%**的…损伤」/「附带**X%攻击力**的…损伤」/「造成相当于**攻击力X%**的…损伤」。
+   ⇒ 量纲＝`ATK × ratio`；实测有 `1.5`（`GetEnmey.`，安眠伴随兽），**不许假定 ≤1**。
+   ⚠ **但这里有一处口径隐患（尚未裁定）**：第一条文案写的是「**伤害**X%」而不是「攻击力X%」，
+   而两者在技能带倍率时**不是同一个数**（记忆 `775ce480`：技能倍率只在 `resolve_damage(scale=)` 乘一次）。
+   仓库现有规则把三种写法**都**记成 `source="ATK"` —— 这是**可能的口径合并**，是否要拆开需裁定。
+   已有测试用例走这条规则：`tools/check_formula.py:95-100`（文案「攻击附带造成法术伤害{attack@ep_damage_ratio:0%}的」）。
+2. **前缀的语义 ⇒ 已取证：前缀是"哪个机制读它"的命名空间，本实现只需原样透传。**
+   敌人侧公式编译器明写（`ak_tactic/enemy_formula.py:547-557`）：
+   「**prts.wiki 手写的敌人正文不写数值**（「造成一定侵蚀损伤」），**真值在敌人同档黑板上**——
+   所以这里只认种类、量纲记 word」。⇒ 种类来自正文、**数值必须来自黑板**，
+   而黑板在敌人技能侧是**按完整键名取值**的（`ak_tactic/battle/sim.py` 形如 `sk.blackboard.get("…")`，
+   例：L710 `force`、L1274 `stun_prob`、L1283 `attack@prob`）。
+   ⇒ 结论：**规格必须把敌人的 `blackboard` 原样送进来**，前缀不解释、不改写；
+   "什么时候结算"由读它的那个机制决定，不由前缀字符串决定。
+   ⚠ 仍**未验证**的是：`aura.` / `Wake2Sleep.` / `GetEnmey.`（原文如此拼写）各自对应哪个机制——
+   这决定"持续伤害接成一次伤害"这类错误能否避免，属**接线阶段**必须逐敌人核的事。
 3. `burst_cooldown` 与 `burst_duration` 在 Go 里共用 `elementBurst.Duration` 一个字段。
 4. **C 组的来源未找到**（见 §二·C ⚠）。可能住 gamedata 元素总表；**未验证**。
 5. 领袖档 `2000` 未逐敌人核对（`defaultMaxEP/leaderMaxEP` 来自 PRTS 口径）。
