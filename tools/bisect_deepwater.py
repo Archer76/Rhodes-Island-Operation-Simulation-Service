@@ -14,6 +14,16 @@
    * 不能 ⇒ **这本身就是合格结论**：「与权威实现 Python 一致的 Go 行为，只出现在那个不可复现的混合态里」。
 3. **硬约束**：不许为了凑出端点改引擎、补提交或放宽判据；只读交付。
 
+## 硬约束（PM 2026-09-20 00:08 追加）
+
+> **清理类动作必须留一条会说话的判据**——`worktree remove` 的退出码、`worktree list` 的条数、
+> 目录是否还存在，**三者至少要报一个**。**"用完即删"是一个意图，不是一个状态。**
+
+2026-09-20 实测教训：本工具第一版在**失败路径**上 `continue`（"建不了"的提交），**清理语句压根没执行**，
+加上 `shutil.rmtree(..., ignore_errors=True)`，于是 17 条 `%TEMP%` 工作树（76.6 MB）留在盘上，
+而报告里写着"用完即删"。现在：失败路径**也清**，清完**必复核**（`assert_clean()` 报
+`worktree list` 条数与 `%TEMP%` 残留数，两者都必须为 0）。
+
 ## 用法
 
     # 单点：某个提交的 Go 读数（自建自钉，临时树用完即删）
@@ -80,16 +90,58 @@ def build_at(sha: str, keep: bool = False) -> tuple[Path, Path]:
                        cwd=str(tree / "rios-sim"), capture_output=True, text=True,
                        encoding="utf-8")
     if r.returncode != 0 or not exe.exists():
-        raise RuntimeError(f"构建失败 rc={r.returncode}: {(r.stderr or '').strip()[:300]}")
+        #: ⚠ **失败路径也必须清**：2026-09-20 实测 17 条临时树（76.6 MB）全留在盘上，
+        #: 其中大多数正是"建不了"的那些提交——`scan()` 在这条路上 `continue`，
+        #: **清理语句压根没被执行**。"用完即删"写在成功路径上，等于没写。
+        rep = drop_tree(tree)
+        raise RuntimeError(f"构建失败 rc={r.returncode}（临时树已清：{rep['ok']}）: "
+                           f"{(r.stderr or '').strip()[:300]}")
     return exe, tree
 
 
-def drop_tree(tree: Path) -> None:
-    try:
-        run_git(["worktree", "remove", "--force", str(tree)])
-    except Exception:                                            # noqa: BLE001
-        pass
-    shutil.rmtree(tree.parent, ignore_errors=True)
+def drop_tree(tree: Path) -> dict:
+    """删掉临时树，并**留一条会说话的判据**。
+
+    ⚠ 2026-09-20 事故：这里原本是 `git worktree remove --force` ＋ `shutil.rmtree(..., ignore_errors=True)`
+    ——**两个都可能悄悄失败**，于是"用完即删"这个**意图**被当成**状态**报了 17 次，
+    17 条 `%TEMP%` 工作树（76.6 MB）全部留在盘上，而报告里写着"用完即删"。
+    ⇒ **清理类动作必须回一个可核验的结论**：`remove` 的退出码、`worktree list` 的条数、
+    目录是否还在，三者至少报一个（这里**三个都报**，并由调用方打印）。
+    """
+    out: dict = {"tree": str(tree)}
+    r = subprocess.run(["git", "worktree", "remove", "--force", str(tree)],
+                       cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8")
+    out["remove_rc"] = r.returncode
+    out["remove_err"] = (r.stderr or "").strip()[:200]
+    if tree.parent.exists():
+        #: 目录还在（`remove` 可能没删掉，或它删登记不删目录）⇒ 自己删，**不许 ignore_errors**
+        try:
+            shutil.rmtree(tree.parent)
+        except Exception as e:                                   # noqa: BLE001
+            out["rmtree_err"] = f"{type(e).__name__}: {e}"
+    out["dir_exists"] = tree.parent.exists()
+    out["ok"] = (out["remove_rc"] == 0) and not out["dir_exists"]
+    return out
+
+
+def worktree_report() -> dict:
+    """主树之外还剩几条工作树、`%TEMP%` 下还剩几个 `bisect-*` 目录。**必须为 0 才算清干净。**"""
+    lst = [ln for ln in run_git(["worktree", "list"]).splitlines() if ln.strip()]
+    extras = [ln for ln in lst[1:]]
+    leftovers = [p for p in Path(tempfile.gettempdir()).glob("bisect-*") if p.is_dir()]
+    return {"worktree_total": len(lst), "worktree_extra": len(extras),
+            "extra_paths": [ln.split()[0] for ln in extras],
+            "tmp_dirs": len(leftovers), "tmp_paths": [str(p) for p in leftovers]}
+
+
+def assert_clean() -> bool:
+    """复核：主树之外 0 条工作树、`%TEMP%` 下 0 个 `bisect-*` 目录。**报出来，别只在心里想。**"""
+    rep = worktree_report()
+    ok = rep["worktree_extra"] == 0 and rep["tmp_dirs"] == 0
+    print(f"  【清理复核】worktree list 主树之外 {rep['worktree_extra']} 条"
+          f"（{rep['extra_paths'] or '无'}）；%TEMP% 下 bisect-* 目录 {rep['tmp_dirs']} 个"
+          f"（{rep['tmp_paths'] or '无'}）　⇒ {'✅ 清干净' if ok else '❌ 还有残留'}")
+    return ok
 
 
 def read_point(exe: Path, plan_path: Path, roster_file: Path) -> dict:
@@ -185,9 +237,11 @@ def scan(lo: str, hi: str, plan: Path, roster_file: Path, keep: bool,
         p = Path(json_out)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "plan": str(plan),
-                                 "range": f"{lo}..{hi}", "commits": recs},
+                                 "range": f"{lo}..{hi}", "cleanup": worktree_report(),
+                                 "commits": recs},
                                 ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"  落盘：{json_out}")
+    assert_clean()                       #: **清理复核**：主树之外 0 条、%TEMP% 残留 0 个
     return recs
 
 
