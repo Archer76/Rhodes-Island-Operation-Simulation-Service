@@ -115,6 +115,9 @@ def main() -> int:
     pairs_full = sum(len(v) for v in needs_full.values())
     keys_full = {k for v in needs_full.values() for k in v}
 
+    if not needs_full:
+        print("✗ 输入为空：缓存里没有任何第 1 类需求对 ⇒ **按通则当错误，退出码 2**（不许印空名单）")
+        return 2
     lit = go_literals()                       #: 生产代码（判据用这个）
     lit_all = go_literals(include_tests=True)  #: 含测试（只作诊断：差就是"测试数据假命中"）
     hit = {k for k in keys_full if hit_in_go(k, lit)}
@@ -199,36 +202,10 @@ def main() -> int:
             }, ensure_ascii=False, indent=1), encoding="utf-8")
             print(f"（JSON 已落盘：{a.json}）")
         return 0
-    #: ★ 2026-09-20 自纠：`needs_narrow` 原本定义在下面的 print 之后，我新加的退化守卫
-    #: 却引用它 ⇒ `UnboundLocalError`（与后端2 那次 `data_all` 只在 `--only-port` 分支
-    #: 绑定是同一病理：**新增分支必须把默认档也真跑一次**，`73e53f57`。此处先绑定后使用）。
-    needs_narrow = {c: {k for k in v if k in keys_hit_gate or k in hit} for c, v in needs_gate.items()}
-    n_pairs = sum(len(v) for v in needs_narrow.values())
-    if n_pairs == 0:
-        print("--- 收窄后重跑贪心：**退化，名单不可读** ---")
-        print(f"    收窄后需求集只剩 {len(keys_hit_gate)} 键 / {n_pairs} 对 ⇒ 任何干员的收益都是 0，")
-        print("    而贪心**收益 0 也不停手**（选到凑满 k 位）⇒ 它会按表序把最靠前的 10 位选出来，")
-        print("    ★ 那不是「收窄后的最优名单」，是「问题在这个行空间里已经消失」的证据。**A 名单未动**")
-        print("  ⇒ **按 PM 通则当错误：退出码 2，不产出任何名单**（名单有 10 位 ≠ 有 10 个候选人）")
-        if a.json:
-            Path(a.json).write_text(json.dumps({
-                "error": "empty-need-set", "keys_hit_gate": sorted(keys_hit_gate),
-                "pairs": 0, "note": "输入为空时任何非空输出都必须当错误（PM 通则 2026-09-20）",
-            }, ensure_ascii=False, indent=1), encoding="utf-8")
-            print(f"（JSON 记录错误态：{a.json}）")
-        return 2
-    print("--- 收窄后重跑贪心（同一个贪心，只换需求集）---")
-    wt_new: dict[str, int] = {}
-    for v in needs_narrow.values():
-        for kk in v:
-            wt_new[kk] = wt_new.get(kk, 0) + 1
-    picks_new, _tr2 = AC.greedy_pick(needs_narrow, wt_new, [c for c, _n in ops], a.batch)
-    print(f"  收窄后名单：{'、'.join(names[c] for c in picks_new)}")
-    in_new = [c for c in picks_new if c not in picks_ctl]
-    out_old = [c for c in picks_ctl if c not in picks_new]
-    print(f"  ★ 进：{'、'.join(names[c] for c in in_new) or '（无）'}")
-    print(f"  ★ 出：{'、'.join(names[c] for c in out_old) or '（无）'}")
-    print("  ★ 名单**未改**（A 名单是 PM 裁过的，改它要走裁定）")
+    print("--- 收窄后重跑贪心：**本轴已退役，不再据此算名单** ---")
+    print("    理由：S3（Go 里已有落点）实测 2/594，且**与第 1 类的定义同义**（`b7805171`）")
+    print("    ⇒ 收窄后的需求集恒为空，任何贪心输出都只是「问题已消失」的假象。")
+    print("    ★ 退役不等于沉默：S1/S2/S3 的读数与登记都在上面，缺的是「键族↔机制种类」映射（乙表）。")
     print()
 
     print("--- S4 能跑出非平凡结果 ---")
@@ -242,8 +219,7 @@ def main() -> int:
             "s3_generic": sorted(generic_hit), "keys_hit_gate": sorted(keys_hit_gate),
             "pairs_hit_gate": len(pairs_hit_gate),
             "greedy_control": [names[c] for c in picks_ctl],
-            "greedy_narrowed": [names[c] for c in picks_new],
-            "in": [names[c] for c in in_new], "out": [names[c] for c in out_old],
+            "narrowed_axis": "RETIRED",
         }, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"\n（JSON 已落盘：{a.json}）")
     return 0
