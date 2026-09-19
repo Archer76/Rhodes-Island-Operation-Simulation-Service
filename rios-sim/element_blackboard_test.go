@@ -135,6 +135,97 @@ func TestResolveEpAmountValueIsAbsolute(t *testing.T) {
 	}
 }
 
+// 适配层：把"一处元素损伤"从黑板走到结算，并且**来源可见**。
+//
+// 这一层存在的理由是"静默"：`damage()` 只吃一个算好的量，量取空了机制就被关掉而无人知。
+// 所以守卫要盯两件事——① 没候选时**不报错**但 Keys 为空（可区分"这处没有"与"取空了"）；
+// ② 有候选时 Keys 必须原样带出来。
+func TestApplyFromBlackboardReportsNoCandidate(t *testing.T) {
+	s := newElementState(defaultMaxEP)
+	h, err := s.ApplyFromBlackboard(map[string]float64{"atk": 2.0}, 100, elemSanity, "测试目标")
+	if err != nil {
+		t.Fatalf("没有候选不该报错：%v", err)
+	}
+	if h.Keys != nil || h.Raw != 0 || h.Dealt != 0 || h.Burst {
+		t.Fatalf("没有候选时应为零值且 Keys 为空，得到 %+v", h)
+	}
+	if h.EP != defaultMaxEP {
+		t.Fatalf("元素值不该被动过，得到 %v", h.EP)
+	}
+}
+
+func TestApplyFromBlackboardDeductsAndReportsSource(t *testing.T) {
+	s := newElementState(defaultMaxEP)
+	bb := map[string]float64{"EpDamage.attack@ep_damage_ratio": 0.2}
+	h, err := s.ApplyFromBlackboard(bb, 1000, elemSanity, "目标甲")
+	if err != nil {
+		t.Fatalf("单键不该报错：%v", err)
+	}
+	// base=1000、ratio=0.2 ⇒ 原始 200；损伤抵抗 0 ⇒ 实扣 200
+	if h.Raw != 200 || h.Dealt != 200 {
+		t.Fatalf("原始与实扣都应为 200，得到 raw=%v dealt=%v", h.Raw, h.Dealt)
+	}
+	if h.EP != defaultMaxEP-200 {
+		t.Fatalf("元素值应为 %v，得到 %v", defaultMaxEP-200, h.EP)
+	}
+	if h.Burst {
+		t.Fatal("1000→800 不该爆条")
+	}
+	if len(h.Keys) != 1 || h.Keys[0] != "EpDamage.attack@ep_damage_ratio" {
+		t.Fatalf("来源键必须原样带出，得到 %v", h.Keys)
+	}
+}
+
+// 损伤抵抗生效时，实扣必须小于原始——这条把"抵抗有没有被吃到"钉住。
+func TestApplyFromBlackboardHonoursResist(t *testing.T) {
+	s := newElementState(defaultMaxEP)
+	s.resist = 50 // 实扣 = raw × (1 − 50×0.01) = raw/2
+	h, err := s.ApplyFromBlackboard(
+		map[string]float64{"Scream.ep_damage_value": 300}, 1000, elemSanity, "目标乙")
+	if err != nil {
+		t.Fatalf("不该报错：%v", err)
+	}
+	if h.Raw != 300 || h.Dealt != 150 {
+		t.Fatalf("raw 应为 300、实扣应为 150，得到 raw=%v dealt=%v", h.Raw, h.Dealt)
+	}
+}
+
+// 冷却期间"所有元素值无法损失" ⇒ 实扣 0、不爆条，但**来源仍要打出来**（不吞证据）。
+func TestApplyFromBlackboardDuringCoolingDeductsNothing(t *testing.T) {
+	s := newElementState(defaultMaxEP)
+	s.cool[elemFire] = 5 // 任一元素冷却即全局冷却
+	h, err := s.ApplyFromBlackboard(
+		map[string]float64{"aura.ep_damage_ratio": 1.0}, 1000, elemSanity, "目标丙")
+	if err != nil {
+		t.Fatalf("不该报错：%v", err)
+	}
+	if !h.Cooling || h.Dealt != 0 || h.Burst {
+		t.Fatalf("冷却期间应实扣 0、不爆条且标记 Cooling，得到 %+v", h)
+	}
+	if h.EP != defaultMaxEP {
+		t.Fatalf("冷却期间元素值不该变，得到 %v", h.EP)
+	}
+	if h.Raw != 1000 {
+		t.Fatalf("原始量仍应算出来（证据不许吞），得到 %v", h.Raw)
+	}
+}
+
+// 歧义必须**从适配层**就报出来，而不是挑一条算出一个看着正常的数。
+func TestApplyFromBlackboardPropagatesAmbiguity(t *testing.T) {
+	s := newElementState(defaultMaxEP)
+	bb := map[string]float64{
+		"aura.ep_damage_ratio":  0.3,
+		"aura2.ep_damage_ratio": 0.9,
+	}
+	if _, err := s.ApplyFromBlackboard(bb, 1000, elemSanity, "目标丁"); err == nil {
+		t.Fatal("歧义必须报错，不许挑一条")
+	}
+	if s.ep[elemSanity] != defaultMaxEP {
+		t.Fatal("报错时不该动元素值")
+	}
+}
+
+// 谁若"顺手改正"成 GetEnemy.，这条守卫会红——不红就说明守卫失效了。
 // **拼写错误原样保留**：`GetEnmey.` 是数据里的真实拼写。
 // 谁若"顺手改正"成 GetEnemy.，这条守卫会红——不红就说明守卫失效了。
 func TestResolveEpAmountKeepsMisspelledPrefix(t *testing.T) {
