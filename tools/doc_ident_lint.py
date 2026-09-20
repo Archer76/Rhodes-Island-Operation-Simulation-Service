@@ -36,7 +36,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-TOKEN = re.compile(r"`([0-9a-f]{7,40})`")
+TOKEN = re.compile(r"`([0-9a-fA-F]{7,64})`")
+LONG = re.compile(r"`([0-9a-fA-F]{65,})`")          # ★ 长度>64 ⇒ 仍然逃逸，必须自己会红（不许静默）
+SPELLING_UPPER: list = []
+TOO_LONG: list = []
 
 
 def resolves_as_commit(tok: str) -> bool:
@@ -51,7 +54,9 @@ def classify(tok: str) -> str:
         return "sha16"
     if len(tok) == 8:
         return "记忆"
-    return "未归类"          # 9~15 或 17~40 且不是提交 ⇒ 说不出从哪儿读出来的
+    if len(tok) == 64:
+        return "sha256"      # ★ 整份 sha256（两侧原文哈希常按这个长度写）
+    return "未归类"          # 9~15／17~39／41~63 且不是提交 ⇒ 说不出从哪儿读出来的
 
 
 def ident(path: Path) -> str:
@@ -82,7 +87,9 @@ def ident(path: Path) -> str:
         tip += (f"\n  ⚠ **工作区与入库 blob 归一后仍不同 ⇒ 有未提交改动**：这个读数可能测到\n"
                 f"     **一个正在被写的中间态**（实测：别人正在改的那份文档被我读成 rc=1 判 5 处，\n"
                 f"     重测 rc=0、且 diff 显示 38 行未提交 ⇒ 那不是缺陷，是**撕裂读**）。\n"
-                f"     ⇒ **要下结论先冻住**：从 `git show <sha>:{rel}` 取只读副本再量（`5558b5a0`）。")
+                f"     ⇒ **要下结论先冻住**：从 `git show <sha>:{rel}` 取只读副本再量（`5558b5a0`）。\n"
+                f"     ★ **⚠ 与 rc 是两条轴**：⚠ 只提示「这个读数可能是中间态」，**它本身不参与 rc** ——\n"
+                f"     构造态（内容本身不含违规）实测 **rc=0**；不要把 ⚠ 读成失败（后端2 实测并回送）。")
     else:
         tip += "\n  ✓ 工作区与入库 blob 归一后相同（差异仅行尾或有未提交改动时另报）"
     return tip
@@ -95,12 +102,17 @@ def label_before(ln: str, pos: int) -> str | None:
       第二次永远看到第一次的标签，于是「首处贴对、后面贴错」被判成绿（反向守卫 B 当场抓到）。
       ⇒ 粒度必须是**出现处**，不是行。
     """
-    head = ln[max(0, pos - 8):pos]
-    for w in ("提交", "sha16", "记忆"):
-        if head.endswith(w):
-            return w
-        if head.rstrip().endswith(w) and head[len(head.rstrip()):].strip() == "":
-            return w
+    head = ln[max(0, pos - 10):pos]
+    for w in ("sha256", "提交", "sha16", "记忆"):
+        if not (head.endswith(w) or (head.rstrip().endswith(w) and head[len(head.rstrip()):].strip() == "")):
+            continue
+        # ★ 散文与标签在这把尺子里无法区分：`不是提交 X` / `非 sha16 X` 里的词紧邻反引号，
+        #   会被读成「贴了标签」。语义反了也照样绿 ⇒ 加一条否定词窗口：紧邻的否定词使该词**不构成标签**。
+        j = head.rstrip().rfind(w)
+        win = head[max(0, j - 2):j]
+        if any(c in win for c in ("不", "非", "未", "别")):
+            return None
+        return w
     return None
 
 
@@ -137,15 +149,25 @@ def scan(path: Path) -> tuple[list[str], dict[str, tuple[str, int, str | None]]]
     bad: list[str] = []
     info: dict[str, tuple[str, int, str | None]] = {}
     mislabel: list[str] = []
+    _too_long_here: list[str] = []
+    SPELLING_UPPER.clear()
+    TOO_LONG.clear()
     for i, ln in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        for m in LONG.finditer(ln):
+            TOO_LONG.append(f"{path.name}:{i}  长度 {len(m.group(1))} 的十六进制串"
+                            f"**超出尺子上限 64 ⇒ 它对判定完全不可见**，请缩短或改口径后再引用")
         for m in TOKEN.finditer(ln):
-            tok = m.group(1)
+            raw = m.group(1)
+            tok = raw.lower()          # ★ 大写拼法也要被抓到；判定归一小写（git 的 sha 解析本就不分大小写）
+            if raw != tok:
+                SPELLING_UPPER.append(raw)
             label = label_before(ln, m.start())
             ns_here = classify(tok)
             if tok not in info:                       # ① 首次出现
                 info[tok] = (ns_here, i, label)
             elif label is not None and label != ns_here:   # ② 后面任何一处贴错
                 mislabel.append(f"{path.name}:{i}  `{tok}`（{ns_here}）在这里贴成了「{label}」")
+    bad.extend(TOO_LONG)
     for tok, (ns, line, label) in sorted(info.items(), key=lambda kv: kv[1][1]):
         if ns == "未归类":
             bad.append(f"{path.name}:{line}  `{tok}` 既不是提交、也不是 sha16／记忆 id "
@@ -210,6 +232,9 @@ def main() -> int:
         print(ident(path))
         bad, info = scan(path)
         head = sorted(info.items(), key=lambda kv: kv[1][1])[:8]
+        if SPELLING_UPPER:
+            print(f"   ★ 其中以**大写拼法**出现的 {len(SPELLING_UPPER)} 处（判定时**归一到小写**；"
+                  f"两个拼法视为**同一个标识** —— git 的 sha 解析本就不分大小写）：{sorted(set(SPELLING_UPPER))[:6]}")
         print(f"   反引号内的十六进制标识共 {len(info)} 种："
               + "、".join(f"{k}({v[0]})" for k, v in head) + ("…" if len(info) > 8 else ""))
         if ids is None:
