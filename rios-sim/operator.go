@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // intAttrs 是面板上按整数显示的属性（`stats.py:125-129`）。
@@ -120,22 +121,55 @@ type OperatorStats struct {
 var charTableCache map[string]json.RawMessage
 
 // loadCharTable 读 `character_table.json`（14 MB），只读一次并缓存。
+//
+// 复刻 `stats.py:400-423` 的**两步**：
+//
+//  1. **只留 `char_` 前缀**——`trap_*` / `token_*` 是装置与召唤物，不是干员。
+//     不筛会把它们当干员算，症状是「名册之外的 id 也能算出面板」。
+//  2. **并入升变形态**：阿米娅的近卫/医疗（`char_1001_amiya2` / `char_1037_amiya3`）
+//     **不在 `character_table` 里**，而在 `char_patch_table.json` 的 `patchChars`，
+//     结构与干员本体完全相同。森空岛名册引用的正是这些 charId——
+//     不并进来则直接报「没有这个干员」，而**这一族一直在名册里**。
+//     合并用 `setdefault` 语义（已存在的不被覆盖）。
+//
+// ★ 补丁表**取不到不该让整个计算器哑火**（Python 的注释原话：「少两个形态而已」），
+// 所以它读失败只是不合并，不作为错误返回。
 func loadCharTable() (map[string]json.RawMessage, error) {
 	if charTableCache != nil {
 		return charTableCache, nil
 	}
-	p := filepath.Join(DataRoot(), "raw.githubusercontent.com", "excel",
-		"character_table.json")
-	blob, err := os.ReadFile(p)
+	base := filepath.Join(DataRoot(), "raw.githubusercontent.com", "excel")
+	blob, err := os.ReadFile(filepath.Join(base, "character_table.json"))
 	if err != nil {
-		return nil, fmt.Errorf("读 character_table 失败（%s）：%w", p, err)
+		return nil, fmt.Errorf("读 character_table 失败（%s）：%w", base, err)
 	}
-	var tbl map[string]json.RawMessage
-	if err := json.Unmarshal(blob, &tbl); err != nil {
-		return nil, fmt.Errorf("character_table 不是合法 JSON（%s）：%w", p, err)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(blob, &raw); err != nil {
+		return nil, fmt.Errorf("character_table 不是合法 JSON（%s）：%w", base, err)
+	}
+	tbl := make(map[string]json.RawMessage, len(raw))
+	for k, v := range raw {
+		if strings.HasPrefix(k, "char_") {
+			tbl[k] = v
+		}
 	}
 	if len(tbl) == 0 {
-		return nil, fmt.Errorf("character_table 是空的（%s）", p)
+		return nil, fmt.Errorf("character_table 里一个 char_ 条目都没有（%s）", base)
+	}
+	if pblob, perr := os.ReadFile(filepath.Join(base, "char_patch_table.json")); perr == nil {
+		var patch struct {
+			PatchChars map[string]json.RawMessage `json:"patchChars"`
+		}
+		if json.Unmarshal(pblob, &patch) == nil {
+			added := 0
+			for cid, c := range patch.PatchChars {
+				if _, exists := tbl[cid]; !exists {
+					tbl[cid] = c
+					added++
+				}
+			}
+			_ = added
+		}
 	}
 	charTableCache = tbl
 	return tbl, nil
