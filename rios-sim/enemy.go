@@ -115,6 +115,10 @@ type EnemyStats struct {
 	SkillAtkNoNormal   bool    `json:"skill_atk_no_normal"`
 	SkillAtkInterval   float64 `json:"skill_atk_interval"`
 	SkillAtkInit       float64 `json:"skill_atk_init"`
+
+	//: ---- 机制前缀那一族（七个前缀，见 `enemy_mech.go`）----
+	//: 用匿名嵌入把 36 个字段**平铺**进 JSON：Python 侧就是平铺的，对拍要同形。
+	Mechs
 }
 
 // EnemyLibrary 是 key → 档位 → 数值。

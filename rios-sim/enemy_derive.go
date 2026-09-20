@@ -279,6 +279,9 @@ func (s *EnemyStats) DeriveBlackboardFields() {
 	s.RebornDefAdd = rb.DefAdd
 	s.RebornDamageMagic = rb.DamageMagic
 	s.RebornSummons = rb.Summons
+	//: 机制前缀那一族（`mech_fields`，七个前缀）。★ 它**逐前缀判断**，
+	//: 不是「有任意一个就全填」——混着填会让没有某机制的敌人凭空带上默认值。
+	s.Mechs = mechFields(bb)
 	if sa, ok := skillAttackFields(s.Skills); ok {
 		s.SkillAtkKey = sa.Key
 		s.SkillAtkScalePhys = sa.ScalePhys

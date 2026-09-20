@@ -68,19 +68,23 @@ DERIVED = [
     "skill_atk_pollut", "skill_atk_targets", "skill_atk_cross",
     "skill_atk_ground_only", "skill_atk_no_normal", "skill_atk_interval",
     "skill_atk_init",
-]
-
-#: **仍未移植**的（`mech_fields` 那一族）。**只用来报非默认条数**。
-NOT_PORTED = [
-    "aura_hit_ratio", "aura_hit_radius",
+    # ---- 机制前缀那一族（七个前缀）----
     "passive_pollut", "passive_radius", "passive_attach_damage",
     "death_token", "death_cnt",
+    "aura_hit_ratio", "aura_hit_radius",
     "speedup_move", "speedup_duration", "speedup_cooldown",
     "phit_cnt", "phit_atk", "phit_def", "phit_res", "phit_move", "phit_pollut",
     "phit_block_pollut", "phit_extra", "phit_max_stack", "phit_weight_cnt",
+    "pm2_atk", "pm2_def", "pm2_res", "pm2_move", "pm2_clean_def",
+    "pm2_clean_res", "pm2_clean_move", "pm2_mark_pollut", "pm2_invincible",
+    "pm2_pollut_threshold",
     "awake_hp_ratio", "awake_summon_ratio", "awake_value", "awake_value_eff",
     "awake_enemy_key", "awake_summon_cnt",
 ]
+
+#: **仍未移植**的字段。现在是空的——三批之后这一族已经全部接进 Go。
+#: 留着这个通道：下一族出现时按名字列进来，判据会把它印出来。
+NOT_PORTED: list[str] = []
 
 
 def norm(v):
@@ -200,7 +204,9 @@ def main() -> int:
     print()
     print("已比字段：核心 16 ＋ 免疫 11 ＋ **派生 %d** ＋ 黑板 ＋ 技能；共 %d 只敌人"
           % (len(DERIVED), compared))
-    if gap_fields:
+    if not NOT_PORTED:
+        print("★ 未移植字段：**无** —— `derive_blackboard_fields()` 那一族已全部接入 Go")
+    elif gap_fields:
         print("★ 未移植族在**本批**非默认的字段：%d 个（这是真缺口，不是「没比」）"
               % len(gap_fields))
         for f, who in sorted(gap_fields.items()):
