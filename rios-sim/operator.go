@@ -106,6 +106,11 @@ type OperatorStats struct {
 	HPDrainPerSec          float64 `json:"hp_drain_per_sec"`
 	//: 三个纯文本判据（`operator_traits.go`）。
 	TextDerived
+	//: 身份两字段：势力与主职业代号。**消费者是两个不同的东西**——
+	//: 「医者丰碑」按势力（罗德岛）翻倍，而按职业发的全场光环看的是
+	//: 主职业代号（`TANK`）。与 `team_id`（小队）也不是一回事，别混。
+	NationID   string `json:"nation_id"`
+	Profession string `json:"profession"`
 }
 
 // ---------------------------------------------------------------- 数据源
@@ -322,6 +327,8 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 		Talents    []json.RawMessage `json:"talents"`
 		Trait      json.RawMessage   `json:"trait"`
 		Description string           `json:"description"`
+		NationID   string            `json:"nationId"`
+		Profession string            `json:"profession"`
 	}
 	if err := json.Unmarshal(raw, &char); err != nil {
 		return nil, fmt.Errorf("%s 的表项解析失败：%w", cfg.CharID, err)
@@ -421,6 +428,9 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 	st.HPDrainPerSec = readHPDrain(char.Description, char.Trait)
 	//: 三个纯文本判据（攻击类型 / 平A 是否治疗 / 弱点伤害）。
 	st.TextDerived = textDerived(char.Description, char.Talents)
+	//: 身份两字段：直接取自 character_table，不做任何推断。
+	st.NationID = char.NationID
+	st.Profession = char.Profession
 	return st, nil
 }
 

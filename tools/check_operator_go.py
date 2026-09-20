@@ -161,6 +161,8 @@ def main() -> int:
                "hp_drain_per_sec": 0}
     #: 三个纯文本判据的行使计数（布尔真 / 非法术类型 各计一次）。
     tx_hits = {"damage_type_text": 0, "heals": 0, "weakness_damage": 0}
+    #: 身份两字段的行使计数（非空次数）。
+    id_hits = {"nation_id": 0, "profession": 0}
     for cfg, g in zip(configs, got):
         py = calc.stats(cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
                         trust=cfg["trust"], potential=cfg["potential"],
@@ -256,6 +258,14 @@ def main() -> int:
                 tx_hits[k] += 1
             if norm(g.get(k)) != norm(b):
                 out.append("%s：Go=%r Python=%r" % (k, g.get(k), b))
+        #: 身份两字段（直接取自 character_table，不做推断）。
+        py_id = {"nation_id": ch.get("nationId") or "",
+                 "profession": ch.get("profession") or ""}
+        for k, b in py_id.items():
+            if b:
+                id_hits[k] += 1
+            if (g.get(k) or "") != b:
+                out.append("%s：Go=%r Python=%r" % (k, g.get(k), b))
         if out:
             bad += 1
             print("✗ %s E%d L%d trust=%g pot=%d mod=%s —— %d 处不一致"
@@ -274,6 +284,11 @@ def main() -> int:
     for k, n in aspd_hits.items():
         flag = "" if n else "   ← 零信息量的绿：这一档本轮没被行使到"
         print("    %-18s %d%s" % (k, n, flag))
+    print("★ 身份两字段行使计数（非空次数）：")
+    for k, n in id_hits.items():
+        flag = "" if n else "   ← 这一档本轮全是空值"
+        print("    %-18s %d%s" % (k, n, flag))
+    print()
     print("★ 三个纯文本判据行使计数（MAGIC 条数 / 治疗为真 / 弱点伤害为真）：")
     for k, n in tx_hits.items():
         flag = "" if n else "   ← 这一档本轮没被行使到"
