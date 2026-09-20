@@ -78,10 +78,12 @@ def norm(v):
 
 
 def main() -> int:
-    from ak_tactic.operator import OperatorCalculator
+    from ak_tactic.operator import OperatorCalculator, TalentBook
     from ak_tactic.operator.attack_speed import attack_speed_bonus
     from ak_tactic.battle.traits import read_combo_attack
+    from ak_tactic.battle.talents import find_power_attack
     calc = OperatorCalculator()
+    tbook = TalentBook()
     roster = json.loads(ROSTER.read_text(encoding="utf-8"))
 
     configs: list[dict] = []
@@ -150,6 +152,8 @@ def main() -> int:
     #: ⚠ 不能靠「字段值 ≠ 默认值」来数命中：`combo_hit_scale` 的**真值就是 1.0**，
     #: 与「没有这条」的默认值相同 ⇒ 按值判会永远数成 0（那是尺子的毛病）。
     combo_seen = [0, 0.0]
+    #: 「强击瓶专家」的行使计数（`count` 非 0、`scale` 非 1.0）。
+    pa_hits = {"power_attack_count": 0, "power_attack_scale": 0}
     for cfg, g in zip(configs, got):
         py = calc.stats(cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
                         trust=cfg["trust"], potential=cfg["potential"],
@@ -194,6 +198,17 @@ def main() -> int:
             a = norm(g.get(k))
             if a != norm(b):
                 out.append("%s：Go=%r Python=%r" % (k, a, b))
+        #: 「强击瓶专家」。★ `scale` 的「没有这条」是 **1.0**，`count` 是 0。
+        pa = find_power_attack(tbook.for_operator(
+            cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
+            potential=cfg["potential"]))
+        py_pa = {"power_attack_count": pa.count if pa else 0,
+                 "power_attack_scale": pa.scale if pa else 1.0}
+        for k, b in py_pa.items():
+            if (k == "power_attack_count" and b) or (k == "power_attack_scale" and b != 1.0):
+                pa_hits[k] += 1
+            if norm(g.get(k)) != norm(b):
+                out.append("%s：Go=%r Python=%r" % (k, norm(g.get(k)), b))
         if out:
             bad += 1
             print("✗ %s E%d L%d trust=%g pot=%d mod=%s —— %d 处不一致"
@@ -212,6 +227,11 @@ def main() -> int:
     for k, n in aspd_hits.items():
         flag = "" if n else "   ← 零信息量的绿：这一档本轮没被行使到"
         print("    %-18s %d%s" % (k, n, flag))
+    print("★「强击瓶专家」行使计数（count 非 0 / scale 非 1.0）：")
+    for k, n in pa_hits.items():
+        flag = "" if n else "   ← 这一档本轮没被行使到"
+        print("    %-20s %d%s" % (k, n, flag))
+    print()
     print("★ 连击三字段的行使计数（**非 1** 的次数；这三条的「没有这条」就是 1）：")
     for k, n in combo_hits.items():
         flag = "" if n else "   ← 该字段的值与默认值相同（见下）"

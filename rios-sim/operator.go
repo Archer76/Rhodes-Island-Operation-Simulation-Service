@@ -92,6 +92,8 @@ type OperatorStats struct {
 	AttackSpeedBonus
 	//: 普攻连击（`operator_traits.go`）。**「没有这条」是 1 / 1.0，不是 0**。
 	ComboAttack
+	//: 天赋「强击瓶专家」（`operator_traits.go`）。**`scale` 的「没有这条」是 1.0**。
+	PowerAttack
 }
 
 // ---------------------------------------------------------------- 数据源
@@ -389,6 +391,8 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 		cfg.Potential, parts)
 	//: 普攻连击：读隐藏天赋的键组合（不是按干员名）。
 	st.ComboAttack = readComboAttack(char.Talents)
+	//: 「强击瓶专家」：按**键的组合**认（名字那条只给审计用）。
+	st.PowerAttack = readPowerAttack(char.Talents, cfg.Elite, cfg.Level, cfg.Potential)
 	return st, nil
 }
 
