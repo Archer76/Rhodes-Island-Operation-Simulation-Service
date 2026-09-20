@@ -80,6 +80,7 @@ def norm(v):
 def main() -> int:
     from ak_tactic.operator import OperatorCalculator
     from ak_tactic.operator.attack_speed import attack_speed_bonus
+    from ak_tactic.battle.traits import read_combo_attack
     calc = OperatorCalculator()
     roster = json.loads(ROSTER.read_text(encoding="utf-8"))
 
@@ -142,6 +143,13 @@ def main() -> int:
     #: ★ 行使计数：三个 aspd 字段**各有几次非零**。全零的绿是零信息量的绿——
     #: 若三条都是 0，这条判据什么也没证明（本项目记过「必然绿」这一类）。
     aspd_hits = {"aspd_flat": 0, "aspd_when_free": 0, "aspd_high_ground": 0}
+    #: 连击三字段的行使计数：这三条「没有这条」是 1/1.0/1.0，
+    #: 所以要数的是**非 1** 的次数（非零判据在这里会数成「全员命中」）。
+    combo_hits = {"combo_hits": 0, "combo_hit_scale": 0, "combo_damage_scale": 0}
+    #: 这条连击天赋**命中**的次数与它实际的 hit_scale 取值。
+    #: ⚠ 不能靠「字段值 ≠ 默认值」来数命中：`combo_hit_scale` 的**真值就是 1.0**，
+    #: 与「没有这条」的默认值相同 ⇒ 按值判会永远数成 0（那是尺子的毛病）。
+    combo_seen = [0, 0.0]
     for cfg, g in zip(configs, got):
         py = calc.stats(cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
                         trust=cfg["trust"], potential=cfg["potential"],
@@ -171,6 +179,21 @@ def main() -> int:
                 aspd_hits[gk] += 1
             if a != b:
                 out.append("%s：Go=%r Python=%r" % (gk, a, b))
+        #: 普攻连击（隐藏天赋的键组合）。Python 侧 `verify.py:342-344` 的三行
+        #: 是「没有这条 1 / 1.0 / 1.0」，Go 侧同口径。
+        combo = read_combo_attack(calc.character(cfg["char_id"]))
+        if combo is not None:
+            combo_seen[0] += 1
+            combo_seen[1] = combo.hit_scale
+        py_combo = {"combo_hits": combo.hits if combo else 1,
+                    "combo_hit_scale": combo.hit_scale if combo else 1.0,
+                    "combo_damage_scale": combo.damage_scale if combo else 1.0}
+        for k, b in py_combo.items():
+            if b != 1 and b != 1.0:
+                combo_hits[k] += 1
+            a = norm(g.get(k))
+            if a != norm(b):
+                out.append("%s：Go=%r Python=%r" % (k, a, b))
         if out:
             bad += 1
             print("✗ %s E%d L%d trust=%g pot=%d mod=%s —— %d 处不一致"
@@ -189,6 +212,13 @@ def main() -> int:
     for k, n in aspd_hits.items():
         flag = "" if n else "   ← 零信息量的绿：这一档本轮没被行使到"
         print("    %-18s %d%s" % (k, n, flag))
+    print("★ 连击三字段的行使计数（**非 1** 的次数；这三条的「没有这条」就是 1）：")
+    for k, n in combo_hits.items():
+        flag = "" if n else "   ← 该字段的值与默认值相同（见下）"
+        print("    %-18s %d%s" % (k, n, flag))
+    print("    连击天赋命中 %d 次，其 hit_scale 实测 = %g" % (combo_seen[0], combo_seen[1]))
+    print("    ⚠ hit_scale 的**真值就是 1.0**，与默认值无法按值区分 ⇒ 上面那一行 0")
+    print("      是尺子的口径所限，不是「没被走到」；命中次数看这两行。")
     print()
     if mod_ops:
         print("    模组清单（取每位的第一个带数值模组，全等级扫）：")

@@ -90,6 +90,8 @@ type OperatorStats struct {
 	//: 匿名嵌入把 `aspd_flat` / `aspd_when_free` / `aspd_high_ground` 平铺出来——
 	//: 与 `verify.py:326` 那三行同名，对拍要同形。
 	AttackSpeedBonus
+	//: 普攻连击（`operator_traits.go`）。**「没有这条」是 1 / 1.0，不是 0**。
+	ComboAttack
 }
 
 // ---------------------------------------------------------------- 数据源
@@ -385,6 +387,8 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 	}
 	st.AttackSpeedBonus = attackSpeedBonus(char.Talents, cfg.Elite, cfg.Level,
 		cfg.Potential, parts)
+	//: 普攻连击：读隐藏天赋的键组合（不是按干员名）。
+	st.ComboAttack = readComboAttack(char.Talents)
 	return st, nil
 }
 
