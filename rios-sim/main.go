@@ -29,7 +29,7 @@
 //	{"id":2,"ok":true,"verdict":{…}}
 //
 // **Go 侧不做任何数据源访问**：不读数据库、不联网、不做练度折算。它只把一场战斗
-// 跑完——输入是"已经完全算好的数字"，输出是判决与时间线。这条边界是故意的：练度
+// 跑完——输入是「已经完全算好的数字」，输出是判决与时间线。这条边界是故意的：练度
 // 折算那套东西有一整条已经验证过的 Python 链，搬过来只会多一处会漂的实现。
 package main
 
@@ -47,13 +47,16 @@ import (
 )
 
 // : 协议版本。Python 侧连上来先 `ping` 一次核对它——二进制与调用方版本不一致时，
-// : 症状会是"判决微妙地对不上"，那是最难查的一类错，所以要在这里挡住。
+// : 症状会是「判决微妙地对不上」，那是最难查的一类错，所以要在这里挡住。
 const protocolVersion = 1
 
 type request struct {
 	ID   int             `json:"id"`
 	Cmd  string          `json:"cmd"`
 	Spec json.RawMessage `json:"spec,omitempty"`
+	//: `load` 用：关卡查询串。既收 levelId（`main_00-01`）也收关卡号（`0-1`），
+	//: 换算走 `_level_index.json`，与 `stage.py:966-980` 同口径。
+	Level string `json:"level,omitempty"`
 }
 
 type response struct {
@@ -61,7 +64,9 @@ type response struct {
 	OK      bool            `json:"ok"`
 	Pong    *pong           `json:"pong,omitempty"`
 	Verdict json.RawMessage `json:"verdict,omitempty"`
-	Error   string          `json:"error,omitempty"`
+	//: `load` 的应答：Go 自己解析出来的关卡（见 `stage.go`）。
+	Stage json.RawMessage `json:"stage,omitempty"`
+	Error string          `json:"error,omitempty"`
 }
 
 type pong struct {
@@ -72,7 +77,7 @@ type pong struct {
 	Started  string `json:"started"`
 	SpecDone bool   `json:"spec_done"` //: `sim` 是否已经实现（最小版本落地后为 true）
 	//: 本二进制里**编译进来**的关卡特有机制名（`mech.Available()`）。
-	//: Python 侧据此判断"这一关的机制能不能交给 Go 跑"，不各自维护名单。
+	//: Python 侧据此判断「这一关的机制能不能交给 Go 跑」，不各自维护名单。
 	Mechanisms []string `json:"mechanisms"`
 }
 
@@ -80,7 +85,7 @@ func main() {
 	// 机制层的痕迹通道（见 `initMechTrace`）：`RIOS_TRACE=1` 时接上，
 	// 否则 `mech.Trace` 保持 no-op。
 	initMechTrace()
-	// 无缓冲地一行一行应答：调用方是"发一批、收一批"的同步用法，
+	// 无缓冲地一行一行应答：调用方是「发一批、收一批」的同步用法，
 	// 攒着不写会让人以为进程挂住了。
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 0, 1<<20), 1<<26) // spec 可能很大（整张地图 + 波次）
@@ -141,8 +146,8 @@ func handle(req *request, started string) response {
 		}
 		verdict, err := runSim(&spec)
 		if err != nil {
-			// **宁可什么都不回，也不回一个残缺的判决**：对拍台把"这一局不支持"
-			// 当成失败，把"缺了机制的结果"当成通过，后者才是真危险。
+			// **宁可什么都不回，也不回一个残缺的判决**：对拍台把「这一局不支持」
+			// 当成失败，把「缺了机制的结果」当成通过，后者才是真危险。
 			return response{ID: req.ID, OK: false, Error: err.Error()}
 		}
 		raw, err := json.Marshal(verdict)
@@ -151,8 +156,25 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("判决序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Verdict: raw}
+	case "load":
+		// 丙阶段一：**Go 自己读关卡数据**，不经 Python 的规格。
+		// 这是把取数链搬进 Go 的第一块，见 `stage.go` 的文件头。
+		if req.Level == "" {
+			return response{ID: req.ID, OK: false,
+				Error: "load 少了 level（给 levelId，如 main_00-01，或关卡号，如 0-1）"}
+		}
+		st, err := LoadStage(req.Level)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(st)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("关卡序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Stage: raw}
 	default:
 		return response{ID: req.ID, OK: false,
-			Error: fmt.Sprintf("不认识的命令：%q（支持 ping / sim）", req.Cmd)}
+			Error: fmt.Sprintf("不认识的命令：%q（支持 ping / sim / load）", req.Cmd)}
 	}
 }
