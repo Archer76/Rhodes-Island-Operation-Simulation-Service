@@ -111,6 +111,8 @@ type OperatorStats struct {
 	//: 主职业代号（`TANK`）。与 `team_id`（小队）也不是一回事，别混。
 	NationID   string `json:"nation_id"`
 	Profession string `json:"profession"`
+	//: 天赋「翔虫机动」（`operator_traits.go`）。**没有这条时全取零值**。
+	Glider
 }
 
 // ---------------------------------------------------------------- 数据源
@@ -431,6 +433,8 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 	//: 身份两字段：直接取自 character_table，不做任何推断。
 	st.NationID = char.NationID
 	st.Profession = char.Profession
+	//: 「翔虫机动」：一个天赋两个平面（落位放宽 ＋ 限时攻击力加成）。
+	st.Glider = readGlider(char.Talents, cfg.Elite, cfg.Level, cfg.Potential)
 	return st, nil
 }
 

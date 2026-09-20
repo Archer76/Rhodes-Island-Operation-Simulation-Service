@@ -82,7 +82,7 @@ def main() -> int:
     from ak_tactic.operator.attack_speed import attack_speed_bonus
     from ak_tactic.battle.traits import (read_combo_attack, read_trait_splash,
                                          apply_splash_talent, read_hp_drain)
-    from ak_tactic.battle.talents import find_power_attack
+    from ak_tactic.battle.talents import find_power_attack, find_glider_mobility
     calc = OperatorCalculator()
     tbook = TalentBook()
     roster = json.loads(ROSTER.read_text(encoding="utf-8"))
@@ -163,6 +163,11 @@ def main() -> int:
     tx_hits = {"damage_type_text": 0, "heals": 0, "weakness_damage": 0}
     #: 身份两字段的行使计数（非空次数）。
     id_hits = {"nation_id": 0, "profession": 0}
+    #: 「翔虫机动」七字段的行使计数（非零/非空/为真）。
+    gl_hits = {"mobility_atk_bonus": 0, "mobility_atk_duration": 0,
+               "mobility_leftover": 0, "mobility_deploy_range": 0,
+               "mobility_melee_deploy": 0, "mobility_ignore_dir": 0,
+               "no_respawn_cost_add": 0}
     for cfg, g in zip(configs, got):
         py = calc.stats(cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
                         trust=cfg["trust"], potential=cfg["potential"],
@@ -266,6 +271,23 @@ def main() -> int:
                 id_hits[k] += 1
             if (g.get(k) or "") != b:
                 out.append("%s：Go=%r Python=%r" % (k, g.get(k), b))
+        #: 天赋「翔虫机动」：**一个天赋两个平面**（落位放宽 ＋ 限时攻击力加成）。
+        #: 没有这条时 verify.py:348-354 给的是零值 0.0/False/""。
+        gl = find_glider_mobility(tbook.for_operator(
+            cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
+            potential=cfg["potential"]))
+        py_gl = {"mobility_atk_bonus": gl.atk_bonus if gl else 0.0,
+                 "mobility_atk_duration": gl.atk_duration if gl else 0.0,
+                 "mobility_leftover": gl.projectile if gl else "",
+                 "mobility_deploy_range": gl.deploy_range if gl else "",
+                 "mobility_melee_deploy": gl.ignore_build_type if gl else False,
+                 "mobility_ignore_dir": gl.ignore_dir if gl else 0.0,
+                 "no_respawn_cost_add": gl.no_respawn_cost_add if gl else False}
+        for k, b in py_gl.items():
+            if b:
+                gl_hits[k] += 1
+            if norm(g.get(k)) != norm(b):
+                out.append("%s：Go=%r Python=%r" % (k, norm(g.get(k)), b))
         if out:
             bad += 1
             print("✗ %s E%d L%d trust=%g pot=%d mod=%s —— %d 处不一致"
@@ -284,6 +306,11 @@ def main() -> int:
     for k, n in aspd_hits.items():
         flag = "" if n else "   ← 零信息量的绿：这一档本轮没被行使到"
         print("    %-18s %d%s" % (k, n, flag))
+    print("★「翔虫机动」七字段行使计数（非零/非空/为真）：")
+    for k, n in gl_hits.items():
+        flag = "" if n else "   ← 这一档本轮没被行使到"
+        print("    %-22s %d%s" % (k, n, flag))
+    print()
     print("★ 身份两字段行使计数（非空次数）：")
     for k, n in id_hits.items():
         flag = "" if n else "   ← 这一档本轮全是空值"

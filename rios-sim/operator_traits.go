@@ -263,6 +263,84 @@ func isSplashTalent(t resolvedTalent) bool {
 	return true
 }
 
+// ---- 天赋「翔虫机动」----
+
+// gliderTalentNames / gliderTalentKeys 复刻 `talents.py:256/258`。
+var gliderTalentNames = map[string]bool{"翔虫机动": true}
+var gliderTalentKeys = []string{"ignore_build_type_target", "not_add_respawn_cost_cnt"}
+
+// Glider 是天赋「翔虫机动」翻出来的七个量（`talents.py:210-252`）。
+//
+// **一个天赋，两个平面**：落位放宽（能不能放近战位）＋ 限时攻击力加成。
+// 没有这条时全部取「零值」——`verify.py:348-354` 的 `if glider else …`。
+type Glider struct {
+	AtkBonus     float64 `json:"mobility_atk_bonus"`
+	AtkDuration  float64 `json:"mobility_atk_duration"`
+	Projectile   string  `json:"mobility_leftover"`
+	DeployRange  string  `json:"mobility_deploy_range"`
+	IgnoreBuild  bool    `json:"mobility_melee_deploy"`
+	IgnoreDir    float64 `json:"mobility_ignore_dir"`
+	NoRespawnAdd bool    `json:"no_respawn_cost_add"`
+}
+
+// readGlider 复刻 `is_glider_mobility` + `find_glider_mobility`（`talents.py:261-289`）。
+//
+// ★ **两个范围/弹道代号住在 `$键`（`valueStr`）里**，裸键的 `value` 恒为 0：
+// `{"key": "ignore_build_type_target_range", "value": 0, "valueStr": "x-1"}`。
+// 判据是 `$键 或 裸键`——只看裸键会拿到一个恒为 0 的数并静默丢掉 `x-1`。
+func readGlider(talents []json.RawMessage, elite, level, potential int) Glider {
+	for _, t := range resolveTalents(talents, elite, level, potential) {
+		if !isGliderTalent(t) {
+			continue
+		}
+		var g Glider
+		if v, ok := toFloat(t.Blackboard["atk"]); ok {
+			g.AtkBonus = v
+		}
+		if v, ok := toFloat(t.Blackboard["atk_duration"]); ok {
+			g.AtkDuration = v
+		}
+		g.Projectile = strOr(t.Blackboard["$projectile"], t.Blackboard["projectile"])
+		g.DeployRange = strOr(t.Blackboard["$ignore_build_type_target_range"],
+			t.Blackboard["ignore_build_type_target_range"])
+		if v, ok := toFloat(t.Blackboard["ignore_build_type_target"]); ok {
+			g.IgnoreBuild = v != 0
+		}
+		if v, ok := toFloat(t.Blackboard["ignore_build_type_target_dir"]); ok {
+			g.IgnoreDir = v
+		}
+		if v, ok := toFloat(t.Blackboard["not_add_respawn_cost_cnt"]); ok {
+			g.NoRespawnAdd = v != 0
+		}
+		return g
+	}
+	return Glider{}
+}
+
+// isGliderTalent 复刻 `is_glider_mobility`：名字或**键的组合**命中即可。
+func isGliderTalent(t resolvedTalent) bool {
+	if gliderTalentNames[t.Name] {
+		return true
+	}
+	for _, k := range gliderTalentKeys {
+		if _, ok := t.Blackboard[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// strOr 复刻 `str(a or b or "")`：前者为空则取后者。
+func strOr(a, b any) string {
+	if s, ok := a.(string); ok && s != "" {
+		return s
+	}
+	if s, ok := b.(string); ok && s != "" {
+		return s
+	}
+	return ""
+}
+
 // ---- 三个纯文本判据（`verify.py:329-331`）----
 //
 // 它们各自只有一个判据词，**必须与 Python 逐字一致**——差一个字就会静默变成
