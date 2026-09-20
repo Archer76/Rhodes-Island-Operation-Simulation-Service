@@ -1908,6 +1908,15 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 		op.attackTimer = 0
 		scale := scaleNow
 		hits := op.hitCount()
+		//: ★ 行使指纹两族（建模族清点用）：**公式层**（这一击真的走了倍率解析）
+		//: 与**普攻连击**（`hits > 1` 才算这一族在场上；等于 1 是普通一击，
+		//: 打出来只会让计数变成「这场出手了几次」，与这一族无关）。
+		if traceOn {
+			trace("ATKSCALE t=%.4f op=%s v=%.6f", t, op.spec.Name, scaleNow)
+			if hits > 1 {
+				trace("COMBO t=%.4f op=%s hits=%d", t, op.spec.Name, hits)
+			}
+		}
 		finalScale, hasFinal := op.finalHitScale()
 		// 普攻连击（焰狐龙梓兰的**隐藏天赋**）：普通攻击为三连击、每击 100%，
 		// **计算防御/法抗之后**再 ×33.3%（原版 `sim.py:4049-4062` + 4135）。
@@ -1934,6 +1943,10 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 		// Go 的 `Profile`**。所以这里只兑现 `rounds = 1` 这一种，闸门负责把
 		// 剩下的挡在门外——两边都不许猜。
 		if op.powerAttackLeft > 0 {
+			//: ★ 行使指纹：只有在**剩余层数 > 0 且这一轮真的要乘**时才打。
+			if traceOn {
+				trace("POWERATK t=%.4f op=%s left=%.0f", t, op.spec.Name, op.powerAttackLeft)
+			}
 			power *= op.spec.PowerAttackScale
 			op.powerAttackLeft = math.Max(0, op.powerAttackLeft-1)
 		}
@@ -2299,15 +2312,27 @@ func inRangeOf(op *operator, enemies []*enemy) []*enemy {
 func teamAuraTick(ops []*operator) {
 	for _, op := range ops {
 		atk, def := 0.0, 0.0
+		//: ★ 痕迹要能**指名**：`from` 是这一帧真给出非零光环的主人（`|` 连接）。
+		//: 只打「吃到了多少」而不打「谁给的」，出分歧时归因不到人。
+		from := make([]string, 0, len(ops))
 		for _, owner := range ops {
 			for i := range owner.spec.TeamAuras {
 				x, y := owner.spec.TeamAuras[i].current(owner, op)
 				atk += x
 				def += y
+				if x != 0 || y != 0 {
+					from = append(from, owner.spec.Name)
+				}
 			}
 		}
 		op.auraAtkPct = atk
 		op.auraDefPct = def
+		//: ★ 行使指纹（建模族清点用）：**只在真的算出了非零光环时**才打。
+		//: 打在「入口被调用」上会退化成「每帧都打」——那种计数证明不了这一族被行使。
+		if traceOn && (atk != 0 || def != 0) {
+			trace("AURA-TEAM op=%s atk=%.4f def=%.4f from=%s",
+				op.spec.Name, atk, def, strings.Join(from, "|"))
+		}
 	}
 }
 
@@ -2403,6 +2428,11 @@ func regenAuraTick(ops []*operator, dt float64) {
 					rate *= au.NationMult
 				}
 				op.regenPerSec = math.Max(op.regenPerSec, rate)
+				//: ★ 行使指纹：打在**真的授出**那一刻（`markRegenGranted` 之后），不是函数入口。
+				if traceOn {
+					trace("AURA-REGEN op=%s target=%s rate=%.4f dur=%.4f",
+						owner.spec.Name, op.spec.Name, rate, au.Duration)
+				}
 			}
 			if op.regenLeft > 0 {
 				// `step` 夹在剩余时长上：最后一帧只跳剩下的那点，不能多跳一帧的整量。
