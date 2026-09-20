@@ -61,6 +61,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+#: ⚠ ★ **本机 python 的 `sys.stdout.encoding` 默认就是 `gbk`**（实测，不是推断；
+#: `PYTHONIOENCODING` 未设时），而本工具要印 `✓` / `❌` / `⇒`。
+#: 不管的话，**最后那行总结会抛 `UnicodeEncodeError`、rc 变 1** ——
+#: 而 rc=1 会被读成「有违规」，**崩溃伪装成了结论**（判据级陷阱，同族 `ab0483bd`）。
+#:
+#: 处置**只放宽错误处理器、不改编码**：改编码会让 GBK 终端整片变乱码。
+#: 配套第二条在下面几处：**判定词用 ASCII 打头**，别把结论只放在字形里。
+try:
+    sys.stdout.reconfigure(errors="backslashreplace")
+except Exception:                                            # noqa: BLE001
+    pass
+
 DB = ROOT / "data" / "akdb.sqlite"
 CACHE = ROOT / "data" / "gamedata"
 STAGE_TABLE = CACHE / "raw.githubusercontent.com" / "excel" / "stage_table.json"
@@ -138,10 +150,11 @@ def main() -> int:
     print("=" * 78)
 
     ok, n_st, n_hit = excel_has_no_devices()
-    print(f"  穷举守卫 · excel/stage_table.json：{n_st} 条，含装置字段的 {n_hit} 条 "
-          f"→ {'✓ 便宜路确实不通' if ok else '❌ 守卫红了，先别取数'}")
+    print(f"  [GUARD] 穷举守卫 · excel/stage_table.json：{n_st} 条，含装置字段的 {n_hit} 条 "
+          f"→ {'[OK] 便宜路确实不通' if ok else '[FAIL] 守卫红了，先别取数'}")
     if not ok:
-        print("  ❌ stage_table 里出现了装置字段 ⇒ 「必须逐份取 level JSON」这个前提不成立。")
+        print("  [FAIL] stage_table 里出现了装置字段 ⇒ "
+              "「必须逐份取 level JSON」这个前提不成立。")
         return 2
 
     rows = rows_from_db()
@@ -200,7 +213,7 @@ def main() -> int:
 
     if errors:
         print()
-        print(f"  ❌ {len(errors)} 份取数失败（不许当成 0）：")
+        print(f"  [FAIL] {len(errors)} 份取数失败（**不许当成 0**）：")
         for dp, why in errors[:10]:
             print(f"      {dp}  {why}")
 
@@ -263,12 +276,12 @@ def main() -> int:
     if args.check_cache:
         print()
         if n_cmp == 0:
-            print("  ❌ 控制组**一份都没比到**（本地缓存里没有这些 data_path）"
+            print("  [FAIL] 控制组**一份都没比到**（本地缓存里没有这些 data_path）"
                   "——这不叫通过，叫没行使。")
             mism.append(("__none_compared__", 0, 0))
         else:
-            print(f"  控制组（--check-cache）：实比 {n_cmp} 份，失配 {len(mism)} 处"
-                  + ("  ✓" if not mism else "  ❌"))
+            print(f"  [{'OK' if not mism else 'FAIL'}] 控制组（--check-cache）："
+                  f"实比 {n_cmp} 份，失配 {len(mism)} 处")
 
     if args.json:
         out = {"n_rows": len(rows), "n_paths": len(paths),
@@ -288,4 +301,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    #: ⚠ 给「崩了」留一个**与业务态不重叠**的退出码：0=跑完、1=有取数失败、2=守卫红、
+    #: **5=本工具自己崩了**。不这样分，崩溃会伪装成「有违规」（上面 GBK 那条就是）。
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except BaseException as exc:                              # noqa: BLE001
+        print(f"\n[CRASH] {type(exc).__name__}: {exc}", file=sys.stderr)
+        raise SystemExit(5)

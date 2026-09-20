@@ -41,7 +41,71 @@ from . import build_spec, find_binary
 from .client import Simgo
 from ak_tactic.frontend.inputs import SpecInputs
 
-__all__ = ["GoEngineMixin", "GoVerifier"]
+__all__ = ["GoEngineMixin", "GoVerifier", "GATE_ALLOW_DEVICES", "GATE_ALLOW_SKILLS",
+           "GATE_RULING_REF", "gate_declaration"]
+
+
+# ============================================================================
+# ★★ 本次读数的**闸门口径** —— PM 裁定④（2026-09-20）「走乙」
+# ============================================================================
+#
+# 这三行是**唯一的那一份口径**：`_run_other_engine` 从这里读，产物从
+# `gate_declaration()` 抄。**改这里就会改跑出来的那一场**，所以它不是装饰。
+#
+# ## 现状（已知的、有意的，不是 bug）
+#
+# `_run_other_engine` 对**所有关卡**一律 `allow_devices=True`，而 `simgo/spec.py:112-123`
+# 写明这个口子**本来要带证据开**：只在实测过「把 `_device_tick`（建成 / AuraHit 进入
+# 触发 / 被拆后把地形还回去）与 `_pile_tick`（天桩链）**换成空操作之后判决一字不变**」
+# 时才许传 True。
+#
+# ⇒ **凡是带装置的关，它的 Go 读数是在「装置运行期被关掉」的前提下取的。**
+#    实测规模（穷举，不是抽样）：主线 433 行里 **196 行（45.3%）带装置** ——
+#    尺子 `tools/mainline_devices.py`（content sha16 `8C429C47E1DF7464`），
+#    表与按章分布见 `docs/mainline-stages.md` §九。**装置不是罕见个例。**
+#
+# ## 为什么保留一刀切（为什么没走「甲」）
+#
+# * **甲**＝关掉它、改成按证据的关卡白名单 ⇒ 那 196 行当场从「可跑」变「拒跑」，
+#   而甲的前提是**先把 196 关的装置运行期建起来、或逐关补取证** —— 那是另一条线的工作量，
+#   不该压在这里，也**不该用一个大洞换一个小洞**。
+# * **乙**（本裁定）＝保留行为，但把口径**逐份记进产物**（`tools/golden_go.py` 的 `gate` 栏）
+#   ⇒ 读数不失效，而 45.3% 这个数**从「藏着」变成「印出来」**。
+#
+# ## ⚠ 下一个人：请**不要**顺手把这里改成甲
+#
+# 那是另一个决定。改它要连 196 关的建模一起做；单独改掉只会让近一半主线关
+# 当场拒跑，而**没有任何东西会红**（这正是乙要堵的那个静默）。
+#
+# ## 这个口径有判据撑着（不是只写在注释里）
+#
+# `tools/golden_go.py`：
+#   * 每份产物的 `gate` 栏与这里**逐位比对**，不符即 rc≠0；
+#   * 基线里**缺 `gate` 栏**即 rc≠0；
+#   * `--gate-selftest` 是它的反向守卫（合成缺栏/改口径，必须变红）。
+GATE_ALLOW_DEVICES = True
+GATE_ALLOW_SKILLS = False
+#: 指向裁定本身，让机器可读的那一栏能被人追回来。
+GATE_RULING_REF = "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+
+
+def gate_declaration(*, provenance: str = "run") -> dict:
+    """本次读数的闸门口径，**机器可读**（要和四项读数同屏，不许只活在散文里）。
+
+    `provenance` 是**两值**，不许压成一个：
+
+    * `"run"` —— 这一栏来自**这一次真跑**（`run_one` 现场抄的）。
+    * `"backfill"` —— 这一栏是**2026-09-20 回填**的：那些基线录的时候还没有这一栏。
+      回填有据且已取证：`allow_devices=True` 只在 `046944a`（2026-09-19）进来过一次，
+      而首个基线提交 `3bab699` **是它的后代**、当时 `verifier.py` 已经是 `True`
+      ⇒ **23 份基线全部是在这个口径下录的**，不存在"某份是 False 录的"。
+    """
+    return {
+        "allow_devices": GATE_ALLOW_DEVICES,
+        "allow_skills": GATE_ALLOW_SKILLS,
+        "ruling_ref": GATE_RULING_REF,
+        "provenance": provenance,
+    }
 
 
 class GoEngineMixin:
@@ -52,10 +116,13 @@ class GoEngineMixin:
         super().__init__(*args, **kwargs)                     # type: ignore[misc]
         self._go: Simgo | None = None
         #: 这一路跑过的场次、累计耗时、以及**退回原版的次数**。
-        #: 证据：目标那条"把 214 秒压下一个量级"要拿它们说话。
+        #: 证据：目标那条「把 214 秒压下一个量级」要拿它们说话。
         self.go_runs = 0
         self.go_seconds = 0.0
         self.go_fallbacks = 0
+        #: 本次读数用的**闸门口径**（裁定④：「乙」）。产物靠它把「装置运行期已关」
+        #: 这个前提印出来——见 `gate_declaration()` 与 `tools/golden_go.py` 的 `gate` 栏。
+        self.gate = gate_declaration()
 
     # ------------------------------------------------------------------ 引擎
 
@@ -90,7 +157,22 @@ class GoEngineMixin:
         这些"此刻"的字段，跑完之后 `life` 已经是 0，Go 收到一份 life=0 的规格会
         当场判负、一帧都不跑（这个坑实测撞过）。
         """
-        spec = build_spec(SpecInputs.from_sim(sim), allow_devices=True, schedule=schedule, env=env)
+        # ★★ 具名注释 · 指向 **PM 裁定④（2026-09-20，「走乙」）** ★★
+        #
+        # `allow_devices=True` 在这里是**一刀切**——**已知的、有意的**，不是漏改、
+        # 不是待办。`simgo/spec.py:112-123` 说这个口子要带证据开；本模块顶部
+        # `GATE_ALLOW_DEVICES` 里写了取舍的全文与取证（196/433 行带装置）。
+        #
+        # ⚠ 把它改成按证据开 ＝ 走「甲」⇒ 196 行（45.3%）从「可跑」变「拒跑」，
+        #   而甲的前提是**先建 196 关的装置运行期／逐关补取证**。那是一个**独立的决定**，
+        #   请连建模一起做；单独改这里只会让近一半主线关静默拒跑。
+        #
+        # ⚠ 这两个值是从上面那两个常量读的，**不是字面量**——所以「改口径」只有一处，
+        #   且产物侧的 `gate` 栏会自动跟着变（守卫会把不一致的基线判红）。
+        spec = build_spec(SpecInputs.from_sim(sim),
+                          allow_devices=GATE_ALLOW_DEVICES,
+                          allow_skills=GATE_ALLOW_SKILLS,
+                          schedule=schedule, env=env)
         unsupported = list(spec.get("unsupported") or [])
         if unsupported:
             # 没移植的东西——**退回原版**，并且写清楚。
@@ -172,8 +254,11 @@ def ensure_go_engine(obj: Any) -> None:
         setattr(obj, name, types.MethodType(getattr(GoEngineMixin, name), obj))
     if "_go" not in obj.__dict__:
         obj._go = None
-    #: 与 `GoEngineMixin.__init__` 逐项对齐：跑过的场次、累计耗时、退回原版的次数。
-    for attr, init in (("go_runs", 0), ("go_seconds", 0.0), ("go_fallbacks", 0)):
+    #: 与 `GoEngineMixin.__init__` 逐项对齐：跑过的场次、累计耗时、退回原版的次数、
+    #: 以及**闸门口径**（漏掉 `gate` 的症状是产物里那一栏变成 `null`，
+    #: 而 `golden_go` 的守卫会当场判红——这正是要的：**缺字段必须响**）。
+    for attr, init in (("go_runs", 0), ("go_seconds", 0.0), ("go_fallbacks", 0),
+                       ("gate", gate_declaration())):
         if attr not in obj.__dict__:
             setattr(obj, attr, init)
 

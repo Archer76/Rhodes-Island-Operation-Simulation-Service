@@ -6,6 +6,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 2,
@@ -21,6 +27,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 48,
@@ -36,6 +48,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 50,
@@ -51,6 +69,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 33,
@@ -66,6 +90,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 38,
@@ -81,6 +111,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 33,
@@ -96,6 +132,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 46,
@@ -111,6 +153,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 45,
@@ -126,6 +174,12 @@
     "engine_bin": "rios-sim-4f47539b.exe",
     "engine_bin_mtime": "2026-09-20 03:28:22",
     "engine_bin_sha16": "6ab41e7de224017f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 96,
@@ -141,6 +195,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 82,
@@ -156,6 +216,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 54,
@@ -171,6 +237,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 85,
@@ -186,6 +258,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 5,
@@ -201,6 +279,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 22,
@@ -216,6 +300,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 8,
@@ -231,6 +321,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 24,
@@ -246,6 +342,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 42,
@@ -261,6 +363,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 2,
@@ -276,6 +384,12 @@
     "engine_bin": "rios-sim-12f35f7.exe",
     "engine_bin_mtime": "2026-09-20 12:05:59",
     "engine_bin_sha16": "1dd24575475ecb07",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 0,
@@ -291,6 +405,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 27,
@@ -306,6 +426,12 @@
     "engine_bin": "rios-sim-2c68f2c6.exe",
     "engine_bin_mtime": "2026-09-19 22:13:25",
     "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 7,
@@ -321,6 +447,12 @@
     "engine_bin": "rios-sim-12f35f7.exe",
     "engine_bin_mtime": "2026-09-20 12:05:59",
     "engine_bin_sha16": "1dd24575475ecb07",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 11,
@@ -336,6 +468,12 @@
     "engine_bin": "rios-sim-12f35f7.exe",
     "engine_bin_mtime": "2026-09-20 12:05:59",
     "engine_bin_sha16": "1dd24575475ecb07",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 41,
@@ -351,6 +489,12 @@
     "engine_bin": "rios-sim-12f35f7.exe",
     "engine_bin_mtime": "2026-09-20 12:05:59",
     "engine_bin_sha16": "1dd24575475ecb07",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "backfill",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
     "go_fallbacks": 0,
     "go_runs": 1,
     "kills": 50,
