@@ -235,6 +235,12 @@ H1 = hashes()
 
 
 def show(tag: str, rc: int, out: str, pats: list[str], also: list[str] = ()) -> None:
+    #: ★ 2026-09-20 自缚修正：本函数**过滤**被审输出后显示（无命中只印末尾 4 行），
+    #:   而「有没有印」是关于**原文**的断言 ⇒ 过滤后的日志不能拿来判「没印」。
+    #:   故：原文全量落盘 + 印出被抑制的行数（这一屏只是视图，原文才是本体）。
+    raw = ROOT / "out" / "acceptance" / f"raw-main-{tag.split()[0]}.log"
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text(out, encoding="utf-8")
     print(f"\n===== {tag} ⇒ rc={rc} =====")
     lines = out.splitlines()
     hit = 0
@@ -245,6 +251,9 @@ def show(tag: str, rc: int, out: str, pats: list[str], also: list[str] = ()) -> 
         print("   （无匹配行 ⇒ 原文尾部）")
         for l in lines[-4:]:
             print("   " + l.strip()[:158])
+    print(f"   [原文] 未过滤全量已落盘：{raw}（共 {len(lines)} 行，本屏显示 "
+          f"{hit if hit else 4} 行 ⇒ 被抑制 {len(lines) - (hit if hit else 4)} 行；"
+          f"★ 判「有没有印」必须查这份原文）")
     for a in also:
         print("   " + a)
 

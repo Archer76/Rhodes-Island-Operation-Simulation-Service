@@ -100,11 +100,20 @@ def main() -> int:
         return 2
     print(f"[仪器] 被审文件 = {ORIG}")
     rc, txt = run_their_main(make_tree(case), case)
+    #: ★ 2026-09-20 自缚修正：本探针**过滤**被审输出后再显示，而「有没有印」是关于
+    #:   **原文**的断言 ⇒ 过滤后的日志不能拿来判「没印」。故：原文全量落盘 + 印出被抑制行数。
+    rawp = BASE.parent / f"raw-scope-{case}.log"
+    rawp.write_text(txt, encoding="utf-8")
+    total = len(txt.splitlines())
     print(f"===== {case}：它 rc={rc} =====")
+    shown = 0
     for u in txt.splitlines():
         s = u.strip()
         if s.startswith(("✓", "✗", "⊘", "[SystemExit]")) or "判定：" in s or "跨过" in s or "不适用" in s:
             print("   " + s[:150])
+            shown += 1
+    print(f"   [原文] 未过滤全量已落盘：{rawp}（共 {total} 行，本屏只显示 {shown} 行"
+          f"；★ 判「有没有印」必须查这份原文，不许看本屏）")
     rs = rows(txt)
     if case != "control":
         print("   [本用例四行] " + " ｜ ".join(f"{k}: {rs.get(k, '(缺)')[:70]}" for k in ("M1", "M2", "M3", "M4")))
