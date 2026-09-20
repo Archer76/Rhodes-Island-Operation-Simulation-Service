@@ -73,9 +73,19 @@ def ident(path: Path) -> str:
     blob = _sp.run(["git", "cat-file", "blob", "HEAD:" + rel], capture_output=True)
     b16 = _h.sha256(blob.stdout).hexdigest()[:16] if blob.returncode == 0 else None
     lines = data.decode("utf-8", "replace").count(chr(10))
-    side = (f"工作区形态 sha16={ws}／入库 blob(HEAD) sha16={b16}" if b16
-            else f"工作区形态 sha16={ws}／入库 blob=**非 index 内路径**（`{rel}` 不在 HEAD 的树里）")
-    return f"  被测对象：{side}／行数={lines}／归一(CRLF→LF) sha16={norm}"
+    if b16 is None:
+        return (f"  被测对象：工作区形态 sha16={ws}／行数={lines}／归一(CRLF→LF) sha16={norm}"
+                f"\n  ⊘ 与入库 blob 的可比性：**不适用**（`{rel}` 不在 HEAD 的树里 ⇒ 无入库形态可对）")
+    side = f"工作区形态 sha16={ws}／入库 blob(HEAD) sha16={b16}"
+    tip = f"  被测对象：{side}／行数={lines}／归一(CRLF→LF) sha16={norm}"
+    if norm != b16:
+        tip += (f"\n  ⚠ **工作区与入库 blob 归一后仍不同 ⇒ 有未提交改动**：这个读数可能测到\n"
+                f"     **一个正在被写的中间态**（实测：别人正在改的那份文档被我读成 rc=1 判 5 处，\n"
+                f"     重测 rc=0、且 diff 显示 38 行未提交 ⇒ 那不是缺陷，是**撕裂读**）。\n"
+                f"     ⇒ **要下结论先冻住**：从 `git show <sha>:{rel}` 取只读副本再量（`5558b5a0`）。")
+    else:
+        tip += "\n  ✓ 工作区与入库 blob 归一后相同（差异仅行尾或有未提交改动时另报）"
+    return tip
 
 
 def label_before(ln: str, pos: int) -> str | None:
@@ -105,6 +115,11 @@ def collisions(info: dict, ids: set[str]) -> tuple[list[str], int]:
       **没有第二个语义来源**，唯一来源就是标签本身（这正是本纪律要求贴标签的原因）。
     """
     bad: list[str] = []
+    ghost = sorted(tok for tok, (ns, _, _) in info.items() if ns == "记忆" and tok not in ids)
+    for tok in ghost:
+        bad.append(f"`{tok}` 是「8 位非提交」而**不在记忆 id 清单里** ⇒ **一个不属于任何命名空间的标识**："
+                   f"本检查按形状把它推定为「记忆」并要求贴标签，而第二来源否证了这个推定 ⇒ "
+                   f"**不要给它贴假标签**（要么它是别的东西、要么清单不全）")
     hit = sorted(tok for tok, (ns, _, _) in info.items() if ns == "提交" and tok in ids)
     for tok in hit:
         bad.append(f"`{tok}` 既能解析为提交、又在记忆 id 清单里 ⇒ **值本身不再唯一确定语义**，"
@@ -201,13 +216,17 @@ def main() -> int:
             print("   ⊘ 与形状无关的碰撞检测：**未行使**（未提供记忆 id 清单）")
         else:
             cb, nhit = collisions(info, ids)
-            print(f"   · 碰撞检测：**已行使**（{len(info)} 个标识 × {len(ids)} 个记忆 id）⇒ 命中 {nhit} 个")
+            print(f"   · 碰撞检测：**已行使**（{len(info)} 个标识 × {len(ids)} 个记忆 id）⇒ 碰撞 {nhit} 个、"
+                  f"推定被否证 {sum(1 for x in cb if '不在记忆 id 清单里' in x)} 个")
+            print("     ★ 本层只在**清单完整**时才有意义；清单不全 ⇒ 真 id 会被判成「不属于」＝假红（宁可假红，`7bd9ca65`）。")
             bad += cb
         for b in bad:
             print("   ✗ " + b)
         total_bad += bad
     print("\n== 判定：== " + ("所有标识的命名空间都已声明且正确" if not total_bad
                               else f"**{len(total_bad)} 处未声明／未归类／贴错** ⇒ rc=1"))
+    print("★ 推定声明：「8 位十六进制且不可解析为提交」一律按**形状**归「记忆」——这是**推定**，不是核对；"
+          "若某个这样的值其实不属于记忆命名空间，本检查会**逼人给它贴一个假标签**（后端2 实测：合成负对照值哪一套都不是）。")
     print("★ 盖到哪为止：只证「命名空间已声明且贴对」，**不证**「那个记忆 id 真的存在」（要证得读记忆轨＝外部依赖）。")
     return 1 if total_bad else 0
 
