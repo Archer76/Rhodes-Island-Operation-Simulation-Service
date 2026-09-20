@@ -214,3 +214,7 @@ tools/wrap_spec_inputs.py
 #   （`python <worklog>\wl.py add <路径>`），不入本仓。
 tools/sweep_hsl_parity.py
 tools/sandbox_mode_selfcheck.py
+# 引擎收口（2026-09-20）：族清单的行与覆盖面判定结论 —— 内部件，家在 worklog
+docs/engine-family-rows.md
+docs/engine-coverage-verdict.md
+tools/mechanism_matrix.py
