@@ -1,0 +1,389 @@
+package main
+
+// operator.go：**Go 侧自己折算干员面板**（丙阶段三）。
+//
+// 对应 Python `ak_tactic/operator/stats.py`（`OperatorCalculator.stats`，`:537-613`）
+// 与它依赖的四个纯函数：`interpolate_keyframes`(:219)、`_apply_rounding`(:206)、
+// `_potential_bonus`(:273)、`module_levels`(:499)。
+//
+// ## 三条最容易写错的
+//
+//  1. ★ **取整要用银行家舍入**（`math.RoundToEven`），不是 `math.Round`。
+//     两语言在 .5 上的判决相反（8.5 → Python 8 / Go 的 Round 是 9），
+//     本项目为此专门记过一条（记忆 `7fb765b5`）。
+//  2. **只对 `INT_ATTRS` 里的属性取整**；`magicResistance` / `moveSpeed` /
+//     `attackSpeed` / `baseAttackTime` 是浮点，取整会把 0.7 的移速压成 0。
+//  3. **信赖的 `trust` 参数已经是「显示值 ÷ 2」的内部标度**（0–100），
+//     直接当 `favorKeyFrames` 的 level 用，**不要再除一次**。
+//
+// ## 本轮的边界
+//
+// 模组那一支（`module_levels`，读 `battle_equip_table.json`）**这一轮没接**——
+// 那份表不在本机缓存里（`excel/` 下只有 character_table / skill_table /
+// range_table / char_patch_table 四份）。它是对拍工具里的具名缺口，不静默略过。
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"os"
+	"path/filepath"
+	"sort"
+)
+
+// intAttrs 是面板上按整数显示的属性（`stats.py:125-129`）。
+var intAttrs = map[string]bool{
+	"maxHp": true, "atk": true, "def": true, "cost": true, "blockCnt": true,
+	"respawnTime": true, "maxDeployCount": true, "maxDeckStackCnt": true,
+	"tauntLevel": true, "massLevel": true, "baseForceLevel": true,
+}
+
+// potentialAttrMap 是潜能 `attributeModifiers.attributeType` → 属性名
+// （`stats.py:171-182`，全大写那套）。
+var potentialAttrMap = map[string]string{
+	"MAX_HP": "maxHp", "ATK": "atk", "DEF": "def",
+	"MAGIC_RESISTANCE": "magicResistance", "COST": "cost",
+	"ATTACK_SPEED": "attackSpeed", "RESPAWN_TIME": "respawnTime",
+	"BLOCK_CNT": "blockCnt", "MOVE_SPEED": "moveSpeed",
+	"MAX_DEPLOY_COUNT": "maxDeployCount",
+}
+
+// moduleKeyMap 是模组 `attributeBlackboard` 的 key（下划线风格）→ 属性名
+// （`stats.py:158-168`）。本轮未接模组那一支，但这张表先留着——
+// 它是契约的一部分，不是推测。
+var moduleKeyMap = map[string]string{
+	"max_hp": "maxHp", "atk": "atk", "def": "def",
+	"magic_resistance": "magicResistance", "attack_speed": "attackSpeed",
+	"cost": "cost", "respawn_time": "respawnTime",
+	"block_cnt": "blockCnt", "move_speed": "moveSpeed",
+}
+
+// OperatorCalcConfig 是一次折算的入参。
+type OperatorCalcConfig struct {
+	CharID      string  `json:"char_id"`
+	Elite       int     `json:"elite"`
+	Level       int     `json:"level"`
+	Trust       float64 `json:"trust"`
+	Potential   int     `json:"potential"`
+	Module      string  `json:"module"`
+	ModuleLevel int     `json:"module_level"`
+}
+
+// OperatorStats 是一次折算的结果。
+//
+// 四份来源分开留着（与 `OperatorStats` 同构），对拍时逐份比——
+// 只比 `total` 会让「base 错、抵消后 total 对」这种情形溜过去。
+type OperatorStats struct {
+	CharID         string             `json:"char_id"`
+	Elite          int                `json:"elite"`
+	Level          int                `json:"level"`
+	Trust          float64            `json:"trust"`
+	Potential      int                `json:"potential"`
+	Module         string             `json:"module"`
+	ModuleLevel    int                `json:"module_level"`
+	Base           map[string]any     `json:"base"`
+	TrustBonus     map[string]any     `json:"trust_bonus"`
+	PotentialBonus map[string]any     `json:"potential_bonus"`
+	ModuleBonus    map[string]any     `json:"module_bonus"`
+	Total          map[string]any     `json:"total"`
+}
+
+// ---------------------------------------------------------------- 数据源
+
+var charTableCache map[string]json.RawMessage
+
+// loadCharTable 读 `character_table.json`（14 MB），只读一次并缓存。
+func loadCharTable() (map[string]json.RawMessage, error) {
+	if charTableCache != nil {
+		return charTableCache, nil
+	}
+	p := filepath.Join(DataRoot(), "raw.githubusercontent.com", "excel",
+		"character_table.json")
+	blob, err := os.ReadFile(p)
+	if err != nil {
+		return nil, fmt.Errorf("读 character_table 失败（%s）：%w", p, err)
+	}
+	var tbl map[string]json.RawMessage
+	if err := json.Unmarshal(blob, &tbl); err != nil {
+		return nil, fmt.Errorf("character_table 不是合法 JSON（%s）：%w", p, err)
+	}
+	if len(tbl) == 0 {
+		return nil, fmt.Errorf("character_table 是空的（%s）", p)
+	}
+	charTableCache = tbl
+	return tbl, nil
+}
+
+// ---------------------------------------------------------------- 纯函数
+
+// applyRounding 复刻 `_apply_rounding`（`stats.py:206-216`）。
+//
+// ★ `round` 这一支是**银行家舍入**——Python 内建 `round` 就是它。
+// 用 Go 的 `math.Round` 会在 .5 上分出相反的结果。
+func applyRounding(v float64, attr, rounding string) any {
+	if !intAttrs[attr] || rounding == "none" {
+		return v
+	}
+	switch rounding {
+	case "floor":
+		return int(math.Floor(v))
+	case "round":
+		return int(math.RoundToEven(v))
+	case "ceil":
+		return int(math.Ceil(v))
+	}
+	return v
+}
+
+// frame 是一个关键帧。
+type frame struct {
+	Level float64
+	Data  map[string]any
+}
+
+// interpolateKeyframes 复刻 `interpolate_keyframes`（`stats.py:219-270`）。
+//
+// **不假定只有两帧**——真实数据里存在 3、4、6 甚至 11 帧的阶段。
+// 等级落在两帧之间按比例插值；超出范围夹到最近一帧；布尔取左侧那帧。
+func interpolateKeyframes(frames []frame, level float64, rounding string) map[string]any {
+	fr := make([]frame, 0, len(frames))
+	for _, f := range frames {
+		if len(f.Data) > 0 {
+			fr = append(fr, f)
+		}
+	}
+	sort.SliceStable(fr, func(i, j int) bool { return fr[i].Level < fr[j].Level })
+	if len(fr) == 0 {
+		return map[string]any{}
+	}
+	if len(fr) == 1 {
+		out := map[string]any{}
+		for k, v := range fr[0].Data {
+			out[k] = v
+		}
+		return out
+	}
+	var lo, hi frame
+	switch {
+	case level <= fr[0].Level:
+		lo, hi = fr[0], fr[0]
+	case level >= fr[len(fr)-1].Level:
+		lo, hi = fr[len(fr)-1], fr[len(fr)-1]
+	default:
+		lo, hi = fr[0], fr[len(fr)-1]
+		for i := 0; i+1 < len(fr); i++ {
+			if fr[i].Level <= level && level <= fr[i+1].Level {
+				lo, hi = fr[i], fr[i+1]
+				break
+			}
+		}
+	}
+	span := hi.Level - lo.Level
+	t := 0.0
+	if span != 0 {
+		t = (level - lo.Level) / span
+	}
+	keys := map[string]bool{}
+	for k := range lo.Data {
+		keys[k] = true
+	}
+	for k := range hi.Data {
+		keys[k] = true
+	}
+	out := map[string]any{}
+	for k := range keys {
+		va, oka := lo.Data[k]
+		vb, okb := hi.Data[k]
+		if !oka || va == nil {
+			out[k] = vb
+			continue
+		}
+		if !okb || vb == nil {
+			out[k] = va
+			continue
+		}
+		if isBool(va) || isBool(vb) {
+			if t < 0.5 {
+				out[k] = va
+			} else {
+				out[k] = vb
+			}
+			continue
+		}
+		fa, oka2 := toFloat(va)
+		fb, okb2 := toFloat(vb)
+		if oka2 && okb2 {
+			out[k] = applyRounding(fa+(fb-fa)*t, k, rounding)
+		} else {
+			out[k] = va
+		}
+	}
+	return out
+}
+
+func isBool(v any) bool {
+	_, ok := v.(bool)
+	return ok
+}
+
+// potentialBonus 复刻 `_potential_bonus`（`stats.py:273-296`）。
+//
+// 游戏里的潜能是 1–6，而 `potentialRanks` 只有 5 项——**对应潜能 2–6**，
+// 潜能 1 是干员到手时的状态、没有任何加成。所以取前 `potential - 1` 项。
+func potentialBonus(ranks []json.RawMessage, potential int) map[string]any {
+	out := map[string]any{}
+	if potential <= 1 {
+		return out
+	}
+	n := potential - 1
+	if n > len(ranks) {
+		n = len(ranks)
+	}
+	for _, rRaw := range ranks[:n] {
+		var rank struct {
+			Type string `json:"type"`
+			Buff struct {
+				Attributes struct {
+					AttributeModifiers []struct {
+						AttributeType string   `json:"attributeType"`
+						Value         *float64 `json:"value"`
+						FormulaItem   string   `json:"formulaItem"`
+					} `json:"attributeModifiers"`
+				} `json:"attributes"`
+			} `json:"buff"`
+		}
+		if err := json.Unmarshal(rRaw, &rank); err != nil {
+			continue
+		}
+		if rank.Type != "BUFF" {
+			continue
+		}
+		for _, m := range rank.Buff.Attributes.AttributeModifiers {
+			attr, ok := potentialAttrMap[m.AttributeType]
+			if !ok {
+				continue
+			}
+			val := 0.0
+			if m.Value != nil {
+				val = *m.Value
+			}
+			if m.FormulaItem == "MULTIPLIER" {
+				//: 乘算潜能（少数干员有），键名前加 `x` 打标记，最后单独处理。
+				out["x"+attr] = val
+			} else {
+				cur, _ := toFloat(out[attr])
+				out[attr] = cur + val
+			}
+		}
+	}
+	return out
+}
+
+// ---------------------------------------------------------------- 主入口
+
+// OperatorStatsFor 折算一名干员在某一档配置下的面板。
+func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, error) {
+	if rounding == "" {
+		rounding = "round"
+	}
+	tbl, err := loadCharTable()
+	if err != nil {
+		return nil, err
+	}
+	raw, ok := tbl[cfg.CharID]
+	if !ok || string(raw) == "null" {
+		return nil, fmt.Errorf("character_table 里没有 %q", cfg.CharID)
+	}
+	var char struct {
+		Name       string            `json:"name"`
+		Phases     []json.RawMessage `json:"phases"`
+		Favor      []json.RawMessage `json:"favorKeyFrames"`
+		Potentials []json.RawMessage `json:"potentialRanks"`
+	}
+	if err := json.Unmarshal(raw, &char); err != nil {
+		return nil, fmt.Errorf("%s 的表项解析失败：%w", cfg.CharID, err)
+	}
+	if cfg.Elite < 0 || cfg.Elite >= len(char.Phases) {
+		return nil, fmt.Errorf("%s 只有 %d 个精英阶段，没有精英 %d",
+			char.Name, len(char.Phases), cfg.Elite)
+	}
+	var ph struct {
+		MaxLevel  int               `json:"maxLevel"`
+		KeyFrames []json.RawMessage `json:"attributesKeyFrames"`
+	}
+	if err := json.Unmarshal(char.Phases[cfg.Elite], &ph); err != nil {
+		return nil, err
+	}
+	if cfg.Level < 1 || cfg.Level > ph.MaxLevel {
+		return nil, fmt.Errorf("精英 %d 的等级必须在 1–%d，收到 %d",
+			cfg.Elite, ph.MaxLevel, cfg.Level)
+	}
+
+	st := &OperatorStats{
+		CharID: cfg.CharID, Elite: cfg.Elite, Level: cfg.Level,
+		Trust: cfg.Trust, Potential: cfg.Potential,
+		Module: cfg.Module, ModuleLevel: cfg.ModuleLevel,
+		TrustBonus: map[string]any{}, PotentialBonus: map[string]any{},
+		ModuleBonus: map[string]any{},
+	}
+	st.Base = interpolateKeyframes(parseFrames(ph.KeyFrames),
+		float64(cfg.Level), rounding)
+	//: 信赖：`favorKeyFrames` 的 level 是 0–50，对应显示信赖 0%–100%，
+	//: 即 `level = 显示 / 2`。`trust` 本身已是「显示 ÷ 2」，**直接当 level 用**。
+	for k, v := range interpolateKeyframes(parseFrames(char.Favor), cfg.Trust, rounding) {
+		if f, ok := toFloat(v); ok && f != 0 {
+			st.TrustBonus[k] = v
+		}
+	}
+	st.PotentialBonus = potentialBonus(char.Potentials, cfg.Potential)
+	//: 模组那一支本轮未接（见文件头）；**不静默跳过**：要了模组就直接报错。
+	if cfg.Module != "" && cfg.ModuleLevel != 0 {
+		return nil, fmt.Errorf("模组那一支（battle_equip_table）本轮未接入 Go，收到 %s Lv%d",
+			cfg.Module, cfg.ModuleLevel)
+	}
+
+	total := map[string]any{}
+	for k, v := range st.Base {
+		if isBool(v) {
+			total[k] = v
+			continue
+		}
+		f, ok := toFloat(v)
+		if !ok {
+			total[k] = v
+			continue
+		}
+		acc := f
+		for _, src := range []map[string]any{st.TrustBonus, st.PotentialBonus, st.ModuleBonus} {
+			if b, ok := toFloat(src[k]); ok {
+				acc += b
+			}
+		}
+		//: 乘算潜能
+		if mul, ok := toFloat(st.PotentialBonus["x"+k]); ok && mul != 0 {
+			acc *= mul
+		}
+		total[k] = applyRounding(acc, k, rounding)
+	}
+	st.Total = total
+	return st, nil
+}
+
+func parseFrames(raws []json.RawMessage) []frame {
+	out := make([]frame, 0, len(raws))
+	for _, r := range raws {
+		var f struct {
+			Level *float64       `json:"level"`
+			Data  map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal(r, &f); err != nil {
+			continue
+		}
+		lv := 0.0
+		if f.Level != nil {
+			lv = *f.Level
+		}
+		out = append(out, frame{Level: lv, Data: f.Data})
+	}
+	return out
+}

@@ -68,6 +68,8 @@ type response struct {
 	Stage json.RawMessage `json:"stage,omitempty"`
 	//: `enemies` 的应答：一关引用的敌人各自那一档（见 `enemy.go`）。
 	Enemies json.RawMessage `json:"enemies,omitempty"`
+	//: `opstats` 的应答：干员面板折算结果（见 `operator.go`）。
+	OpStats json.RawMessage `json:"opstats,omitempty"`
 	Error   string          `json:"error,omitempty"`
 }
 
@@ -191,8 +193,38 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("敌人序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Enemies: raw}
+	case "opstats":
+		// 丙阶段三：**Go 自己折算干员面板**。`spec` 收一个配置或一批配置。
+		if len(req.Spec) == 0 {
+			return response{ID: req.ID, OK: false,
+				Error: "opstats 少了 spec（一个配置或一批配置的数组）"}
+		}
+		var list []OperatorCalcConfig
+		if err := json.Unmarshal(req.Spec, &list); err != nil {
+			var one OperatorCalcConfig
+			if err2 := json.Unmarshal(req.Spec, &one); err2 != nil {
+				return response{ID: req.ID, OK: false,
+					Error: fmt.Sprintf("spec 既不是配置数组也不是单个配置：%v", err2)}
+			}
+			list = []OperatorCalcConfig{one}
+		}
+		results := make([]*OperatorStats, 0, len(list))
+		for _, c := range list {
+			st, err := OperatorStatsFor(c, "round")
+			if err != nil {
+				return response{ID: req.ID, OK: false, Error: err.Error()}
+			}
+			results = append(results, st)
+		}
+		raw, err := json.Marshal(results)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("面板序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, OpStats: raw}
 	default:
 		return response{ID: req.ID, OK: false,
-			Error: fmt.Sprintf("不认识的命令：%q（支持 ping / sim / load / enemies）", req.Cmd)}
+			Error: fmt.Sprintf(
+				"不认识的命令：%q（支持 ping / sim / load / enemies / opstats）", req.Cmd)}
 	}
 }
