@@ -150,7 +150,17 @@ def port_reasons(sim, op) -> list[str]:
         bad.append("剑气（描述驱动）")
     bad += _field_reasons(eff)
     if getattr(eff, "variants", None):
-        bad.append("技能变体（第二次及以后换一套数值）")
+        #: ⚠ **这条文案不许列举任何一个条件名**——旧文案写的是
+        #: 「第二次及以后换一套数值」，而它实际拦的 64 条里只有 **1 条**是
+        #: `second`（另 63 条是 shield / cost / crit / switch_mode 等），
+        #: 全库共 **82 种**条件名。照旧文案去读的人会以为变体族＝1 条技能，
+        #: 而 `second` 恰好是唯一有战斗内消费点的那一个（`battle/sim.py:2449`）
+        #: ⇒ 只做 `second` 就能让这一族**看起来完成了**。
+        #: 「局部完成伪装成整体完成」，而铺路的是这句文案本身（PM 裁定① 2026-09-20）。
+        #: 规模与逐条出处见 `tools/variant_provenance.py`（未核数会红）。
+        #: ★ 保留「技能变体」这个字面量：`tools/opfamily_inventory.py` 与
+        #: `docs/literal-bracket-audit.md` 都按它取证（给读者看的那一栏也是别人的接口）。
+        bad.append(f"技能变体（条件键非默认 {len(eff.variants)} 个）")
     if getattr(op, "effects_override", None) is not None and \
             getattr(op, "effects_override", None) is not eff:
         bad.append("效果覆盖（effects_override）")
