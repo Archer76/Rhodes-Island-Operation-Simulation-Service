@@ -184,6 +184,15 @@ def _make_output_safe() -> None:
 
 def main(argv: list[str]) -> int:
     args = [a for a in argv[1:] if a != "--"]
+    if "--help" in args or "-h" in args:
+        #: ★ 补这个分支是**安全修复**，不是好看：本工具靠「滤掉以 -- 开头的参数」取文件表，
+        #: 于是 `--help` 会被静默滤掉 ⇒ 它**降级成「不带参数」**，跑一整轮默认范围扫描。
+        #: 实测：`--help` 打印了 133 个文件的全部 1940 处违规（5.9 万字节）。
+        #: ★ 更坏的是 ``--help --fix``：`--fix` 仍会生效 ⇒ **一次「想看帮助」重写 133 个文件**。
+        #: ⇒ 入口必须可预测：不认识的参数要么报错、要么明确定义，不许静默降级成默认动作。
+        print(__doc__.strip())
+        print("VERDICT=HELP")
+        return RC_CLEAN
     quiet = "--quiet" in args
     fix = "--fix" in args
     disk = "--disk" in args                     #: ★ 显式开关：扫工作区磁盘（含未入库的内部件）
