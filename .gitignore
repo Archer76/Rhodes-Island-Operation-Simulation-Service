@@ -218,3 +218,13 @@ tools/sandbox_mode_selfcheck.py
 docs/engine-family-rows.md
 docs/engine-coverage-verdict.md
 tools/mechanism_matrix.py
+
+# 技能族迁 Go（session-5e9afb18，2026-09-20）—— 内部件，家在 worklog
+# 变体族的施工图：**82 种条件名 × 两轴（行使/正确性）× 原文出处**。
+# 判据同上一节：它是我们这一族的台账，不是给「用这个仓库的人」的产品
+# （工具/题源/生成物三件是一体的：题源人填、生成物不许手改）。
+# 它存在的理由写在那句理由文案的注释里（`simgo/skills.py::port_reasons`）：
+# 没有这张表，做完 `second` 必然有人宣布「变体族完成」。
+tools/variant_provenance.py
+tools/variant_provenance.json
+tools/variant-provenance.md
