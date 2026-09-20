@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -45,23 +46,39 @@ TRUSTS = [0.0, 50.0, 100.0]
 POTENTIALS = [1, 6]
 
 
-def go_opstats(configs: list[dict]) -> list[dict]:
-    env = dict(os.environ)
-    env["RIOS_DATA"] = str(DATA)
-    req = json.dumps({"id": 1, "cmd": "opstats", "spec": configs}) + "\n"
-    p = subprocess.run([GO_BIN], input=req.encode("utf-8"),
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-    if p.returncode != 0:
-        raise SystemExit("Go rc=%d：%s" % (p.returncode,
-                                           p.stderr.decode("utf-8", "replace")[:400]))
-    line = p.stdout.decode("utf-8", "replace").strip().splitlines()
-    if not line:
-        raise SystemExit("Go 没有回任何东西（stderr：%s）"
-                         % p.stderr.decode("utf-8", "replace")[:400])
-    resp = json.loads(line[0])
-    if not resp.get("ok"):
-        raise SystemExit("Go 回 error：%s" % resp.get("error"))
-    return resp["opstats"]
+def go_opstats(configs: list[dict]) -> tuple[list[dict], list[str]]:
+    """问 Go 要一批面板。
+
+    ★ **逐个剔除**：Go 对不认识的 char_id 是**大声失败**（不静默给 0），
+    所以遇到它就回 error。这里把这个 id 剔出去重试，并把它们**具名收在
+    第二个返回值里**——「这一批没跑」与「跑过没问题」必须分开报
+    （第一版直接抛，整批一次都没跑成，却看着像判据红了）。
+    """
+    dropped: list[str] = []
+    while True:
+        env = dict(os.environ)
+        env["RIOS_DATA"] = str(DATA)
+        req = json.dumps({"id": 1, "cmd": "opstats", "spec": configs}) + "\n"
+        p = subprocess.run([GO_BIN], input=req.encode("utf-8"),
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        if p.returncode != 0:
+            raise SystemExit("Go rc=%d：%s"
+                             % (p.returncode, p.stderr.decode("utf-8", "replace")[:400]))
+        line = p.stdout.decode("utf-8", "replace").strip().splitlines()
+        if not line:
+            raise SystemExit("Go 没有回任何东西")
+        resp = json.loads(line[0])
+        if resp.get("ok"):
+            #: ★ 回来的是**剔除之后**的那一批——必须把它一并返回，
+            #: 否则外层 `zip(configs, got)` 会错位（看起来全一致，其实比错了对象）。
+            return resp["opstats"], configs, dropped
+        err = resp.get("error") or ""
+        m = re.search(r'character_table 里没有 "([^"]+)"', err)
+        if not m or len(dropped) > 50:
+            raise SystemExit("Go 回 error（不是可逐个剔除的那种）：%s" % err)
+        bad_id = m.group(1)
+        dropped.append(bad_id)
+        configs = [c for c in configs if c["char_id"] != bad_id]
 
 
 def norm(v):
@@ -131,7 +148,42 @@ def main() -> int:
                 })
                 mod_cfg += 1
 
-    got = go_opstats(configs)
+    #: ---- 覆盖面拉宽：账号名册全量 ----
+    #: ★ 现有的深扫只覆盖 fixtures 那 20 位；而账号名册有 211 位。
+    #: 「取证范围不许窄于结论范围」——只测 20 位就宣布面板层没问题，是不成立的。
+    #: 这里每位只取**它自己的**精英/等级/潜能、信赖取 0：
+    #: 信赖的标度（显示% ÷ 2）在两种名册里口径不同，**不猜**，留给上面的深扫。
+    import re as _re
+    ROW = _re.compile(
+        r"^\|\s*([^|]+?)\s*\|\s*`(char_[^`]+)`\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*"
+        r"\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|")
+    wide = 0
+    skipped: list[str] = []
+    for line in (ROOT / "docs" / "roster-<uid>.md").read_text(
+            encoding="utf-8").splitlines():
+        m = ROW.match(line)
+        if not m:
+            continue
+        cid = m.group(2)
+        if not calc.exists(cid):
+            skipped.append(cid)
+            continue
+        try:
+            elite = int(m.group(4).lstrip("Ee") or 0)
+            level = int(m.group(5) or 1)
+            pot = int(m.group(6) or 1)
+        except ValueError:
+            skipped.append(cid)
+            continue
+        if not (1 <= level <= int(calc.max_level(cid, elite) or 1)):
+            skipped.append("%s(E%d L%d 越界)" % (cid, elite, level))
+            continue
+        configs.append({"char_id": cid, "elite": elite, "level": level,
+                        "trust": 0.0, "potential": pot,
+                        "module": "", "module_level": 0})
+        wide += 1
+
+    got, configs, dropped = go_opstats(configs)
 
     mutate = "--mutate" in sys.argv
     if mutate:
@@ -302,6 +354,15 @@ def main() -> int:
     print("覆盖面：名册 %d 位 × (底/顶/中 三档等级) × 信赖 %s × 潜能 %s，"
           "另加**模组** %d 次（%d 位带数值模组的干员）"
           % (len(roster), TRUSTS, POTENTIALS, mod_cfg, len(mod_ops)))
+    print("        另加**账号名册全量** %d 位（`docs/roster-<uid>.md`，各取自己的"
+          "精英/等级/潜能、信赖 0）" % wide)
+    if skipped:
+        print("        名册里跳过 %d 位（表里没有 / 等级越界）：%s"
+              % (len(skipped), "、".join(skipped[:8])))
+    if dropped:
+        print("★ Go 侧**没有覆盖**的 char_id %d 个（它大声失败，由判据逐个剔除）：%s"
+              % (len(dropped), "、".join(dropped)))
+        print("  ⇒ 这些干员**不在本轮覆盖面内**，不是「比过了没问题」。")
     print("★ 攻速三字段的**行使计数**（Python 侧非零次数／共 %d 次折算）：" % compared)
     for k, n in aspd_hits.items():
         flag = "" if n else "   ← 零信息量的绿：这一档本轮没被行使到"
