@@ -261,6 +261,31 @@ class SpecInputs:
         #: 没有显式排程时它们必须齐——少一个就是 `AttributeError`，而且是 17 份一起红。
         lists = _schedule_lists(schedule)
 
+        #: ★ **敌人取数口的关卡修饰层**——`battle/sim.py:402-411` 构造时干的就是
+        #: 这件事（`parse_rune_muls(...)` ＋ `wrap_enemy_at(...)`），这里必须做
+        #: 同一件事。不做的后果**不是**「覆盖率差一点」，是**算错**：
+        #: 带敌人属性倍率的难度档会以**普通档属性**进规格。
+        #:
+        #: 实测（`tools/spec_from_stage_check.py`）：`plan-hsex08f.json`
+        #: （`act31side_ex08#f#`，`Stage.difficulty='FOUR_STAR'`）的
+        #: `$.spawns[i].{atk,def,hp}` 与田地装置子项**每一处都少乘一个 ×1.2**，
+        #: `from_sim ≡ from_stage` 卡在 **21/22**。
+        #:
+        #: ★ **×1.2 的出处是数据、不是「Python 里这么写的」**：
+        #: `data/gamedata/map.ark-nights.com/levels/activities/act31side/`
+        #: `level_act31side_ex08.json` 里
+        #: `runes[key='enemy_attribute_mul']`，`difficultyMask='FOUR_STAR'`，
+        #: `blackboard` = `atk/def/max_hp` 各 `1.2`。普通档掩码不匹配 ⇒
+        #: `rune_muls` 为空 ⇒ 不包（这正是 `act31side_ex08` 普通档两边一致的原因）。
+        if enemy_at is not None:
+            from ak_tactic.frontend.stage_mul import (parse_rune_muls,
+                                                      wrap_enemy_at)
+            _muls = parse_rune_muls(
+                (getattr(stage, "raw", None) or {}).get("runes"),
+                _env_difficulty(stage, env))
+            if _muls:
+                enemy_at = wrap_enemy_at(enemy_at, _muls)
+
         return cls(
             stage=stage,
             enemy_at=enemy_at, species_provider=species_provider,
