@@ -85,6 +85,36 @@ type EnemyStats struct {
 	//: 逐档沿用的技能原文（`enemy.py:952-962`）：`null` = 这一档没写、接着用低档；
 	//: 空列表 `[]` = 显式没有技能，照旧覆盖。
 	Skills []any `json:"skills"`
+
+	//: ---- 由黑板/技能派生的字段（`enemy_derive.go`）----
+	//: 平铺而不是嵌一个对象：Python 侧就是平铺的，对拍要同形。
+	P3R          map[string]int            `json:"p3r"`
+	WeakMax      float64                   `json:"weak_max"`
+	FallDuration float64                   `json:"fall_duration"`
+	Modes        map[string]map[string]int `json:"modes"`
+	ShieldHPRatio float64                  `json:"shield_hp_ratio"`
+	KillCost     int                       `json:"kill_cost"`
+
+	RebornCount       int      `json:"reborn_count"`
+	RebornDuration    float64  `json:"reborn_duration"`
+	RebornHPRatio     float64  `json:"reborn_hp_ratio"`
+	RebornPrefix      string   `json:"reborn_prefix"`
+	RebornInterval    float64  `json:"reborn_interval"`
+	RebornPollut      float64  `json:"reborn_pollut"`
+	RebornDefAdd      float64  `json:"reborn_def_add"`
+	RebornDamageMagic float64  `json:"reborn_damage_magic"`
+	RebornSummons     [][3]any `json:"reborn_summons"`
+
+	SkillAtkKey        string  `json:"skill_atk_key"`
+	SkillAtkScalePhys  float64 `json:"skill_atk_scale_phys"`
+	SkillAtkScaleMagic float64 `json:"skill_atk_scale_magic"`
+	SkillAtkPollut     float64 `json:"skill_atk_pollut"`
+	SkillAtkTargets    int     `json:"skill_atk_targets"`
+	SkillAtkCross      int     `json:"skill_atk_cross"`
+	SkillAtkGroundOnly bool    `json:"skill_atk_ground_only"`
+	SkillAtkNoNormal   bool    `json:"skill_atk_no_normal"`
+	SkillAtkInterval   float64 `json:"skill_atk_interval"`
+	SkillAtkInit       float64 `json:"skill_atk_init"`
 }
 
 // EnemyLibrary 是 key → 档位 → 数值。
@@ -283,6 +313,8 @@ func LoadEnemyLibrary() (*EnemyLibrary, error) {
 					st.Name = s
 				}
 			}
+			// ★ 派生字段必须在**黑板合并完之后**算（`enemy.py:997`）。
+			st.DeriveBlackboardFields()
 			levels[lv] = st
 		}
 		lib.ByKey[e.Key] = levels
@@ -360,7 +392,23 @@ func (s *EnemyStats) Clone() *EnemyStats {
 		c.TalentBlackboard[k] = v
 	}
 	c.Skills = append([]any{}, s.Skills...)
+	//: 派生字段里那两个 map 与那个切片也要深拷——浅拷会让 `WithOverwrite`
+	//: 改到库里的那一份。
+	c.P3R = copyIntMap(s.P3R)
+	c.Modes = map[string]map[string]int{}
+	for k, v := range s.Modes {
+		c.Modes[k] = copyIntMap(v)
+	}
+	c.RebornSummons = append([][3]any{}, s.RebornSummons...)
 	return &c
+}
+
+func copyIntMap(m map[string]int) map[string]int {
+	out := make(map[string]int, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // WithOverwrite 把关卡自带的敌人定义盖到 prefab 档位上（`enemy.py:1038-1122`）。
@@ -471,7 +519,10 @@ func (l *EnemyLibrary) WithOverwrite(id string, level int,
 			out.Skills = arr
 		}
 	}
-	// ⚠ `derive_blackboard_fields()` 那一族**未移植**（见文件头）。
+	// ⚠ `derive_blackboard_fields()` 那一族里 `mech_fields` 部分**未移植**（见文件头）；
+	// 相性/屏障/击杀费用/重生/技能攻击这几支已接，且必须在这里**重算**
+	// （`enemy.py:1118-1121`：本地定义换了 prefab，不重算会按老黑板召错单位）。
+	out.DeriveBlackboardFields()
 	return out, nil
 }
 

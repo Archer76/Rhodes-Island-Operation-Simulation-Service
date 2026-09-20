@@ -58,23 +58,44 @@ IMMUNES = [
     "teleportImmune", "groundBoundImmune", "disarmedCombatImmune",
 ]
 
-#: 未移植的机制族（`derive_blackboard_fields` 的产物）。**只用来报非默认条数**。
-NOT_PORTED = [
+#: 由黑板/技能派生、**本轮已移植**的字段——必须逐字段比，不是只计数。
+DERIVED = [
     "p3r", "weak_max", "fall_duration", "modes", "shield_hp_ratio", "kill_cost",
     "reborn_count", "reborn_duration", "reborn_hp_ratio", "reborn_prefix",
     "reborn_interval", "reborn_pollut", "reborn_def_add", "reborn_damage_magic",
-    "reborn_summons", "passive_pollut", "passive_radius", "passive_attach_damage",
-    "death_token", "death_cnt", "aura_hit_ratio", "aura_hit_radius",
-    "speedup_move", "speedup_duration", "speedup_cooldown",
-    "phit_cnt", "phit_atk", "phit_def", "phit_res", "phit_move", "phit_pollut",
-    "phit_block_pollut", "phit_extra", "phit_max_stack", "phit_weight_cnt",
-    "awake_hp_ratio", "awake_summon_ratio", "awake_value", "awake_value_eff",
-    "awake_enemy_key", "awake_summon_cnt",
+    "reborn_summons",
     "skill_atk_key", "skill_atk_scale_phys", "skill_atk_scale_magic",
     "skill_atk_pollut", "skill_atk_targets", "skill_atk_cross",
     "skill_atk_ground_only", "skill_atk_no_normal", "skill_atk_interval",
     "skill_atk_init",
 ]
+
+#: **仍未移植**的（`mech_fields` 那一族）。**只用来报非默认条数**。
+NOT_PORTED = [
+    "aura_hit_ratio", "aura_hit_radius",
+    "passive_pollut", "passive_radius", "passive_attach_damage",
+    "death_token", "death_cnt",
+    "speedup_move", "speedup_duration", "speedup_cooldown",
+    "phit_cnt", "phit_atk", "phit_def", "phit_res", "phit_move", "phit_pollut",
+    "phit_block_pollut", "phit_extra", "phit_max_stack", "phit_weight_cnt",
+    "awake_hp_ratio", "awake_summon_ratio", "awake_value", "awake_value_eff",
+    "awake_enemy_key", "awake_summon_cnt",
+]
+
+
+def norm(v):
+    """把 Python 的 tuple 摊成 list —— Go 的 JSON 里没有 tuple。
+
+    `reborn_summons` 是 `((间隔, 个数, id), …)`，不与 Go 的 `[[…]]` 同形；
+    不归一化会**每一只敌人都报不一致**，那是比法错、不是实现差。
+    """
+    if isinstance(v, tuple):
+        return [norm(x) for x in v]
+    if isinstance(v, list):
+        return [norm(x) for x in v]
+    if isinstance(v, dict):
+        return {k: norm(x) for k, x in v.items()}
+    return v
 
 
 def go_enemies(stage: str) -> dict:
@@ -157,7 +178,13 @@ def main() -> int:
             if list(g.get("skills") or []) != list(py.skills_raw or ()):
                 out.append("skills 不一致（Go %d 条 / Python %d 条）"
                            % (len(g.get("skills") or []), len(py.skills_raw or ())))
-            # 未移植族：只统计「非默认」的，具名落账
+            # 派生字段：**已移植的逐字段比**（这一栏才是判据）
+            for f in DERIVED:
+                a = norm(g.get(f))
+                b = norm(getattr(py, f, None))
+                if a != b:
+                    out.append("派生.%s：Go=%r Python=%r" % (f, _short(a), _short(b)))
+            # 仍未移植族：只统计「非默认」的，具名落账
             for f in NOT_PORTED:
                 if not is_default(getattr(py, f, None), f):
                     gap_fields.setdefault(f, []).append("%s@%d" % (key, lv))
@@ -171,7 +198,8 @@ def main() -> int:
         print("  %-14s 引用敌人 %d 只" % (stage, len(got["refs"])))
 
     print()
-    print("已比字段：核心 16 ＋ 免疫 11 ＋ 黑板 ＋ 技能；共 %d 只敌人" % compared)
+    print("已比字段：核心 16 ＋ 免疫 11 ＋ **派生 %d** ＋ 黑板 ＋ 技能；共 %d 只敌人"
+          % (len(DERIVED), compared))
     if gap_fields:
         print("★ 未移植族在**本批**非默认的字段：%d 个（这是真缺口，不是「没比」）"
               % len(gap_fields))
