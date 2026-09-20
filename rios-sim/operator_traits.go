@@ -111,7 +111,7 @@ func defaultPowerAttack() PowerAttack {
 //
 // ★ 判据是**键的组合**（`power_attack_count` + `power_attack_scale`），
 // **不是名字**——名字只留给审计的第三道筛子看。两条都要留：
-// 名字那一条是给"按天赋名"的审计用的，键那一条才是真的识别。
+// 名字那一条是给「按天赋名」的审计用的，键那一条才是真的识别。
 func readPowerAttack(talents []json.RawMessage, elite, level, potential int) PowerAttack {
 	for _, t := range resolveTalents(talents, elite, level, potential) {
 		if !powerAttackTalentNames[t.Name] {
