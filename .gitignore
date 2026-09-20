@@ -208,3 +208,9 @@ tools/spec_sim_surface.py
 tools/trace_key_diff.py
 tools/two_spelling_audit.py
 tools/wrap_spec_inputs.py
+
+# ---- 建仓后新出现的内部件（判据同上一节：对「用这个仓库的人」有没有意义）----
+# ★ 新来的内部仪器请一并加在这里；它们的家在 ..\ak-tactic-worklog
+#   （`python <worklog>\wl.py add <路径>`），不入本仓。
+tools/sweep_hsl_parity.py
+tools/sandbox_mode_selfcheck.py
