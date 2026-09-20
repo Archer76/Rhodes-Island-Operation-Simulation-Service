@@ -79,6 +79,7 @@ def norm(v):
 
 def main() -> int:
     from ak_tactic.operator import OperatorCalculator
+    from ak_tactic.operator.attack_speed import attack_speed_bonus
     calc = OperatorCalculator()
     roster = json.loads(ROSTER.read_text(encoding="utf-8"))
 
@@ -138,6 +139,9 @@ def main() -> int:
 
     bad = 0
     compared = 0
+    #: ★ 行使计数：三个 aspd 字段**各有几次非零**。全零的绿是零信息量的绿——
+    #: 若三条都是 0，这条判据什么也没证明（本项目记过「必然绿」这一类）。
+    aspd_hits = {"aspd_flat": 0, "aspd_when_free": 0, "aspd_high_ground": 0}
     for cfg, g in zip(configs, got):
         py = calc.stats(cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
                         trust=cfg["trust"], potential=cfg["potential"],
@@ -153,19 +157,39 @@ def main() -> int:
                     if a.get(k) != b.get(k):
                         out.append("%s.%s：Go=%r Python=%r"
                                    % (part, k, a.get(k), b.get(k)))
+        #: 攻速加成那一支（天赋常驻/高台条件 ＋ 模组特性改写/未阻挡条件）。
+        #: 模组那一项**只有在这次折算带了模组时**才可能非零。
+        aspd = attack_speed_bonus(
+            calc, cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
+            potential=cfg["potential"],
+            module=cfg.get("module") or None,
+            module_level=cfg.get("module_level") or 0)
+        for gk, pk in (("aspd_flat", "flat"), ("aspd_when_free", "when_free"),
+                       ("aspd_high_ground", "when_high_ground")):
+            a, b = norm(g.get(gk)), norm(getattr(aspd, pk, 0.0))
+            if b:
+                aspd_hits[gk] += 1
+            if a != b:
+                out.append("%s：Go=%r Python=%r" % (gk, a, b))
         if out:
             bad += 1
-            print("✗ %s E%d L%d trust=%g pot=%d —— %d 处不一致"
+            print("✗ %s E%d L%d trust=%g pot=%d mod=%s —— %d 处不一致"
                   % (cfg["char_id"], cfg["elite"], cfg["level"],
-                     cfg["trust"], cfg["potential"], len(out)))
+                     cfg["trust"], cfg["potential"], cfg.get("module") or "-", len(out)))
             for line in out[:10]:
                 print("    " + line)
     print()
-    print("已比：base / trust_bonus / potential_bonus / module_bonus / total 五份逐字段；"
+    print("已比：base / trust_bonus / potential_bonus / module_bonus / total 五份逐字段，"
+          "另加**攻速**三字段（aspd_flat / aspd_when_free / aspd_high_ground）；"
           "共 %d 次折算" % compared)
     print("覆盖面：名册 %d 位 × (底/顶/中 三档等级) × 信赖 %s × 潜能 %s，"
           "另加**模组** %d 次（%d 位带数值模组的干员）"
           % (len(roster), TRUSTS, POTENTIALS, mod_cfg, len(mod_ops)))
+    print("★ 攻速三字段的**行使计数**（Python 侧非零次数／共 %d 次折算）：" % compared)
+    for k, n in aspd_hits.items():
+        flag = "" if n else "   ← 零信息量的绿：这一档本轮没被行使到"
+        print("    %-18s %d%s" % (k, n, flag))
+    print()
     if mod_ops:
         print("    模组清单（取每位的第一个带数值模组，全等级扫）：")
         for line in mod_ops:

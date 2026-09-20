@@ -86,6 +86,10 @@ type OperatorStats struct {
 	PotentialBonus map[string]any     `json:"potential_bonus"`
 	ModuleBonus    map[string]any     `json:"module_bonus"`
 	Total          map[string]any     `json:"total"`
+	//: 攻速加成（天赋常驻 ＋ 模组特性改写，见 `operator_aspd.go`）。
+	//: 匿名嵌入把 `aspd_flat` / `aspd_when_free` / `aspd_high_ground` 平铺出来——
+	//: 与 `verify.py:326` 那三行同名，对拍要同形。
+	AttackSpeedBonus
 }
 
 // ---------------------------------------------------------------- 数据源
@@ -299,6 +303,7 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 		Phases     []json.RawMessage `json:"phases"`
 		Favor      []json.RawMessage `json:"favorKeyFrames"`
 		Potentials []json.RawMessage `json:"potentialRanks"`
+		Talents    []json.RawMessage `json:"talents"`
 	}
 	if err := json.Unmarshal(raw, &char); err != nil {
 		return nil, fmt.Errorf("%s 的表项解析失败：%w", cfg.CharID, err)
@@ -373,6 +378,13 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 		total[k] = applyRounding(acc, k, rounding)
 	}
 	st.Total = total
+	//: 攻速加成：天赋（常驻/高台条件）＋ 模组特性改写（未阻挡条件）。
+	parts, err := moduleParts(cfg.Module, cfg.ModuleLevel)
+	if err != nil {
+		return nil, err
+	}
+	st.AttackSpeedBonus = attackSpeedBonus(char.Talents, cfg.Elite, cfg.Level,
+		cfg.Potential, parts)
 	return st, nil
 }
 
