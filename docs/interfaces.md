@@ -391,7 +391,7 @@ python -m ak_tactic [--no-cache] <子命令> [参数]
 | `source.GamedataError` | 取不到数据，或数据长得不像 gamedata |
 | `source.LevelEntry` | 关卡索引里的一条 |
 | `stage.load_stage(query, *, code='', chapter=…)` | 取一份关卡并解析成 `Stage` |
-| `stage.parse_stage(raw, *, level_id='', code='')` | 把一份关卡 JSON 解析成 `Stage` |
+| `stage.parse_stage(raw, *, level_id='', code='', difficulty='NORMAL')` | 把一份关卡 JSON 解析成 `Stage`。`difficulty` 由 `load_stage` 从关卡索引那条 `LevelEntry` 传下来：四星档 `#f#` 与普通档读**同一个数据文件**，只有索引分得开 |
 | `stage.enemy_refs(raw)` | 关卡引用的敌人清单（含各自要用的等级） |
 | `stage.Stage` / `StageMap` / `Tile` / `Route` / `RouteLeg` / `Checkpoint` / `EnemySpawn` / `StageOptions` | 关卡模型；`StageMap` 用 MAA 坐标（原点左上、y 向下） |
 | `range.RangeTable` / `range.RangeGrid` | `excel/range_table.json` 的读取入口与格集合 |

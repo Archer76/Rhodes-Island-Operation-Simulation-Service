@@ -622,6 +622,16 @@ class Stage:
     extra_routes: list[Route] = field(default_factory=list)
     #: 顶层 ``branches``：支线名 → 出怪动作。装置用 ``branch_id`` 指过来。
     branches: dict[str, list[BranchAction]] = field(default_factory=dict)
+    #: 这一关是哪一档难度（``NORMAL`` / ``FOUR_STAR``）。**来源只有关卡索引那一条**
+    #: （``LevelEntry.difficulty``）：源上「普通/四星」是**同一个数据文件**——
+    #: ``act31side_ex08`` 与 ``act31side_ex08#f#`` 的 ``data_path`` 逐字相同，
+    #: 只有索引分得开。
+    #:
+    #: ⚠ 2026-09-20 之前没有这个字段，于是四星档专属的 ``runes``
+    #: （``global_lifepoint`` / ``enemy_attribute_mul`` / ``env_system_new``）
+    #: **一条都不生效**，而读数与普通档**逐位相同**、也不报错。取证与判据见
+    #: ``docs/hsl-backfill-attribution.md`` §四.3。
+    difficulty: str = "NORMAL"
 
     # ------------------------------------------------------------ 查询
 
@@ -925,8 +935,13 @@ def _parse_branches(raw: dict) -> dict[str, list[BranchAction]]:
     return out
 
 
-def parse_stage(raw: dict, *, level_id: str = "", code: str = "") -> Stage:
-    """把一份关卡 JSON 解析成 Stage。"""
+def parse_stage(raw: dict, *, level_id: str = "", code: str = "",
+                difficulty: str = "NORMAL") -> Stage:
+    """把一份关卡 JSON 解析成 Stage。
+
+    `difficulty` 只能由调用方给（`load_stage` 从索引那条 `LevelEntry` 取）——
+    数据文件里没有这个信息，默认 `NORMAL` 是为了让既有调用点行为不变。
+    """
     if "mapData" not in raw:
         raise GamedataError("这份数据里没有 mapData，不像关卡文件")
     world = _parse_map(raw["mapData"])
@@ -942,6 +957,8 @@ def parse_stage(raw: dict, *, level_id: str = "", code: str = "") -> Stage:
         branches=_parse_branches(raw),
         spawns=_parse_spawns(raw.get("waves") or [], raw.get("enemyDbRefs") or []),
         options=_parse_options(raw),
+        # 难度**不在数据文件里**，只有索引那条记着它（见 `Stage.difficulty`）。
+        difficulty=str(difficulty or "NORMAL"),
         raw=raw,
     )
 
@@ -957,7 +974,10 @@ def load_stage(query: str, *, code: str = "", chapter: str | None = None,
     src = source or GameDataSource()
     entry = src.resolve_level(query)
     raw = src.level(entry.level_id, chapter=chapter)
-    return parse_stage(raw, level_id=entry.level_id, code=code or entry.code)
+    return parse_stage(raw, level_id=entry.level_id, code=code or entry.code,
+                       # ⚠ 必须往下传：`entry.difficulty` 是**唯一**记着四星档的地方
+                       # （`act31side_ex08#f#` 与普通版读同一个文件）。
+                       difficulty=entry.difficulty)
 
 
 def enemy_refs(raw: dict) -> list[dict]:

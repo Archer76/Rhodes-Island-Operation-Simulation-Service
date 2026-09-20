@@ -269,6 +269,21 @@
     "spec_error": null,
     "spec_sha": "62c775dd9ec777a6fe88209bc95386f401c9dbac3e403e029a004dcc0f470617"
   },
+  "plan-hsex08f.json": {
+    "damage": 4212.0,
+    "elapsed": 34.9,
+    "engine": "go",
+    "engine_bin": "rios-sim-12f35f7.exe",
+    "engine_bin_mtime": "2026-09-20 12:05:59",
+    "engine_bin_sha16": "1dd24575475ecb07",
+    "go_fallbacks": 0,
+    "go_runs": 1,
+    "kills": 0,
+    "leaks": 1,
+    "roster_sha16": "21d3045f119a5d04",
+    "spec_error": null,
+    "spec_sha": "bcd5606b11d78360d07e212ef42995982a5fc8726e371eeb863777b593e266fa"
+  },
   "plan-hstr01.json": {
     "damage": 65700.0,
     "elapsed": 85.9333,

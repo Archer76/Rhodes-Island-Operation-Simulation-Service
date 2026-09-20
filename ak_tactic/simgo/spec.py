@@ -1159,8 +1159,13 @@ def build_spec(inp, *, stage_label: str = "", allow_devices: bool = False,
     if env is None:
         env = dict(stage_env(
             inp.stage,
-            environment_difficulty=getattr(inp, "environment_difficulty",
-                                           "NORMAL")))
+            #: ⚠ 现算这条也要带上难度：`inp.environment_difficulty` 为空时退回
+            #: **关卡自己**那一档（`Stage.difficulty`，来源是关卡索引）。口径与
+            #: `frontend/inputs.py::_env_difficulty` 同，改一处要改两处。
+            environment_difficulty=str(
+                getattr(inp, "environment_difficulty", "") or
+                getattr(getattr(inp, "stage", None), "difficulty", "") or
+                "NORMAL")))
         env.update({
             "fps": int(inp.fps),
             "speed_scale": float(inp.speed_scale),

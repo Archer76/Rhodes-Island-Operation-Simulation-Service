@@ -366,6 +366,20 @@ class Verifier:
         provider = self.range_provider(stage) if self.use_range_table else None
         roster = roster or Roster.empty()
 
+        #: **难度轴接线**（2026-09-20）：调用方没显式给 `environment_difficulty`
+        #: 时，用**关卡自己**那一档（索引里 `#f#` 记的是 `FOUR_STAR`）。
+        #:
+        #: 不接这条的后果不是报错，而是四星档**安静地按普通档跑**：`runes` 里
+        #: `global_lifepoint` / `enemy_attribute_mul` / `env_system_new(FOUR_STAR)`
+        #: 一条都不生效，读数与普通档**逐位相同**（实测 `ex01` 与 `s01` 两例，
+        #: `spec_sha` 逐位相等）。取证：`docs/hsl-backfill-attribution.md` §四.3。
+        #:
+        #: 只在**没给**时兜底：显式给了（含 `""` 之外的非空值）一律以调用方为准，
+        #: 既有读数因此零变化（判据 `tools/hsl_backfill_probe.py --zero-change`）。
+        if not switches.get("environment_difficulty"):
+            switches["environment_difficulty"] = (
+                str(getattr(stage, "difficulty", "") or "NORMAL"))
+
         sim = BattleSimulator(
             stage, enemy_at=lib.get, range_provider=provider,
             # 敌人**种类**（PRTS 的「种类」列，住在 enemydb 的 `enemy.category`）。
@@ -415,6 +429,14 @@ class Verifier:
             speed_scale=switches.get("speed_scale", 1.0),
             ranged_enemies=switches.get("ranged_enemies", True),
             enemy_windup=switches.get("enemy_windup", 0.5))
+        #: ⚠ 难度**不是** `ENV_KEYS` 那 8 项之一（那 8 项是要送进规格的字段），
+        #: 但下游 `SpecInputs.from_sim` 还要用它去算田地参数
+        #: （`frontend/inputs.py:222` 的 `PolluteParams.from_stage`）——
+        #: 那里不能只靠 `env` 的 8 个键，所以在这里把它捎上。
+        #: 少这一行，“敌人属性倍率/生命点/费用”会跟着难度走，而**田地参数不会**：
+        #: 半接线的样子与全没接线在判决上分不开（`act31side_ex08` 的初始污染点
+        #: 正常档 `1,1:0`、四星档 `4,4:100`）。
+        env["environment_difficulty"] = switches["environment_difficulty"]
 
         # ---- 排时刻 + 落位合法性守卫
         # 费用模型与 run_sr6 / MAA 自动作战同规则：钱够了就下。给了显式时刻的，

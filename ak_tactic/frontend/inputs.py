@@ -71,6 +71,29 @@ def _schedule_lists(schedule: Any) -> dict[str, list]:
     return out
 
 
+def _env_difficulty(stage: Any, env: Any = None) -> str:
+    """这一局按哪一档难度算：**环境那 8 项里没有它**，要单独取。
+
+    优先用调用方经 `env` 交进来的那一档，其次用关卡自己那一档
+    （`Stage.difficulty`，来源是关卡索引那条 `LevelEntry.difficulty`）。
+
+    ⚠ 两种容器都要认：`env` 在 `verify.py::run` 那条路是 **dict**
+    （`stage_env(...)` 的返回值），在别处可能是对象。原先这两处调用点写的是
+    `getattr(env, "environment_difficulty", "NORMAL")` —— **对 dict 永远取不到**，
+    于是默默退回 NORMAL：敌人属性倍率、生命点、费用都跟着难度走了，
+    而**田地参数没有**。半接线与全没接线在判决上分不开，所以这里必须显式分叉。
+    """
+    for src in (env, stage):
+        if isinstance(src, dict):
+            got = src.get("environment_difficulty")
+        else:
+            got = getattr(src, "environment_difficulty",
+                          getattr(src, "difficulty", None))
+        if got:
+            return str(got)
+    return "NORMAL"
+
+
 @dataclass
 class SpecInputs:
     """`build_spec` 的全部输入。字段名与它原先从模拟器上读的名字**逐字相同**，
@@ -206,7 +229,9 @@ class SpecInputs:
         #: `verify.py:410` 的 `stage_env(...)` 是**同一个函数**，不另写一份。
         if env is None:
             from ak_tactic.frontend.stage_env import stage_env
-            env = stage_env(stage)
+            #: ⚠ 现算这条也必须带上关卡自己的难度（`Stage.difficulty`），
+            #: 否则 `act31side_ex08#f#` 这类四星档会在这里悄悄退回 NORMAL。
+            env = stage_env(stage, environment_difficulty=_env_difficulty(stage))
 
         # ---- 装置：构造期纯由 stage 造出（`sim.py:525`）----
         from ak_tactic.battle.devices import BLOCKER_KEY, make_devices
@@ -219,8 +244,7 @@ class SpecInputs:
         #: 有田地的图会多算若干格田地（原版为这件事专门写过注释）。
         farmland = None
         from ak_tactic.battle.environment import FarmlandSystem, PolluteParams
-        params = PolluteParams.from_stage(
-            stage, getattr(env, "environment_difficulty", "NORMAL"))
+        params = PolluteParams.from_stage(stage, _env_difficulty(stage, env))
         if params is not None and params.valid:
             farmland = FarmlandSystem(stage, params)
             for cell in blocker_cells:
@@ -245,7 +269,7 @@ class SpecInputs:
             speed_scale=getattr(env, "speed_scale", 1.0),
             ranged_enemies=getattr(env, "ranged_enemies", True),
             enemy_windup=getattr(env, "enemy_windup", 0.5),
-            environment_difficulty=getattr(env, "environment_difficulty", "NORMAL"),
+            environment_difficulty=_env_difficulty(stage, env),
             max_time=getattr(env, "max_time", 0.0),
             devices=list(devices),
             snow_fields=[],          #: 开局恒空（`sim.py:573`）——不许改成"现在有几片"
