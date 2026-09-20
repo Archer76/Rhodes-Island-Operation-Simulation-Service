@@ -70,7 +70,9 @@ type response struct {
 	Enemies json.RawMessage `json:"enemies,omitempty"`
 	//: `opstats` 的应答：干员面板折算结果（见 `operator.go`）。
 	OpStats json.RawMessage `json:"opstats,omitempty"`
-	Error   string          `json:"error,omitempty"`
+	//: `range` 的应答：攻击范围（相对格 ＋ 绝对格，见 `range.go`）。
+	Ranges json.RawMessage `json:"ranges,omitempty"`
+	Error  string          `json:"error,omitempty"`
 }
 
 type pong struct {
@@ -222,9 +224,31 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("面板序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, OpStats: raw}
+	case "range":
+		// 丙阶段三·第十一批：**Go 自己读范围表**并做旋转/平移。
+		if len(req.Spec) == 0 {
+			return response{ID: req.ID, OK: false,
+				Error: "range 少了 spec（一批 {code,direction,x,y}）"}
+		}
+		var qs []RangeQuery
+		if err := json.Unmarshal(req.Spec, &qs); err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("spec 不是范围查询数组：%v", err)}
+		}
+		res, err := RangeFor(qs)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(res)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("范围序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Ranges: raw}
 	default:
 		return response{ID: req.ID, OK: false,
 			Error: fmt.Sprintf(
-				"不认识的命令：%q（支持 ping / sim / load / enemies / opstats）", req.Cmd)}
+				"不认识的命令：%q（支持 ping / sim / load / enemies / opstats / range）",
+				req.Cmd)}
 	}
 }
