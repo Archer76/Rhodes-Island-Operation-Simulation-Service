@@ -80,7 +80,8 @@ def norm(v):
 def main() -> int:
     from ak_tactic.operator import OperatorCalculator, TalentBook
     from ak_tactic.operator.attack_speed import attack_speed_bonus
-    from ak_tactic.battle.traits import read_combo_attack, read_trait_splash, read_hp_drain
+    from ak_tactic.battle.traits import (read_combo_attack, read_trait_splash,
+                                         apply_splash_talent, read_hp_drain)
     from ak_tactic.battle.talents import find_power_attack
     calc = OperatorCalculator()
     tbook = TalentBook()
@@ -155,7 +156,9 @@ def main() -> int:
     #: 「强击瓶专家」的行使计数（`count` 非 0、`scale` 非 1.0）。
     pa_hits = {"power_attack_count": 0, "power_attack_scale": 0}
     #: 特性的行使计数（三项各自非零次数）。「没有这条」都是 0，所以非零即命中。
-    tr_hits = {"splash_radius": 0, "splash_scale": 0, "hp_drain_per_sec": 0}
+    tr_hits = {"splash_radius": 0, "splash_scale": 0, "splash_damage_scale": 0,
+               "highland_splash_scale": 0, "highland_splash_sluggish": 0,
+               "hp_drain_per_sec": 0}
     for cfg, g in zip(configs, got):
         py = calc.stats(cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
                         trust=cfg["trust"], potential=cfg["potential"],
@@ -211,14 +214,22 @@ def main() -> int:
                 pa_hits[k] += 1
             if norm(g.get(k)) != norm(b):
                 out.append("%s：Go=%r Python=%r" % (k, norm(g.get(k)), b))
-        #: 特性那两支：溅射几何 与 生命流失速率。**「没有这条」都是 0**。
+        #: 特性那两支：溅射（几何 ＋ 天赋「汹涌怒火」叠三项）与生命流失速率。
+        #: ★ 有天赋叠层时 `damage_scale` 的「没有这条」是 **1.0**（它是乘数），
+        #: 两个 highland 是 0.0——不能一律按 0 判。
         ch = calc.character(cfg["char_id"])
-        sp = read_trait_splash(ch)
+        sp = apply_splash_talent(
+            read_trait_splash(ch),
+            tbook.for_operator(cfg["char_id"], elite=cfg["elite"],
+                               level=cfg["level"], potential=cfg["potential"]))
         py_tr = {"splash_radius": sp.radius if sp else 0.0,
                  "splash_scale": sp.scale if sp else 0.0,
+                 "splash_damage_scale": sp.damage_scale if sp else 1.0,
+                 "highland_splash_scale": sp.highland_scale if sp else 0.0,
+                 "highland_splash_sluggish": sp.highland_sluggish if sp else 0.0,
                  "hp_drain_per_sec": read_hp_drain(ch)}
         for k, b in py_tr.items():
-            if b:
+            if (k == "splash_damage_scale" and b != 1.0) or (k != "splash_damage_scale" and b):
                 tr_hits[k] += 1
             if norm(g.get(k)) != norm(b):
                 out.append("%s：Go=%r Python=%r" % (k, norm(g.get(k)), b))

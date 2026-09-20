@@ -191,6 +191,78 @@ func readTraitSplash(traitRaw json.RawMessage) (float64, float64, bool) {
 	return 0.0, 0.0, false
 }
 
+// splashTalentNames 复刻 `SPLASH_TALENTS`（`traits.py:124`）。
+var splashTalentNames = map[string]bool{"汹涌怒火": true}
+
+// splashTalentKeys 复刻 `SPLASH_TALENT_KEYS`（`traits.py:120`）。
+var splashTalentKeys = []string{"damage_scale", "attack@splash_atk_scale"}
+
+// Splash 是一条特性溅射的**已解释**参数（`TraitSplash`，`traits.py:279-295`）。
+//
+// ⚠ `damage_scale` 只乘在**溅射**上，不乘主目标。
+type Splash struct {
+	Radius           float64
+	Scale            float64
+	DamageScale      float64
+	HighlandScale    float64
+	HighlandSluggish float64
+	OK               bool
+}
+
+// readSplash 复刻 `read_trait_splash` + `apply_splash_talent`
+// （`traits.py:163-178` 与 `251-270`）。
+//
+// 两段：
+//  1. **几何**只认特性黑板上的键组合（不是子职业名）；
+//  2. 天赋「汹涌怒火」再叠三项——**只认第一条命中的**，没有就原样返回，
+//     此时 `damage_scale` 保持 1.0、两个 highland 保持 0.0（`TraitSplash` 的默认值）。
+func readSplash(traitRaw json.RawMessage, talents []json.RawMessage,
+	elite, level, potential int) Splash {
+	out := Splash{DamageScale: 1.0}
+	for _, cand := range traitCandidates(traitRaw) {
+		bb := pairsToDict(cand)
+		radius, okR := bb[splashRadiusKey]
+		scale, okS := bb[splashScaleKey]
+		if okR && okS {
+			out.Radius, out.Scale, out.OK = radius, scale, true
+			break
+		}
+	}
+	if !out.OK {
+		return out
+	}
+	for _, t := range resolveTalents(talents, elite, level, potential) {
+		if !isSplashTalent(t) {
+			continue
+		}
+		out.DamageScale = 1.0
+		if v, ok := toFloat(t.Blackboard["damage_scale"]); ok {
+			out.DamageScale = v
+		}
+		if v, ok := toFloat(t.Blackboard["attack@splash_atk_scale"]); ok {
+			out.HighlandScale = v
+		}
+		if v, ok := toFloat(t.Blackboard["attack@sluggish"]); ok {
+			out.HighlandSluggish = v
+		}
+		return out
+	}
+	return out
+}
+
+// isSplashTalent 复刻 `is_splash_talent`（`traits.py:243-248`）。
+func isSplashTalent(t resolvedTalent) bool {
+	if splashTalentNames[t.Name] {
+		return true
+	}
+	for _, k := range splashTalentKeys {
+		if _, ok := t.Blackboard[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // traitCandidates 取出 `trait.candidates[].blackboard`。
 func traitCandidates(traitRaw json.RawMessage) [][]json.RawMessage {
 	if len(traitRaw) == 0 {

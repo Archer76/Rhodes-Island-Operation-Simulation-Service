@@ -98,7 +98,12 @@ type OperatorStats struct {
 	//: 与 `verify.py:333/334/340` 的字段名同形；「没有这条」一律是 0。
 	SplashRadius  float64 `json:"splash_radius"`
 	SplashScale   float64 `json:"splash_scale"`
-	HPDrainPerSec float64 `json:"hp_drain_per_sec"`
+	//: 天赋「汹涌怒火」叠上去的三项（`traits.py:251-270`）。**「没有这条」分别是
+	//: 1.0 / 0.0 / 0.0**——`damage_scale` 的「没有」是 1.0 不是 0（它是乘数）。
+	SplashDamageScale      float64 `json:"splash_damage_scale"`
+	HighlandSplashScale    float64 `json:"highland_splash_scale"`
+	HighlandSplashSluggish float64 `json:"highland_splash_sluggish"`
+	HPDrainPerSec          float64 `json:"hp_drain_per_sec"`
 }
 
 // ---------------------------------------------------------------- 数据源
@@ -400,9 +405,16 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 	st.ComboAttack = readComboAttack(char.Talents)
 	//: 「强击瓶专家」：按**键的组合**认（名字那条只给审计用）。
 	st.PowerAttack = readPowerAttack(char.Talents, cfg.Elite, cfg.Level, cfg.Potential)
-	//: 特性那两支：溅射的几何、生命流失速率。**「没有这条」都是 0**。
-	if r, s, ok := readTraitSplash(char.Trait); ok {
-		st.SplashRadius, st.SplashScale = r, s
+	//: 特性那两支：溅射（几何 ＋ 天赋「汹涌怒火」叠的三项）、生命流失速率。
+	//: **「没有这条」：半径/倍率/滑坡是 0，damage_scale 是 1.0。**
+	sp := readSplash(char.Trait, char.Talents, cfg.Elite, cfg.Level, cfg.Potential)
+	if sp.OK {
+		st.SplashRadius, st.SplashScale = sp.Radius, sp.Scale
+		st.SplashDamageScale = sp.DamageScale
+		st.HighlandSplashScale = sp.HighlandScale
+		st.HighlandSplashSluggish = sp.HighlandSluggish
+	} else {
+		st.SplashDamageScale = 1.0
 	}
 	st.HPDrainPerSec = readHPDrain(char.Description, char.Trait)
 	return st, nil
