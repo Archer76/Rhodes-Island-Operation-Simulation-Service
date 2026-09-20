@@ -46,6 +46,20 @@ r"""chain 判据的**独立性实测**：一个变异红几条。
       后的代码上算（`_strip_literals`）＋ 跨度不许跨函数边界（`spans_stay_inside_funcs` 当场红）。
       **不许把「依赖顺序」当地基用** —— 顺序一旦被重排，P7b 那类会以另一种形状回来。
 
+  · ★★★ **验收 §16 的收窄准入（裁定「问B」）：`⊘` 的准入是「结构上不可归属」，不是「这一行有多种种类」。**
+    `⊘` 里原本混进了**同行的表外真红**（`faceA 隔离用：表外文案`、`P7 同行被吞的红：78.75`
+    都是 `t.Errorf` 的真红，却都进了 ⊘，而**未认出恒为 0**）⇒ **桶换了，数还在**。
+    修法：先把每处调用的**首参字面量前缀**抠出来（`%` 动词与换行之后是运行期算的，源码里没有 ⇒ 只能比前缀），
+    再拿红行正文与**各调用自己的前缀**比：**恰好 1 个匹配** ⇒ 归属它（日志＝不算红；判词＝表内/未认出）；
+    **≥2 个互相覆盖** ⇒ 才进 ⊘；**0 个匹配** ⇒ 未认出（fail closed，不当「不计入」）。
+  · ★ **汇总必须按实际取证的栏生成**（验收 F2/F3）：「不适用」要在**明细、括注、汇总三处同口径**；
+    没取证产品树的那一轮**不许**在汇总里写「产品树只读」；两棵树的身份**提在最前面无条件打印**
+    （证据要在所有出口都能看见，不能只落在需要它的那条分支上）。
+  · ★ **表内期望的适用性按内容判，不按路径**（验收 F1）：逐字节相同的拷贝树上不许报「不适用」
+    （那是我上一版的**误报**）；判据＝`ASSERTIONS` 每条前缀在该树的判词文件里**存在且唯一**，
+    并有一条硬条件：**内容逐字节相同却判「不适用」⇒ 当场判红**。
+  · ★ **rc⇔桶 对账**（验收给的最便宜的第二来源）：每行都要求 `rc != 0 ⇔ 三类桶合计 ≥ 1`。
+
 用法：`python tools/chain_judge_independence.py`
 """
 
@@ -141,23 +155,46 @@ CONTROLS: list[tuple[str, list[tuple[str, str, str]], dict]] = [
     ], {"known": [], "unknown_min": 1}),
     #: ★ P7：**同行两个调用、Logf 在前**——按「行内第一个调用」标种类就会把同行的 Errorf 红吞掉
     #:   （验收探针 P7 的形态；我上一版正是这个洞，它实测 rc=0 而我方真值是 rc=1）。
-    #:   ★★ 裁定「问①」之后：该行**两条**消息都进 ⊘ 未定性（归属不定），**不进表内计数**。
-    ("P7 同行 Logf+Errorf（两条文案都表外 ⇒ 两条都进 ⊘ 未定性）", [
+    #:   ★★ 收窄准入后这条红**必须进「未认出」**（两条调用的字面前缀**不同** ⇒ 归属是确定的：
+    #:      `Logf` 的正文按它自己的前缀归日志 ⇒ 不算红；那条表外 `Errorf` 归判词 ⇒ 未认出）。
+    #:      它同时是「⊘ 不许把真红吃掉」的守卫（与 P8 同形，但 P7 是验收探针的原形）。
+    ("P7 同行 Logf+Errorf（表外真红必须进「未认出」，不许进 ⊘）", [
         (TEST_REL, M2_OLD, M2_NEW),
         (TEST_REL, P2_ANCHOR,
          "\t\tif seqs[2][1] != chainBase*chainScale { t.Logf(\"P7 同行日志\"); "
          "t.Errorf(\"P7 同行被吞的红：%v\", seqs[2][1]) }\n" + P2_ANCHOR),
-    ], {"known": ["断言5 读法判别器"], "undet_min": 2}),
+    ], {"known": ["断言5 读法判别器"], "unknown_min": 1, "undet_max": 0}),
     #: ★★★ faceA（验收的差分、PM 裁定「问①」的那一条）：**同行** `Logf` 的正文里塞一个**表内前缀**，
     #:   同行的 `Errorf` 故意用**表外**文案作隔离 ⇒ 真值「M2 下断言1 根本不红」。
     #:   旧版（判词优先 ⇒ 整行算判词）会把 `Logf` 正文算成断言1 ⇒ 表内红 2 条 ⇒ **「恰红 1 条」分辨率被打破**。
     #:   本控制组就是这条分辨率的判据：表内必须**只有**断言5、且**不许出现**断言1。
+    #:   ★ 收窄准入后：`Logf` 正文按**它自己的字面前缀**归属 ⇒ 是日志、不算红；
+    #:     同行 `Errorf` 的表外文案按**它自己的字面前缀**归属 ⇒ **未认出**（不是 ⊘）。
     ("faceA 同行 Logf 正文含**表内前缀**（不许被算成表内红）", [
         (TEST_REL, M2_OLD, M2_NEW),
         (TEST_REL, P2_ANCHOR,
          "\t\tif seqs[2][1] != chainBase*chainScale { t.Logf(\"实现未过判据：这是日志正文\"); "
          "t.Errorf(\"faceA 隔离用：表外文案\"); }\n" + P2_ANCHOR),
-    ], {"known": ["断言5 读法判别器"], "forbid": ["断言1 实现过判据"], "undet_min": 2}),
+    ], {"known": ["断言5 读法判别器"], "forbid": ["断言1 实现过判据"], "unknown_min": 1, "undet_max": 0}),
+    #: ★★★ P8（验收 §16 裁定「问B」给的**反向守卫**）：同行一条 `Logf` ＋ 一条**表外判词** ⇒
+    #:   那条表外判词的红**必须进「未认出」**（具名 + rc≠0），**不许进 ⊘**。
+    #:   ★ 为什么它是本笔的分辨率判据：旧准入（「该行候选种类 >1 就进 ⊘」）会把这条**真红**
+    #:     丢进 ⊘ ⇒ **未认出恒为 0**，桶换了但数还在（验收实测到的两条反例正是这个形态）。
+    ("P8 同行 Logf＋**表外判词** ⇒ 必须进「未认出」不许进 ⊘（反向守卫）", [
+        (TEST_REL, M2_OLD, M2_NEW),
+        (TEST_REL, P2_ANCHOR,
+         "\t\tif seqs[2][1] != chainBase*chainScale { t.Logf(\"P8 同行日志正文\"); "
+         "t.Errorf(\"P8 同行表外判词：%v\", seqs[2][1]) }\n" + P2_ANCHOR),
+    ], {"known": ["断言5 读法判别器"], "unknown_min": 1, "undet_max": 0}),
+    #: ★★ P9（收窄准入的**另一侧**）：同行两条调用**字面前缀相同** ⇒ 这条红**结构上不可归属**
+    #:   ⇒ 必须进 ⊘。否则「⊘ 未定性」这个桶就成了死代码（只降不放，谁都不进）。
+    #:   ★ 这条也顺带守住「⊘ 不是垃圾桶」的另一面：**只有前缀互相覆盖才进**，前缀不同就不许进。
+    ("P9 同行两条**同一字面前缀** ⇒ 结构上不可归属 ⇒ 必须进 ⊘", [
+        (TEST_REL, M2_OLD, M2_NEW),
+        (TEST_REL, P2_ANCHOR,
+         "\t\tif seqs[2][1] != chainBase*chainScale { t.Logf(\"P9 同一文案\"); "
+         "t.Errorf(\"P9 同一文案\"); }\n" + P2_ANCHOR),
+    ], {"known": ["断言5 读法判别器"], "unknown_min": 0, "undet_min": 1}),
     #: ★ G6：**同包另一个 _test.go 的红**（验收造树实测：真实 rc=1、两文件皆红，旧版报 rc=0 全绿）
     ("G6 同包另一个 _test.go 的红（新增 zz_probe_test.go ＋ M1）", [
         ("mech/chain.go",
@@ -172,6 +209,10 @@ CALL_RE = re.compile(r"\bt\.(Errorf|Fatalf|Logf)\(")
 FUNC_RE = re.compile(r"^func\s+(\w+)\(")
 #: 验收 P4 的口径：`t.Errorf/Fatalf(` 后面紧跟**单行首参字面量**
 MSG_RE = re.compile(r't\.(?:Errorf|Fatalf)\(\s*"((?:[^"\\]|\\.)*)"')
+#: ★ 收窄准入用（验收裁定「问B」）：取**每个调用自己**的首参字面量（可以跨行、直到闭引号）。
+#:   有了它，红行**归属哪一个调用**就不再靠「这一行有几种种类」，而是**按消息对各调用自己的字面前缀**判。
+CALL_LIT_RE = re.compile(r't\.(Errorf|Fatalf|Logf)\(\s*(?:\n\s*)?`((?:[^`])*)`'
+                         r'|t\.(Errorf|Fatalf|Logf)\(\s*(?:\n\s*)?"((?:[^"\\]|\\.)*)"')
 WRAP_RE = re.compile(r"append\(bad,")
 #: `fmt.Errorf`——注意：验收 P4 的正则 `t\.(?:Errorf|Fatalf)\(` 会**子串命中**它（`fm`＋`t.Errorf`），
 #: 于是它把 helper 的 4 条返回文案也数成「判词调用处」。本脚本用 `\bt\.` ⇒ 不命中。
@@ -284,9 +325,27 @@ def _strip_literals(ln: str) -> str:
     return "".join(out)
 
 
+def _lit_prefix(raw: str) -> str:
+    """把一条消息的字面量首参折成**可比较的前缀**：解转义 → 在前导换行/`%` 动词处截断。
+
+    ★ 为什么要截断：`go test` 的一行只装得下**第一条输出行**（后续行不带 `file:line:`），
+      而 `t.Errorf("读法判别器红：\\n  %s", …)` 的第一行正文恰好是「读法判别器红：」
+      ⇒ 前缀必须截在 `\\n` 与 `%` 之前，否则一个表内判词会被判成「匹配不上」（假红）。
+    ★ 为什么用**字面量前缀**而不是「整条消息」：`%v/%s` 后面的部分是运行时算出来的，
+      源码里没有 ⇒ 只能比前缀（验收裁定「问B」给的正是这条）。
+    """
+    s = raw.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"').replace("\\\\", "\\")
+    cut = len(s)
+    for i, ch in enumerate(s):
+        if ch == "%" or ch == "\n":
+            cut = i
+            break
+    return s[:cut].strip()
+
+
 def _scan_one(path: Path) -> tuple[dict[int, set[str]], dict[int, set[str]], dict[int, str],
-                                  list[tuple[int, int, set[str]]]]:
-    """扫一个测试文件：给行号标**候选种类集合**（PM 裁定「问①」后从「一种类」升级）。
+                                  list[tuple[int, int, set[str], list[tuple[str, str]]]]]:
+    """扫一个测试文件：给行号标**候选种类集合**＋给每行留**每个调用自己的字面前缀**。
 
     ★ 为什么按行号而不是按消息形状：`-v` 输出里 `t.Logf` 与 `t.Errorf` 长得**一模一样**
     （都是 `    <file>_test.go:NN: 正文`），按形状分不出「日志」与「判词」；但**行号**能
@@ -296,17 +355,29 @@ def _scan_one(path: Path) -> tuple[dict[int, set[str]], dict[int, set[str]], dic
       「优先」是**选定一个**，而这里需要的是**两个都留着** —— 判词优先会让同行的 `Logf` 正文
       也按判词算 ⇒ 正文里若含表内前缀就被算进表内计数（faceA：表内红 2 条 vs 真值只 1 条，
       **「恰红 1 条」这条分辨率被打破**）。
-      ⇒ 现在一行存**候选集合**；**归属不定**的那类统一进 `classify` 的第三个桶 ⊘ 未定性。
+    ★★★ 收窄准入（验收 §16 裁定「问B」）：**一行有多种种类 ≠ 这条消息归属不定**。
+      `⊘` 的准入必须是「**结构上不可归属**」——先把每处调用的**首参字面量前缀**抠出来，
+      再拿红行的正文去比；**只有两条调用的前缀互相覆盖（都匹配得上）时才进 ⊘**。
+      旧准入（「该行候选种类 >1 就进 ⊘」）会把**同行的表外真红**（`faceA 隔离用：表外文案`、
+      `P7 同行被吞的红：78.75`）也丢进 ⊘ ⇒ **未认出恒为 0**，桶换了但数还在（验收实测到的反例）。
     ★ 已知区间**不是手写的表**：它是每次运行前从**被测文件现扫**出来的（扫描器与判词表是两个来源）。
     ★ 括号配平在**抠掉字面量**后的代码上算（见 `_strip_literals`）。
 
-    返回 (全部行号→候选集合, 调用首行→候选集合, 函数首行→函数名, 每处调用的跨度)。
+    返回 (全部行号→候选集合, 调用首行→候选集合, 函数首行→函数名, 每处调用的跨度＋各调用的前缀)。
     """
-    lines = path.read_text(encoding="utf-8").splitlines()
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
     kinds: dict[int, set[str]] = {}
     starts: dict[int, set[str]] = {}
     funcs: dict[int, str] = {}
-    spans: list[tuple[int, int, set[str]]] = []
+    spans: list[tuple[int, int, set[str], list[tuple[str, str]]]] = []
+    #: 每个调用在**原始文本**里的字符偏移 → 行号与 (种类, 前缀)：偏移是给「消息属于哪个调用」用的。
+    calls_at: dict[int, list[tuple[str, str]]] = {}
+    for cm in CALL_LIT_RE.finditer(text):
+        kind = "判词" if (cm.group(1) or cm.group(3)) in ("Errorf", "Fatalf") else "日志"
+        raw = cm.group(2) if cm.group(2) is not None else cm.group(4)
+        line_no = text.count("\n", 0, cm.start()) + 1
+        calls_at.setdefault(line_no, []).append((kind, _lit_prefix(raw or "")))
     for i, ln in enumerate(lines, 1):
         fm = FUNC_RE.match(ln)
         if fm:
@@ -323,14 +394,16 @@ def _scan_one(path: Path) -> tuple[dict[int, set[str]], dict[int, set[str]], dic
             j += 1
             nxt = _strip_literals(lines[j - 1])
             depth += nxt.count("(") - nxt.count(")")
-        spans.append((i, j, set(here)))
+        #: 该跨度覆盖的每个调用（含跨行调用）带上它自己的字面前缀 —— 归属就靠它，不靠行号。
+        calls = [c for k in range(i, j + 1) for c in calls_at.get(k, [])]
+        spans.append((i, j, set(here), calls))
         for k in range(i, j + 1):
             kinds.setdefault(k, set()).update(here)
     return kinds, starts, funcs, spans
 
 
 def scan_package() -> dict[str, tuple[dict[int, set[str]], dict[int, set[str]], dict[int, str],
-                                      list[tuple[int, int, set[str]]]]]:
+                                      list[tuple[int, int, set[str], list[tuple[str, str]]]]]]:
     """扫**包内全部** `*_test.go`（G6：运行范围是整个包 ⇒ 不能只扫一个文件）。"""
     return {p.name: _scan_one(p) for p in sorted((WORK / "mech").glob(TEST_GLOB))}
 
@@ -344,7 +417,7 @@ def spans_stay_inside_funcs(per: dict) -> list[str]:
     bad: list[str] = []
     for fname, (_k, _s, funcs, spans) in per.items():
         fstarts = sorted(funcs)
-        for a, b, _kind in spans:
+        for a, b, _kind, _calls in spans:
             for f in fstarts:
                 if a < f <= b:
                     bad.append(f"{fname}:{a}-{b} 的调用跨度跨过了 {funcs[f]}（第 {f} 行）"
@@ -415,18 +488,18 @@ def classify(out: str, per: dict) -> tuple[list[str], list[str], list[str]]:
     `*_test.go` 都要看；**非 `JUDGE_FILE` 的红行一律算「未认出」**（具名 + rc≠0），
     因为判词表**只**覆盖 `JUDGE_FILE` —— 「别的文件里的红」与「认不出的判词」是同一族的漏。
 
-    ★★★ PM 裁定「问①」（验收的 faceA 差分）：**该行的候选种类不止一种时，消息归属不定**
-    —— 一行 `t.Logf(…); t.Errorf(…)` 会打出**两条**长得一样的输出行，行号相同、形状相同，
-    仅靠行号**归不出**哪条来自哪个调用。旧版把「判词优先」当解法 ⇒ 同行 `Logf` 的正文也按判词算
-    ⇒ 正文里含表内前缀就被算进表内计数（faceA：表内红 2 条，真值只 1 条）。
-    ⇒ 现在这类**一律进第三桶 ⊘ 未定性**，**不参与表内计数、也不参与控制组判定**
-      （否则控制组会变成恒真——验收 §14.1 记的那条）。**"优先"是选定一个，这里需要的是"两个都留着"。**
-
-    三桶各是什么：
-      · **表内**：单一候选＝判词，且正文命中判词表前缀 ⇒ 算它红（这是唯一进计数的路径）；
-      · **未认出**：单一候选＝判词但正文不命中 ⇒ 具名 + rc≠0（P2/G1 通道）；
-        行号不在任何已知调用区间内、或红行来自别的文件（G6）⇒ 同样未认出；
-      · **⊘ 未定性**：候选集合含多种种类（消息归属不定）⇒ 具名印出，不计数、不判控制组。
+    ★★★ 归属按**消息前缀**判，不按「这一行有几种种类」（验收 §16 收窄准入，PM 记的 `bb29f311`）：
+      该行每条红先与**该行各调用自己的字面首参前缀**比 —— `%` 动词之后是运行期算的、源码里没有，
+      故只能比前缀。
+        · **恰好 1 个调用匹配** ⇒ 归属它：日志 ⇒ 不算红（被认出来了，只是它不是判词）；判词 ⇒
+          命中判词表 ⇒ 表内；不命中 ⇒ **未认出**（P2/G1 通道，rc≠0）；
+        · **≥2 个调用匹配**（前缀互相覆盖）⇒ **结构上不可归属** ⇒ ⊘ 未定性，
+          **不参与表内计数、也不参与控制组判定**；
+        · **0 个匹配** ⇒ **未认出**（可能是非字面量首参/包装路径 ⇒ fail closed，不许当「不计入」）。
+      ⇒ ★ 旧准入（「该行候选种类 >1 就进 ⊘」）是错的：它把**同行的表外真红**也丢进 ⊘
+        ⇒ **未认出恒为 0**（验收实测：`faceA 隔离用：表外文案`、`P7 同行被吞的红：78.75`
+        都是 `t.Errorf` 的真红，却都进了 ⊘）—— **桶换了，数还在**。
+      ⇒ ★ 只有「**同行两条调用的字面前缀相同／互相覆盖**」才进 ⊘。
     """
     known: list[str] = []
     unknown: list[str] = []
@@ -439,24 +512,73 @@ def classify(out: str, per: dict) -> tuple[list[str], list[str], list[str]]:
         if fname != JUDGE_FILE:
             unknown.append(f"{fname}:{n}: {text}（不在判词表覆盖的文件内 ⇒ 取证范围必须 ≥ 运行范围）")
             continue
-        kinds = per.get(fname, ({}, {}, {}, []))[0]
-        cand = kinds.get(n)
-        if cand is None:
-            unknown.append(f"{fname}:{n}: {text}（行号不在任何已知调用区间内 ⇒ 认不出）")
+        incalls = calls_covering(per.get(fname), n)
+        if not incalls:
+            unknown.append(f"{fname}:{n}: {text}（行号不在任何已知调用跨度内 ⇒ 认不出）")
             continue
-        if len(cand) > 1:
+        matched = [(k, p) for k, p in incalls if p and text.startswith(p)]
+        if len(matched) >= 2:
             undet.append(f"{fname}:{n}: {text}"
-                         f"（该行候选种类 {'＋'.join(sorted(cand))} ⇒ 同号多调用、消息归属不定；"
+                         f"（该行 {len(matched)} 处调用的字面前缀互相覆盖 "
+                         f"{'／'.join(repr(p) for _k, p in matched)} ⇒ 结构上不可归属；"
                          f"不参与表内计数与控制组）")
             continue
-        if cand == {"日志"}:
-            continue                     #: 被认出来了，只是它不是判词 ⇒ 不算红
-        hit = [aid for aid, p in ASSERTIONS if p in text]
-        if hit:
-            known.extend(hit)
-        else:
-            unknown.append(f"{fname}:{n}: {text}（表外判词 ⇒ 归类器认不出）")
+        if len(matched) == 1:
+            kind = matched[0][0]
+            if kind == "日志":
+                continue                 #: 被认出来了，只是它不是判词 ⇒ 不算红
+            hit = [aid for aid, p in ASSERTIONS if p in text]
+            if hit:
+                known.extend(hit)
+            else:
+                unknown.append(f"{fname}:{n}: {text}（表外判词 ⇒ 归类器认不出）")
+            continue
+        unknown.append(f"{fname}:{n}: {text}（该行 {len(incalls)} 处调用的字面前缀都匹配不上 "
+                       f"⇒ 认不出：可能是非字面量首参或包装路径（fail closed，不当「不计入」））")
     return known, unknown, undet
+
+
+def calls_covering(per_file, n: int) -> list[tuple[str, str]]:
+    """第 `n` 行落在哪些调用的跨度里，各带自己的 (种类, 字面前缀)。
+
+    ★ 用**跨度**而不是「调用首行」：跨行调用（首参字面量写在下一行）的红行报的是**调用那一行**，
+      但也可能是跨度内的行；两者都要能归属。
+    """
+    if per_file is None:
+        return []
+    _k, _s, _f, spans = per_file
+    out: list[tuple[str, str]] = []
+    for a, b, _ks, calls in spans:
+        if a <= n <= b:
+            out.extend(calls)
+    return out
+
+
+def judge_text_applicable() -> tuple[bool, list[str]]:
+    """**表内期望**在不在这棵树上说得通 —— 按**内容**判，**不按路径**（验收 §16 F1）。
+
+    ★ 为什么不能按路径：验收把 `go.mod ＋ mech/*.go` **逐字节原样**复制成一棵拷贝树 ⇒
+      `SRC ≠ 产品树` 为真，但 M1–M4 的读数与产品树**逐项相同** ⇒ 上一版在那棵树上连打 5 次
+      「不适用」，**内容相同却宣布「看不清」** —— 那是**误报**（判据用错了东西：
+      我想表达的是「这棵树的**判词文案**被改过」，那是一件**内容**事件）。
+    ★ 判据取**内容**本身：`ASSERTIONS` 每条前缀在该树的判词文件里**存在且唯一** ⇒ 期望适用；
+      哪条不唯一/不存在就具名报出来（那棵树上「表内读数」确实与产品树不同义）。
+    ★ 路径只决定**要不要做这项比较**：外部树（`SRC ≠ 产品树`）**照样做**，只是把结论标成
+      「非产品树」，并**另有一条硬条件**：内容与产品树逐字节相同却判「不适用」⇒ 判红（见 `main`）。
+    """
+    f = WORK / "mech" / JUDGE_FILE
+    if not f.exists():
+        return False, [f"{JUDGE_FILE} 不在树里（{f}）"]
+    txt = f.read_text(encoding="utf-8")
+    bad = [f"判词前缀「{p}」在该文件里出现 {txt.count(p)} 次（应为 1）"
+           for _aid, p in ASSERTIONS if txt.count(p) != 1]
+    return (not bad), bad
+
+
+def judge_file_sha(root: Path) -> str:
+    """判词文件在给定树里的 SHA256（用来判「这棵树的内容是不是与产品树逐字节相同」）。"""
+    f = root / "mech" / JUDGE_FILE
+    return hashlib.sha256(f.read_bytes()).hexdigest() if f.exists() else "（文件不存在）"
 
 
 def mutate(pairs: list[tuple[str, str, str]]) -> None:
@@ -532,8 +654,21 @@ def anchors_are_distinct() -> list[str]:
     return bad
 
 
+def reconcile(rc: int, known: list[str], unknown: list[str], undet: list[str]) -> tuple[bool, str]:
+    """★ **最便宜的第二来源**（验收 §16 给的判据）：`go test` 的 rc 与三类桶对账。
+
+    `rc != 0 ⇔ 三类桶合计 ≥ 1`。为什么要它：**每一行印的 rc 就是 `go test` 的退出码**，
+    但它**从不与桶对账** ⇒ 存在一个可构造的静默实例：`RED_RE` 要求 `\\s+\\S+_test\\.go:(\\d+):`，
+    **另一个包的失败**（`FAIL pkg [build failed]` 这类）不匹配 ⇒ **桶合计 0 而 rc=1**。
+    本条把那种情形当场判红（「rc 红了但桶里什么都没有」＝读数与来源不一致）。
+    """
+    total = len(known) + len(unknown) + len(undet)
+    ok = (rc != 0) == (total > 0)
+    return ok, f"rc⇔桶 对账 {'✓' if ok else '✗'}（rc={rc}、桶合计 {total}）"
+
+
 def run_once(pairs: list[tuple[str, str, str]], *, control: bool = False
-             ) -> tuple[int, list[str], list[str], list[str], list[str]]:
+             ) -> tuple[int, list[str], list[str], list[str], list[str], bool]:
     stage()
     skipped: list[str] = []
     if pairs:
@@ -541,22 +676,34 @@ def run_once(pairs: list[tuple[str, str, str]], *, control: bool = False
     per = scan_package()
     rc, out = go_test()
     known, unknown, undet = classify(out, per)
-    return rc, known, unknown, undet, skipped
+    rc_ok, _why = reconcile(rc, known, unknown, undet)
+    return rc, known, unknown, undet, skipped, rc_ok
 
 
 def main() -> int:
     if console_check():
         return 1
     before = tree_hashes()
-    print(f"== 工作副本：{WORK.relative_to(ROOT) if WORK.is_relative_to(ROOT) else WORK}"
-          f"（产品树只读：{SRC}）==")
+    #: ★★ 问④（验收 §16 F3）：两棵树的具名身份**无条件印在最前面**，不进任何分支 ——
+    #:   上一版把它放在 G5 段里，验收那次按 `pats` 过滤的日志里看不到它 ⇒ 看起来「恰好在该需要它的
+    #:   分支上缺席」。位置本身就是判据的一部分：**证据要在所有出口都能看见**。
+    print(f"== 工作副本：{WORK.relative_to(ROOT) if WORK.is_relative_to(ROOT) else WORK} ==")
+    print(f"== G5 具名身份：SRC = {SRC}")
+    print(f"              产品树 = {PRODUCT}")
+    product_hashed = (SRC == PRODUCT)
+    print(f"              SRC 就是产品树：**{product_hashed}** "
+          f"⇒ 下面的哈希{'**量的是产品树**' if product_hashed else '**量的是 SRC 树**'} ==")
+    if not product_hashed:
+        print("   ★ SRC ≠ 产品树 ⇒ **产品树本次未被触碰**（本脚本写路径只有 SRC／WORK），"
+              "**但它没有被本次哈希取证**")
+        print("   ★ 「门关着」≠「门被取证过」：要取证产品树只读，请在 SRC ＝ 产品树的那次运行里读这一行。")
     g3 = anchors_are_distinct()
     if g3:
         print("✗ G3 自校验失败（改锚点会留下另一处）：")
         for b in g3:
             print(f"      ↳ {b}")
         return 1
-    rc, known, unknown, undet, _sk = run_once([])
+    rc, known, unknown, undet, _sk, rc_base = run_once([])
     per = scan_package()
     sp = spans_stay_inside_funcs(per)
     if sp:
@@ -565,8 +712,21 @@ def main() -> int:
             print(f"      ↳ {b}")
         return 1
     coverage(per)
-    print(f"== 基线：rc={rc}、表内红 {len(known)} 条 {known}、认不出 {len(unknown)} 条、"
-          f"⊘ 未定性 {len(undet)} 条 ==")
+    #: ★★ F1（验收 §16）：**表内期望**的适用性按**内容**判，不按路径；并有一条硬条件：
+    #:   内容与产品树**逐字节相同**却判「不适用」 ⇒ 当场判红（那正是上一版的误报）。
+    known_ok_content, known_why = judge_text_applicable()
+    same_content = judge_file_sha(SRC) == judge_file_sha(PRODUCT)
+    print(f"== 表内期望的适用性（按**内容**判，不按路径）：判词文件 {JUDGE_FILE} "
+          f"在 SRC 树里 = **{'适用' if known_ok_content else '⊘ 不适用'}**"
+          f"（与产品树该文件逐字节相同：{same_content}）==")
+    for w in known_why:
+        print(f"      ⊘ {w}")
+    if same_content and not known_ok_content:
+        print("✗ 硬条件被破：SRC 的判词文件与产品树**逐字节相同**，却判「表内期望不适用」"
+              "（内容相同就不可能看不清）⇒ 判据用错了东西，读数无效")
+        return 1
+    print(f"== 基线：rc={rc}（{reconcile(rc, known, unknown, undet)[1]}）、表内红 {len(known)} 条 "
+          f"{known}、认不出 {len(unknown)} 条、⊘ 未定性 {len(undet)} 条 ==")
     for u in unknown:
         print(f"      ↳ {u}")
     for u in undet:
@@ -582,12 +742,15 @@ def main() -> int:
     #:   验收 P3 的判据就是这条（旧版先印表头再跑 ⇒ 失败时表头已落地 ⇒ 检查读成「印了矩阵」）。
     rows: list[str] = []
     for name, rel, old, new, expect in MUTATIONS:
-        rc, known, unknown, undet, _sk = run_once([(rel, old, new)])
+        rc, known, unknown, undet, _sk, rc_ok = run_once([(rel, old, new)])
         #: 面4（PM 转派）：`rc != 0` 免费且严格更强——一个变异若连 go test 都没弄红，这一行不该算过。
         #: ★ 但它**关不掉静默**：P7b 那次的 rc 本来就是 1，缺的是「红行总数」的第二个来源（PM 已登记）。
-        good = (rc != 0 and len(known) == 1 and not unknown and not undet and known[0] == expect)
+        #: ★★ 现在多一条：`rc_ok`（rc⇔桶 对账）—— 验收 §16 给的**最便宜的第二来源**。
+        good = (rc != 0 and rc_ok and len(known) == 1 and not unknown and not undet
+                and known[0] == expect)
         ok &= good
-        rows.append(f"{'✓' if good else '✗'} {name}：rc={rc}、表内红 {len(known)} 条 {known}、"
+        rows.append(f"{'✓' if good else '✗'} {name}：rc={rc}（{reconcile(rc, known, unknown, undet)[1]}）、"
+                    f"表内红 {len(known)} 条 {known}、"
                     f"认不出 {len(unknown)} 条、⊘ 未定性 {len(undet)} 条（预期只红 {expect}）")
         for u in unknown:
             rows.append(f"      ↳ {u}")
@@ -597,13 +760,13 @@ def main() -> int:
     ctrl_rows: list[str] = []
     n_skipped = 0
     n_na = 0
-    #: ★ 「表内期望」只在**产品树**上成立：验收的 C/D/E/P7 树把判词文案改过/注入过（那是它们的目的），
-    #:   同一变异在那里的表内读数**本来就不一样** ⇒ 拿产品树的期望去判那是**假红**。
-    #:   ⇒ 外部树上这一栏记 **⊘ 不适用**（具名原因），而**通道判据（未认出／未定性／不许出现）照旧生效**
-    #:      —— 否则「不适用」会变成控制组放水的后门（`13274c48`：不适用必须是可观察的第三态）。
-    on_product = (SRC == PRODUCT)
+    #: ★★ F1（验收 §16）：**表内期望的适用性按内容判**（`judge_text_applicable`），不看路径。
+    #:   上一版按 `SRC ≠ 产品树` 判 ⇒ 验收把文件**逐字节原样**复制成拷贝树后，**连打 5 次「不适用」**
+    #:   —— **内容相同却宣布「看不清」**（误报）。现在路径只决定「要不要声明这不是产品树」。
+    #:   内容里判词前缀不齐（真被外部改过）⇒ 记 **⊘ 不适用**（具名原因），
+    #:   而**通道判据（未认出／未定性／不许出现）照旧生效** —— 否则「不适用」会变成控制组放水的后门。
     for name, pairs, exp in CONTROLS:
-        rc, known, unknown, undet, skipped = run_once(pairs, control=True)
+        rc, known, unknown, undet, skipped, rc_ok = run_once(pairs, control=True)
         n_skipped += len(skipped)
         #: ★ 控制组的判据从「有未认出」升级成**逐桶对期望**（PM 裁定「问①」后）：
         #:   否则新加的 ⊘ 未定性 桶会让控制组变成恒真（验收 §14.1 记的那条）。
@@ -611,9 +774,10 @@ def main() -> int:
         #:   不是拿它当通过条件）——`unknown_min` 与 `forbid` 才是通道判据。
         known_ok: bool | None = True
         if exp.get("known") is not None:
-            known_ok = (sorted(set(known)) == sorted(set(exp["known"]))) if on_product else None
-        good = (rc != 0 and len(unknown) >= exp.get("unknown_min", 0)
+            known_ok = (sorted(set(known)) == sorted(set(exp["known"]))) if known_ok_content else None
+        good = (rc != 0 and rc_ok and len(unknown) >= exp.get("unknown_min", 0)
                 and len(undet) >= exp.get("undet_min", 0)
+                and len(undet) <= exp.get("undet_max", 10 ** 9)
                 and known_ok is not False
                 and not any(f in known for f in exp.get("forbid", [])))
         if skipped:
@@ -624,13 +788,17 @@ def main() -> int:
         ok &= good
         ctrl_rows.append(f"{'✓' if good else ('⊘' if skipped else '✗')} {name}：rc={rc}、"
                          f"表内红 {len(known)} 条 {known}、认不出 {len(unknown)} 条、⊘ 未定性 {len(undet)} 条"
-                         f"（期望：表内 {exp.get('known') if on_product else '⊘ 不适用（外部树）'}、"
+                         f"（期望：表内 "
+                         f"{exp.get('known') if known_ok_content else '⊘ 不适用（该树判词文案不齐）'}、"
                          f"未认出≥{exp.get('unknown_min', 0)}、"
-                         f"未定性≥{exp.get('undet_min', 0)}"
+                         f"未定性 {exp.get('undet_min', 0)}..{exp.get('undet_max', '∞')}"
                          f"{'、不许出现 ' + '／'.join(exp['forbid']) if exp.get('forbid') else ''}）")
         if known_ok is None:
-            ctrl_rows.append(f"      ⊘ 表内期望不适用：SRC ≠ 产品树（{SRC.name}）⇒ 判词文案可能被外部改过，"
-                             f"**这一栏不计入判定**；通道判据（未认出／未定性／不许出现）照旧生效")
+            ctrl_rows.append(f"      ⊘ 表内期望不适用：**内容**判据给出「{JUDGE_FILE} 的判词前缀在 SRC 树里不齐」"
+                             f"（{SRC.name}）⇒ **这一栏不计入判定**；通道判据（未认出／未定性／不许出现）照旧生效")
+        if not rc_ok:
+            ctrl_rows.append("      ✗ rc⇔桶 对账失败：rc 红了但三类桶合计为 0（或反之）"
+                             "⇒ rc 与桶不是同一个来源，读数无效")
         for s in skipped:
             ctrl_rows.append(f"      ⊘ 不适用：{s} ⇒ **本树上通道证明不完整**（既不算通过、也不许因此变绿）")
         for u in unknown:
@@ -663,15 +831,10 @@ def main() -> int:
     #: **验收把 SRC 指到 `out/` 拷贝树**时，这一条量的就是拷贝树 —— 那一刻
     #: **产品树没被哈希、也没被 git 取证**（git 那侧会正确判「不适用」），只是**结构上未被触碰**
     #: （本脚本的写路径只有 SRC 与 WORK）。⇒ 证据必须**具名它量的是谁**。
-    print(f"== G5 具名身份：SRC = {SRC}")
-    print(f"              产品树 = {PRODUCT}")
-    print(f"              SRC 就是产品树：**{SRC == PRODUCT}** ==")
-    if SRC != PRODUCT:
-        print("   ★ SRC ≠ 产品树 ⇒ **产品树本次未被触碰**（写路径只有 SRC ／ WORK），"
-              "**但它没有被本次哈希取证**（上面那份哈希量的是 SRC 树）")
-        print("   ★ 「门关着」≠「门被取证过」：要取证产品树只读，请在 SRC ＝ 产品树的那次运行里看这一行。")
-    print(f"== G5 产品树只读：{'✓ 逐文件 SHA256 跑前跑后相同' if same else '✗ 被改动了！'}"
-          f"（**全树 {len(before)} 个文件**，量的是上面那棵树）==")
+    #: ★★ F3（验收 §16）：身份两句**已提到运行最前面无条件打印**（不在这个分支里）——
+    #:   位置本身是判据的一部分：**证据要在所有出口都能看见**，不能只落在需要它的那条分支上。
+    print(f"== G5 哈希取证：{'✓ 逐文件 SHA256 跑前跑后相同' if same else '✗ 被改动了！'}"
+          f"（**全树 {len(before)} 个文件**，{('量的是产品树：' + str(SRC)) if product_hashed else ('量的是 SRC 树（**不是产品树**）：' + str(SRC))}）==")
     if not same:
         for k in sorted(set(before) | set(after)):
             if before.get(k) != after.get(k):
@@ -681,18 +844,28 @@ def main() -> int:
     if g_state == "脏":
         ok = False
 
+    #: ★★★ F2/F3（验收 §16）：**汇总必须按实际取证的栏生成**，不许把「明细里 ⊘ 的栏」在汇总里
+    #:   说成已经判过；也**不许在没取证产品树的那一轮里宣称「产品树只读」**。
+    #:   纪律：**「不适用」必须在明细、括注、汇总三处同口径 —— 只落一处就等于没落。**
+    known_col = f"表内断言{'（适用）' if known_ok_content else f'（⊘ 不适用 {n_na} 处：该树判词文案不齐）'}"
+    tree_col = ("产品树只读（哈希取证：是）" if product_hashed
+                else "**产品树本次未被哈希取证**（哈希量的是 SRC 树 ⇒ 本条不写「产品树只读」）")
     print()
     if ok:
-        print(f"== 判定：4/4 变异各恰红 1 条表内断言（0 未认出、0 未定性）、"
-              f"{len(CONTROLS)}/{len(CONTROLS)} 控制组都按**自己的期望**红并具名、产品树只读 "
-              f"⇒ 通道与矩阵都成立 ==")
+        print(f"== 判定：4/4 变异各行成立（每行 {known_col}、0 未认出、0 未定性、rc⇔桶 对账 ✓）、"
+              f"{len(CONTROLS)}/{len(CONTROLS)} 控制组都按**自己的期望**红并具名、"
+              f"{tree_col} ⇒ 通道与矩阵在**已被取证的栏**上都成立 ==")
     else:
         print("== 判定：✗ 有变异红 ≠1 条，或有「认不出的红行」没被具名，或控制组不满足自己的期望，"
-              "或产品树被写 ⇒ 判失败 ==")
+              "或 rc 与桶对不上账，或树被写 ⇒ 判失败 ==")
     if n_skipped:
         print(f"   ★ 另有 {n_skipped} 处控制组「不适用」（外部树已施加该改动）⇒ 本树上通道证明不完整")
     if n_na:
-        print(f"   ★ 另有 {n_na} 处「表内期望不适用」（SRC ≠ 产品树）⇒ 那一栏没判，但通道判据都判了")
+        print(f"   ★ 另有 {n_na} 处「表内期望 ⊘ 不适用」（按**内容**判：该树 {JUDGE_FILE} 的判词前缀不齐）"
+              f"⇒ 那一栏没判，但通道判据都判了")
+    if not product_hashed:
+        print("   ★ 汇总口径声明：本轮**产品树未被哈希取证、也未被 git 取证**（后者在非索引树里正确判"
+              "「不适用」）⇒ 读数只覆盖 SRC 树；**「门关着」≠「门被取证过」**")
     print("★ 纪律：「认不出」必须自己会红，不能靠「恰好没有第二条」")
     print("★ 纪律：红行的取证范围必须 ≥ 运行范围（`-run` 跑几个文件，就得看几个文件）")
     print("★ 纪律：一行能打出多种文本时，「优先」是选定一个 —— 这里要的是**两个都留着**"
