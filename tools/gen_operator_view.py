@@ -7,14 +7,14 @@
 `verify.py::unit` 建一个 `kw` dict（35 键）再 `OperatorUnit(**kw)`，
 而 `OperatorUnit` 是 **134 字段的 dataclass**——`kw` 没给的那些走**默认值**。
 
-⇒ 视图 = `kw` ＋ **全部默认值** ＋ **四个现算的方法**。三样都从 AST 里取，
-一个手打的字都没有：
+⇒ 视图 = `kw` ＋ **全部默认值** ＋ **`METHODS` 里那些现算的方法**（连它们依赖的 helper
+一起）。三样都从 AST 里取，一个手打的字都没有：
 
 | 来源 | 怎么取 |
 |---|---|
 | `kw` | 运行时由 `verify.py::unit` 给（调用方传进来） |
 | 默认值 | `OperatorUnit` / `Combatant` 的 dataclass 字段右值，原样 `ast.unparse` |
-| 方法 | `current_atk` / `current_defense` / `current_res` 的**函数体原文** |
+| 方法 | `METHODS` 里每个方法的**函数体原文**（清单与数量**不在这句话里手打**，见常量 `METHODS`） |
 
 ⚠ `current_range_id` 不抄：它早就搬进 `frontend/geometry.py` 了，
 视图里直接转调那一份（与 `battle/unit.py` 现在的写法一致）。
@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import sys
 from pathlib import Path
 
@@ -37,8 +38,29 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "ak_tactic" / "battle" / "unit.py"
 DST = ROOT / "ak_tactic" / "frontend" / "operator_view.py"
 
-#: 要原样抄进视图的方法（`current_range_id` 不在此列，它只转调 geometry）
-METHODS = ["current_atk", "current_defense", "current_res"]
+#: 要原样抄进视图的方法（`current_range_id` 不在此列，它只转调 geometry）。
+#:
+#: ⚠⚠ **这张清单必须按「调用闭包」写全**：抄进来的方法体里 `self.xxx()` 调到的 helper
+#: 也得一起列在这里，否则产物**照样生成、`py_compile` 也过**，崩的是**运行期**
+#: （`AttributeError`），而症状出现在消费方那一帧——查的人会先去查消费方，查错了地方。
+#:
+#: 量测（`out/backend2-b1/opview_closure.py`，2026-09-20）：
+#:   `current_interval` 的闭包 ＝ {`current_interval`, `current_attack_speed`}
+#:   `current_max_target` / `active_attack_type` 各自闭包只有自己
+#: 消费方是 `simgo/skills.py::_profile`（`:230-236`）：前四项**无条件**读，
+#: `current_max_target` / `active_attack_type` 只在 `active=True` 那一支读。
+#: ⇒ 只加 `current_interval` 会让那条路**立刻在下一行再崩一次**，所以一并列全。
+#: `build()` 末尾有一条**闭包断言**兜底：抄进来的方法体若调用了视图里没有的名字，
+#: 直接拒跑并报出缺谁（不许静默生成一个"调用时才炸"的产物）。
+METHODS = [
+    "current_atk",
+    "current_defense",
+    "current_res",
+    "current_interval",
+    "current_attack_speed",
+    "current_max_target",
+    "active_attack_type",
+]
 
 #: 也用原样抄：`effects` 在原版是 **property**，抄成 property 就**没有初始化顺序问题**
 #: ——普通属性要在 `kw` 覆盖之后再算一遍，而 property 每读一次现算，天生一致。
@@ -59,7 +81,7 @@ HEADER = '''# -*- coding: utf-8 -*-
 
 * `verify.py::unit` 建的那个 `kw`（35 键，来自 `OperatorCalculator` ＋ 天赋 ＋ 特性文本）
 * `kw` 没给的那些字段的**默认值**（本文件照 `OperatorUnit` 的 dataclass 右值抄）
-* 四个**现算**的量：`current_atk` / `current_defense` / `current_res` / `current_range_id`
+* **现算的方法**：__METHOD_LIST__
 
 ⇒ 视图 = 这三样。`spec.py::_operator_spec` 是 `getattr` 式的读法，喂得饱。
 
@@ -182,20 +204,48 @@ def operator_view(kw: dict[str, Any], **overrides: Any) -> OperatorView:
 '''
 
 
+def _names_in_nodes(nodes: list[ast.AST]) -> set[str]:
+    """一段源码（方法体/表达式节点）里出现的**裸名字**。
+
+    ⚠ 与 `_names_in` 分开：那个吃的是"表达式字符串"（默认值），这个吃的是**方法体节点**。
+    用途是同一个——把抄进来的东西**引用到的模块级常量**一起带过来。
+    """
+    found: set[str] = set()
+    for n in nodes:
+        for sub in ast.walk(n):
+            if isinstance(sub, ast.Name):
+                found.add(sub.id)
+    return found
+
+
 def _module_consts(names: set[str], src: str, tree: ast.Module) -> list[tuple[str, str]]:
     """默认值表达式里引用到的**模块级常量**，从 `unit.py` 原样带过来。
 
     ⚠ 抄默认值就必须连它引用的常量一起抄：`block_tol2 = POSITION_TOL * POSITION_TOL`
     原样搬过去会 `NameError`（第二次跑撞上的就是这个）。
     只带真正用到的那些——把 `unit.py` 的模块顶层整段搬过来会牵出一片无关的导入。
+
+    ⚠⚠ **要取到不动点**（2026-09-20 补）：常量自己也可能引用别的常量，
+    只带一层会漏掉第二层——症状同样是**运行期 `NameError`**。
     """
     out: list[tuple[str, str]] = []
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
-                and isinstance(node.targets[0], ast.Name) \
-                and node.targets[0].id in names:
-            out.append((node.targets[0].id, ast.unparse(node.value)))
-    return out
+    seen: set[str] = set()
+    want = set(names)
+    while True:
+        fresh: list[tuple[str, str]] = []
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                    and isinstance(node.targets[0], ast.Name) \
+                    and node.targets[0].id in want \
+                    and node.targets[0].id not in seen:
+                fresh.append((node.targets[0].id, ast.unparse(node.value)))
+        if not fresh:
+            return out
+        for name, expr in fresh:
+            seen.add(name)
+            out.append((name, expr))
+        #: 刚带过来的常量自己又引用了谁（下一轮继续找）
+        want = {n for n in _names_in([e for _n, e in fresh]) if n not in seen}
 
 
 def _names_in(exprs: list[str]) -> set[str]:
@@ -212,18 +262,106 @@ def _names_in(exprs: list[str]) -> set[str]:
     return found
 
 
+def _method_list_line() -> str:
+    """把 `METHODS` 印成一行（**不许手打**）。
+
+    ⚠ 原来这句是手打的「四个现算的量：`current_atk` / `current_defense` / `current_res` /
+    `current_range_id`」——★ **它替漏项背了书**：`current_range_id` 实际住在 `FOOTER`、
+    不住 `METHODS`，把数一凑正好是"四"，于是没人去数清单里到底有几个。
+    ⇒ 清单与数量一律由常量派生，手打的那句话不再有机会对不上。
+    """
+    names = " / ".join("`%s`" % m for m in METHODS)
+    return "%d 个（%s）＋ `current_range_id`（转调 `geometry`，不住 `METHODS`）" % (
+        len(METHODS), names)
+
+
+def _assert_closure(text: str) -> None:
+    """生成物自检：抄进来的方法体里 `self.<name>(...)` 调到的名字，**必须都在视图里**。
+
+    为什么要有这条：清单漏一项时产物**照样生成**、`py_compile` 也过，崩的是**运行期**
+    （`AttributeError: 'OperatorView' object has no attribute '...'`），而报错那一帧在
+    **消费方**（`simgo/skills.py:233`）——★ 查的人会先去查消费方，查错了地方。
+    ⇒ 把"清单闭不闭包"变成**生成时的硬断言**：缺谁报谁，不许猜、不许静默生成。
+    """
+    tree = ast.parse(text)
+    defined = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    missing: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) \
+                    and isinstance(sub.func.value, ast.Name) \
+                    and sub.func.value.id == "self" \
+                    and sub.func.attr not in defined:
+                missing.add("%s() 里调了 %s()" % (node.name, sub.func.attr))
+    if missing:
+        raise SystemExit(
+            "❌ 拒跑：抄进来的方法体依赖了视图里没有的方法（`METHODS` 漏项）\n  "
+            + "\n  ".join(sorted(missing))
+            + "\n  ⇒ 把缺的补进 `METHODS` 再重跑（见该常量上方的闭包说明）。")
+
+
+def _assert_names_defined(text: str) -> None:
+    """生成物自检②：文件里**读**到的每个裸名字，都得在文件里有定义。
+
+    与 `_assert_closure` 是**两条不同的缝**（2026-09-20 实测各出一条）：
+    * `_assert_closure` 管 `self.<name>()` 调的**方法**在不在；
+    * 本条管**模块级常量**有没有被带过来——`current_interval` 抄过去会读到
+      `MIN_INTERVAL` / `ASPD_MIN`，而原来的收集逻辑只认**默认值表达式**里的名字，
+      于是产物能生成、能 `py_compile`，运行时 `NameError: name 'MIN_INTERVAL' is not defined`。
+
+    白名单刻意**取宽**（内置名 ＋ 模块级定义 ＋ 任何被赋值/传参的名字）：
+    宁可漏报也不假红——假红的守卫会被绕过（这条纪律本项目有留档）。
+    """
+    tree = ast.parse(text)
+    defined = set(dir(builtins)) | {"self"}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            defined |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            defined.add(node.target.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            defined |= {(a.asname or a.name).split(".")[0] for a in node.names}
+        elif isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            defined.add(node.name)
+    for node in ast.walk(tree):                      # 保守：函数内绑定的一切
+        if isinstance(node, ast.arg):
+            defined.add(node.arg)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            defined.add(node.id)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            defined.add(node.name)
+    missing = sorted({n.id for n in ast.walk(tree)
+                      if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+                     - defined)
+    if missing:
+        raise SystemExit(
+            "❌ 拒跑：生成物读到了没有定义的名字（生成器没把它们带过来）\n  "
+            + ", ".join(missing)
+            + "\n  ⇒ 模块级常量要经 `_module_consts` 带（它会取到不动点）；"
+              "方法要进 `METHODS`。")
+
+
 def build() -> str:
     src = SRC.read_text(encoding="utf-8")
     tree = ast.parse(src)
 
-    parts = [HEADER]
+    parts = [HEADER.replace("__METHOD_LIST__", _method_list_line())]
     #: ⚠ `Combatant` 是基类，它的字段（hp / max_hp / alive …）在子类里不再声明，
     #: 所以**两份都要**，且基类在前（子类同名覆盖）。
     pairs: list[tuple[str, str]] = []
     for cls in ("Combatant", "OperatorUnit"):
         pairs.extend(_defaults(cls, src, tree))
 
-    consts = _module_consts(_names_in([e for _n, e in pairs]), src, tree)
+    consts = _module_consts(
+        #: ★ 默认值引用到的 ＋ **抄进来的方法体引用到的**（2026-09-20 补：只算前者时
+        #: `current_interval` 抄过去会带一个未定义的 `MIN_INTERVAL` ⇒ 运行期 `NameError`）
+        _names_in([e for _n, e in pairs])
+        | _names_in_nodes([n for n in ast.walk(tree)
+                           if isinstance(n, ast.FunctionDef)
+                           and n.name in set(PROPERTIES + METHODS)]),
+        src, tree)
     if consts:
         parts.append("\n")
         for name, expr in consts:
@@ -247,7 +385,10 @@ def build() -> str:
         parts.append(_method_src(name, src, tree))
         parts.append("\n")
     parts.append(FOOTER)
-    return "".join(parts)
+    text = "".join(parts)
+    _assert_closure(text)
+    _assert_names_defined(text)
+    return text
 
 
 def main() -> int:

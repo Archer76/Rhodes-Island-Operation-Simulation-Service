@@ -13,7 +13,7 @@
 
 * `verify.py::unit` 建的那个 `kw`（35 键，来自 `OperatorCalculator` ＋ 天赋 ＋ 特性文本）
 * `kw` 没给的那些字段的**默认值**（本文件照 `OperatorUnit` 的 dataclass 右值抄）
-* 四个**现算**的量：`current_atk` / `current_defense` / `current_res` / `current_range_id`
+* **现算的方法**：7 个（`current_atk` / `current_defense` / `current_res` / `current_interval` / `current_attack_speed` / `current_max_target` / `active_attack_type`）＋ `current_range_id`（转调 `geometry`，不住 `METHODS`）
 
 ⇒ 视图 = 这三样。`spec.py::_operator_spec` 是 `getattr` 式的读法，喂得饱。
 
@@ -39,6 +39,8 @@ __all__ = ["OperatorView", "operator_view"]
 #: 下面这几行是 `OperatorUnit` 的**模块级常量**，由生成器按需带过来
 #: （默认值表达式引用到它们，比如 `block_tol2 = POSITION_TOL * POSITION_TOL`）。
 
+ASPD_MIN = 20.0
+MIN_INTERVAL = 0.05
 POSITION_TOL = 0.35
 
 
@@ -264,6 +266,88 @@ class OperatorView:
             v = e.variants.get("kill") or {}
             res += float(v.get("res", 0.0)) * self.kill_stacks
         return res
+
+    def current_interval(self) -> float:
+        """当前攻击间隔——**平A 也按攻速折算**，开技能期间再叠技能修正。
+
+        旧写法在没有技能效果时直接返回 `attack_interval`，等于把攻速整个丢掉：
+        天赋与模组的攻速在平A 期间一律不生效，出手频率只剩基础值。攻速正好是
+        100 时两种写法等价，所以这个缺口一直没露出来。
+        """
+        spd = self.current_attack_speed()
+        # 〈替身〉形态的"**攻击间隔增大**"（天赋「不羁之力」的 `base_attack_time`
+        # +0.4 秒）。它是**加在基础间隔上**的，不是攻速修正——两者不可互换：
+        # 加 0.4 秒间隔与"减若干攻速"在非线性处结果并不相同，而正文写的是前者。
+        base_iv = self.attack_interval + (self.stand_interval_add
+                                          if self.stand_timer > 0.0 else 0.0)
+        e = self.effects
+        if e is None:
+            return max(MIN_INTERVAL, base_iv * 100.0 / max(ASPD_MIN, spd))
+        return e.attack_interval(base_iv, spd)
+
+    def current_attack_speed(self) -> float:
+        """当前总攻速——含「未阻挡敌人时」的条件加成。
+
+        攻速是**实时**量：模组特性给的那 8 点只在没挡住人时才有，
+        所以不能在建单位那一步就并进 `attack_speed`。
+        """
+        spd = self.attack_speed
+        if self.aspd_when_free and not self.blocking:
+            spd += self.aspd_when_free
+        # 「自身周围四格有高台时」的额外攻速（阿斯卡纶「噬光残影」）。
+        # 与上面那条**不同**：它的条件不是实时状态，而是**地形**——伏击客
+        # 不移动，所以 `high_ground_neighbor` 由模拟器在**部署那一刻**按地图
+        # 判一次就定死（见 `sim` 的部署处）。
+        if self.aspd_high_ground and self.high_ground_neighbor:
+            spd += self.aspd_high_ground
+        # 偷来的 / 被偷走的攻击速度（新约能天使技2「开火成瘾症」）。
+        # 两条都走这里，是因为**两边都是实时量**：被偷者在她开技期间一直少
+        # 这 70 点，她一结束就还回去。下限（`ASPD_MIN`）不在这里夹——
+        # 它由 `current_interval` 那一层管，免得两个地方各夹一次。
+        spd += self.aspd_steal_bonus - self.aspd_loss
+        return spd
+
+    def current_max_target(self) -> int:
+        """这一击最多打几个目标。
+
+        两条来源**相加**，缺一不可：
+
+        * `eff.max_target`——开技即生效的**静态**改写（「攻击目标数+3」那一族，
+          素心/史尔特尔们走这条）；
+        * `eff.target_step` / `target_cap`——**按出手次数递增**的那一族
+          （可露希尔技3「每攻击 9 次后攻击目标数+1，最多触发 6 次」）。
+          计数器 `trigger_hits` 在技能开启动时清零（`sim._activate`），
+          每出手一次 +1（`sim` 的攻击循环里，与 `hits` 同一处）。
+
+        技能没开就退回 1（`effects` 为 None），普攻永远只打一个——这是既定口径，
+        递增的那一段只在技能期内兑现。
+        """
+        e = self.effects
+        # 〈替身〉形态的目标数是**快照**下来的（技能在同一帧就结束了，`effects`
+        # 已经是空的）：技2 塔纳托斯与技3 塔纳托斯·改都是 `attack@max_target 4`。
+        if self.stand_timer > 0.0 and self.stand_max_target > 1:
+            return self.stand_max_target
+        if e is None:
+            return 1
+        base = e.max_target
+        if e.target_step <= 0:
+            return base
+        # 「最多触发 M 次」是**格数**上限，不是次数上限：0 或负数表示没写上限。
+        earned = self.trigger_hits // e.target_step
+        if e.target_cap > 0:
+            earned = min(earned, e.target_cap)
+        return base + earned
+
+    def active_attack_type(self) -> str:
+        """当前伤害类型——技能期间可能被强制改写，〈替身〉形态另有口径。"""
+        if self.stand_timer > 0.0:
+            # 〈替身〉形态的普通攻击**都是法术**：俄耳甫斯/塔纳托斯/塔纳托斯·改
+            # 三个形态的 prts 备注逐条写明"普通攻击造成法术普通伤害"，技3 的
+            # 弱点伤害也是"默认伤害类型为法术伤害"。
+            return "MAGIC"
+        if self.skill_active and self.skill_attack_type:
+            return self.skill_attack_type
+        return self.attack_type
 
 
     def current_range_id(self):
