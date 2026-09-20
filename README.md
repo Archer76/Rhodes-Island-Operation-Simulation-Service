@@ -13,6 +13,25 @@
 
 数据有两条来源，分得很清楚：**文字资料查 prts.wiki 资料站，机器要算的数值查 gamedata**。
 
+---
+
+## 这个仓库里有什么
+
+**只放「拿它做事的人用得到的东西」。** 这句不是修辞，它是一条会执行的判据：凡是只有在这一台机器上、
+只有配上当时那一版引擎与夹具才有意义的文件，一律不进仓库——排障用的一次性探针、逐轮的审计仪器、
+在建过程中的工作台账，都属于这一类。它们留在开发机上，且**随时可能与本仓库不同步**。
+
+因此这里**没有**：验证流水线、基准测试框架、逐关闸门台账、进度报告。
+下面每一节都只描述**克隆下来就成立**的东西。
+
+| 目录 | 是什么 |
+| --- | --- |
+| `ak_tactic/` | Python 侧全部产品代码（CLI、取数、属性、正文编译、解算、搜索、终端界面、两个本地库） |
+| `rios-sim/` | Go 侧模拟器内核（默认引擎） |
+| `tools/` | 面向使用者的脚本：自检套件、三条回归基线、名册与账号、生成物 |
+| `fixtures/` | **判据集**：可执行作业与回归基线（按 schema 认，不按文件名） |
+| `docs/` | 实测报告与口径文档 |
+
 ## 它能做什么
 
 | 节点 | 职能 |
@@ -46,7 +65,7 @@ python -m ak_tactic tui
 
 ## 快速开始
 
-**依赖三个第三方包**（2026-09-17 起，清单见 [`requirements.txt`](requirements.txt)）：
+**依赖三个第三方包**（清单见 [`requirements.txt`](requirements.txt)）：
 `textual`（含 `rich`，只给终端界面用）、`qrcode`（只给二维码用）、`pycryptodome`（只给数美设备指纹用）。
 **三个都是惰性导入**——不装 `textual` 与 `qrcode`，模拟、验证、搜索与全部自检照跑不误。
 
@@ -90,12 +109,28 @@ python tools/export_srx8.py
 prts.wiki（干员文字资料、敌人页面）。两者的响应都落 `data/cache/`，**7 天 TTL**，重复跑不会重新请求。
 干员库建库完全不联网。
 
+### 两个引擎
+
+战斗推演有两套实现，**默认走 Go**：
+
+| | 位置 | 状态 |
+| --- | --- | --- |
+| Go | `rios-sim/`（由 `ak_tactic/simgo/` 驱动） | **默认引擎**，`Verifier(engine="go")` |
+| Python | `ak_tactic/battle/` | 仍在，且 `verify.py` 称之为**权威实现**；`engine="python"` 显式切换 |
+
+★ 这一点必须说清楚，因为它会**静默**改变语义：仓里凡是必须拿到 Python 结果的地方，都要**显式**传
+`engine="python"`。裸 `Verifier()` 现在是 Go。
+
+Go 侧由 `RIOS_SIM_BIN` 指定二进制路径。**不设它不会报错，而是静默落到某个预编译的旧 exe 上**
+——于是同一条命令在两个时刻给出两个数。测任何东西之前先钉住它。
+
 ## 作业规程
 
 - **只搬不推**：档案存原文（关键帧、黑板），插值与加成留在核定层——两处各算一遍，迟早对不上。
 - **未知量必须实测标定**：编出来的默认值未必保守，它可能正好落在好看的那一边。
 - **数字不写死在文档里**：水位与项数会漂，写查询命令而不是写结果。
 - **能重跑就不手写**：裁定表、待裁定清单、敌人字段总账都由脚本生成，手改会在下次再生时丢掉。
+- **中文正文的引号一律用「」**：由 `tools/cjk_quote_lint.py` 在提交前拦下，非 0 退出即不许提交。
 
 ## 常用命令
 
@@ -158,32 +193,36 @@ ak-tactic/
 │  │  └─ enemy_api.py        敌人库查询
 │  ├─ plan.py            ★  关卡无关的「打法」：阵容/落位/朝向/时机 + JSON
 │  ├─ eta.py             ★  敌人到达时刻：速度+路线 → 几点到哪一格（解析式）
-│  ├─ verify.py          ★  通用验证器：打法 → 三星判定 + 归因
+│  ├─ verify.py          ★  通用验证器：打法 → 三星判定 + 归因（engine= 在此选）
 │  ├─ search.py          ★  搜索器：几何剪枝 → beam search（落位/朝向/顺序）
 │  ├─ parallel.py        ★  批量并行：进程池 + 跨调用复用（搜索 / 参数扫描）
 │  ├─ team.py            ★  组队建议：按角色位挑人（回费先锋 / 骗伤 / 低费位）
 │  ├─ diagram.py         ★  输出：摆位图 / 路线热度图 / 时间轴表格 / 完整报告
-│  └─ battle/                战斗模型
+│  ├─ simgo/             Go 引擎驱动层（规格编译 client.py + 机制/技能规格 + verifier）
+│  └─ battle/                战斗模型（Python 侧；见上文「两个引擎」）
 │     ├─ damage.py           物理 / 法术 / 真实 / 治疗
 │     ├─ unit.py             干员与敌人在战斗中的可变态
 │     ├─ range.py            攻击范围 → 实际覆盖格（朝向旋转）
 │     ├─ talents.py          战斗内天赋（积雪、费用加成…）
 │     ├─ p3r.py              相性（P3R）与「全场总攻击」装置
 │     └─ sim.py              模拟器本体（帧级推进）
-├─ tools/
-│  ├─ check_*.py             自检套件（db / enemy_db / battle / p3r / formula
-│  │                         / enemy_formula / verify / eta / search / diagram
-│  │                         / mechanics / tui）；清单以目录为准，别写死套数
-│  ├─ squad.py               森空岛名册 → 战斗单位（保真度基准）
-│  ├─ roster.py              名册拉取（实现在 ak_tactic/skland.py，这里只转调）
-│  ├─ skland.py              同上的兼容入口（`python tools/skland.py <子命令>`）
-│  ├─ run_sr6.py              SR-6 关卡专属跑法（含落位合法性守卫）
-│  ├─ run_srx8.py             SR-EX-8 共用层（编队校验 / 试跑 / 落位表）
-│  ├─ export_srx8.py          SR-EX-8 导出 MAA copilot JSON（现行答案出处）
-│  ├─ unit_audit.py          量纲裁定表生成（裁定栏可回填、再生不丢）
-│  ├─ uncertainty_audit.py   待裁定清单生成 → docs/uncertainties.md（同上机制）
-│  └─ enemy_field_audit.py   敌人字段总账（非 0 退出即有字段没入库）
-├─ docs/                     各阶段实测报告（关卡、敌人、公式、库结构）
+├─ rios-sim/                 Go 引擎（默认）。`go build` 出二进制；源码与 go.mod 入库
+├─ tools/                    面向使用者的脚本（清单以目录为准，别写死）
+│  ├─ check_*.py             自检套件：每套一个主题，非 0 退出即有退化
+│  ├─ cjk_quote_lint.py      提交闸门：中文正文的引号必须是「」
+│  ├─ gated_commit.py        带闸门的提交助手（检查不过就不提交）
+│  ├─ rebuild_data.py        一条命令重建 data/ 下的可再生派生物（见 .gitignore 注释）
+│  ├─ golden_go.py           判据集 fixtures/ 的读写：--check 逐项核对 / --extend 追加
+│  ├─ run_sr6.py / run_srx8.py / export_srx8.py    三条回归基线与 MAA 导出
+│  ├─ skland.py / skland_did.py / roster.py / operbox_path.py / squad.py   名册与账号
+│  ├─ unit_audit.py / uncertainty_audit.py / enemy_field_audit.py   三份生成物（非 0 退出即有缺口）
+│  ├─ gen_*.py               视图与夹具生成：干员视图 / 敌人视图 / 天赋检测器 / 田地金样
+│  ├─ selftest.py / smoke_hsl.py / audit_coverage.py / audit_unmodelled_abilities.py
+│  ├─ spec_deps.py / spec_imports.py / simgo_cost.py / trace_kv.py / check_spec_keys.py
+│  ├─ gate_ledger.py / mainline_strata.py / parity_plan.py / parity_ledger.py
+│  └─ chain_judge_independence.py / check_mech_spec.py
+├─ fixtures/                 可执行作业与回归基线（**判据集**，按 schema 认）
+├─ docs/                     实测报告与口径文档（全部条目见下方导航）
 └─ data/
    ├─ cache/prts/            prts.wiki HTTP 响应缓存（7 天）
    ├─ ranges.json            攻击范围索引
@@ -192,7 +231,12 @@ ak-tactic/
    └─ enemydb.sqlite         敌人库（纯派生物，enemydb build 冷启约 53s）
 ```
 
-分层只有两个原则：**把上游的脏活关在 `client.py` / `source.py` 里**——403、SSL 抖动、限速、翻页、15 MB JSON 的内存膨胀，上层一概看不见；**坐标在入口处一次定型**——全项目内部一律 MAA 口径（原点左上、y 向下），再往下的每一层都不许再翻。
+分层只有两个原则：**把上游的脏活关在 `client.py` / `source.py` 里**——403、SSL 抖动、限速、翻页、
+15 MB JSON 的内存膨胀，上层一概看不见；**坐标在入口处一次定型**——全项目内部一律 MAA 口径
+（原点左上、y 向下），再往下的每一层都不许再翻。
+
+> `tools/` 与 `docs/` 里的**内部件**（一次性探针、逐轮审计仪器、在建台账）不进本仓库。
+> 所以你在别处看到的 `tools/xxx.py` 引用，不一定能在克隆里找到——那是有意为之，不是漏了。
 
 ## 文档导航
 
@@ -201,14 +245,14 @@ ak-tactic/
 | 怎么用命令行、退出码与参数 | [`docs/cli.md`](docs/cli.md)、[`docs/interfaces.md`](docs/interfaces.md) |
 | 两个本地库的结构与为什么分成两个 | [`docs/database.md`](docs/database.md)、[`docs/operator-db.md`](docs/operator-db.md)、[`docs/enemy-db.md`](docs/enemy-db.md) |
 | 两条数据源的实测结论与坑 | [`docs/prts-wiki.md`](docs/prts-wiki.md)、[`docs/gamedata.md`](docs/gamedata.md) |
-| **全部数据源与博士交办的页面**（来源台账，防上下文丢失） | [`docs/data-sources.md`](docs/data-sources.md) |
+| **全部数据源与来源台账** | [`docs/data-sources.md`](docs/data-sources.md) |
 | 元素损伤（元素值 / 爆条 / 两列爆发效果） | [`docs/element-damage.md`](docs/element-damage.md)、[`docs/mechanics-dictionary.md`](docs/mechanics-dictionary.md) |
 | 闸门条目 × Go 落地状态（静态盘点，含两类假信号） | [`docs/gate-inventory.md`](docs/gate-inventory.md) |
 | 正文怎么编译成公式项 | [`docs/formula-model.md`](docs/formula-model.md)、[`docs/formula-maintenance.md`](docs/formula-maintenance.md)、[`docs/enemy-formula.md`](docs/enemy-formula.md) |
 | 公式取源对照与量纲 | [`docs/formula-sources.md`](docs/formula-sources.md)、[`docs/formula-units.md`](docs/formula-units.md) |
 | 地图机制、关卡环境与装置 | [`docs/mechanics.md`](docs/mechanics.md)、[`docs/environment.md`](docs/environment.md)、[`docs/activity.md`](docs/activity.md) |
 | 终端界面的方案与裁定 | [`docs/tui-plan.md`](docs/tui-plan.md) |
-| 关卡数据与解法记录 | [`docs/stage-1-7.md`](docs/stage-1-7.md)、[`docs/stage-sr-6.md`](docs/stage-sr-6.md)、[`docs/stage-sr-ex-8.md`](docs/stage-sr-ex-8.md)、[`docs/srx8-qi-solution.md`](docs/srx8-qi-solution.md)、[`docs/real-run-srx8.md`](docs/real-run-srx8.md) |
+| 关卡数据与解法记录 | [`docs/stage-1-7.md`](docs/stage-1-7.md)、[`docs/stage-sr-6.md`](docs/stage-sr-6.md)、[`docs/stage-sr-ex-8.md`](docs/stage-sr-ex-8.md)、[`docs/srx8-qi-solution.md`](docs/srx8-qi-solution.md)、[`docs/real-run-srx8.md`](docs/real-run-srx8.md)、[`docs/mainline-stages.md`](docs/mainline-stages.md) |
 | 具体干员／敌人的机制口径 | [`docs/wang-mechanics.md`](docs/wang-mechanics.md)、[`docs/ranged-enemy-rule.md`](docs/ranged-enemy-rule.md)、[`docs/squad-skill-audit.md`](docs/squad-skill-audit.md)、[`docs/enemies-sr-ex-8.md`](docs/enemies-sr-ex-8.md) |
 | 实施进度与任务拆分 | [`docs/roadmap.md`](docs/roadmap.md)、[`docs/batch2-plan.md`](docs/batch2-plan.md) |
 | 还没定的事、还在猜的事 | [`docs/uncertainties.md`](docs/uncertainties.md)、[`docs/limitations.md`](docs/limitations.md) |
