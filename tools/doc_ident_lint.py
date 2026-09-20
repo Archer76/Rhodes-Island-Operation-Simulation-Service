@@ -54,6 +54,30 @@ def classify(tok: str) -> str:
     return "未归类"          # 9~15 或 17~40 且不是提交 ⇒ 说不出从哪儿读出来的
 
 
+def ident(path: Path) -> str:
+    """印出**被测对象自己的身份**：工作区形态 sha16／入库 blob sha16／行数。
+
+    ★ 由来（PM 2026-09-20）：我报「61 种」，PM 现算是「66 种」。61 是**测出来的**，
+      但我**测完又改了文档**（§21.5 加了 5 个标识）⇒ 那个数测的是**已被取代的对象**。
+      ⇒ **一个计数不许脱离「它测的是哪一版」单独旅行**。判据落在这里：**每次运行都把身份与数印在同一行**，
+      于是报数只需贴这一行，人手算不进来（`df24ee6a`：漂移/清单要自带身份）。
+    """
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return "  被测对象：**读不到** ⇒ 拒跑"
+    import hashlib as _h, subprocess as _sp
+    ws = _h.sha256(data).hexdigest()[:16]
+    norm = _h.sha256(data.replace(b"\r\n", b"\n")).hexdigest()[:16]
+    rel = path.as_posix()
+    blob = _sp.run(["git", "cat-file", "blob", "HEAD:" + rel], capture_output=True)
+    b16 = _h.sha256(blob.stdout).hexdigest()[:16] if blob.returncode == 0 else None
+    lines = data.decode("utf-8", "replace").count(chr(10))
+    side = (f"工作区形态 sha16={ws}／入库 blob(HEAD) sha16={b16}" if b16
+            else f"工作区形态 sha16={ws}／入库 blob=**非 index 内路径**（`{rel}` 不在 HEAD 的树里）")
+    return f"  被测对象：{side}／行数={lines}／归一(CRLF→LF) sha16={norm}"
+
+
 def label_before(ln: str, pos: int) -> str | None:
     """取**该出现处自己**紧邻前面的标签（按位置回看，不是按行取第一个）。
 
@@ -167,8 +191,9 @@ def main() -> int:
         if not path.exists():
             print(f"★ 文件不存在：{path} ⇒ 拒跑（不把「找不到」读成通过）")
             return 1
-        bad, info = scan(path)
         print(f"== {path} ==")
+        print(ident(path))
+        bad, info = scan(path)
         head = sorted(info.items(), key=lambda kv: kv[1][1])[:8]
         print(f"   反引号内的十六进制标识共 {len(info)} 种："
               + "、".join(f"{k}({v[0]})" for k, v in head) + ("…" if len(info) > 8 else ""))
