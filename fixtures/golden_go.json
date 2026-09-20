@@ -298,5 +298,50 @@
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
     "spec_sha": "575b375a270c88f931e7d4897d52c33573839b46425ca494ae320457d74534a3"
+  },
+  "plan-main-00-01.json": {
+    "damage": 7150.0,
+    "elapsed": 76.4333,
+    "engine": "go",
+    "engine_bin": "rios-sim-12f35f7.exe",
+    "engine_bin_mtime": "2026-09-20 12:05:59",
+    "engine_bin_sha16": "1dd24575475ecb07",
+    "go_fallbacks": 0,
+    "go_runs": 1,
+    "kills": 11,
+    "leaks": 0,
+    "roster_sha16": "21d3045f119a5d04",
+    "spec_error": null,
+    "spec_sha": "ec3467f1412eea292242627dee24aa6ea01bc291e2037bd369b0e9d3ac6995b6"
+  },
+  "plan-main-01-07.json": {
+    "damage": 60750.0,
+    "elapsed": 135.7667,
+    "engine": "go",
+    "engine_bin": "rios-sim-12f35f7.exe",
+    "engine_bin_mtime": "2026-09-20 12:05:59",
+    "engine_bin_sha16": "1dd24575475ecb07",
+    "go_fallbacks": 0,
+    "go_runs": 1,
+    "kills": 41,
+    "leaks": 0,
+    "roster_sha16": "21d3045f119a5d04",
+    "spec_error": null,
+    "spec_sha": "1d98054b704daaeb40da32c6d218d252cc0c84bd7ea6ae632ee6bb22bae73e3e"
+  },
+  "plan-main-02-01.json": {
+    "damage": 78040.0,
+    "elapsed": 206.1,
+    "engine": "go",
+    "engine_bin": "rios-sim-12f35f7.exe",
+    "engine_bin_mtime": "2026-09-20 12:05:59",
+    "engine_bin_sha16": "1dd24575475ecb07",
+    "go_fallbacks": 0,
+    "go_runs": 1,
+    "kills": 50,
+    "leaks": 0,
+    "roster_sha16": "21d3045f119a5d04",
+    "spec_error": null,
+    "spec_sha": "552afa739064f3d063d8cbbcd6f8f3306fc43ff07dd507a9be829c2b5bebf8d5"
   }
 }

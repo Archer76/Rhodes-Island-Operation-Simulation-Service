@@ -1,0 +1,26 @@
+{
+  "stage": "main_01-07",
+  "title": "2 人",
+  "deploys": [
+    {
+      "operator": "拉普兰德",
+      "position": [2, 3],
+      "direction": "Left",
+      "skill": 0,
+      "elite": 2,
+      "level": 1,
+      "potential": 1,
+      "module_level": 0
+    },
+    {
+      "operator": "能天使",
+      "position": [3, 5],
+      "direction": "Up",
+      "skill": 0,
+      "elite": 2,
+      "level": 60,
+      "potential": 1,
+      "module_level": 0
+    }
+  ]
+}

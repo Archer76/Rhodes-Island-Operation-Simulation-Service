@@ -1,0 +1,16 @@
+{
+  "stage": "main_00-01",
+  "title": "1 人",
+  "deploys": [
+    {
+      "operator": "新约能天使",
+      "position": [4, 3],
+      "direction": "Left",
+      "skill": 0,
+      "elite": 2,
+      "level": 90,
+      "potential": 6,
+      "module_level": 0
+    }
+  ]
+}
