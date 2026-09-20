@@ -72,6 +72,8 @@ type response struct {
 	OpStats json.RawMessage `json:"opstats,omitempty"`
 	//: `range` 的应答：攻击范围（相对格 ＋ 绝对格，见 `range.go`）。
 	Ranges json.RawMessage `json:"ranges,omitempty"`
+	//: `skill` 的应答：技能状态机参数（见 `skill.go`）。
+	Skills json.RawMessage `json:"skills,omitempty"`
 	Error  string          `json:"error,omitempty"`
 }
 
@@ -245,10 +247,38 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("范围序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Ranges: raw}
+	case "skill":
+		// 丙阶段四：**Go 自己读技能元数据**（状态机那一半）。
+		if len(req.Spec) == 0 {
+			return response{ID: req.ID, OK: false,
+				Error: "skill 少了 spec（一批 {skill_id,level}）"}
+		}
+		var qs []struct {
+			SkillID string `json:"skill_id"`
+			Level   int    `json:"level"`
+		}
+		if err := json.Unmarshal(req.Spec, &qs); err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("spec 不是技能查询数组：%v", err)}
+		}
+		out := make([]*SkillMeta, 0, len(qs))
+		for _, q := range qs {
+			m, err := SkillMetaFor(q.SkillID, q.Level)
+			if err != nil {
+				return response{ID: req.ID, OK: false, Error: err.Error()}
+			}
+			out = append(out, m)
+		}
+		raw, err := json.Marshal(out)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("技能序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Skills: raw}
 	default:
 		return response{ID: req.ID, OK: false,
 			Error: fmt.Sprintf(
-				"不认识的命令：%q（支持 ping / sim / load / enemies / opstats / range）",
+				"不认识的命令：%q（支持 ping / sim / load / enemies / opstats / range / skill）",
 				req.Cmd)}
 	}
 }
