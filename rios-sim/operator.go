@@ -336,10 +336,17 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 		}
 	}
 	st.PotentialBonus = potentialBonus(char.Potentials, cfg.Potential)
-	//: 模组那一支本轮未接（见文件头）；**不静默跳过**：要了模组就直接报错。
 	if cfg.Module != "" && cfg.ModuleLevel != 0 {
-		return nil, fmt.Errorf("模组那一支（battle_equip_table）本轮未接入 Go，收到 %s Lv%d",
-			cfg.Module, cfg.ModuleLevel)
+		levels, err := moduleLevels(cfg.Module)
+		if err != nil {
+			return nil, err
+		}
+		bb, ok := levels[cfg.ModuleLevel]
+		if !ok {
+			return nil, fmt.Errorf("模组 %s 只有这几个等级 %v，收到 %d",
+				cfg.Module, sortedLevels(levels), cfg.ModuleLevel)
+		}
+		st.ModuleBonus = bb
 	}
 
 	total := map[string]any{}
@@ -367,6 +374,78 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 	}
 	st.Total = total
 	return st, nil
+}
+
+// ---------------------------------------------------------------- 模组
+
+var battleEquipCache map[string]json.RawMessage
+
+// moduleLevels 复刻 `module_levels`（`stats.py:499-517`）。
+//
+// ★ 返回的是该等级的**总加成**，不是相对上一级的增量。
+// ★ `attributeBlackboard` 的 key 是**下划线风格**（`max_hp` / `magic_resistance`），
+// 与 character_table 的属性名不同名，要走 `moduleKeyMap` 转一次。
+func moduleLevels(moduleID string) (map[int]map[string]any, error) {
+	if battleEquipCache == nil {
+		p := filepath.Join(DataRoot(), "raw.githubusercontent.com", "excel",
+			"battle_equip_table.json")
+		blob, err := os.ReadFile(p)
+		if err != nil {
+			return nil, fmt.Errorf("读 battle_equip_table 失败（%s）：%w", p, err)
+		}
+		var tbl map[string]json.RawMessage
+		if err := json.Unmarshal(blob, &tbl); err != nil {
+			return nil, fmt.Errorf("battle_equip_table 不是合法 JSON（%s）：%w", p, err)
+		}
+		battleEquipCache = tbl
+	}
+	raw, ok := battleEquipCache[moduleID]
+	if !ok {
+		//: 与 `stats.py:505-507` 同口径：**基础证章不带属性加成**，没有这一条。
+		return nil, fmt.Errorf("模组 %s 没有战斗数值（基础证章不带属性加成）", moduleID)
+	}
+	var entry struct {
+		Phases []struct {
+			EquipLevel *int `json:"equipLevel"`
+			Board      []struct {
+				Key   string   `json:"key"`
+				Value *float64 `json:"value"`
+			} `json:"attributeBlackboard"`
+		} `json:"phases"`
+	}
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		return nil, fmt.Errorf("模组 %s 解析失败：%w", moduleID, err)
+	}
+	out := map[int]map[string]any{}
+	for _, ph := range entry.Phases {
+		lv := 0
+		if ph.EquipLevel != nil {
+			lv = *ph.EquipLevel
+		}
+		bb := map[string]any{}
+		for _, b := range ph.Board {
+			attr, ok := moduleKeyMap[b.Key]
+			if !ok {
+				continue
+			}
+			v := 0.0
+			if b.Value != nil {
+				v = *b.Value
+			}
+			bb[attr] = v
+		}
+		out[lv] = bb
+	}
+	return out, nil
+}
+
+func sortedLevels(m map[int]map[string]any) []int {
+	out := make([]int, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Ints(out)
+	return out
 }
 
 func parseFrames(raws []json.RawMessage) []frame {

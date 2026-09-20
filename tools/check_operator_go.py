@@ -98,6 +98,34 @@ def main() -> int:
                         "trust": tr, "potential": pot,
                         "module": "", "module_level": 0,
                     })
+    #: 模组一支：每位带数值模组的干员、每个等级都扫一遍。
+    #: ★ 不扫模组＝那 18/20 位干员的面板**根本没被这条判据覆盖**。
+    mod_cfg = 0
+    mod_ops: list[str] = []
+    for e in roster:
+        cid = e["id"]
+        try:
+            mods = [m for m in calc.modules(cid) if m.get("has_stats")]
+        except Exception:                                        # noqa: BLE001
+            mods = []
+        if not mods:
+            continue
+        mid = mods[0]["id"]
+        try:
+            levels = sorted(calc.module_levels(mid))
+        except Exception:                                        # noqa: BLE001
+            continue
+        mod_ops.append("%s(%s:%s)" % (e["name"], mid, levels))
+        for mlv in levels:
+            for tr in (0.0, 100.0):
+                configs.append({
+                    "char_id": cid, "elite": int(e["elite"]),
+                    "level": int(e["level"]), "trust": tr,
+                    "potential": int(e["potential"]),
+                    "module": mid, "module_level": mlv,
+                })
+                mod_cfg += 1
+
     got = go_opstats(configs)
 
     mutate = "--mutate" in sys.argv
@@ -110,10 +138,11 @@ def main() -> int:
 
     bad = 0
     compared = 0
-    mod_ops = []
     for cfg, g in zip(configs, got):
         py = calc.stats(cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
-                        trust=cfg["trust"], potential=cfg["potential"])
+                        trust=cfg["trust"], potential=cfg["potential"],
+                        module=cfg.get("module") or None,
+                        module_level=cfg.get("module_level") or 0)
         compared += 1
         out = []
         for part in ("base", "trust_bonus", "potential_bonus", "total"):
@@ -131,25 +160,18 @@ def main() -> int:
                      cfg["trust"], cfg["potential"], len(out)))
             for line in out[:10]:
                 print("    " + line)
-    #: 具名缺口：名册里带模组的干员
-    for e in roster:
-        try:
-            ms = [m for m in calc.modules(e["id"]) if m.get("has_stats")]
-        except Exception:                                        # noqa: BLE001
-            continue
-        if ms:
-            mod_ops.append("%s(%d 个)" % (e["name"], len(ms)))
-
     print()
-    print("已比：base / trust_bonus / potential_bonus / total 四份逐字段；共 %d 次折算"
-          % compared)
-    print("覆盖面：名册 %d 位 × (底/顶/中 三档等级) × 信赖 %s × 潜能 %s"
-          % (len(roster), TRUSTS, POTENTIALS))
+    print("已比：base / trust_bonus / potential_bonus / module_bonus / total 五份逐字段；"
+          "共 %d 次折算" % compared)
+    print("覆盖面：名册 %d 位 × (底/顶/中 三档等级) × 信赖 %s × 潜能 %s，"
+          "另加**模组** %d 次（%d 位带数值模组的干员）"
+          % (len(roster), TRUSTS, POTENTIALS, mod_cfg, len(mod_ops)))
     if mod_ops:
-        print("★ 本轮**未接入**的：模组那一支（battle_equip_table.json 不在本机缓存）。"
-              "名册里带数值模组的干员 %d 位：%s" % (len(mod_ops), "、".join(mod_ops[:8])))
+        print("    模组清单（取每位的第一个带数值模组，全等级扫）：")
+        for line in mod_ops:
+            print("        " + line)
     else:
-        print("★ 模组那一支未接入；名册里**没有**带数值模组的干员 ⇒ 本次覆盖面不受它影响")
+        print("★ 名册里**没有**带数值模组的干员 —— 模组那一支这一轮没被行走到")
     print()
     if mutate:
         if bad:
