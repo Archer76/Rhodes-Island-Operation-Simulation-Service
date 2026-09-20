@@ -47,6 +47,12 @@ type SkillMeta struct {
 	RangeID *string `json:"range_id"`
 	//: 这一级有没有 `blackboard`——数值那一半的原料，本批不解析，只报个数。
 	BlackboardEntries int `json:"blackboard_entries"`
+	//: ★ 完整黑板（`skill.py:1758-1763` 的口径）：
+	//: **每个有 key 的项都落一个数值键**（`float(value or 0)`，所以 value 是 null
+	//: 也照样落 0），**另有 `$key` 落 valueStr**（只有当它非空时）。
+	//: 两套都要——字符串键是「召唤什么/给哪个装置」唯一的住处，丢掉不报错，
+	//: 只是上层把它当「没这项机制」。
+	Blackboard map[string]any `json:"blackboard"`
 }
 
 // normalizeSPType 复刻 `_normalize_sp_type`（`skill.py:1988-2008`）：
@@ -185,6 +191,26 @@ func SkillMetaFor(skillID string, level int) (*SkillMeta, error) {
 	out.MaxCharge = 1
 	if lv.SPData.MaxChargeTime != nil && *lv.SPData.MaxChargeTime != 0 {
 		out.MaxCharge = *lv.SPData.MaxChargeTime
+	}
+	//: 黑板：数值键全落（null 也落 0），`$key` 只在 valueStr 非空时落。
+	out.Blackboard = map[string]any{}
+	for _, bRaw := range lv.Blackboard {
+		var b struct {
+			Key      string   `json:"key"`
+			Value    *float64 `json:"value"`
+			ValueStr *string  `json:"valueStr"`
+		}
+		if err := json.Unmarshal(bRaw, &b); err != nil || b.Key == "" {
+			continue
+		}
+		v := 0.0
+		if b.Value != nil {
+			v = *b.Value
+		}
+		out.Blackboard[b.Key] = v
+		if b.ValueStr != nil && *b.ValueStr != "" {
+			out.Blackboard["$"+b.Key] = *b.ValueStr
+		}
 	}
 	return out, nil
 }

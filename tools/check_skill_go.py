@@ -94,6 +94,8 @@ def main() -> int:
         got[0]["sp_cost"] = got[0]["sp_cost"] + 1
 
     bad = 0
+    bb_keys = 0
+    bb_dollar = 0
     hit = {k: 0 for k, _ in FIELDS}
     hit["duration_nonzero"] = 0
     hit["range_id_nonnull"] = 0
@@ -120,8 +122,25 @@ def main() -> int:
             print("✗ %s L%d —— %d 处" % (q["skill_id"], q["level"], len(out)))
             for line in out[:6]:
                 print("    " + line)
+        #: ★ 黑板单独比：数值键 ＋ `$key` 两套都要（`skill.py:1758-1763` 的口径）。
+        #: 只比数值键会让「字符串键整批丢掉」看不出来——而那正是召唤/装置那类
+        #: 机制唯一的住处，丢了不报错、上层当「没这项机制」。
+        gbb = {str(k): norm(v) for k, v in (g.get("blackboard") or {}).items()}
+        pbb = {str(k): norm(v) for k, v in (getattr(py, "blackboard", None) or {}).items()}
+        if gbb != pbb:
+            bad += 1
+            only_go = sorted(set(gbb) - set(pbb))[:6]
+            only_py = sorted(set(pbb) - set(gbb))[:6]
+            diff = [k for k in sorted(set(gbb) & set(pbb)) if gbb[k] != pbb[k]][:6]
+            print("✗ %s L%d 黑板不一致（Go %d 键 / Python %d 键）；Go 多 %s；Python 多 %s；值不同 %s"
+                  % (q["skill_id"], q["level"], len(gbb), len(pbb), only_go, only_py, diff))
+        bb_keys += len(pbb)
+        bb_dollar += sum(1 for k in pbb if k.startswith("$"))
     print()
-    print("已比：状态机九字段；共 %d 个技能（全表 × 最高级）" % len(queries))
+    print("已比：状态机九字段 ＋ **完整黑板**（数值键 ＋ `$key` 两套）；"
+          "共 %d 个技能（全表 × 最高级）" % len(queries))
+    print("★ 黑板行使计数：共 %d 个键，其中 `$` 字符串键 **%d** 个（那套就是"
+          "召唤/装置类机制唯一的住处）" % (bb_keys, bb_dollar))
     print("★ 行使计数（Python 侧非默认次数）：")
     for k, n in hit.items():
         print("    %-20s %d" % (k, n))
