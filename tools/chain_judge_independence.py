@@ -66,6 +66,7 @@ r"""chain 判据的**独立性实测**：一个变异红几条。
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -74,9 +75,51 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "rios-sim"
-#: ★ G5 要打印**两棵树的具名身份**：哈希走 `SRC.rglob` ⇒ 它量的是 SRC 树，不是「产品树」这个名字。
-PRODUCT = ROOT / "rios-sim"
 WORK = ROOT / "out" / "backend2-b1" / "indep" / "rios-sim"
+#: ★★ F4（验收 §17）：**产品树的身份不许从脚本位置推**。
+#:   脚本被冻到 `out/acceptance/pinned/` 后，`__file__` 推出的「产品树」＝ `out/acceptance/rios-sim` ——
+#:   **根本不存在**；而旧版把「取不到」的哨兵直接与真 sha 比 ⇒ 印出「逐字节相同：**False**」（真值 True），
+#:   而且那条硬条件（内容相同却判不适用 ⇒ 判红）**在这类运行里永远不可能触发** ⇒
+#:   ★ 零信息量的绿、而且**判据在它被设计来服务的那个用法里（冻结副本）失效**。
+#:   现在候选按顺序取、**每个具名**，最后还有一条**与路径无关**的 git 对象兜底；
+#:   全取不到 ⇒ **大声失败**（不许压成「内容不同」）。
+PRODUCT_ENV = "CHAIN_PRODUCT_ROOT"
+
+
+def product_candidates() -> list[tuple[str, Path]]:
+    """产品树的候选位置，按可信度排序，**每个带名字**（身份要能说出它是从哪来的）。"""
+    cands: list[tuple[str, Path]] = []
+    env = (os.environ.get(PRODUCT_ENV) or "").strip()
+    if env:
+        cands.append((f"环境变量 {PRODUCT_ENV}={env}", Path(env) / "rios-sim"))
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=str(ROOT), capture_output=True)
+    if top.returncode == 0:
+        t = (top.stdout or b"").decode("utf-8", "replace").strip()
+        if t:
+            cands.append((f"git rev-parse --show-toplevel（{t}）", Path(t) / "rios-sim"))
+    cands.append((f"脚本位置（{ROOT}）", ROOT / "rios-sim"))
+    return cands
+
+
+def product_judge_sha() -> tuple[str, str, str, str]:
+    """产品树里那个判词文件的身份。**三态**：`可读`（附来源名与 sha）／`不可得`（附试过哪些）。
+
+    ★ 为什么最后要有一条 git 对象兜底：它**与路径无关** —— 脚本冻在哪、cwd 在哪都不影响；
+      代价是它量的是 **HEAD 里那一版**、不是工作区里那一版 ⇒ 名字里**写清**，不许混用。
+    """
+    tried: list[str] = []
+    for name, root in product_candidates():
+        f = root / "mech" / JUDGE_FILE
+        if f.exists():
+            return "可读", name, hashlib.sha256(f.read_bytes()).hexdigest(), str(root)
+        tried.append(f"{name} ⇒ {f} 不存在")
+    blob = subprocess.run(["git", "show", f"HEAD:rios-sim/mech/{JUDGE_FILE}"],
+                          cwd=str(ROOT), capture_output=True)
+    if blob.returncode == 0 and (blob.stdout or b""):
+        return ("可读", f"git 对象 HEAD:rios-sim/mech/{JUDGE_FILE}（**HEAD 那一版，不是工作区那一版**）",
+                hashlib.sha256(blob.stdout).hexdigest(), "git 对象")
+    tried.append("git show HEAD:rios-sim/mech/chain_test.go 也失败")
+    return "不可得", "／".join(tried), "", ""
 #: 判词表覆盖的**唯一**文件（＝本脚本的取证范围里唯一「认得」的文件）；
 #: ★ 运行范围是**整个包**（`go test ./mech/ -run Chain`）⇒ 取证范围必须 ≥ 运行范围（G6）。
 JUDGE_FILE = "chain_test.go"
@@ -575,10 +618,16 @@ def judge_text_applicable() -> tuple[bool, list[str]]:
     return (not bad), bad
 
 
-def judge_file_sha(root: Path) -> str:
-    """判词文件在给定树里的 SHA256（用来判「这棵树的内容是不是与产品树逐字节相同」）。"""
+def judge_file_sha(root: Path) -> str | None:
+    """判词文件在给定树里的 SHA256。**取不到返回 None**（第三态），**不许返回哨兵串**。
+
+    ★ F4（验收 §17）：旧版取不到时返回 `（文件不存在）`，于是它被拿去与真 sha 比 ⇒
+      **「取不到」被静默压成「内容不同」**（同族 `1b6ee8e9`：两种不同的空压成一个值）。
+    """
     f = root / "mech" / JUDGE_FILE
-    return hashlib.sha256(f.read_bytes()).hexdigest() if f.exists() else "（文件不存在）"
+    if not f.exists():
+        return None
+    return hashlib.sha256(f.read_bytes()).hexdigest()
 
 
 def mutate(pairs: list[tuple[str, str, str]]) -> None:
@@ -688,11 +737,26 @@ def main() -> int:
     #:   上一版把它放在 G5 段里，验收那次按 `pats` 过滤的日志里看不到它 ⇒ 看起来「恰好在该需要它的
     #:   分支上缺席」。位置本身就是判据的一部分：**证据要在所有出口都能看见**。
     print(f"== 工作副本：{WORK.relative_to(ROOT) if WORK.is_relative_to(ROOT) else WORK} ==")
+    #: ★★★ F4（验收 §17）：产品树的身份**不许从脚本位置推** —— 脚本冻到 `out/acceptance/pinned/` 后，
+    #:   `__file__` 推出的「产品树」根本不存在 ⇒ 旧版把「取不到」压成「内容不同」并印成假读数。
+    #:   现在**三态**：可读（附来源名）／不可得（附试过哪些，且**大声失败**）。
+    p_state, p_src, p_sha, p_root = product_judge_sha()
     print(f"== G5 具名身份：SRC = {SRC}")
-    print(f"              产品树 = {PRODUCT}")
-    product_hashed = (SRC == PRODUCT)
-    print(f"              SRC 就是产品树：**{product_hashed}** "
-          f"⇒ 下面的哈希{'**量的是产品树**' if product_hashed else '**量的是 SRC 树**'} ==")
+    print(f"              产品树身份 = **{p_state}**（来源：{p_src}）")
+    if p_state != "可读":
+        print("✗ 产品树身份**不可得** ⇒ 不许把它压成「内容不同」（两种不同的空压成一个值）；"
+              "本轮的「内容相同/不同」与那条硬条件都**没有判据**⇒ 判失败")
+        print(f"   一行修法：设 {PRODUCT_ENV}=<产品树所在仓库根> 后重跑")
+        return 1
+    if p_root == "git 对象":
+        print("   ★ 身份取自 **git 对象**（HEAD 那一版）⇒ 与 SRC **无法比路径**，"
+              "本轮不宣称「产品树只读」，只比内容")
+        product_hashed = False
+    else:
+        product_hashed = (SRC.resolve() == Path(p_root).resolve())
+        print(f"              SRC 就是产品树：**{product_hashed}** "
+              f"⇒ 下面的哈希{'**量的是产品树**' if product_hashed else '**量的是 SRC 树**'}")
+    print(f"              产品树判词文件 sha16 = {p_sha[:16]} ==")
     if not product_hashed:
         print("   ★ SRC ≠ 产品树 ⇒ **产品树本次未被触碰**（本脚本写路径只有 SRC／WORK），"
               "**但它没有被本次哈希取证**")
@@ -715,13 +779,23 @@ def main() -> int:
     #: ★★ F1（验收 §16）：**表内期望**的适用性按**内容**判，不按路径；并有一条硬条件：
     #:   内容与产品树**逐字节相同**却判「不适用」 ⇒ 当场判红（那正是上一版的误报）。
     known_ok_content, known_why = judge_text_applicable()
-    same_content = judge_file_sha(SRC) == judge_file_sha(PRODUCT)
+    s_sha = judge_file_sha(SRC)
+    #: ★★ 三态（验收 F4 修法③）：**相同／不同／不可得**。`不可得` 不许退化成「不同」。
+    if s_sha is None:
+        content_state = "不可得（SRC 树里没有判词文件）"
+    elif s_sha == p_sha:
+        content_state = "相同"
+    else:
+        content_state = "不同"
     print(f"== 表内期望的适用性（按**内容**判，不按路径）：判词文件 {JUDGE_FILE} "
           f"在 SRC 树里 = **{'适用' if known_ok_content else '⊘ 不适用'}**"
-          f"（与产品树该文件逐字节相同：{same_content}）==")
+          f"（与产品树该文件：**{content_state}**；产品树身份取自 {p_src}）==")
     for w in known_why:
         print(f"      ⊘ {w}")
-    if same_content and not known_ok_content:
+    if s_sha is None:
+        print("✗ SRC 树里取不到判词文件 ⇒ 「内容相同/不同」是**不可得**（不是「不同」）⇒ 判失败")
+        return 1
+    if content_state == "相同" and not known_ok_content:
         print("✗ 硬条件被破：SRC 的判词文件与产品树**逐字节相同**，却判「表内期望不适用」"
               "（内容相同就不可能看不清）⇒ 判据用错了东西，读数无效")
         return 1
