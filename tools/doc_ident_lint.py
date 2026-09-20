@@ -38,6 +38,12 @@ from pathlib import Path
 
 TOKEN = re.compile(r"`([0-9a-fA-F]{7,64})`")
 LONG = re.compile(r"`([0-9a-fA-F]{65,})`")          # ★ 长度>64 ⇒ 仍然逃逸，必须自己会红（不许静默）
+# ★ 第三面（后端2 送回）：**段内含非十六进制字符** ⇒ 整段不匹配 TOKEN。按装饰**语义**分两级：
+REV = re.compile(r"`([0-9a-fA-F]{7,64})[\^~]`")     # 修订算符 ⇒ 十六进制部分**就是提交引用** ⇒ 进判定
+TRUNC = re.compile(r"`([0-9a-fA-F]{7,64})…`")        # 省略号＝截断 ⇒ **推不出命名空间**（8 位截断会按形状误判成记忆）⇒ 只报不判
+MIXED = re.compile(r"`[^`\n]*?[0-9a-fA-F]{7,64}[^`\n]*?`")
+TRUNCATED: list = []
+MIXED_HITS: list = []
 SPELLING_UPPER: list = []
 TOO_LONG: list = []
 
@@ -152,10 +158,29 @@ def scan(path: Path) -> tuple[list[str], dict[str, tuple[str, int, str | None]]]
     _too_long_here: list[str] = []
     SPELLING_UPPER.clear()
     TOO_LONG.clear()
+    TRUNCATED.clear()
+    MIXED_HITS.clear()
     for i, ln in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         for m in LONG.finditer(ln):
             TOO_LONG.append(f"{path.name}:{i}  长度 {len(m.group(1))} 的十六进制串"
                             f"**超出尺子上限 64 ⇒ 它对判定完全不可见**，请缩短或改口径后再引用")
+        for m in REV.finditer(ln):
+            raw = m.group(1)
+            label = label_before(ln, m.start())
+            ns = classify(raw.lower())
+            if label is None:
+                bad.append(f"{path.name}:{i}  `{raw}[修订算符]` 的十六进制部分是**{ns}**"
+                           f"（本仓约定：提交前缀 + ^ / ~）但**没有贴着标签** ⇒ 读者会把「前缀+算符」当成别的东西")
+            elif label != ns:
+                bad.append(f"{path.name}:{i}  `{raw}[修订算符]` 是**{ns}**却贴成了「{label}」")
+        for m in TRUNC.finditer(ln):
+            TRUNCATED.append(f"{path.name}:{i}  `{m.group(1)}…`")
+        for m in MIXED.finditer(ln):
+            seg = m.group(0)
+            if TOKEN.fullmatch(seg) or REV.fullmatch(seg) or TRUNC.fullmatch(seg):
+                continue
+            MIXED_HITS.append(f"{path.name}:{i}  {seg[:70]}")
+            break
         for m in TOKEN.finditer(ln):
             raw = m.group(1)
             tok = raw.lower()          # ★ 大写拼法也要被抓到；判定归一小写（git 的 sha 解析本就不分大小写）
@@ -232,6 +257,12 @@ def main() -> int:
         print(ident(path))
         bad, info = scan(path)
         head = sorted(info.items(), key=lambda kv: kv[1][1])[:8]
+        if TRUNCATED:
+            print(f"   ⚠ 另报（**不进 rc**）：**截断形式** {len(TRUNCATED)} 段 —— 装饰集＝`…`；"
+                  f"**截断推不出命名空间**（8 位截断按形状会被误判成「记忆」）⇒ 只报不判，例：{TRUNCATED[:3]}")
+        if MIXED_HITS:
+            print(f"   ⚠ 另报（**不进 rc**）：段内含十六进制串但**不属标识形状** {len(MIXED_HITS)} 段"
+                  f"（如 `source_sig=<8位>`、`<名>-<8位>.exe`）⇒ 按形状判会**贴错命名空间** ⇒ 只报不判，例：{MIXED_HITS[:3]}")
         if SPELLING_UPPER:
             print(f"   ★ 其中以**大写拼法**出现的 {len(SPELLING_UPPER)} 处（判定时**归一到小写**；"
                   f"两个拼法视为**同一个标识** —— git 的 sha 解析本就不分大小写）：{sorted(set(SPELLING_UPPER))[:6]}")
