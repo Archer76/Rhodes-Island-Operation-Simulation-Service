@@ -876,9 +876,27 @@ def _view(inp, *, enemy_id: str, level: int,
     换关卡乘区/难度档位这些仍走同一个 `enemy_at`（原版也是这样），所以不必重实现。
     """
     stats = enemy_stats(inp.enemy_at, inp.stage, enemy_id, level)
-    return enemy_view(stats, enemy_id=enemy_id, level=level,
-                      route=route, legs=legs, t=float(t), wait=float(wait),
-                      species_provider=inp.species_provider)
+    e = enemy_view(stats, enemy_id=enemy_id, level=level,
+                   route=route, legs=legs, t=float(t), wait=float(wait),
+                   species_provider=inp.species_provider)
+    # ---- 伤害相性 P3R（`TotalAttack.*` / `Mode_A|B`）：**把原料挂上视图**
+    #
+    # ⚠ 这里**不用** `enemy_view` 的 `affinity=`/`bk=` 两个槽，理由是"选哪一档"是
+    # **运行期**的事：原版 `sim._build_enemy`（`sim.py:1552-1558`）按当时的
+    # `sim.boss_mode` 选 `modes[...]`，而 `sim.py:3640` 在档位切换时**改写**
+    # `e.affinity`。规格是出怪**之前**算好的，所以只能把**原料**送过去，
+    # 由 Go 在同一时刻自己选（同 `reborn_summons` 那条的处置）。
+    #
+    # ⚠ 原版还有一个**门**：`if self.total_attack is not None:` —— 装置不在，
+    # `aff` 恒为 `{}`。这跟"这只敌人有没有相性"是两件事，故分两个键送。
+    e.p3r_raw = dict(getattr(stats, "p3r", None) or {})
+    e.p3r_modes = {str(k): dict(v or {})
+                   for k, v in (getattr(stats, "modes", None) or {}).items()}
+    e.p3r_weak_max = float(getattr(stats, "weak_max", 0.0) or 0.0)
+    e.p3r_fall_duration = float(getattr(stats, "fall_duration", 0.0) or 0.0)
+    e.p3r_has = bool(getattr(stats, "has_p3r", False))
+    e.p3r_armed = getattr(inp, "total_attack", None) is not None
+    return e
 
 
 def _spawn_spec(inp, t: float, sp,
@@ -1019,6 +1037,32 @@ def _unit_spec(inp, e, *, time: float = 0.0) -> dict[str, Any]:
         # 同一个寻路），Go 按召唤那刻的格子查表——查不到它会当场拒跑，
         # 而不是随便给一条路（那会让漏怪判定悄悄偏）。
         "reborn_summons": _reborn_summons_spec(inp, e),
+        # ---- 伤害相性 P3R（`TotalAttack.*` / `Mode_A|B`）
+        #
+        # ★ 这一族是目前**两端都缺**的整族：Go 侧 0 落点（含 `_test.go`），
+        # 规格侧此前**一个字段都不送**（`enemy_view` 有 `affinity` 槽，但 `_view`
+        # 从来没传过它 ⇒ 恒 `None`）。本轮只开**通道**：送「相性是什么」，
+        # **不实现**「相性怎么作用」（那一条等通道开了、有夹具行使了再说）。
+        #
+        # ⚠ **空值写法**（`{}` / `0` / 键缺席 三者含义不同，不许压成一个）：
+        # * 本侧**永远送这几个键**；没有相性时送 `{}` / `0.0` / `false`，
+        #   **不用"键缺席"表示空**；
+        # * Go 侧对应地用 `map` 与**指针**接收 ⇒ 老规格（键缺席）解出来是 `nil`、
+        #   显式空是**非 nil 的空 map**，两者可判。
+        # * 于是三态可分辨：`nil` = 这份规格没有这个通道；`{}` = 通道在、无相性；
+        #   有内容 = 有相性。把它们压成一个，正是本族此前静默的根因。
+        "p3r": dict(getattr(e, "p3r_raw", None) or {}),
+        "p3r_modes": {str(k): dict(v or {})
+                      for k, v in (getattr(e, "p3r_modes", None) or {}).items()},
+        #: 击破值阈值（`TotalAttack.weak_max`）：累积到这个实际掉血量就倒地。
+        "p3r_weak_max": float(getattr(e, "p3r_weak_max", 0.0) or 0.0),
+        #: 倒地持续秒数（`TotalAttack.fall_duration`）。
+        "p3r_fall_duration": float(getattr(e, "p3r_fall_duration", 0.0) or 0.0),
+        #: 原版建 `BreakState` 的判据（`stats.has_p3r`）。
+        "p3r_has": bool(getattr(e, "p3r_has", False)),
+        #: 原版的**门**：装置不在时 `aff` 恒 `{}`（`sim.py:1552`）。
+        #: 它全局、且与"这只敌人有没有相性"不同源，故单独一个键。
+        "p3r_armed": bool(getattr(e, "p3r_armed", False)),
         # ---- 明识形态（`PassiveM2.*`，「祟」重生归来后的第二形态）
         #
         # 送的是"进形态要改哪些量"；"什么时候判清水、什么时候算标记退场"

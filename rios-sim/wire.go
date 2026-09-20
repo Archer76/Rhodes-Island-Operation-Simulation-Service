@@ -535,6 +535,39 @@ type SpawnSpec struct {
 	//: 普攻双份出手（HS-EX-8 第 2 手就是这么多出两笔 192 的）。
 	SkillAtkNoNormal bool `json:"skill_atk_no_normal,omitempty"`
 
+	//: ---- 伤害相性 P3R（原版 `TotalAttack.*` / `Mode_A|B`，`battle/p3r.py`）
+	//:
+	//: 取值 `0 弱点 / 1 正常 / 2 免疫 / 3 反射`，**逐伤害类型**给（`physical`/
+	//: `magical`/`element`）。这一族此前**两端都缺**：Go 侧 0 落点，规格侧也
+	//: 一个字段都不送（`enemy_view` 有 `affinity` 槽，但 `_view` 从没传过它）。
+	//: 本段只开**通道**——字段到了 Go，**怎么作用**还没实现。
+	//:
+	//: ⚠ **故意不用 `omitempty`，而且用可判 `nil` 的类型**：三个空值含义不同，
+	//: 压成一个就是本族静默的根因。
+	//:   * **键缺席** → 解出来是 `nil`：这份规格是开通道之前写的，压根没有这一路；
+	//:   * **`{}` / 显式 0** → **非 nil** 的空 map ／ 非 nil 指针：通道在，
+	//:     这只敌人（或这一关）没有相性；
+	//:   * **有内容** → 真的带相性。
+	//: 用 `omitempty` 会让"没送"和"送了空"在**序列化回来**时长得一样。
+	P3R map[string]int `json:"p3r"`
+	//: 形态相性（BOSS 专用）`{"Mode_A": {...}, "Mode_B": {...}}`。
+	//:
+	//: ★ BOSS 的**真档位**在这里，它的 `P3R` 反而是 `1/1/1`（无弱点）。
+	//: ⚠ "选哪一档"是**运行期**的事：原版按当时的 `sim.boss_mode` 选
+	//: （`sim.py:1554`），并在档位切换时**改写** `e.affinity`（`sim.py:3640`）。
+	//: 规格是出怪之前算好的，所以**整份送过来**、由 Go 在同一时刻自己选。
+	P3RModes map[string]map[string]int `json:"p3r_modes"`
+	//: 击破值阈值（`TotalAttack.weak_max`）：累积到这个**实际掉血量**就倒地。
+	P3RWeakMax *float64 `json:"p3r_weak_max"`
+	//: 倒地持续秒数（`TotalAttack.fall_duration`）。
+	P3RFallDuration *float64 `json:"p3r_fall_duration"`
+	//: 原版建 `BreakState` 的判据（`stats.has_p3r`）。
+	P3RHas *bool `json:"p3r_has"`
+	//: 原版的**门**：`sim.py:1552` 的 `if self.total_attack is not None` ——
+	//: **装置不在时相性恒不生效**（`aff` 恒 `{}`），与"这只敌人有没有相性"
+	//: 是两件事、不同源，所以单独一个键。
+	P3RArmed *bool `json:"p3r_armed"`
+
 	Legs []LegSpec `json:"legs"`
 
 	//: **天桩-乙**（原版 `sim._pile_mark_key(e)` 非空）。
