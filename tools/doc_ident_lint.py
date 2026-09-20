@@ -70,6 +70,24 @@ def label_before(ln: str, pos: int) -> str | None:
     return None
 
 
+def collisions(info: dict, ids: set[str]) -> tuple[list[str], int]:
+    """与**形状无关的第二来源**求交（可选）：记忆轨里真实存在的条目 id 清单。
+
+    ★ 为什么需要它：`classify` 按**形状/可解析性**给命名空间。若某个 8 位值**既能解析为提交、
+      又恰好是一条记忆条目 id**，按形状只会归「提交」，而那一处文档可能实际在指记忆条目
+      ⇒ 检查会绿着放过一个**语义贴错**的标签（后端2 提出的洞，量级见 §21.5）。
+    ★ 它盖到哪为止：只能查出**数值在两套命名空间里都存在**（那时值本身不再唯一确定语义，
+      必须由人确认），**查不出**「值只在一套里存在、却被当成另一套用」——那种情况在文档里
+      **没有第二个语义来源**，唯一来源就是标签本身（这正是本纪律要求贴标签的原因）。
+    """
+    bad: list[str] = []
+    hit = sorted(tok for tok, (ns, _, _) in info.items() if ns == "提交" and tok in ids)
+    for tok in hit:
+        bad.append(f"`{tok}` 既能解析为提交、又在记忆 id 清单里 ⇒ **值本身不再唯一确定语义**，"
+                   f"请人工确认文档里那一处指的是哪一个（形状判不了）")
+    return bad, len(hit)
+
+
 def scan(path: Path) -> tuple[list[str], dict[str, tuple[str, int, str | None]]]:
     """返回 (判红理由, {token: (命名空间, 首次出现行号, 首次处贴的标签或 None)})。
 
@@ -115,8 +133,36 @@ def main() -> int:
         return 2
     print(f"   ✓ 合成反例被归到「{ns}」且不能被当成提交 ⇒ 检查有分辨力\n")
 
+    argv = sys.argv[1:]
+    ids: set[str] | None = None
+    if "--memory-ids" in argv:
+        k = argv.index("--memory-ids")
+        mf = Path(argv[k + 1]); del argv[k:k + 2]
+        if not mf.exists():
+            print(f"★ 记忆 id 清单不存在：{mf} ⇒ 拒跑（不把「找不到」读成通过）")
+            return 1
+        ids: set[str] = set()
+        junk: list[str] = []
+        for k2, raw in enumerate(mf.read_text(encoding="utf-8").splitlines(), 1):
+            s = raw.strip()
+            if not s:
+                continue
+            m2 = re.fullmatch(r"[0-9a-f]{7,40}", s)
+            if m2:
+                ids.add(s)
+            else:
+                junk.append(f"{mf.name}:{k2}  `{s[:24]}` 不是十六进制标识 ⇒ 清单本身不可用")
+        if junk:
+            print("★ 第二来源清单里有无法解析的行 ⇒ 拒跑（清单被静默丢空会让「碰撞 0 个」变成假绿）：")
+            for j in junk[:6]:
+                print("   ✗ " + j)
+            return 1
+        print(f"== 第二来源（记忆 id 清单）：{mf.name}，**解析出 {len(ids)} 个**（7~40 位十六进制）⇒ 碰撞检测已行使 ==")
+    else:
+        print("== 第二来源（记忆 id 清单）**未提供** ⇒ 碰撞检测**未行使**（第三态，不参与判定）==")
+
     total_bad: list[str] = []
-    for arg in sys.argv[1:]:
+    for arg in argv:
         path = Path(arg)
         if not path.exists():
             print(f"★ 文件不存在：{path} ⇒ 拒跑（不把「找不到」读成通过）")
@@ -126,6 +172,12 @@ def main() -> int:
         head = sorted(info.items(), key=lambda kv: kv[1][1])[:8]
         print(f"   反引号内的十六进制标识共 {len(info)} 种："
               + "、".join(f"{k}({v[0]})" for k, v in head) + ("…" if len(info) > 8 else ""))
+        if ids is None:
+            print("   ⊘ 与形状无关的碰撞检测：**未行使**（未提供记忆 id 清单）")
+        else:
+            cb, nhit = collisions(info, ids)
+            print(f"   · 碰撞检测：**已行使**（{len(info)} 个标识 × {len(ids)} 个记忆 id）⇒ 命中 {nhit} 个")
+            bad += cb
         for b in bad:
             print("   ✗ " + b)
         total_bad += bad
