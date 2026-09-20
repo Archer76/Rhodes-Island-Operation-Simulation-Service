@@ -66,7 +66,9 @@ type response struct {
 	Verdict json.RawMessage `json:"verdict,omitempty"`
 	//: `load` 的应答：Go 自己解析出来的关卡（见 `stage.go`）。
 	Stage json.RawMessage `json:"stage,omitempty"`
-	Error string          `json:"error,omitempty"`
+	//: `enemies` 的应答：一关引用的敌人各自那一档（见 `enemy.go`）。
+	Enemies json.RawMessage `json:"enemies,omitempty"`
+	Error   string          `json:"error,omitempty"`
 }
 
 type pong struct {
@@ -173,8 +175,24 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("关卡序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Stage: raw}
+	case "enemies":
+		// 丙阶段二：**Go 自己读敌人库**，逐档合并后取这一关引用的那几档。
+		if req.Level == "" {
+			return response{ID: req.ID, OK: false,
+				Error: "enemies 少了 level（给关卡，如 main_00-01）"}
+		}
+		lid, refs, err := EnemiesForStage(req.Level)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(map[string]any{"level_id": lid, "refs": refs})
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("敌人序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Enemies: raw}
 	default:
 		return response{ID: req.ID, OK: false,
-			Error: fmt.Sprintf("不认识的命令：%q（支持 ping / sim / load）", req.Cmd)}
+			Error: fmt.Sprintf("不认识的命令：%q（支持 ping / sim / load / enemies）", req.Cmd)}
 	}
 }
