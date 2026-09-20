@@ -34,6 +34,55 @@ DIRECTIONS = ("Right", "Left", "Up", "Down")
 _POS_ML = re.compile(r'"position": \[\s*(\d+),\s*(\d+)\s*\]')
 
 
+def _skill_from_json(raw: dict[str, Any], where: str) -> Any:
+    """把 `skill` 的**对象形态**装成一枚 `SkillLevel`（丙方案，PM 2026-09-20 批准）。
+
+    写法：`{"id": "skchr_angel_3", "level": 7, "mastery": 3}`。
+
+    ★ **为什么这件事只需要改这里**：`frontend/schedule.py:69` 的 `Deployment.skill`
+    **类型本来就是 `object`**，它的文档字符串早就写了「也可以直接给一个
+    `SkillLevel` 对象」，而 `simgo/spec.py:97-101` 已经在兑现那条分支。
+    **形状本来就在，是下面 `from_dict` 里那个 `int(...)` 把它掐窄了。**
+
+    ⚠ **为什么不用 `for_operator(char_id)`**（那一支才是 `SkillBook` 的示例用法）：
+    `DeployOrder.operator` 是**中文名**，而那一支要 `char_id`，两者的映射住在
+    **名册**里——`Plan.from_dict` 手上**没有名册**（`5383209a`：计划用中文名、
+    名册用 charId，是两个键空间）。`skill_id` 是**全局唯一**的，
+    所以走 `levels(skill_id)` 这条路**不需要名册**。
+
+    ⚠ **`import` 故意放在函数里**：`plan.py` 今天是**只依赖标准库的叶子模块**，
+    把取数/gamedata 那一套拖到模块顶层，会让每个 `import plan` 的地方都先付这份
+    代价——而旧夹具一个字段都不用它（走的是下面那条 int 路）。
+
+    ★ **装不出来一律拒跑并具名报错**：不许 `getattr` 兜底、不许把认不出的值当 0
+    ——那会把「我写错了字段」静默变成「这一局不带技能」，正好把这条刚打开的路
+    反过来焊死。
+    """
+    if not isinstance(raw, dict):
+        raise PlanError(
+            f"{where} 只能是 0–3 的整数或一个对象，收到 {type(raw).__name__}")
+    sid = raw.get("id") or raw.get("skill_id")
+    if not sid:
+        raise PlanError(
+            f"{where} 缺 `id`（技能编号，如 skchr_angel_3）。"
+            f"★ 这里**不认槽位号**：槽位号只在「同一位干员的第几个技能」里有意义，"
+            f"而技能编号是全局唯一的——两个键空间，不许混")
+    level = int(raw.get("level") or 7)
+    mastery = int(raw.get("mastery") or 0)
+    #: ⚠ 迟到的 import（理由见 docstring）。
+    from ak_tactic.operator.skill import SkillBook, resolve_index
+    book = SkillBook()
+    if not book.exists(str(sid)):
+        raise PlanError(f"{where} 的技能编号 {sid!r} 在技能表里没有")
+    levels = book.levels(str(sid))
+    idx = resolve_index(level, mastery)
+    if idx >= len(levels):
+        raise PlanError(
+            f"{where} 的 {sid} 只有 {len(levels)} 个等级，"
+            f"取不到 level={level} / mastery={mastery}")
+    return levels[idx]
+
+
 class PlanError(ValueError):
     """打法文件有问题。**必须是硬错误**——静默纠正一个错坐标会产出假结果。"""
 
@@ -51,7 +100,12 @@ class DeployOrder:
     operator: str
     position: tuple[int, int]
     direction: str = "Right"
-    skill: int = 0
+    #: ★ **0–3 的槽位号，或一个技能对象**（丙方案，2026-09-20）。
+    #: 对象形态＝`{"id": 技能编号, "level": 1–7, "mastery": 0–3}`，
+    #: 装成 `SkillLevel` 之后放进 `self.skill`。
+    #: ★ 与 `frontend/schedule.py:69` 的 `Deployment.skill` **同一个类型契约**
+    #: （那边本来就是 `object`）——这里今天才跟上。
+    skill: object = 0
     mastery: int = 0
     elite: int | None = None
     level: int | None = None
@@ -65,6 +119,11 @@ class DeployOrder:
     module_level: int | None = None
     time: float | None = None
     auto_skill: bool = True
+    #: ★ **对象形态的原始写法**，只用于 `to_dict` 往返。
+    #: `skill` 到了这里已经是一枚 `SkillLevel`（不可 JSON 序列化），
+    #: 而 `to_dict` 要写出**能被再读回来的**那一份 ⇒ 原件留在这儿。
+    #: `repr=False` 避免每次打印都吐一大坨；`compare=False` 让它不参与相等判定。
+    _skill_raw: dict[str, Any] | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.position = (int(self.position[0]), int(self.position[1]))
@@ -72,13 +131,21 @@ class DeployOrder:
             raise PlanError(
                 f"{self.operator} 的朝向 {self.direction!r} 不认识，"
                 f"只能是 {DIRECTIONS} 之一")
-        if not 0 <= int(self.skill) <= 3:
+        if isinstance(self.skill, dict):
+            #: ★ 对象形态：**在这里**装成 `SkillLevel`（下游一行都不用改：
+            #: `spec.py:97` 判的是 `isinstance(spec, int)`，对象自然走「已经绑好」那条）。
+            self._skill_raw = self.skill
+            self.skill = _skill_from_json(self.skill, f"{self.operator} 的 skill")
+        elif not 0 <= int(self.skill) <= 3:
+            #: ⚠ 这条**一个字的判定都没改**：旧夹具走的还是这一行。
             raise PlanError(f"{self.operator} 的技能槽 {self.skill} 越界（0–3）")
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
             "operator": self.operator, "position": list(self.position),
-            "direction": self.direction, "skill": self.skill,
+            "direction": self.direction,
+            #: 对象形态写回**原件**（不是那枚 `SkillLevel`，它序列化不了）
+            "skill": self._skill_raw if self._skill_raw is not None else self.skill,
         }
         for k in ("mastery", "elite", "level", "potential", "trust", "module",
                   "module_level", "time"):
@@ -254,7 +321,13 @@ class Plan:
             deploys.append(DeployOrder(
                 operator=name, position=(pos[0], pos[1]),
                 direction=d.get("direction") or d.get("facing") or "Right",
-                skill=int(d.get("skill") or 0),
+                #: ★ 丙方案（PM 2026-09-20 批准）：`skill` 除 int 外还可以是一个对象。
+                #: ⚠ 判定只加了一层 `isinstance(..., dict)`：**int 那一路一个字符没动**
+                #: ⇒ 24 份夹具（`skill` 全是 int）走的分支与改动前**逐字节同一条**。
+                #: ⚠ 这里**不**用 `or 0` 兜 dict：空 `{}` 也是 dict，要让它走到
+                #: `_skill_from_json` 里**具名报错**，而不是静默变成「不带技能」。
+                skill=(d["skill"] if isinstance(d.get("skill"), dict)
+                       else int(d.get("skill") or 0)),
                 mastery=int(d.get("mastery") or 0),
                 elite=None if d.get("elite") is None else int(d["elite"]),
                 level=None if d.get("level") is None else int(d["level"]),
