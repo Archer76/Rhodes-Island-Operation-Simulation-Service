@@ -145,4 +145,23 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    #: ★ 判据的输出不许依赖终端编码（2026-09-20 修，PM 裁定 msg-mu9cwt89-ll 第二节）。
+    #: 本机 `sys.stdout.encoding` **默认就是 gbk**（PYTHONIOENCODING 未设），而本文件的输出里
+    #: 含 ✓／✗／⇒／− 等 GBK **编不出**的字符 ⇒ **印总结行时**抛 UnicodeEncodeError
+    #: ⇒ 退出码由崩溃给出：实测改前**恒 rc=1**，与它要判的东西毫无关系
+    #: （＝一个从不发光的守卫；PM 每次 push 前的「tools/check_*.py 全绿」判据因此失去分辨力）。
+    #: 只放宽错误处理器、**不改编码**：编不出的字符退化成转义文本，信息不丢，既有输出形状一字未动。
+    #: ★ 全部写在 `__main__` 里：作为模块被 import 时行为**一字不变**。
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(errors="backslashreplace")
+    except Exception:  # noqa: BLE001 - 不支持 reconfigure 的流 ⇒ 不适用，继续
+        pass
+    try:
+        _rc = main()
+    except BaseException as _e:  # noqa: BLE001 - 崩了必须是**与业务态不重叠**的一个值
+        print(f"VERDICT=SELFCHECK_CRASH EXC={type(_e).__name__}: {_e}")
+        _rc = 5
+    #: ASCII 机读判定行：rc 从此是它自己的结论（0 无失败／1 有失败／5 没能判定）。
+    print(f"VERDICT={'PASS' if _rc == 0 else 'FAIL'} rc={_rc}")
+    raise SystemExit(_rc)
