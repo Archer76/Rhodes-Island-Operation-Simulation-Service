@@ -104,6 +104,8 @@ type OperatorStats struct {
 	HighlandSplashScale    float64 `json:"highland_splash_scale"`
 	HighlandSplashSluggish float64 `json:"highland_splash_sluggish"`
 	HPDrainPerSec          float64 `json:"hp_drain_per_sec"`
+	//: 三个纯文本判据（`operator_traits.go`）。
+	TextDerived
 }
 
 // ---------------------------------------------------------------- 数据源
@@ -417,6 +419,8 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 		st.SplashDamageScale = 1.0
 	}
 	st.HPDrainPerSec = readHPDrain(char.Description, char.Trait)
+	//: 三个纯文本判据（攻击类型 / 平A 是否治疗 / 弱点伤害）。
+	st.TextDerived = textDerived(char.Description, char.Talents)
 	return st, nil
 }
 

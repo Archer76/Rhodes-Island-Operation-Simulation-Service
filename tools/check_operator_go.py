@@ -159,6 +159,8 @@ def main() -> int:
     tr_hits = {"splash_radius": 0, "splash_scale": 0, "splash_damage_scale": 0,
                "highland_splash_scale": 0, "highland_splash_sluggish": 0,
                "hp_drain_per_sec": 0}
+    #: 三个纯文本判据的行使计数（布尔真 / 非法术类型 各计一次）。
+    tx_hits = {"damage_type_text": 0, "heals": 0, "weakness_damage": 0}
     for cfg, g in zip(configs, got):
         py = calc.stats(cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
                         trust=cfg["trust"], potential=cfg["potential"],
@@ -233,6 +235,27 @@ def main() -> int:
                 tr_hits[k] += 1
             if norm(g.get(k)) != norm(b):
                 out.append("%s：Go=%r Python=%r" % (k, norm(g.get(k)), b))
+        #: 三个纯文本判据（verify.py:305-308 与 :329-331）。
+        #: ⚠ `weakness_damage` 的判据文本是**所有候选**的描述拼接，
+        #: 不是「这个练度下生效的那几条」——照解析后的天赋判会漏。
+        trait = ch.get("description") or ""
+        tal_text = " ".join(
+            (cand.get("description") or "")
+            for t_ in (ch.get("talents") or [])
+            for cand in (t_.get("candidates") or []))
+        py_tx = {"damage_type_text": "MAGIC" if "法术伤害" in trait else "PHYSICAL",
+                 "heals": "恢复友方单位生命" in trait,
+                 "weakness_damage": "弱点伤害" in tal_text}
+        for k, b in py_tx.items():
+            #: ⚠ `damage_type_text` 是**字符串**（恒真），按真值计数会数出
+            #: 「468 次全被行使」——那是假计数。它要数的是 **MAGIC 的条数**。
+            if k == "damage_type_text":
+                if b == "MAGIC":
+                    tx_hits[k] += 1
+            elif b:
+                tx_hits[k] += 1
+            if norm(g.get(k)) != norm(b):
+                out.append("%s：Go=%r Python=%r" % (k, g.get(k), b))
         if out:
             bad += 1
             print("✗ %s E%d L%d trust=%g pot=%d mod=%s —— %d 处不一致"
@@ -251,6 +274,11 @@ def main() -> int:
     for k, n in aspd_hits.items():
         flag = "" if n else "   ← 零信息量的绿：这一档本轮没被行使到"
         print("    %-18s %d%s" % (k, n, flag))
+    print("★ 三个纯文本判据行使计数（MAGIC 条数 / 治疗为真 / 弱点伤害为真）：")
+    for k, n in tx_hits.items():
+        flag = "" if n else "   ← 这一档本轮没被行使到"
+        print("    %-18s %d%s" % (k, n, flag))
+    print()
     print("★ 特性三字段行使计数（非零／共 %d 次）：" % compared)
     for k, n in tr_hits.items():
         flag = "" if n else "   ← 这一档本轮没被行使到"

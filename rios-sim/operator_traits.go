@@ -263,6 +263,55 @@ func isSplashTalent(t resolvedTalent) bool {
 	return true
 }
 
+// ---- 三个纯文本判据（`verify.py:329-331`）----
+//
+// 它们各自只有一个判据词，**必须与 Python 逐字一致**——差一个字就会静默变成
+// 另一种攻击类型 / 不治疗 / 丢了弱点伤害。
+
+// TextDerived 是三项由文本推出的字段。
+type TextDerived struct {
+	//: `"MAGIC" if "法术伤害" in trait else "PHYSICAL"`（特性正文）。
+	DamageType string `json:"damage_type_text"`
+	//: 特性正文含「恢复友方单位生命」= 这个人的平A 是治疗。
+	Heals bool `json:"heals"`
+	//: **全部天赋候选**的正文里含「弱点伤害」（不是只看生效的那几条）。
+	WeaknessDamage bool `json:"weakness_damage"`
+}
+
+// textDerived 复刻 `verify.py:305-308` 与 `:329-331`。
+//
+// ⚠ `weakness_damage` 的判据文本 `tal_text` 是**所有候选**的描述拼接，
+// 不是「这个练度下生效的那几条」——照解析后的天赋判会漏掉高档位才解锁的那条。
+func textDerived(traitDesc string, talents []json.RawMessage) TextDerived {
+	out := TextDerived{DamageType: "PHYSICAL"}
+	if strings.Contains(traitDesc, "法术伤害") {
+		out.DamageType = "MAGIC"
+	}
+	out.Heals = strings.Contains(traitDesc, "恢复友方单位生命")
+	out.WeaknessDamage = strings.Contains(talentText(talents), "弱点伤害")
+	return out
+}
+
+// talentText 复刻 `verify.py:305-308`：所有候选的描述拼成一串。
+func talentText(talents []json.RawMessage) string {
+	var b strings.Builder
+	for _, tRaw := range talents {
+		var group struct {
+			Candidates []struct {
+				Description string `json:"description"`
+			} `json:"candidates"`
+		}
+		if err := json.Unmarshal(tRaw, &group); err != nil {
+			continue
+		}
+		for _, cand := range group.Candidates {
+			b.WriteString(cand.Description)
+			b.WriteString(" ")
+		}
+	}
+	return b.String()
+}
+
 // traitCandidates 取出 `trait.candidates[].blackboard`。
 func traitCandidates(traitRaw json.RawMessage) [][]json.RawMessage {
 	if len(traitRaw) == 0 {
