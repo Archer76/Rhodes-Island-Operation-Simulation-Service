@@ -349,8 +349,25 @@ def stage() -> None:
         shutil.copy2(p, WORK / "mech" / p.name)
 
 
+def discover_tests() -> dict[str, list[str]]:
+    """**从树上现算**测试名单：`文件 → [^func Test 名字]`（运行范围不许是写死的常量）。
+
+    ★★ F5（验收 §18）：旧版命令行写死 `-run Chain` ⇒ **运行范围**是一个**未声明的窄范围**，
+      而归类器扫的是**全部** `*_test.go` ⇒ **两个来源范围不同**；更要紧的是
+      **运行范围 < 树上真实存在的测试集** —— 这是「取证范围 ≥ 运行范围」的**镜像**：
+      上五次是**取证**窄于运行，这一次是**运行本身就窄**，**两边都看不见**。
+      实测（本次）：树上 `^func Test` **3 个**（`chain_test.go` 2 ＋ `farmland_golden_test.go` 的
+      `TestFarmlandGolden`），`-run Chain` 只跑 **2 个** ⇒ 第三个**没有任何一组读数提到它**、rc=0。
+    """
+    out: dict[str, list[str]] = {}
+    for p in sorted((WORK / "mech").glob(TEST_GLOB)):
+        names = re.findall(r"^func (Test\w+)\(", p.read_text(encoding="utf-8", errors="replace"), re.M)
+        out[p.name] = sorted(set(names))
+    return out
+
+
 def go_test() -> tuple[int, str, dict]:
-    """跑 `go test -json`，**一次运行两个来源**：给人看的正文 ＋ 给机器看的失败集合。
+    """跑 `go test -json`，**一次运行两个来源**：给人看的正文 ＋ 给机器看的判决集合。
 
     ★★★ 根因那笔的**强版本**（PM 转派）：旧版只用正文里 `file:line:` 形态的红行，
       于是「红行总数」**没有第二个来源**、只与常量 1 比（`f6068d3c`）。
@@ -358,8 +375,10 @@ def go_test() -> tuple[int, str, dict]:
       与我从正文**推**出来的归属是**两个独立来源** ⇒ 可以逐条对账。
     ★ 为什么不用两次运行（一次文本一次 json）：**同一个量在同一份产物里只能有一个来源**（`45fab0e7`）——
       两次运行是两个时刻，读数可能不同；这里正文直接从 json 的 `Output` 还原。
+    ★★ F5：命令行**不再写 `-run`**（运行整包）—— 运行范围＝树上真实测试集，
+      并在 `reconcile_scope` 里逐名对账（**运行范围不许是一个没人为它发声的常量**）。
     """
-    p = subprocess.run(["go", "test", "./mech/", "-run", "Chain", "-count=1", "-v", "-json"],
+    p = subprocess.run(["go", "test", "./mech/", "-count=1", "-v", "-json"],
                        cwd=str(WORK), capture_output=True)
     raw = (p.stdout or b"").decode("utf-8", "replace")
     events: list[dict] = []
@@ -388,6 +407,7 @@ def verdict_from_events(events: list[dict], raw: str) -> dict:
     """
     tests_fail: set[str] = set()
     tests_pass: set[str] = set()
+    tests_skip: set[str] = set()
     pkg_fail = False
     build_lines: list[str] = []
     for e in events:
@@ -404,6 +424,9 @@ def verdict_from_events(events: list[dict], raw: str) -> dict:
                 pkg_fail = True
         elif act == "pass" and t:
             tests_pass.add(str(t))
+        elif act == "skip" and t:
+            #: ★ 跳过也是**判决的一种**（它出现在运行器判决里）⇒ 范围对账必须把它算进「被提到过」
+            tests_skip.add(str(t))
     hints = build_lines[:4]
     if not hints:                     #: 兜底：老版本 go 不发 build-output 时才去扫原文（绝不静默）
         for ln in raw.splitlines():
@@ -411,7 +434,33 @@ def verdict_from_events(events: list[dict], raw: str) -> dict:
             if "[build failed]" in s.lower() or "syntax error" in s.lower():
                 hints.append(s[:200])
     return {"pkg_fail": pkg_fail, "tests_fail": sorted(tests_fail), "tests_pass": sorted(tests_pass),
+            "tests_skip": sorted(tests_skip),
             "build_failed": bool(build_lines), "build_lines": build_lines[:4], "hints": hints}
+
+
+def reconcile_scope(discovered: dict[str, list[str]], verdict: dict) -> tuple[bool, list[str], str]:
+    """★★★ F5：**运行范围对账** —— 树上现算的测试集 ⇔ 运行器判决里出现过的测试集。
+
+    ★ 为什么必须有它：`-run` 是个**常量**时，没人替运行范围发声 ⇒
+      树上有一个失败的测试而**没有一组读数提到它**、rc=0（验收实测到的静默）。
+      这条把「运行范围」从**一个写死的常量**变成**一个被对账过的导出量**：
+      **少一个就具名报出缺了谁**，多一个也报（那说明我从树上没扫到它 ⇒ 扫描器漏了）。
+    """
+    bad: list[str] = []
+    disc = {n for v in discovered.values() for n in v}
+    seen = set(verdict["tests_fail"]) | set(verdict["tests_pass"]) | set(verdict.get("tests_skip") or [])
+    missing = sorted(disc - seen)
+    extra = sorted(seen - disc)
+    if missing:
+        bad.append(f"**运行范围 < 树上真实测试集**：树上有 {len(disc)} 个测试，运行器判决里没有 "
+                   f"{len(missing)} 个 ⇒ 缺 {missing}（它们**没有被跑**，任何一组读数都不会提到它们）")
+    if extra:
+        bad.append(f"运行器报出的测试不在树上现算的名单里：{extra} ⇒ 扫描器漏了（或 -run 语义与名字不符）")
+    note = (f"运行范围＝**整包**（命令行不写 `-run`）：树上现算 **{len(disc)}** 个测试 "
+            f"（{'、'.join(sorted(discovered))}）／运行器判决提到 **{len(seen)}** 个"
+            f"（失败 {len(verdict['tests_fail'])}＋通过 {len(verdict['tests_pass'])}"
+            f"＋跳过 {len(verdict.get('tests_skip') or [])}）")
+    return (not bad), bad, note
 
 
 def _line2test(per: dict, fname: str, line: int) -> str:
@@ -880,25 +929,27 @@ class Run:
 
     __slots__ = ("rc", "known", "unknown", "undet", "skipped", "bucket_ok",
                  "runner_ok", "runner_bad", "tests_fail", "tests_pass", "pkg_fail",
-                 "build_failed", "hints")
+                 "build_failed", "hints", "scope_ok", "scope_bad", "scope_note", "tests_skip")
 
     def __init__(self, rc: int, known: list[str], unknown: list[str], undet: list[str],
                  skipped: list[str], bucket_ok: bool, runner_ok: bool, runner_bad: list[str],
-                 verdict: dict):
+                 verdict: dict, scope_ok: bool, scope_bad: list[str], scope_note: str):
         self.rc, self.known, self.unknown, self.undet, self.skipped = rc, known, unknown, undet, skipped
         self.bucket_ok, self.runner_ok, self.runner_bad = bucket_ok, runner_ok, runner_bad
         self.tests_fail = list(verdict.get("tests_fail") or [])
         self.tests_pass = list(verdict.get("tests_pass") or [])
+        self.tests_skip = list(verdict.get("tests_skip") or [])
         self.pkg_fail = bool(verdict.get("pkg_fail"))
         self.build_failed = bool(verdict.get("build_failed"))
         self.hints = list(verdict.get("hints") or [])
+        self.scope_ok, self.scope_bad, self.scope_note = scope_ok, scope_bad, scope_note
 
     @property
     def total(self) -> int:
         return len(self.known) + len(self.unknown) + len(self.undet)
 
     def line(self) -> str:
-        """一行里同时给出**两个来源**：rc⇔桶（最便宜的那半）＋运行器判决（强的那半）。
+        """一行里同时给出**三个来源**：rc⇔桶、运行器判决、运行范围对账。
 
         ★ 两个量**分列**：`包判决`（包 fail＝包里有测试失败）与 `编译失败`（go 的 build-output 事件）
           不是同义词 —— 我第一版把两者都印成「包级失败」⇒ 标签与读数不同义。
@@ -907,9 +958,11 @@ class Run:
                 f"表内红 {len(self.known)} 条 {self.known}、认不出 {len(self.unknown)} 条、"
                 f"⊘ 未定性 {len(self.undet)} 条、"
                 f"运行器判决：失败 Test {len(self.tests_fail)} 个 {self.tests_fail or '[]'}"
-                f"／通过 {len(self.tests_pass)} 个／包判决={'fail' if self.pkg_fail else 'pass'}"
+                f"／通过 {len(self.tests_pass)} 个／跳过 {len(self.tests_skip)} 个"
+                f"／包判决={'fail' if self.pkg_fail else 'pass'}"
                 f"／编译失败={'是' if self.build_failed else '否'}"
-                f"（对账 {'✓' if self.runner_ok else '✗'}）")
+                f"（对账 {'✓' if self.runner_ok else '✗'}）"
+                f"、运行范围对账 {'✓' if self.scope_ok else '✗'}")
 
 
 def run_once(pairs: list[tuple[str, str, str]], *, control: bool = False) -> Run:
@@ -918,12 +971,15 @@ def run_once(pairs: list[tuple[str, str, str]], *, control: bool = False) -> Run
     if pairs:
         skipped = apply_or_skip(pairs) if control else (mutate(pairs), [])[1]
     per = scan_package()
+    discovered = discover_tests()                 #: ★ F5：运行范围**现算**，不写死
     rc, out, verdict = go_test()
     reds = classify_reds(out, per)
     known, unknown, undet = classify(out, per)
     rc_ok, _why = reconcile(rc, known, unknown, undet)
     runner_ok, runner_bad = reconcile_runner(verdict, reds, per)
-    return Run(rc, known, unknown, undet, skipped, rc_ok, runner_ok, runner_bad, verdict)
+    scope_ok, scope_bad, scope_note = reconcile_scope(discovered, verdict)
+    return Run(rc, known, unknown, undet, skipped, rc_ok, runner_ok, runner_bad, verdict,
+               scope_ok, scope_bad, scope_note)
 
 
 def main() -> int:
@@ -998,16 +1054,21 @@ def main() -> int:
               "（内容相同就不可能看不清）⇒ 判据用错了东西，读数无效")
         return 1
     print(f"== 基线：{base_run.line()} ==")
+    #: ★★★ F5（验收 §18／PM 加硬）：**运行范围**是一个被对账过的导出量，不许是没人为它发声的常量。
+    print(f"== 运行范围：{base_run.scope_note} ==")
     for u in base_run.unknown:
         print(f"      ↳ {u}")
     for u in base_run.undet:
         print(f"      ↳ {u}")
     for b in base_run.runner_bad:
         print(f"      ↳ 运行器对账：{b}")
-    if base_run.rc != 0 or base_run.total or not base_run.runner_ok:
+    for b in base_run.scope_bad:
+        print(f"      ↳ 运行范围对账：{b}")
+    if (base_run.rc != 0 or base_run.total or not base_run.runner_ok
+            or not base_run.scope_ok):
         #: ★ 基线把 ⊘ 未定性也算了进来：**这不是让它参与「计数」**，而是「产品树本该一条都没有」——
         #:   产品树里出现同行多调用 ⇒ 归类器从此对那一行**没有归属能力**，必须在基线处就看见。
-        print("✗ 基线不是全绿（含 ⊘ 未定性；或运行器判决与归属对不上账）⇒ 后面的矩阵无意义")
+        print("✗ 基线不是全绿（含 ⊘ 未定性；或运行器／运行范围对账不过）⇒ 后面的矩阵无意义")
         return 1
 
     ok = True
@@ -1021,7 +1082,8 @@ def main() -> int:
         #: ★★ 现在有两个：`bucket_ok`（rc⇔桶 对账，验收 §16 给的最便宜的那个）与
         #:   `runner_ok`（**根因那笔的强版本**：`go test -json` 的失败集合与我的逐函数归属逐条对账）。
         #:   ★ 另加一条「恰红 1 条」的**第二来源**：运行器说失败的 Test 必须**恰好 1 个**。
-        good = (r.rc != 0 and r.bucket_ok and r.runner_ok and len(r.tests_fail) == 1
+        good = (r.rc != 0 and r.bucket_ok and r.runner_ok and r.scope_ok
+                and len(r.tests_fail) == 1
                 and len(r.known) == 1 and not r.unknown and not r.undet
                 and r.known[0] == expect)
         ok &= good
@@ -1032,6 +1094,8 @@ def main() -> int:
             rows.append(f"      ↳ {u}")
         for b in r.runner_bad:
             rows.append(f"      ↳ 运行器对账：{b}")
+        for b in r.scope_bad:
+            rows.append(f"      ↳ 运行范围对账：{b}")
 
     ctrl_rows: list[str] = []
     n_skipped = 0
@@ -1055,12 +1119,13 @@ def main() -> int:
             known_ok = (sorted(set(known)) == sorted(set(exp["known"]))) if known_ok_content else None
         if exp.get("reconcile_must_fail"):
             #: ★★★ P10（根因那笔强版本的**控制组**）：这一类控制组断言的不是分类器，而是**检查器本身**
-            #:   —— 「包级失败 ⇒ 正文 0 条红行 ⇒ rc≠0 而桶合计 0」必须**当场被判红**。
-            #:   ⇒ 期望写成：rc≠0、**rc⇔桶 对账失败**、包级失败为真、桶合计 0、且运行器那条具名在。
-            good = (rc != 0 and not rc_ok and r.pkg_fail and r.total == 0
+            #:   —— 「编译失败 ⇒ 正文 0 条红行 ⇒ rc≠0 而桶合计 0」必须**当场被判红**。
+            #:   ⇒ 期望写成：rc≠0、**rc⇔桶 对账失败**、编译失败为真、桶合计 0、且运行器那条具名在。
+            good = (rc != 0 and not rc_ok and r.build_failed and r.total == 0
                     and bool(r.runner_bad))
         else:
-            good = (rc != 0 and rc_ok and r.runner_ok and len(unknown) >= exp.get("unknown_min", 0)
+            good = (rc != 0 and rc_ok and r.runner_ok and r.scope_ok
+                    and len(unknown) >= exp.get("unknown_min", 0)
                     and len(undet) >= exp.get("undet_min", 0)
                     and len(undet) <= exp.get("undet_max", 10 ** 9)
                     and known_ok is not False
@@ -1073,7 +1138,7 @@ def main() -> int:
         ok &= good
         ctrl_rows.append(f"{'✓' if good else ('⊘' if skipped else '✗')} {name}：{r.line()}"
                          f"（期望："
-                         + ("**对账必须失败**：rc≠0、桶合计 0、包级失败、运行器具名"
+                         + ("**对账必须失败**：rc≠0、桶合计 0、**编译失败**、运行器具名"
                             if exp.get("reconcile_must_fail") else
                             f"表内 {exp.get('known') if known_ok_content else '⊘ 不适用（该树判词文案不齐）'}、"
                             f"未认出≥{exp.get('unknown_min', 0)}、"
@@ -1088,6 +1153,8 @@ def main() -> int:
                              "⇒ rc 与桶不是同一个来源，读数无效")
         for b in r.runner_bad:
             ctrl_rows.append(f"      ↳ 运行器对账：{b}")
+        for b in r.scope_bad:
+            ctrl_rows.append(f"      ↳ 运行范围对账：{b}")
         for s in skipped:
             ctrl_rows.append(f"      ⊘ 不适用：{s} ⇒ **本树上通道证明不完整**（既不算通过、也不许因此变绿）")
         for u in unknown:
@@ -1142,7 +1209,7 @@ def main() -> int:
     print()
     if ok:
         print(f"== 判定：4/4 变异各行成立（每行 {known_col}、0 未认出、0 未定性、rc⇔桶 对账 ✓、"
-              f"**运行器对账 ✓（失败 Test 恰 1 个）**）、"
+              f"**运行器对账 ✓（失败 Test 恰 1 个）**、**运行范围对账 ✓**）、"
               f"{len(CONTROLS)}/{len(CONTROLS)} 控制组都按**自己的期望**红并具名、"
               f"{tree_col} ⇒ 通道与矩阵在**已被取证的栏**上都成立 ==")
     else:
