@@ -62,6 +62,15 @@ def classify(tok: str) -> str:
         return "记忆"
     if len(tok) == 64:
         return "sha256"      # ★ 整份 sha256（两侧原文哈希常按这个长度写）
+    if len(tok) == 40:
+        # ★ 后端2 送回（2026-09-20）：**git 的对象 id（blob／tree 的 sha1）在命名空间表里没有位置**。
+        #   ⇒ 它落「未归类」必红，于是**只能贴假标签**（贴「提交」是假的、贴「sha16」长度也不对）。
+        #   ★ 但这一格与「…」不是同一形态：`…` 是**截断**（信息缺，推不出命名空间 ⇒ 只报不判）；
+        #     40 位是**信息全、语义歧义**（提交 sha1 与 blob sha1 **同形**）⇒ 它**可以**靠标签消歧。
+        #   ⇒ 处置：**给它一个命名空间「对象」，并要求标签**（写 `blob `…`` 或 `tree `…``）。
+        #   ★ 天花板：**这个命名空间是按长度推定的**（40 位也可能是 sha256 的前 40 位），
+        #     唯一的第二来源就是**写的人自己的标签** ⇒ 它的正确性**不可由本尺子自证**。
+        return "对象"
     return "未归类"          # 9~15／17~39／41~63 且不是提交 ⇒ 说不出从哪儿读出来的
 
 
@@ -109,7 +118,8 @@ def label_before(ln: str, pos: int) -> str | None:
       ⇒ 粒度必须是**出现处**，不是行。
     """
     head = ln[max(0, pos - 10):pos]
-    for w in ("sha256", "提交", "sha16", "记忆"):
+    for w, ns_of_w in (("sha256", "sha256"), ("提交", "提交"), ("sha16", "sha16"), ("记忆", "记忆"),
+                       ("blob", "对象"), ("tree", "对象"), ("对象", "对象")):
         if not (head.endswith(w) or (head.rstrip().endswith(w) and head[len(head.rstrip()):].strip() == "")):
             continue
         # ★ 散文与标签在这把尺子里无法区分：`不是提交 X` / `非 sha16 X` 里的词紧邻反引号，
@@ -118,7 +128,7 @@ def label_before(ln: str, pos: int) -> str | None:
         win = head[max(0, j - 2):j]
         if any(c in win for c in ("不", "非", "未", "别")):
             return None
-        return w
+        return ns_of_w          # ★ 返回**规范化后的命名空间**：写 `blob` 与写 `tree` 都是「对象」的那一格
     return None
 
 
@@ -197,6 +207,13 @@ def scan(path: Path) -> tuple[list[str], dict[str, tuple[str, int, str | None]]]
         if ns == "未归类":
             bad.append(f"{path.name}:{line}  `{tok}` 既不是提交、也不是 sha16／记忆 id "
                        f"⇒ **说不出它是从哪儿读出来的**（长度 {len(tok)}）")
+        elif ns == "对象" and label != "对象":
+            # ★ 自查抓到：第一版这个分支**没有读 label** ⇒ 把已贴对「blob／tree」的那种也判红了。
+            #   ⇒ 新加分支时必须问它与既有分支的**先后关系**（同族：一行两种调用要定判词优先）。
+            bad.append(f"{path.name}:{line}  `{tok}` 长度 40、与**提交 sha1 同形** ⇒ "
+                       f"**形状推不出命名空间**（blob／tree 的对象 id 也是 40 位）"
+                       f"⇒ 请**贴标签消歧**：`blob \u0060{tok}\u0060` 或 `tree \u0060{tok}\u0060`；"
+                       f"★ 贴「提交」是**假的**（它解析不出提交）")
         elif label is None:
             bad.append(f"{path.name}:{line}  `{tok}` 是**{ns}**但首次出现处没有贴着标签 "
                        f"⇒ 读者会拿它去当另一种标识用（本仓最常见的是拿记忆 id 去 git show）")
