@@ -41,6 +41,8 @@ FIELDS = [
     ("sp_cost", "sp_cost"), ("init_sp", "init_sp"),
     ("increment", "increment"), ("max_charge_time", "max_charge"),
     ("duration", "duration"), ("range_id", "range_id"),
+    #: 级号（0 起算）与**原样正文**；渲染过的 description 本轮未接。
+    ("index", "index"), ("raw_description", "raw_description"),
 ]
 
 

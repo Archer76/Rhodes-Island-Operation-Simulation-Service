@@ -53,6 +53,13 @@ type SkillMeta struct {
 	//: 两套都要——字符串键是「召唤什么/给哪个装置」唯一的住处，丢掉不报错，
 	//: 只是上层把它当「没这项机制」。
 	Blackboard map[string]any `json:"blackboard"`
+	//: 级号：**0 起算**（`SkillLevel.index`）。级别用的是 1 起算的 `Level`，
+	//: 两个都在——混用会让「第 3 级」与「index 3」差一位。
+	Index int `json:"index"`
+	//: 正文**原样**（`raw_description`）。渲染过的那一份（`description`）
+	//: 要把 `{key}` 按黑板代进去，**本轮未接**——它是描述驱动机制的唯一出处
+	//: （剑气、真伤、连击数都只写在正文里），下一批做。
+	RawDescription string `json:"raw_description"`
 }
 
 // normalizeSPType 复刻 `_normalize_sp_type`（`skill.py:1988-2008`）：
@@ -124,6 +131,7 @@ func SkillMetaFor(skillID string, level int) (*SkillMeta, error) {
 	var entry struct {
 		Levels []struct {
 			Name         string  `json:"name"`
+			Description  string  `json:"description"`
 			RangeID      *string `json:"rangeId"`
 			SkillType    string  `json:"skillType"`
 			DurationType string  `json:"durationType"`
@@ -153,6 +161,8 @@ func SkillMetaFor(skillID string, level int) (*SkillMeta, error) {
 		SkillType: lv.SkillType, DurationType: lv.DurationType,
 		RangeID: lv.RangeID, SPType: normalizeSPType(lv.SPData.SPType, lv.SkillType),
 		BlackboardEntries: len(lv.Blackboard),
+		//: `index` 是**0 起算**的级号；`Level` 是 1 起算的那个，两个都留。
+		Index: level - 1, RawDescription: lv.Description,
 	}
 	//: `duration < 0` 是「无限持续」的哨兵，落成 nil（`skill.py:1769-1774`）。
 	if lv.Duration != nil && *lv.Duration >= 0 {
