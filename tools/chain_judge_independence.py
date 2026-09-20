@@ -267,6 +267,12 @@ CONTROLS: list[tuple[str, list[tuple[str, str, str]], dict]] = [
 
 RED_RE = re.compile(r"^\s+(\S+_test\.go):(\d+):\s?(.*)$")
 CALL_RE = re.compile(r"\bt\.(Errorf|Fatalf|Logf)\(")
+#: ★★ F6：覆盖面那一节的**两套口径**（**不许相加**）：
+#:   窄＝会自己发一条带 `file:line:` 消息、且被本脚本的行分类器认得的调用（`Errorf`／`Fatalf`）；
+#:   宽＝再算上 `t.Fatal(`／`t.Error(`（它们也发消息——`t.Error` ＝ `t.Log` ＋ `t.Fail`——
+#:   但**行分类器不认它们**，本笔只作口径对照，不改分类器：那是另一件事，要单独立笔）。
+JUDGE_CALL_RE = re.compile(r"\bt\.(Errorf|Fatalf)\(")
+WIDE_CALL_RE = re.compile(r"\bt\.(Errorf|Fatalf|Fatal|Error)\(")
 FUNC_RE = re.compile(r"^func\s+(\w+)\(")
 #: 验收 P4 的口径：`t.Errorf/Fatalf(` 后面紧跟**单行首参字面量**
 MSG_RE = re.compile(r't\.(?:Errorf|Fatalf)\(\s*"((?:[^"\\]|\\.)*)"')
@@ -658,23 +664,69 @@ def enclosing(funcs: dict[int, str], n: int) -> str:
     return funcs[max(cand)] if cand else "（函数外）"
 
 
-def coverage(per: dict) -> None:
+def coverage_counts(per: dict) -> tuple[dict[str, dict[str, int]], int, int]:
+    """逐文件现算调用处数（★ F6：**分行行上的数必须是该文件自己的数**）＋ 一个**独立的整包来源**。
+
+    ★★ F6（验收 §十九／PM 派单）：覆盖面这一节是**读者用来判断取证范围**的地方，
+      而它有**两个口径混印在同一块里**：分行行是「整包按文件」，汇总行却只数判词表那一个文件
+      ⇒ 产品树上印出「两行各 13、合计也 13」，读者一读就以为其中一行是别人的数（实测 SUM=26 vs 13）。
+      ⇒ 修法：①分行**逐文件现算**②`Σ(分行) == 整包独立来源`，**不等判红**③两套口径**分列并写明不许相加**。
+    ★ 两套口径（**不许相加**）：
+      · **窄**＝`t.Errorf(` / `t.Fatalf(` —— 会**自己发一条带 `file:line:` 的消息**，是本脚本归类的对象；
+      · **宽**＝再算上 `t.Fatal(` / `t.Error(` —— 它们也发消息（`t.Error` ＝ `t.Log` ＋ `t.Fail`），
+        但本脚本的行分类器不认它们（`CALL_RE` 只管 `Errorf|Fatalf|Logf`）⇒ **只作口径对照，不进分类**。
+    ★ 「两行同数」**不是**「同一行重印」：实测两个文件在**窄**口径下**真的各 13 条**；
+      要区分这两种情形，只能**改一个文件看另一行动不动**（见守卫 ⑩ 的反向夹具）。
+    """
+    rows: dict[str, dict[str, int]] = {}
+    pkg_narrow = pkg_wide = 0
+    for fname, (_k, st, _f, _sp) in per.items():
+        text = (WORK / "mech" / fname).read_text(encoding="utf-8")
+        lines = text.splitlines()
+        rows[fname] = {
+            "narrow": sum(1 for _n, ks in st.items() if "判词" in ks),
+            "wide": sum(1 for ln in lines if WIDE_CALL_RE.search(ln)),
+            "mixed": sum(1 for _n, ks in st.items() if len(ks) > 1),
+        }
+        pkg_narrow += sum(1 for ln in lines if JUDGE_CALL_RE.search(ln))
+        pkg_wide += rows[fname]["wide"]
+    return rows, pkg_narrow, pkg_wide
+
+
+def coverage(per: dict) -> list[str]:
     """G2 ＋ G6：把「不覆盖」的东西**显式印出来并说清为什么可以不覆盖**（理由由结构给出）。
 
     G6 加的一层：**运行范围是整个包**，故先把包内每个 `*_test.go` 列出来，标出哪个是判词表覆盖的，
     其余文件里**即便有判词也是未覆盖** ⇒ 它们一旦红了就是「未认出」⇒ 具名 + rc=1。
+    ★★ F6：每一行的数**逐文件现算**，且与**整包独立来源**（另一次行级扫描）对账，不等 ⇒ 判红。
     """
-    print(f"== 归类器覆盖面（现算，包内 {TEST_GLOB}；判词表只覆盖 {JUDGE_FILE}）==")
-    for fname, (_k, st, _f, _sp) in per.items():
-        n_judge = sum(1 for _n, ks in st.items() if "判词" in ks)
-        n_mixed = sum(1 for _n, ks in st.items() if len(ks) > 1)
+    print(f"== 归类器覆盖面（逐文件现算，包内 {TEST_GLOB}；判词表只覆盖 {JUDGE_FILE}）==")
+    rows, pkg_narrow, pkg_wide = coverage_counts(per)
+    bad: list[str] = []
+    #: ★ 行形状是**接口**：验收的 `tools/acceptance_coverage_count_probe.py` 按
+    #:   `· <文件>：判词调用处 N 条` 与 `判词**调用处**共 M 条` 两条正则读本节
+    #:   ⇒ **口径声明只能加在括号里，不许动这两个锚**（数字不加粗、顺序不变）。
+    for fname, c in rows.items():
         tag = "判词表覆盖" if fname == JUDGE_FILE else "**未覆盖**（红了 ⇒ 未认出 ⇒ rc=1）"
-        print(f"   · {fname}：判词调用处 {n_judge} 条、**同行多调用 {n_mixed} 行** —— {tag}")
+        print(f"   · {fname}：判词调用处 {c['narrow']} 条"
+              f"（窄口径 `t.Errorf(`／`t.Fatalf(`；宽口径＋`t.Fatal(`／`t.Error(` ＝ {c['wide']} 条）"
+              f"、**同行多调用 {c['mixed']} 行** —— {tag}")
+    sum_rows = sum(c["narrow"] for c in rows.values())
+    if sum_rows != pkg_narrow:
+        bad.append(f"Σ(分行)＝{sum_rows} ≠ 整包独立来源＝{pkg_narrow} ⇒ 分行行上至少有一个数**不是该文件自己的**"
+                   f"（或有文件漏扫）⇒ 这一节会误导读者判断取证范围")
+    #: ★ 合计一声明口径（谓词＋覆盖哪一批文件）⇒ 不再让读者把它当成「分行之和」去猜。
+    print(f"   整包合计：判词**调用处**共 {pkg_narrow} 条 —— 口径＝**包内全部 {TEST_GLOB}**"
+          f"（{len(rows)} 个文件，含未覆盖的那个）、谓词＝窄口径；"
+          f"Σ 分行（{sum_rows}）⇔ 整包独立来源（{pkg_narrow}，**另一次行级扫描**）"
+          f"⇒ 对账 {'✓' if sum_rows == pkg_narrow else '✗ 判红'}")
+    print(f"   整包两套分母（**不许相加**）：窄 {pkg_narrow} 条、宽 {pkg_wide} 条"
+          f"（宽−窄＝{pkg_wide - pkg_narrow} 条是 `t.Error(`／`t.Fatal(`，本脚本的行分类器不认它们）")
 
     jf = per.get(JUDGE_FILE)
     if jf is None:
         print(f"   ✗ 判词表覆盖的文件 {JUDGE_FILE} 不在包里 ⇒ 判词表已失效")
-        return
+        return bad + [f"判词表覆盖的文件 {JUDGE_FILE} 不在包里"]
     lines = (WORK / "mech" / JUDGE_FILE).read_text(encoding="utf-8").splitlines()
     _kinds, starts, funcs, _spans = jf
     judge_starts = [(n, k) for n, k in sorted(starts.items()) if "判词" in k]
@@ -686,7 +738,10 @@ def coverage(per: dict) -> None:
     msg_lits = MSG_RE.findall("\n".join(lines))
     n_fmt = sum(1 for ln in lines if FMT_RE.search(ln))
 
-    print(f"   判词**调用处**共 {len(judge_starts)} 条：表内能认 {len(inside)} 条、**表外 {len(outside)} 条**")
+    #: ★ F6：这一行的口径**写在行里**（`判词表覆盖的文件内`），不再让读者把它当成上面的整包合计。
+    print(f"   判词表覆盖的文件内：判词调用处 {len(judge_starts)} 条（口径＝**仅 {JUDGE_FILE} 这一个文件**、"
+          f"谓词＝窄口径；**不要与上面的整包合计 {pkg_narrow} 相加或相减**）—— "
+          f"表内能认 {len(inside)} 条、**表外 {len(outside)} 条**")
     mixed = sorted(n for n, ks in starts.items() if len(ks) > 1)
     print(f"   ★ 同行多调用（候选种类 >1 ⇒ 消息归属不定 ⇒ 进 ⊘ 未定性）："
           f"{len(mixed)} 行{'：' + '、'.join('L%d' % n for n in mixed) if mixed else '（本树上没有）'}")
@@ -703,6 +758,7 @@ def coverage(per: dict) -> None:
     print(f"   口径对账（两套分母**不许相加**）：本脚本按**调用处**数 ＝ {len(judge_starts)}；"
           f"验收 P4 按正则 `t\\.(?:Errorf|Fatalf)\\(` 数 ＝ {len(msg_lits)}"
           f" ＝ {len(judge_starts)} ＋ {n_fmt} 条 **`fmt.Errorf`**。")
+    return bad
     print(f"   ★ 机理（现算，不是我的叙述）：那条正则**子串命中**了 `fmt.Errorf`（`fm`＋`t.Errorf`），"
           f"多出的 {n_fmt} 条正是 helper `assertDecayFirstTwo` 的返回文案；加词边界 `\\bt\\.` 即只数 "
           f"{len(judge_starts)}。**两个数不同义，不许相加。**")
@@ -1029,7 +1085,14 @@ def main() -> int:
         for b in sp:
             print(f"      ↳ {b}")
         return 1
-    coverage(per)
+    #: ★★ F6：覆盖面那一节的对账**必须能驱动 rc**（它是给读者判断取证范围用的；
+    #:   今天它不进判定 ⇒ 只有看这一节的人会被误导，没有任何东西会红）。
+    cover_bad = coverage(per)
+    if cover_bad:
+        print("✗ 覆盖面这一节的计数对不上账（Σ 分行 ≠ 整包独立来源）⇒ 读者会按它判断取证范围：")
+        for b in cover_bad:
+            print(f"      ↳ {b}")
+        return 1
     #: ★★ F1（验收 §16）：**表内期望**的适用性按**内容**判，不按路径；并有一条硬条件：
     #:   内容与产品树**逐字节相同**却判「不适用」 ⇒ 当场判红（那正是上一版的误报）。
     known_ok_content, known_why = judge_text_applicable()
