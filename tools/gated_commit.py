@@ -21,7 +21,12 @@ PM 把这条提成通则（`msg-mu901myi-fw`）：
 
 * 默认闸门＝ `tools/cjk_quote_lint.py` 扫这些路径（散文里的半角引号）；
 * `--gate` 可给多条，**逐条跑、逐条判 rc**，任何一条红就退出且**不提交**；
-* 退出码：0＝闸门全绿且已提交（或 `--dry-run` 下全绿）；1＝**被闸门拦下**；2＝闸门绿但 git 失败。
+* 退出码：0＝闸门全绿且已提交（或 `--dry-run` 下全绿）；1＝**被闸门拦下**；2＝闸门绿但 git 失败；
+  **5＝工具自己崩了**（2026-09-20 加）。
+  ★ 加这一格的理由：改前**工具崩掉的 rc=1 与「闸门拦下」的 rc=1 完全同形** ⇒
+  提交的人会以为自己的提交被拦了，**其实是工具死了**（`1a9a1184`／`1e161194` 那一族：
+  把「我坏了」与「它红了」压成一个值）。现在两者**从 rc 一个数就能分开**，
+  且崩时另印一行 ASCII `VERDICT=TOOL_CRASH EXC=…`（与被拦时那行「闸门拦住」形状不同）。
 
 ★ 一处刻意的设计：**闸门红的输出会原样转给用户**（不做过滤）——
 被拦下的人需要看到"哪一行、为什么"，否则他会绕过闸门。
@@ -110,4 +115,20 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
+    #: ★ 工具崩了必须与「闸门红了」分开（2026-09-20 修；PM 派 `msg-mu9ed6tv-mr` 第二节）。
+    #: 病因：`run()` 按 utf-8 解码闸门输出，遇到非法字节得到 \ufffd（U+FFFD），而 \ufffd
+    #: **在 GBK 里编不出** ⇒ 上面 `print(f"   {line}")` 抛 UnicodeEncodeError ⇒ 工具自己崩掉。
+    #: 只放宽错误处理器、**不改编码**（编不出的字符退化成转义文本，信息不丢、行形状不变）。
+    #: 崩了给**独立退出码 5**（本工具业务码是 0/1/2，不重叠）。
+    try:
+        sys.stdout.reconfigure(errors="backslashreplace")
+    except Exception:  # noqa: BLE001 - 不支持 reconfigure 的流 ⇒ 不适用，继续
+        pass
+    try:
+        _rc = main(sys.argv)
+    except BaseException as _e:  # noqa: BLE001
+        print(f"VERDICT=TOOL_CRASH EXC={type(_e).__name__}: {_e}")
+        _rc = 5
+    _names = {0: "OK", 1: "GATE_RED", 2: "GIT_FAIL", 5: "TOOL_CRASH"}
+    print(f"VERDICT={_names.get(_rc, 'UNKNOWN')} rc={_rc}")
+    raise SystemExit(_rc)
