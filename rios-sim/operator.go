@@ -94,6 +94,11 @@ type OperatorStats struct {
 	ComboAttack
 	//: 天赋「强击瓶专家」（`operator_traits.go`）。**`scale` 的「没有这条」是 1.0**。
 	PowerAttack
+	//: 特性：生命流失速率 与 特性溅射的几何那一半（`operator_traits.go`）。
+	//: 与 `verify.py:333/334/340` 的字段名同形；「没有这条」一律是 0。
+	SplashRadius  float64 `json:"splash_radius"`
+	SplashScale   float64 `json:"splash_scale"`
+	HPDrainPerSec float64 `json:"hp_drain_per_sec"`
 }
 
 // ---------------------------------------------------------------- 数据源
@@ -308,6 +313,8 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 		Favor      []json.RawMessage `json:"favorKeyFrames"`
 		Potentials []json.RawMessage `json:"potentialRanks"`
 		Talents    []json.RawMessage `json:"talents"`
+		Trait      json.RawMessage   `json:"trait"`
+		Description string           `json:"description"`
 	}
 	if err := json.Unmarshal(raw, &char); err != nil {
 		return nil, fmt.Errorf("%s 的表项解析失败：%w", cfg.CharID, err)
@@ -393,6 +400,11 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 	st.ComboAttack = readComboAttack(char.Talents)
 	//: 「强击瓶专家」：按**键的组合**认（名字那条只给审计用）。
 	st.PowerAttack = readPowerAttack(char.Talents, cfg.Elite, cfg.Level, cfg.Potential)
+	//: 特性那两支：溅射的几何、生命流失速率。**「没有这条」都是 0**。
+	if r, s, ok := readTraitSplash(char.Trait); ok {
+		st.SplashRadius, st.SplashScale = r, s
+	}
+	st.HPDrainPerSec = readHPDrain(char.Description, char.Trait)
 	return st, nil
 }
 

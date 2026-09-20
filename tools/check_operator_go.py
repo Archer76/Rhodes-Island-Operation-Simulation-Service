@@ -80,7 +80,7 @@ def norm(v):
 def main() -> int:
     from ak_tactic.operator import OperatorCalculator, TalentBook
     from ak_tactic.operator.attack_speed import attack_speed_bonus
-    from ak_tactic.battle.traits import read_combo_attack
+    from ak_tactic.battle.traits import read_combo_attack, read_trait_splash, read_hp_drain
     from ak_tactic.battle.talents import find_power_attack
     calc = OperatorCalculator()
     tbook = TalentBook()
@@ -154,6 +154,8 @@ def main() -> int:
     combo_seen = [0, 0.0]
     #: 「强击瓶专家」的行使计数（`count` 非 0、`scale` 非 1.0）。
     pa_hits = {"power_attack_count": 0, "power_attack_scale": 0}
+    #: 特性的行使计数（三项各自非零次数）。「没有这条」都是 0，所以非零即命中。
+    tr_hits = {"splash_radius": 0, "splash_scale": 0, "hp_drain_per_sec": 0}
     for cfg, g in zip(configs, got):
         py = calc.stats(cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
                         trust=cfg["trust"], potential=cfg["potential"],
@@ -209,6 +211,17 @@ def main() -> int:
                 pa_hits[k] += 1
             if norm(g.get(k)) != norm(b):
                 out.append("%s：Go=%r Python=%r" % (k, norm(g.get(k)), b))
+        #: 特性那两支：溅射几何 与 生命流失速率。**「没有这条」都是 0**。
+        ch = calc.character(cfg["char_id"])
+        sp = read_trait_splash(ch)
+        py_tr = {"splash_radius": sp.radius if sp else 0.0,
+                 "splash_scale": sp.scale if sp else 0.0,
+                 "hp_drain_per_sec": read_hp_drain(ch)}
+        for k, b in py_tr.items():
+            if b:
+                tr_hits[k] += 1
+            if norm(g.get(k)) != norm(b):
+                out.append("%s：Go=%r Python=%r" % (k, norm(g.get(k)), b))
         if out:
             bad += 1
             print("✗ %s E%d L%d trust=%g pot=%d mod=%s —— %d 处不一致"
@@ -227,6 +240,11 @@ def main() -> int:
     for k, n in aspd_hits.items():
         flag = "" if n else "   ← 零信息量的绿：这一档本轮没被行使到"
         print("    %-18s %d%s" % (k, n, flag))
+    print("★ 特性三字段行使计数（非零／共 %d 次）：" % compared)
+    for k, n in tr_hits.items():
+        flag = "" if n else "   ← 这一档本轮没被行使到"
+        print("    %-18s %d%s" % (k, n, flag))
+    print()
     print("★「强击瓶专家」行使计数（count 非 0 / scale 非 1.0）：")
     for k, n in pa_hits.items():
         flag = "" if n else "   ← 这一档本轮没被行使到"

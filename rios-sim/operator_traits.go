@@ -23,7 +23,10 @@ package main
 // `combo_hit_scale=… else 1.0`、`combo_damage_scale=… else 1.0`。
 // 按 0 判会把每一位没有连击的干员都当成「0 击」。
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // comboAttackKeys 复刻 `COMBO_ATTACK_KEYS`（`traits.py:128`）。
 var comboAttackKeys = []string{"attack@atk_scale", "attack@damage_scale"}
@@ -132,6 +135,80 @@ func readPowerAttack(talents []json.RawMessage, elite, level, potential int) Pow
 		return out
 	}
 	return defaultPowerAttack()
+}
+
+// ---- 特性：生命流失 与 特性溅射（几何那一半）----
+
+// hpDrainTrait 复刻 `HP_DRAIN_TRAIT`（`traits.py:108`）。
+const hpDrainTrait = "自身生命会不断流失"
+
+// hpDrainKey 复刻 `HP_DRAIN_KEY`（`traits.py:110`）。
+const hpDrainKey = "hp_ratio"
+
+// splashRadiusKey / splashScaleKey 复刻 `traits.py:113/116`。
+const (
+	splashRadiusKey = "attack@ability_range_radius"
+	splashScaleKey  = "attack@atk_scale_2"
+)
+
+// readHPDrain 复刻 `read_hp_drain`（`traits.py:181-203`）。
+//
+// 判据**两段，缺一不可**：① 特性正文含「自身生命会不断流失」；
+// ② 特性黑板里有 `hp_ratio` 且为正。只读黑板会把别的带 `hp_ratio` 的特性误中。
+//
+// 没有这条就返回 0.0——调用侧不用判空（这个量「没有」就是 0）。
+func readHPDrain(description string, traitRaw json.RawMessage) float64 {
+	if !strings.Contains(description, hpDrainTrait) {
+		return 0.0
+	}
+	for _, cand := range traitCandidates(traitRaw) {
+		bb := pairsToDict(cand)
+		if rate, ok := bb[hpDrainKey]; ok && rate > 0.0 {
+			return rate
+		}
+	}
+	return 0.0
+}
+
+// readTraitSplash 复刻 `read_trait_splash`（`traits.py:163-178`）的**几何那一半**。
+//
+// 判据只有一条：**特性黑板上同时有 `attack@ability_range_radius` 与
+// `attack@atk_scale_2`**。不是按子职业名、也不是按干员名——特性是**数据**，
+// 子职业名是**文案**，后者会随版本改名而前者不会。
+//
+// ⚠ 本轮**只接几何**（半径/倍率）；`apply_splash_talent` 叠上去的那三项
+// （`damage_scale` / `highland_splash_scale` / `highland_splash_sluggish`）
+// **未接**——那要按天赋键 `("damage_scale","attack@splash_atk_scale")` 再判一次。
+func readTraitSplash(traitRaw json.RawMessage) (float64, float64, bool) {
+	for _, cand := range traitCandidates(traitRaw) {
+		bb := pairsToDict(cand)
+		radius, okR := bb[splashRadiusKey]
+		scale, okS := bb[splashScaleKey]
+		if okR && okS {
+			return radius, scale, true
+		}
+	}
+	return 0.0, 0.0, false
+}
+
+// traitCandidates 取出 `trait.candidates[].blackboard`。
+func traitCandidates(traitRaw json.RawMessage) [][]json.RawMessage {
+	if len(traitRaw) == 0 {
+		return nil
+	}
+	var t struct {
+		Candidates []struct {
+			Blackboard []json.RawMessage `json:"blackboard"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal(traitRaw, &t); err != nil {
+		return nil
+	}
+	out := make([][]json.RawMessage, 0, len(t.Candidates))
+	for _, c := range t.Candidates {
+		out = append(out, c.Blackboard)
+	}
+	return out
 }
 
 // pairsToDict 复刻 `_pairs_to_dict`（`traits.py:145`）：
