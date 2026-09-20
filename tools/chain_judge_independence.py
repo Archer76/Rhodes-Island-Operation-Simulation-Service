@@ -210,7 +210,7 @@ CONTROLS: list[tuple[str, list[tuple[str, str, str]], dict]] = [
     #:   ★★ 收窄准入后这条红**必须进「未认出」**（两条调用的字面前缀**不同** ⇒ 归属是确定的：
     #:      `Logf` 的正文按它自己的前缀归日志 ⇒ 不算红；那条表外 `Errorf` 归判词 ⇒ 未认出）。
     #:      它同时是「⊘ 不许把真红吃掉」的守卫（与 P8 同形，但 P7 是验收探针的原形）。
-    ("P7 同行 Logf+Errorf（表外真红必须进「未认出」，不许进 ⊘）", [
+    ("P7 同行 Logf+Errorf（表外真红必须进「认不出」，不许进 ⊘）", [
         (TEST_REL, M2_OLD, M2_NEW),
         (TEST_REL, P2_ANCHOR,
          "\t\tif seqs[2][1] != chainBase*chainScale { t.Logf(\"P7 同行日志\"); "
@@ -232,7 +232,7 @@ CONTROLS: list[tuple[str, list[tuple[str, str, str]], dict]] = [
     #:   那条表外判词的红**必须进「未认出」**（具名 + rc≠0），**不许进 ⊘**。
     #:   ★ 为什么它是本笔的分辨率判据：旧准入（「该行候选种类 >1 就进 ⊘」）会把这条**真红**
     #:     丢进 ⊘ ⇒ **未认出恒为 0**，桶换了但数还在（验收实测到的两条反例正是这个形态）。
-    ("P8 同行 Logf＋**表外判词** ⇒ 必须进「未认出」不许进 ⊘（反向守卫）", [
+    ("P8 同行 Logf＋**表外判词** ⇒ 必须进「认不出」不许进 ⊘（反向守卫）", [
         (TEST_REL, M2_OLD, M2_NEW),
         (TEST_REL, P2_ANCHOR,
          "\t\tif seqs[2][1] != chainBase*chainScale { t.Logf(\"P8 同行日志正文\"); "
@@ -700,14 +700,14 @@ def coverage(per: dict) -> list[str]:
     其余文件里**即便有判词也是未覆盖** ⇒ 它们一旦红了就是「未认出」⇒ 具名 + rc=1。
     ★★ F6：每一行的数**逐文件现算**，且与**整包独立来源**（另一次行级扫描）对账，不等 ⇒ 判红。
     """
-    print(f"== 归类器覆盖面（逐文件现算，包内 {TEST_GLOB}；判词表只覆盖 {JUDGE_FILE}）==")
+    print(f"== 归类器覆盖面·**分行**（逐文件现算，包内 {TEST_GLOB}；判词表只覆盖 {JUDGE_FILE}）==")
     rows, pkg_narrow, pkg_wide = coverage_counts(per)
     bad: list[str] = []
     #: ★ 行形状是**接口**：验收的 `tools/acceptance_coverage_count_probe.py` 按
     #:   `· <文件>：判词调用处 N 条` 与 `判词**调用处**共 M 条` 两条正则读本节
     #:   ⇒ **口径声明只能加在括号里，不许动这两个锚**（数字不加粗、顺序不变）。
     for fname, c in rows.items():
-        tag = "判词表覆盖" if fname == JUDGE_FILE else "**未覆盖**（红了 ⇒ 未认出 ⇒ rc=1）"
+        tag = "判词表覆盖" if fname == JUDGE_FILE else "**未覆盖**（红了 ⇒ 认不出 ⇒ rc=1）"
         print(f"   · {fname}：判词调用处 {c['narrow']} 条"
               f"（窄口径 `t.Errorf(`／`t.Fatalf(`；宽口径＋`t.Fatal(`／`t.Error(` ＝ {c['wide']} 条）"
               f"、**同行多调用 {c['mixed']} 行** —— {tag}")
@@ -715,13 +715,21 @@ def coverage(per: dict) -> list[str]:
     if sum_rows != pkg_narrow:
         bad.append(f"Σ(分行)＝{sum_rows} ≠ 整包独立来源＝{pkg_narrow} ⇒ 分行行上至少有一个数**不是该文件自己的**"
                    f"（或有文件漏扫）⇒ 这一节会误导读者判断取证范围")
-    #: ★ 合计一声明口径（谓词＋覆盖哪一批文件）⇒ 不再让读者把它当成「分行之和」去猜。
-    print(f"   整包合计：判词**调用处**共 {pkg_narrow} 条 —— 口径＝**包内全部 {TEST_GLOB}**"
-          f"（{len(rows)} 个文件，含未覆盖的那个）、谓词＝窄口径；"
-          f"Σ 分行（{sum_rows}）⇔ 整包独立来源（{pkg_narrow}，**另一次行级扫描**）"
-          f"⇒ 对账 {'✓' if sum_rows == pkg_narrow else '✗ 判红'}")
+
+    #: ★★ PM 的印法条件（2026-09-20）：**对账与口径声明必须分开印** ——
+    #:   不能让读者在同一块里看到 `26` 与 `13` 而以为它们是一套（那正是验收撤回那条的起因）。
+    #:   ⇒ 四个**分节**：分行 / 合计（口径＝整包）/ 同口径对账 / 判词表文件内部（口径＝单文件）。
+    print(f"== 归类器覆盖面·**合计**（口径＝包内全部 {TEST_GLOB}，与上面的分行数**分属两条数**、不可混读）==")
+    print(f"   整包合计：判词**调用处**共 {pkg_narrow} 条（口径＝**包内全部 {TEST_GLOB}** 共 {len(rows)} 个文件、"
+          f"含未覆盖的那个；谓词＝窄口径）")
     print(f"   整包两套分母（**不许相加**）：窄 {pkg_narrow} 条、宽 {pkg_wide} 条"
           f"（宽−窄＝{pkg_wide - pkg_narrow} 条是 `t.Error(`／`t.Fatal(`，本脚本的行分类器不认它们）")
+    print("== 归类器覆盖面·**同口径对账**（这一层只证「分行没漏对象」；「谓词数得对」它证不了）==")
+    print(f"   Σ 分行（窄，{sum_rows}）⇔ 整包独立来源（窄，**另一次行级扫描**，{pkg_narrow}）"
+          f"⇒ 对账 {'✓' if sum_rows == pkg_narrow else '✗ 判红'}")
+    print("   ★ 这一层证明了什么：**同一谓词两次遍历**（按文件一次、全量行扫一次）一致 ⇒ "
+          "**分行没漏文件、没漏行**。★ 它**证不了「谓词本身选错」**——谓词对不对只能靠**跨尺子对照**"
+          "（验收用窄／宽两把独立尺子逐位比过我印的两个数）；两层合起来才等于「这一节的数可信」。")
 
     jf = per.get(JUDGE_FILE)
     if jf is None:
@@ -738,9 +746,11 @@ def coverage(per: dict) -> list[str]:
     msg_lits = MSG_RE.findall("\n".join(lines))
     n_fmt = sum(1 for ln in lines if FMT_RE.search(ln))
 
-    #: ★ F6：这一行的口径**写在行里**（`判词表覆盖的文件内`），不再让读者把它当成上面的整包合计。
-    print(f"   判词表覆盖的文件内：判词调用处 {len(judge_starts)} 条（口径＝**仅 {JUDGE_FILE} 这一个文件**、"
-          f"谓词＝窄口径；**不要与上面的整包合计 {pkg_narrow} 相加或相减**）—— "
+    #: ★ F6：这一行**单起一节**，口径写在行里（`判词表覆盖的文件内`），
+    #:   不再让读者把它当成上面的整包合计（PM 的印法条件：三条数不许挤在一块）。
+    print(f"== 归类器覆盖面·**判词表覆盖的文件内部**（口径＝仅 {JUDGE_FILE} 这一个文件；"
+          f"**与上面的整包合计 {pkg_narrow} 分属两条数，不许相加或相减**）==")
+    print(f"   判词表覆盖的文件内：判词调用处 {len(judge_starts)} 条（谓词＝窄口径）—— "
           f"表内能认 {len(inside)} 条、**表外 {len(outside)} 条**")
     mixed = sorted(n for n, ks in starts.items() if len(ks) > 1)
     print(f"   ★ 同行多调用（候选种类 >1 ⇒ 消息归属不定 ⇒ 进 ⊘ 未定性）："
@@ -1221,7 +1231,7 @@ def main() -> int:
         for s in skipped:
             ctrl_rows.append(f"      ⊘ 不适用：{s} ⇒ **本树上通道证明不完整**（既不算通过、也不许因此变绿）")
         for u in unknown:
-            ctrl_rows.append(f"      ↳ 具名（未认出）：{u}")
+            ctrl_rows.append(f"      ↳ 具名（认不出）：{u}")
         for u in undet:
             ctrl_rows.append(f"      ↳ 具名（⊘ 未定性）：{u}")
         if not unknown and not undet and not skipped and not exp.get("reconcile_must_fail"):
@@ -1271,7 +1281,7 @@ def main() -> int:
                 else "**产品树本次未被哈希取证**（哈希量的是 SRC 树 ⇒ 本条不写「产品树只读」）")
     print()
     if ok:
-        print(f"== 判定：4/4 变异各行成立（每行 {known_col}、0 未认出、0 未定性、rc⇔桶 对账 ✓、"
+        print(f"== 判定：4/4 变异各行成立（每行 {known_col}、0 认不出、0 未定性、rc⇔桶 对账 ✓、"
               f"**运行器对账 ✓（失败 Test 恰 1 个）**、**运行范围对账 ✓**）、"
               f"{len(CONTROLS)}/{len(CONTROLS)} 控制组都按**自己的期望**红并具名、"
               f"{tree_col} ⇒ 通道与矩阵在**已被取证的栏**上都成立 ==")
