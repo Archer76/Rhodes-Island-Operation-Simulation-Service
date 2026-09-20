@@ -228,3 +228,4 @@ tools/mechanism_matrix.py
 tools/variant_provenance.py
 tools/variant_provenance.json
 tools/variant-provenance.md
+docs/variant-schema-plan.md
