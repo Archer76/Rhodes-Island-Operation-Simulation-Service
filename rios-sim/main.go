@@ -80,6 +80,8 @@ type response struct {
 	MaxHP json.RawMessage `json:"maxhp,omitempty"`
 	//: `interval` 的应答：开技能的攻击间隔那一行（见 `profile.go`）。
 	Interval json.RawMessage `json:"interval,omitempty"`
+	//: `panel` 的应答：同一帧的五处读数（见 `panelfold.go`）。
+	Panel json.RawMessage `json:"panel,omitempty"`
 	Error string          `json:"error,omitempty"`
 }
 
@@ -333,6 +335,27 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Interval: raw}
+	case "panel":
+		// 丙阶段四·第十一批：同一帧的五处读数（纯函数，见 `panelfold.go`）。
+		if len(req.Spec) == 0 {
+			return response{ID: req.ID, OK: false,
+				Error: "panel 少了 spec（一批 PanelState）"}
+		}
+		var qs []PanelState
+		if err := json.Unmarshal(req.Spec, &qs); err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("spec 不是状态数组：%v", err)}
+		}
+		out := make([]PanelReadings, 0, len(qs))
+		for _, q := range qs {
+			out = append(out, FoldPanel(q))
+		}
+		raw, err := json.Marshal(out)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Panel: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。

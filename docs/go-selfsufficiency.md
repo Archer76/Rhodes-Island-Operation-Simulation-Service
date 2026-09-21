@@ -10,8 +10,10 @@
 ## 〇 · 一句话
 
 **取数三层（关卡／敌人／干员）已经搬进 Go，且每一层都有跨实现对拍判据。**
-缺的是「把干员效果折成两套数值」与「规格构造」——那两段还在 Python；
-两套数值里**不必驱动原版读数函数**的那两行已经先落地（`rios-sim/profile.go`）。
+缺的是「把效果折成两套数值」的**装配**与「规格构造」——那两段还在 Python。
+两套数值要的那几处读数已全部落地为纯函数（`rios-sim/profile.go`、
+`panelfold.go`）；没落地的是**喂它们的实时输入**（光环／翔虫机动／替身计时／
+击杀叠层／出手次数／阻挡／高台邻居这些运行态）。
 
 ---
 
@@ -21,8 +23,8 @@
 python tools\check_go_all.py --selfcheck
 ```
 
-* 前半：**八套判据现在不报红**；
-* 后半：**八套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
+* 前半：**九套判据现在不报红**；
+* 后半：**九套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
 
 ★ 两个结论缺一不可：「全绿」只证明现在不报红；**没有反向守卫的绿是零信息量的绿**。
 
@@ -38,6 +40,7 @@ python tools\check_go_all.py --selfcheck
 | 分类 `check_classify_go.py` | 全表黑板键并集 1056 个 | 1056 / 1056 逐字段一致 |
 | 生命上限 `check_profile_go.py` | 网格 base 5 × cur 4 × pct 5 | 100 / 100 点逐点一致 |
 | 攻击间隔 `check_interval_go.py` | 网格 base_iv 6 × base_spd 5 × 两 buff 4×5 | 600 / 600 点逐点一致 |
+| 面板 `check_panel_go.py` | 有序叉乘 13848 行（另含派生边界小表） | 13848 / 13848 行逐字段一致 |
 
 ---
 
@@ -56,6 +59,7 @@ python tools\check_go_all.py --selfcheck
 | 技能·分类 | `rios-sim/classify.go` | 四张分类表 ＋ 拆变体 ＋ 降级序列 | `check_classify_go.py` |
 | 技能·效果 | `rios-sim/effects.go` | `_parse_effects` 全量（五个箱子 ＋ 两个计数 ＋ 演出参数） | `check_skill_go.py` |
 | 数值 profile·纯函数 | `rios-sim/profile.go` | 两套快照里**不必驱动原版读数函数**的那两行：生命上限加成、开技能间隔折算 | `check_profile_go.py`、`check_interval_go.py` |
+| 数值 profile·五处读数 | `rios-sim/panelfold.go` | 同一帧的 atk／def／res／攻速／间隔／目标数／伤害类型（另含 `max_target` 那条 `max(1, int(… or 1))` 派生） | `check_panel_go.py` |
 
 ---
 
@@ -63,7 +67,7 @@ python tools\check_go_all.py --selfcheck
 
 | 缺口 | 说明 |
 |---|---|
-| **两套数值 profile** | 面板 ＋ 效果折成「不开启那套」与「开启期间 active」两份。Python 侧住在 `simgo/skills.py`，做法是临时把「这一帧开没开技能」的字段摆成开启态、借原版的读数函数读。★ 已落地的两块是**不需要那个 harness 的纯函数**（生命上限加成、开技能间隔折算，合计 700 个网格点）；剩下的 `current_atk()` / `current_defense()` / `current_res()` / `current_max_target()` / `active_attack_type()` 仍要驱动原版读数函数。 |
+| **两套数值 profile** | **折算本身已全部落地**（`profile.go` 两行 ＋ `panelfold.go` 七处读数，合计 14548 个网格点/叉乘行）：核对下来原版那七个方法**只读实例属性**，替身对象即可当 oracle——原先以为非搭不可的 harness 省掉了。仍缺的是**喂它们的实时输入**（光环、翔虫机动、替身计时、击杀叠层、出手次数、阻挡、高台邻居、偷取攻速这些运行态），以及 `_profile` 自己「临时把开技能字段摆成开启态、读完立刻还原」的那段装配。 |
 | **规格构造与闸门** | `simgo/spec.py`（76 KB）＋ `simgo/skills.py` 的白名单。Go 现在仍收 Python 送来的 spec。 |
 | **干员侧的其余天赋** | `advisor` 表里除已接的那几支之外的部分（`is_*` finder 一族里尚未逐条搬完的）。 |
 | **干员技能的性质** | 比如「技能改写攻击范围」的消费点。 |

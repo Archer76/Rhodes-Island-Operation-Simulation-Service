@@ -43,6 +43,8 @@ SUITE = [
     ("生命上限", "tools/check_profile_go.py", "Go 生命上限加成一行 vs _max_hp_after_bonus", False),
     #: 第 35 轮加的，同样照第 37-40 行那条教训办。
     ("攻击间隔", "tools/check_interval_go.py", "Go 开技能间隔折算 vs SkillEffects.attack_interval", False),
+    #: 第 36 轮加的。同一条教训：新判据落地即登记，漏跑的症状是全绿。
+    ("面板", "tools/check_panel_go.py", "Go 同一帧七处读数 vs operator_view 的七个方法", False),
 ]
 
 
