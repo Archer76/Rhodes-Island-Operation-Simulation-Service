@@ -33,7 +33,12 @@ SUITE = [
     ("敌人", "tools/check_enemy_go.py", "Go 自读敌人 vs EnemyLibrary（逐档合并/派生/前缀）", True),
     ("干员", "tools/check_operator_go.py", "Go 自算面板/天赋/特性 vs OperatorCalculator", False),
     ("范围", "tools/check_range_go.py", "Go 自读范围表 vs RangeTable + rotate/footprint", False),
-    ("技能", "tools/check_skill_go.py", "Go 自读技能元数据/黑板 vs SkillBook", False),
+    ("技能", "tools/check_skill_go.py", "Go 自读技能元数据/黑板/效果对象 vs SkillBook", False),
+    #: ★ 这一行是第 31 轮补的：分类判据（`check_classify_go.py`）10 天前就立起来了，
+    #: 但**一直没进总入口**——于是「六套里跑五套」印出来仍是「全绿」。
+    #: 这正是本文件第 28-30 行那条教训的同一形状：**漏跑一套的症状是全绿，
+    #: 只是那份绿少了一块**。新增判据时，别忘了往这里加一行。
+    ("分类", "tools/check_classify_go.py", "Go 四张分类表/拆变体/降级 vs _classify", False),
 ]
 
 
