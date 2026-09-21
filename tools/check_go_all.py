@@ -41,6 +41,8 @@ SUITE = [
     ("分类", "tools/check_classify_go.py", "Go 四张分类表/拆变体/降级 vs _classify", False),
     #: 这一行是第 34 轮加的，**就是照第 37-40 行那条教训办的**（新判据落地即登记）。
     ("生命上限", "tools/check_profile_go.py", "Go 生命上限加成一行 vs _max_hp_after_bonus", False),
+    #: 第 35 轮加的，同样照第 37-40 行那条教训办。
+    ("攻击间隔", "tools/check_interval_go.py", "Go 开技能间隔折算 vs SkillEffects.attack_interval", False),
 ]
 
 

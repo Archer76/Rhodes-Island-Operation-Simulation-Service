@@ -78,6 +78,8 @@ type response struct {
 	Classes json.RawMessage `json:"classes,omitempty"`
 	//: `maxhp` 的应答：生命上限加成那一行（见 `profile.go`）。
 	MaxHP json.RawMessage `json:"maxhp,omitempty"`
+	//: `interval` 的应答：开技能的攻击间隔那一行（见 `profile.go`）。
+	Interval json.RawMessage `json:"interval,omitempty"`
 	Error string          `json:"error,omitempty"`
 }
 
@@ -304,6 +306,33 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, MaxHP: raw}
+	case "interval":
+		// 丙阶段四·第十批：开技能的攻击间隔那一行（纯函数，见 `profile.go`）。
+		if len(req.Spec) == 0 {
+			return response{ID: req.ID, OK: false,
+				Error: "interval 少了 spec（一批 {baseIv,baseSpd,ivBuff,spdBuff}）"}
+		}
+		var qs []struct {
+			BaseIv  float64 `json:"base_iv"`
+			BaseSpd float64 `json:"base_spd"`
+			IvBuff  float64 `json:"iv_buff"`
+			SpdBuff float64 `json:"spd_buff"`
+		}
+		if err := json.Unmarshal(req.Spec, &qs); err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("spec 不是参数数组：%v", err)}
+		}
+		vals := make([]float64, 0, len(qs))
+		for _, q := range qs {
+			vals = append(vals,
+				AttackInterval(q.BaseIv, q.BaseSpd, q.IvBuff, q.SpdBuff))
+		}
+		raw, err := json.Marshal(vals)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Interval: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。
