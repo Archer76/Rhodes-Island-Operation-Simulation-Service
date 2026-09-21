@@ -20,9 +20,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 )
 
 // SkillMeta 是一个技能在某一级上的状态机参数。
@@ -56,10 +60,11 @@ type SkillMeta struct {
 	//: 级号：**0 起算**（`SkillLevel.index`）。级别用的是 1 起算的 `Level`，
 	//: 两个都在——混用会让「第 3 级」与「index 3」差一位。
 	Index int `json:"index"`
-	//: 正文**原样**（`raw_description`）。渲染过的那一份（`description`）
-	//: 要把 `{key}` 按黑板代进去，**本轮未接**——它是描述驱动机制的唯一出处
-	//: （剑气、真伤、连击数都只写在正文里），下一批做。
+	//: 正文**原样**（`raw_description`）。
 	RawDescription string `json:"raw_description"`
+	//: 正文**渲染后**（`description`）：`{key}` 按黑板代入、富文本标签剥掉、
+	//: 两种换行写法都还原。**查不到的键原样留着**（连花括号一起）。
+	Description string `json:"description"`
 }
 
 // normalizeSPType 复刻 `_normalize_sp_type`（`skill.py:1988-2008`）：
@@ -78,6 +83,72 @@ func normalizeSPType(spType any, skillType string) any {
 		return "PASSIVE"
 	}
 	return spType
+}
+
+// placeholderRE / tagRE 复刻 `skill.py:134-135`。
+//
+// ⚠ 先剥标签再替占位符（`render_description` 的顺序是 `_PLACEHOLDER_RE.sub`
+// 之后才 `_TAG_RE.sub`——两件都要做，且**标签会插在词中间**：
+// 「伤害类型变为<@ba.vup>真实</>」原样扫「真实伤害」是扫不到的。
+var (
+	placeholderRE = regexp.MustCompile(`\{([^{}]+)\}`)
+	tagRE         = regexp.MustCompile(`</?[^>]+>`)
+)
+
+// FormatValue 复刻 `format_value`（`skill.py:138-155`）。
+//
+// 游戏里只有五种格式：`0%` / `0.0%` / `0.0` / `0`，以及**不写格式串**。
+// 前四种按 .NET 的数值格式理解（`%` 会乘 100）；不写时按「整数就不显示小数点」。
+//
+// ⚠ 兜底那一支是 Python 的 `f"{value:g}"` —— 6 位有效数字。
+// Go 要用 `FormatFloat(v,'g',6,64)` 才是同一个数；用精度 -1（最短表示）
+// 会在 0.153846… 这类值上多出好几位。
+func FormatValue(value float64, spec string) string {
+	switch spec {
+	case "0%":
+		return strconv.FormatFloat(value*100, 'f', 0, 64) + "%"
+	case "0.0%":
+		return strconv.FormatFloat(value*100, 'f', 1, 64) + "%"
+	case "0.0":
+		return strconv.FormatFloat(value, 'f', 1, 64)
+	case "0":
+		return strconv.FormatFloat(value, 'f', 0, 64)
+	}
+	if value == math.Trunc(value) {
+		return strconv.FormatFloat(value, 'f', 0, 64)
+	}
+	return strconv.FormatFloat(value, 'g', 6, 64)
+}
+
+// RenderDescription 复刻 `render_description`（`skill.py:748-766`）。
+//
+// **查不到的键原样留着**（连花括号一起）——漏了什么一眼能看见，
+// 比悄悄替换成 0 或空串诚实。
+//
+// 换行有两种写法（10881 个等级用真实换行、3168 个等级写字面 `\n`），
+// 两种都还原成真实换行。
+func RenderDescription(text string, bb map[string]any) string {
+	out := placeholderRE.ReplaceAllStringFunc(text, func(m string) string {
+		inner := placeholderRE.FindStringSubmatch(m)[1]
+		key, spec := inner, ""
+		if i := strings.Index(inner, ":"); i >= 0 {
+			key, spec = inner[:i], inner[i+1:]
+		}
+		key = strings.TrimSpace(key)
+		v, ok := bb[key]
+		if !ok {
+			return m
+		}
+		f, ok := toFloat(v)
+		if !ok {
+			return m
+		}
+		return FormatValue(f, strings.TrimSpace(spec))
+	})
+	out = tagRE.ReplaceAllString(out, "")
+	out = strings.ReplaceAll(out, "\\r\\n", "\n")
+	out = strings.ReplaceAll(out, "\\n", "\n")
+	return out
 }
 
 var skillTableCache map[string]json.RawMessage
@@ -163,8 +234,7 @@ func SkillMetaFor(skillID string, level int) (*SkillMeta, error) {
 		BlackboardEntries: len(lv.Blackboard),
 		//: `index` 是**0 起算**的级号；`Level` 是 1 起算的那个，两个都留。
 		Index: level - 1, RawDescription: lv.Description,
-	}
-	//: `duration < 0` 是「无限持续」的哨兵，落成 nil（`skill.py:1769-1774`）。
+	}	//: `duration < 0` 是「无限持续」的哨兵，落成 nil（`skill.py:1769-1774`）。
 	if lv.Duration != nil && *lv.Duration >= 0 {
 		out.Duration = lv.Duration
 	}
@@ -222,6 +292,8 @@ func SkillMetaFor(skillID string, level int) (*SkillMeta, error) {
 			out.Blackboard["$"+b.Key] = *b.ValueStr
 		}
 	}
+	//: 渲染正文要**在黑板建好之后**做——它吃的就是这张表。
+	out.Description = RenderDescription(lv.Description, out.Blackboard)
 	return out, nil
 }
 

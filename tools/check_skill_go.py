@@ -43,6 +43,9 @@ FIELDS = [
     ("duration", "duration"), ("range_id", "range_id"),
     #: 级号（0 起算）与**原样正文**；渲染过的 description 本轮未接。
     ("index", "index"), ("raw_description", "raw_description"),
+    #: ★ 渲染后的正文：占位符代入 ＋ 标签剥掉 ＋ 两种换行还原。
+    #: 它是描述驱动机制（剑气/真伤/连击数）唯一的出处。
+    ("description", "description"),
 ]
 
 
