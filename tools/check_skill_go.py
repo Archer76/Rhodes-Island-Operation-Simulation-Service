@@ -104,6 +104,7 @@ def main() -> int:
     bb_dollar = 0
     eff_total = 0
     eff_other = 0
+    eff_buffs = 0
     hit = {k: 0 for k, _ in FIELDS}
     hit["duration_nonzero"] = 0
     hit["range_id_nonnull"] = 0
@@ -125,16 +126,39 @@ def main() -> int:
                 hit["range_id_nonnull"] += 1
             if a != b:
                 out.append("%s：Go=%r Python=%r" % (gk, a, b))
-        #: 效果账：两个计数与 other 键集（`_parse_effects` 的计数那一半）。
+        #: 效果对象：五个箱子 ＋ 两个计数 ＋ 演出参数 ＋ 击杀叠层上限。
         #: ★ 期望值从 Python 的 `effects` 直接取——不自己重写一遍口径。
-        #: ⚠ `buffs`/`damage`/`variants` 的内容**未接**，不比。
+        #: ⚠ 上一轮这里红成 11012/11012，逐条只有 `effects_total：Go=None`
+        #: ——Go 已把效果对象改成**嵌套字段** `effects:{eff_*}`，而这里仍按
+        #: 扁平名取。**红的是尺子**，本轮把它重写。
         pe = getattr(py, "effects", None)
-        for k, b in (("effects_total", getattr(pe, "total", 0)),
-                     ("effects_classified", getattr(pe, "classified", 0)),
-                     ("effects_other", sorted(getattr(pe, "other", {}) or {}))):
-            a = sorted(g.get(k) or []) if k == "effects_other" else norm(g.get(k))
-            if a != (b if k == "effects_other" else norm(b)):
-                out.append("%s：Go=%r Python=%r" % (k, a, b))
+        ge = g.get("effects") or {}
+        pairs = [
+            ("eff_total", "total"), ("eff_classified", "classified"),
+            ("eff_buffs", "buffs"), ("eff_units", "units"),
+            ("eff_damage", "damage"), ("eff_control", "control"),
+            ("eff_variants", "variants"), ("eff_variant_units", "variant_units"),
+            ("eff_other", "other"), ("eff_kill_max_stack", "kill_max_stack"),
+            ("eff_airborne_height", "airborne_height"),
+            ("eff_airborne_rise", "airborne_rise"),
+            ("eff_airborne_fall", "airborne_fall"),
+        ]
+
+        def _normbox(v):
+            """一箱数值：dict-of-值 或 dict-of-dict，两种都要归一。"""
+            if not isinstance(v, dict):
+                return norm(v if v is not None else 0)
+            return {str(k): ({str(kk): norm(vv) for kk, vv in x.items()}
+                             if isinstance(x, dict) else norm(x))
+                    for k, x in v.items()}
+
+        for gk, pk in pairs:
+            a, b = ge.get(gk), getattr(pe, pk, None)
+            a, b = _normbox(a), _normbox(b)
+            if a != b:
+                out.append("%s：Go=%r Python=%r" % (gk, a, b))
+            if a and gk in ("eff_buffs", "eff_damage", "eff_control", "eff_variants"):
+                eff_buffs += 1
         eff_total += getattr(pe, "total", 0)
         eff_other += len(getattr(pe, "other", {}) or {})
         if out:

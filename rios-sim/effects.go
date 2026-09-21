@@ -1,79 +1,177 @@
 package main
 
-// effects.go：`_parse_effects` 的**计数账**（丙阶段四·第七批）。
+// effects.go：`_parse_effects` 的**效果对象内容**（丙阶段四·第八批）。
 //
-// 对应 `ak_tactic/operator/skill.py:2110-2192` 的 `_parse_effects`。
+// 对应 `ak_tactic/operator/skill.py:2110-2192`。计数账在第七批（`EffectsAccount`），
+// 本文件补上五个箱子的**内容**：buffs / damage / control / variants / other。
 //
-// ## 本文件只做计数，不做效果对象的内容
+// ## ★ 为什么必须吃**有序**原料
 //
-// `_parse_effects` 把黑板分装进五个箱子（buffs / damage / control /
-// variant_units / other）。本批**只复刻两个计数与 `other` 的键集**
-// ——它们是 Python `SkillEffects` 直接暴露、且本批能逐条对上的量。
-// `buffs` / `damage` / `variants` 的**内容**（含尾部那两趟
-// `scales`/`ammos` 的收尾）**未接**，见 `skillmeta.go` 的字段注释。
+// 尾部两趟是「按**下标取第一个**」：
 //
-// ## 口径逐条抄（出处行号）
+//	own = [v for k, v in scales.items() if k.startswith("attack@")]
+//	if own: eff.damage["atk_scale"] = own[0]
 //
-//	① `$` 开头的键是 valueStr 标记，**不计数**（:2128-2129）；
-//	② 每个键先 `total += 1`（:2130）；
-//	③ `[kill].max_stack_cnt` 收成规范字段 `kill_max_stack`
-//	   （:2135-2137），★ **但不 `classified += 1`**；
-//	④ 起飞/降落演出参数（`_FLIGHT_KEYS`）在 `_classify` **之前**收走，
-//	   `classified += 1`（:2141-2145）——它们本来就不属于任何一类，
-//	   靠分类表永远进不来；
-//	⑤ `_classify(bare)` 归不了 → 落 `other`，**不计数**（:2147-2149）；
-//	⑥ 归得了 → `classified += 1`（:2151）；`ammo` 在 `durationType != "AMMO"`
-//	   时 `classified -= 1` 并落 `other`（:2162-2167）。
+// `scales` 是按黑板**插入顺序**建的（Python dict 保序），所以 `own[0]` 是
+// 「第一个 `attack@*` 倍率」。Go 的 map 迭代是**随机**的——照 map 写，
+// 同一条技能每次跑都可能选到不同的倍率，而且**看不出来**（值都是合法值）。
+// 所以这里收 `[]json.RawMessage`（JSON 数组的原始顺序），不吃 map。
 //
-// ## ★ ③ 那一行是本批的全部内容
+// ## 其余口径
 //
-// 上一轮我在 ③ 上多加了 1，全表对拍立刻报 11002/11012——唯一差的就是
-// `skchr_amiya2_2`（阿米娅技2，正带 `[kill].max_stack_cnt`）：
-// Go=6 / Python=5，而它的 `other` 键集两边相同。
-// **「哪一支不计数」是这一族里唯一会静默偏 1 的地方。**
+//	* `[kill].max_stack_cnt` → `kill_max_stack`，**不 `classified += 1`**；
+//	* 起飞/降落演出参数在 `_classify` 之前收走，`classified += 1`；
+//	* 变体键落 `variants[variant][name]`，**不并进基础的那一份**；
+//	* `buff` 累加（`+=`）、`control` 取最大（`max`）、`damage` 直接覆盖；
+//	* `ammo` 在 `durationType != "AMMO"` 时退回 `other` 并 `classified -= 1`。
 
-import "strings"
+import (
+	"encoding/json"
+	"math"
+	"strings"
+)
 
-// EffectsAccount 返回 `(total, classified, other 键集)`。
-func EffectsAccount(bb map[string]any, durationType string) (int, int, []string) {
-	total, classified := 0, 0
-	other := []string{}
-	for key := range bb {
-		if strings.HasPrefix(key, "$") {
+// Effects 是五个箱子的内容 ＋ 两个计数。
+type Effects struct {
+	Total        int                `json:"eff_total"`
+	Classified   int                `json:"eff_classified"`
+	Buffs        map[string]float64 `json:"eff_buffs"`
+	Units        map[string]string  `json:"eff_units"`
+	Damage       map[string]float64 `json:"eff_damage"`
+	Control      map[string]float64 `json:"eff_control"`
+	Variants     map[string]map[string]float64 `json:"eff_variants"`
+	VariantUnits map[string]map[string]string  `json:"eff_variant_units"`
+	Other        map[string]float64 `json:"eff_other"`
+	//: 演出参数（不进结算）。
+	AirborneHeight *float64 `json:"eff_airborne_height,omitempty"`
+	AirborneRise   *float64 `json:"eff_airborne_rise,omitempty"`
+	AirborneFall   *float64 `json:"eff_airborne_fall,omitempty"`
+	//: 击杀叠层层数上限（`[kill].max_stack_cnt`）。
+	KillMaxStack int `json:"eff_kill_max_stack"`
+}
+
+// ParseEffects 复刻 `_parse_effects`。`raw` 是那一级黑板的**原始 JSON 数组**
+// （保序），不是 map。
+func ParseEffects(raw []json.RawMessage, durationType string) *Effects {
+	eff := &Effects{
+		Buffs: map[string]float64{}, Units: map[string]string{},
+		Damage: map[string]float64{}, Control: map[string]float64{},
+		Variants: map[string]map[string]float64{},
+		VariantUnits: map[string]map[string]string{},
+		Other: map[string]float64{},
+	}
+	type kv struct {
+		Key string
+		Val float64
+	}
+	scales := map[string]float64{}
+	scaleOrder := []string{}
+	ammos := []kv{}
+
+	for _, bRaw := range raw {
+		var b struct {
+			Key   string   `json:"key"`
+			Value *float64 `json:"value"`
+		}
+		if err := json.Unmarshal(bRaw, &b); err != nil || b.Key == "" {
 			continue
 		}
-		total++
+		key := b.Key
+		value := 0.0
+		if b.Value != nil {
+			value = *b.Value
+		}
+		eff.Total++
 		variant, bare := "", key
 		if v, rest, ok := SplitVariant(key); ok {
 			variant, bare = v, rest
 		}
 		if variant == "kill" && bare == "max_stack_cnt" {
-			//: ★ 这一支**不加 classified**（`skill.py:2135-2137` 是 `continue`）。
+			eff.KillMaxStack = int(value)
 			continue
 		}
-		if _, ok := FLIGHT_KEYS[rsplitAt(bare)]; ok {
-			classified++
+		if field, ok := FLIGHT_KEYS[rsplitAt(bare)]; ok {
+			v := value
+			switch field {
+			case "airborne_height":
+				eff.AirborneHeight = &v
+			case "airborne_rise":
+				eff.AirborneRise = &v
+			case "airborne_fall":
+				eff.AirborneFall = &v
+			}
+			eff.Classified++
 			continue
 		}
-		kind, name, _, hit := Classify(bare)
+		kind, name, unit, hit := Classify(bare)
 		if !hit {
-			other = append(other, key)
+			eff.Other[key] = value
 			continue
 		}
-		classified++
-		if kind == "damage" && name == "ammo" && durationType != "AMMO" {
-			classified--
-			other = append(other, key)
+		eff.Classified++
+		if variant != "" {
+			if eff.Variants[variant] == nil {
+				eff.Variants[variant] = map[string]float64{}
+				eff.VariantUnits[variant] = map[string]string{}
+			}
+			eff.Variants[variant][name] = value
+			eff.VariantUnits[variant][name] = kind + "/" + unit
+			continue
+		}
+		switch kind {
+		case "buff":
+			eff.Buffs[name] += value
+			eff.Units[name] = unit
+		case "damage":
+			if name == "ammo" {
+				if durationType != "AMMO" {
+					eff.Classified--
+					eff.Other[key] = value
+					continue
+				}
+				ammos = append(ammos, kv{key, value})
+				continue
+			}
+			if name == "atk_scale" {
+				if _, seen := scales[key]; !seen {
+					scaleOrder = append(scaleOrder, key)
+				}
+				scales[key] = value
+			} else {
+				eff.Damage[name] = value
+			}
+		default: // control
+			eff.Control[name] = math.Max(eff.Control[name], value)
 		}
 	}
-	sortStringsAsc(other)
-	return total, classified, other
-}
 
-func sortStringsAsc(a []string) {
-	for i := 1; i < len(a); i++ {
-		for j := i; j > 0 && a[j] < a[j-1]; j-- {
-			a[j], a[j-1] = a[j-1], a[j]
+	//: 尾部两趟：**按插入顺序取第一个**（`skill.py:2177-2191`）。
+	var own, bareScales []float64
+	for _, k := range scaleOrder {
+		if strings.HasPrefix(k, "attack@") {
+			own = append(own, scales[k])
+		} else {
+			bareScales = append(bareScales, scales[k])
 		}
 	}
+	if len(own) > 0 {
+		eff.Damage["atk_scale"] = own[0]
+	} else if len(bareScales) > 0 {
+		eff.Damage["atk_scale"] = bareScales[0]
+	}
+	if len(own) > 0 && len(bareScales) > 0 {
+		eff.Damage["atk_scale_other"] = bareScales[0]
+	}
+	var ownAmmo []float64
+	for _, a := range ammos {
+		if strings.HasPrefix(a.Key, "attack@") {
+			ownAmmo = append(ownAmmo, a.Val)
+		}
+	}
+	if len(ownAmmo) > 0 {
+		eff.Damage["ammo"] = ownAmmo[0]
+	} else if len(ammos) > 0 {
+		eff.Damage["ammo"] = ammos[0].Val
+	}
+	return eff
 }
