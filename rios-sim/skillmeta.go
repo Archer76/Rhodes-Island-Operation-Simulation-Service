@@ -65,6 +65,12 @@ type SkillMeta struct {
 	//: 正文**渲染后**（`description`）：`{key}` 按黑板代入、富文本标签剥掉、
 	//: 两种换行写法都还原。**查不到的键原样留着**（连花括号一起）。
 	Description string `json:"description"`
+	//: `_parse_effects` 的**计数账**（`effects.go:EffectsAccount`）：
+	//: `total` / `classified` 两个计数与 `other` 的键集。
+	//: ⚠ `buffs` / `damage` / `variants` 的**内容**（含尾部两趟收尾）**未接**。
+	EffectsTotal      int      `json:"effects_total"`
+	EffectsClassified int      `json:"effects_classified"`
+	EffectsOther      []string `json:"effects_other"`
 }
 
 // normalizeSPType 复刻 `_normalize_sp_type`（`skill.py:1988-2008`）：
@@ -294,6 +300,10 @@ func SkillMetaFor(skillID string, level int) (*SkillMeta, error) {
 	}
 	//: 渲染正文要**在黑板建好之后**做——它吃的就是这张表。
 	out.Description = RenderDescription(lv.Description, out.Blackboard)
+	//: 效果账（两个计数 ＋ other 键集）。`$` 键由 EffectsAccount 自己跳过，
+	//: 这里把整张黑板（含 `$` 键）交给它，与 Python 同一入口。
+	out.EffectsTotal, out.EffectsClassified, out.EffectsOther =
+		EffectsAccount(out.Blackboard, out.DurationType)
 	return out, nil
 }
 

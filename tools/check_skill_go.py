@@ -102,6 +102,8 @@ def main() -> int:
     bad = 0
     bb_keys = 0
     bb_dollar = 0
+    eff_total = 0
+    eff_other = 0
     hit = {k: 0 for k, _ in FIELDS}
     hit["duration_nonzero"] = 0
     hit["range_id_nonnull"] = 0
@@ -123,6 +125,18 @@ def main() -> int:
                 hit["range_id_nonnull"] += 1
             if a != b:
                 out.append("%s：Go=%r Python=%r" % (gk, a, b))
+        #: 效果账：两个计数与 other 键集（`_parse_effects` 的计数那一半）。
+        #: ★ 期望值从 Python 的 `effects` 直接取——不自己重写一遍口径。
+        #: ⚠ `buffs`/`damage`/`variants` 的内容**未接**，不比。
+        pe = getattr(py, "effects", None)
+        for k, b in (("effects_total", getattr(pe, "total", 0)),
+                     ("effects_classified", getattr(pe, "classified", 0)),
+                     ("effects_other", sorted(getattr(pe, "other", {}) or {}))):
+            a = sorted(g.get(k) or []) if k == "effects_other" else norm(g.get(k))
+            if a != (b if k == "effects_other" else norm(b)):
+                out.append("%s：Go=%r Python=%r" % (k, a, b))
+        eff_total += getattr(pe, "total", 0)
+        eff_other += len(getattr(pe, "other", {}) or {})
         if out:
             bad += 1
             print("✗ %s L%d —— %d 处" % (q["skill_id"], q["level"], len(out)))
