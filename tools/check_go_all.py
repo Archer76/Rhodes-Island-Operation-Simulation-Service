@@ -111,7 +111,9 @@ def main() -> int:
         if gbad:
             print("★ %d / %d 套的守卫不成立" % (gbad, len(guards)))
             return 1
-        print("    六套守卫全部成立")
+        #: ⚠ 这行**要与 SUITE 同源**：写死「六套」会在加第七套之后变成假话
+        #: （实测：加了「生命上限」之后它仍印「六套守卫全部成立」，而表上是七行）。
+        print("    %d 套守卫全部成立" % len(guards))
     print()
     if bad:
         print("★ %d / %d 套判据没通过 —— 下面是各自的原始输出尾部：" % (bad, len(rows)))
