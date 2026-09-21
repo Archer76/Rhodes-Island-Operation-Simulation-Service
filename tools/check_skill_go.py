@@ -78,20 +78,21 @@ def norm(v):
 def main() -> int:
     from ak_tactic.operator import SkillBook
     book = SkillBook()
-
-    #: 全表技能 × 最高级。`blackboard` 条数也拿来对——它是数值那一半的原料。
     ids = sorted(book.all_ids())
     if not ids:
         raise SystemExit("拿不到技能全表（SkillBook 的接口变了？）")
+
+    #: ★ **全等级**，不只最高级。第一版每个技能只查最高级（1810 次）——那是
+    #: **抽样**：等级之间的 spCost/initSp/increment/duration 与黑板都在变，
+    #: 只查一级的话剩下那几级读错了照样绿。
     queries = []
     for sid in ids:
         try:
             levels = book.levels(sid)
         except Exception:                                        # noqa: BLE001
             continue
-        if not levels:
-            continue
-        queries.append({"skill_id": sid, "level": len(levels)})
+        for lv in range(1, len(levels) + 1):
+            queries.append({"skill_id": sid, "level": lv})
     got = go_skills(queries)
 
     mutate = "--mutate" in sys.argv
@@ -143,7 +144,7 @@ def main() -> int:
         bb_dollar += sum(1 for k in pbb if k.startswith("$"))
     print()
     print("已比：状态机九字段 ＋ **完整黑板**（数值键 ＋ `$key` 两套）；"
-          "共 %d 个技能（全表 × 最高级）" % len(queries))
+          "共 %d 个「技能×等级」（全表 × **每一级**，不是只查最高级）" % len(queries))
     print("★ 黑板行使计数：共 %d 个键，其中 `$` 字符串键 **%d** 个（那套就是"
           "召唤/装置类机制唯一的住处）" % (bb_keys, bb_dollar))
     print("★ 行使计数（Python 侧非默认次数）：")
