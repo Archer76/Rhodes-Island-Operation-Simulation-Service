@@ -57,6 +57,8 @@ type request struct {
 	//: `load` 用：关卡查询串。既收 levelId（`main_00-01`）也收关卡号（`0-1`），
 	//: 换算走 `_level_index.json`，与 `stage.py:966-980` 同口径。
 	Level string `json:"level,omitempty"`
+	//: `roster` 用：名册文件路径（见 `roster.go`）。
+	Path string `json:"path,omitempty"`
 }
 
 type response struct {
@@ -82,6 +84,8 @@ type response struct {
 	Interval json.RawMessage `json:"interval,omitempty"`
 	//: `panel` 的应答：同一帧的五处读数（见 `panelfold.go`）。
 	Panel json.RawMessage `json:"panel,omitempty"`
+	//: `roster` 的应答：练度名册（见 `roster.go`）。
+	Roster json.RawMessage `json:"roster,omitempty"`
 	Error string          `json:"error,omitempty"`
 }
 
@@ -356,6 +360,22 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Panel: raw}
+	case "roster":
+		// 丙阶段四·第十二批：Go 直读练度名册（见 `roster.go`）。
+		if req.Path == "" {
+			return response{ID: req.ID, OK: false,
+				Error: "roster 少了 path（名册文件路径）"}
+		}
+		rr, err := ReadRoster(req.Path)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(rr)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Roster: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。
