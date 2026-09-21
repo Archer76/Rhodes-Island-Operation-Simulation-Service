@@ -74,7 +74,9 @@ type response struct {
 	Ranges json.RawMessage `json:"ranges,omitempty"`
 	//: `skill` 的应答：技能状态机参数（见 `skill.go`）。
 	Skills json.RawMessage `json:"skills,omitempty"`
-	Error  string          `json:"error,omitempty"`
+	//: `classify` 的应答：黑板键的归类（见 `classify.go`）。
+	Classes json.RawMessage `json:"classes,omitempty"`
+	Error   string          `json:"error,omitempty"`
 }
 
 type pong struct {
@@ -275,10 +277,32 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("技能序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Skills: raw}
+	case "classify":
+		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
+		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。
+		if len(req.Spec) == 0 {
+			return response{ID: req.ID, OK: false,
+				Error: "classify 少了 spec（一批键名）"}
+		}
+		var keys []string
+		if err := json.Unmarshal(req.Spec, &keys); err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("spec 不是键名数组：%v", err)}
+		}
+		outs := make([]KeyClass, 0, len(keys))
+		for _, k := range keys {
+			outs = append(outs, ClassifyKey(k))
+		}
+		raw, err := json.Marshal(outs)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("归类序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Classes: raw}
 	default:
 		return response{ID: req.ID, OK: false,
 			Error: fmt.Sprintf(
-				"不认识的命令：%q（支持 ping / sim / load / enemies / opstats / range / skill）",
+				"不认识的命令：%q（支持 ping / sim / load / enemies / opstats / range / skill / classify）",
 				req.Cmd)}
 	}
 }
