@@ -58,6 +58,12 @@ def cached_levels() -> list[str]:
 def main() -> int:
     rows = []
     lvls = cached_levels()
+    #: `--selfcheck`：**把每套判据的反向守卫也跑一遍**。
+    #: ★ 「六套全绿」只证明它们现在不红；证明不了「人为破坏时会红」。
+    #: 后者才是判据有分辨力的证据——本项目为此单独记过一条
+    #: （没有反向守卫的绿是零信息量的绿）。
+    selfcheck = "--selfcheck" in sys.argv
+    guards: list[tuple[str, int]] = []
     print("取证范围：缓存可达的关卡 %d 个（喂给需要清单的那两套判据）" % len(lvls))
     for name, script, what, wants_levels in SUITE:
         cmd = [PY, "-X", "utf8", str(ROOT / script)]
@@ -71,6 +77,14 @@ def main() -> int:
             if line.startswith("结论："):
                 verdict = line.strip()
         rows.append((name, p.returncode, verdict, what, out, p.stderr.decode("utf-8", "replace")))
+        if selfcheck:
+            gc = [PY, "-X", "utf8", str(ROOT / script), "--mutate"]
+            if wants_levels:
+                #: 守卫只需一个样本就够证明「红得起来」，喂全量太慢。
+                gc += lvls[:1]
+            gp = subprocess.run(gc, cwd=str(ROOT), capture_output=True)
+            #: 约定：`--mutate` 下 **rc=0 = 守卫成立**（真的判红了）。
+            guards.append((name, gp.returncode))
 
     print("=" * 92)
     print("Go 侧跨实现对拍总表（判据脚本各自独立跑；本表只汇总，不改它们的判据）")
@@ -82,6 +96,20 @@ def main() -> int:
             bad += 1
         print("%s %-6s rc=%-3d %s" % (mark, name, rc, verdict or "（没抠到结论行）"))
         print("        %s" % what)
+    if selfcheck:
+        print()
+        print("★ 反向守卫自检（每套人为注入一处不一致，**必须判红**，rc=0 即成立）：")
+        gbad = 0
+        for name, grc in guards:
+            ok = grc == 0
+            if not ok:
+                gbad += 1
+            print("    %s %-6s rc=%d %s" % ("✓" if ok else "✗", name, grc,
+                                            "" if ok else "← 守不住：注入了改动却没红"))
+        if gbad:
+            print("★ %d / %d 套的守卫不成立" % (gbad, len(guards)))
+            return 1
+        print("    六套守卫全部成立")
     print()
     if bad:
         print("★ %d / %d 套判据没通过 —— 下面是各自的原始输出尾部：" % (bad, len(rows)))
