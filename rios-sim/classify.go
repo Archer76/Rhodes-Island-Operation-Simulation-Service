@@ -20,7 +20,12 @@ package main
 // ## 两张表的量纲不是一回事
 //
 // 增益是**比例**（0.5 = +50%）还是**绝对值**，住在第二个字段里；
-// 而 `CONTROL_KEYS` 的值是**秒**。混用会让 10 秒的晕眩变成 +1000%。
+// 而 `CONTROL_KEYS` 的值是**秒**（量纲写 `sec`）。混用会让 10 秒的晕眩变成 +1000%。
+
+import (
+	"regexp"
+	"strings"
+)
 
 // BUFF_KEYS 复刻 `skill.py:772-791`。
 var BUFF_KEYS = map[string][2]string{
@@ -129,40 +134,85 @@ func containsByte(s string, b byte) bool {
 	return false
 }
 
-// KeyClass 是一个黑板键在**表里**的归属（不含降级序列）。
+// Lookup 复刻 `_classify` 里的 `lookup`（`skill.py:886-893`）。
+//
+// ⚠ control 的量纲是 **`sec`**（不是 `secs`）。
+// ⚠ **`_FLIGHT_KEYS` 不在这张查表里**——`_classify` 根本不看它，
+// 所以飞行键的分类结果是 `None`，不是 "flight"。（表本身仍留着：它是
+// 描述驱动那半的登记，出处见 `skill.py:819-825`。）
+func Lookup(k string) (string, string, string, bool) {
+	if b, ok := BUFF_KEYS[k]; ok {
+		return "buff", b[0], b[1], true
+	}
+	if f, ok := DAMAGE_KEYS[k]; ok {
+		return "damage", f, "scale", true
+	}
+	for _, c := range CONTROL_KEYS {
+		if c == k {
+			return "control", k, "sec", true
+		}
+	}
+	return "", "", "", false
+}
+
+// suffixRE / infixRE 复刻 `skill.py:845` 与 `:858`。
+var (
+	suffixRE = regexp.MustCompile(`_(?:s\d+|\d+)$`)
+	infixRE  = regexp.MustCompile(`@s\d+_`)
+)
+
+func rsplitAt(k string) string {
+	if i := strings.LastIndex(k, "@"); i >= 0 {
+		return k[i+1:]
+	}
+	return k
+}
+
+// Classify 复刻 `_classify`（`skill.py:880-904`）的**降级序列**：
+//
+//	原样 → 去 `xxx@` 前缀 → 去 `_s2`/`_2` 尾巴 → 去掉夹在 @ 后面的技能槽标记
+//
+// 七个候选按顺序试，第一个命中的胜出；都不中就返回 false。
+func Classify(key string) (string, string, string, bool) {
+	stripped := suffixRE.ReplaceAllString(key, "")
+	infixed := infixRE.ReplaceAllString(key, "@")
+	for _, cand := range []string{
+		key, rsplitAt(key),
+		stripped, rsplitAt(stripped),
+		infixed, rsplitAt(infixed),
+		suffixRE.ReplaceAllString(infixed, ""),
+	} {
+		if kind, field, unit, ok := Lookup(cand); ok {
+			return kind, field, unit, true
+		}
+	}
+	return "", "", "", false
+}
+
+// KeyClass 是一个黑板键的归类结果。
 type KeyClass struct {
 	Key     string `json:"key"`
-	Kind    string `json:"kind"`  //: buff / damage / control / flight / ""
+	Kind    string `json:"kind"`  //: buff / damage / control / ""
 	Field   string `json:"field"` //: 规范名
-	Unit    string `json:"unit"`  //: 量纲（buff 专用）
+	Unit    string `json:"unit"`  //: 量纲（buff 专用；control 是 sec）
 	Variant string `json:"variant"`
 	NoVar   string `json:"no_variant"` //: 去掉变体限定后的键
 	HasVar  bool   `json:"has_variant"`
 }
 
-// ClassifyKey 只做**查表 ＋ 拆变体**（`_classify` 的降级序列本轮未接）。
+// ClassifyKey 做**拆变体 ＋ 降级序列**（与 `_classify` 同口径）。
+//
+// ⚠ `_split_variant` 与 `_classify` 在 Python 里是**两条独立的路径**：
+// `_classify` 不去方括号（它拿到的键已经去过）。这里把两者都算出来，
+// 但 `kind/field/unit` **只按原键**走降级，不先拆变体——
+// 混起来会让带变体的键归类结果与 Python 分叉。
 func ClassifyKey(key string) KeyClass {
 	out := KeyClass{Key: key, NoVar: key}
 	if v, rest, ok := SplitVariant(key); ok {
 		out.Variant, out.NoVar, out.HasVar = v, rest, true
 	}
-	if b, ok := BUFF_KEYS[key]; ok {
-		out.Kind, out.Field, out.Unit = "buff", b[0], b[1]
-		return out
-	}
-	if f, ok := DAMAGE_KEYS[key]; ok {
-		out.Kind, out.Field, out.Unit = "damage", f, "scale"
-		return out
-	}
-	for _, c := range CONTROL_KEYS {
-		if c == key {
-			out.Kind, out.Field, out.Unit = "control", key, "secs"
-			return out
-		}
-	}
-	if f, ok := FLIGHT_KEYS[key]; ok {
-		out.Kind, out.Field = "flight", f
-		return out
+	if kind, field, unit, ok := Classify(key); ok {
+		out.Kind, out.Field, out.Unit = kind, field, unit
 	}
 	return out
 }

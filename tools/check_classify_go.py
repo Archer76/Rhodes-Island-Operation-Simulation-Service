@@ -59,8 +59,7 @@ def go_classify(keys: list[str]) -> list[dict]:
 
 def main() -> int:
     from ak_tactic.operator import SkillBook
-    from ak_tactic.operator.skill import (BUFF_KEYS, DAMAGE_KEYS, CONTROL_KEYS,
-                                          _FLIGHT_KEYS, _split_variant)
+    from ak_tactic.operator.skill import _classify, _split_variant
 
     book = SkillBook()
     keys: set[str] = set()
@@ -76,17 +75,18 @@ def main() -> int:
         got[0]["kind"] = "<mutated>"
 
     def expect(k: str) -> dict:
+        """★ **直接问 Python 的分类器**，不自己重写一遍表。
+
+        第一版是我照着表手写的期望值，于是"control 的量纲"我两处都写成
+        `secs`（Python 是 `sec`），判据照样全绿——**两把相同的尺子互证**。
+        现在期望值来自 `_classify` 本身，才是真的在被测方那一侧取证。
+        """
         var, rest = _split_variant(k)
         e = {"key": k, "kind": "", "field": "", "unit": "",
              "variant": var or "", "no_variant": rest, "has_variant": var is not None}
-        if k in BUFF_KEYS:
-            e["kind"], e["field"], e["unit"] = "buff", BUFF_KEYS[k][0], BUFF_KEYS[k][1]
-        elif k in DAMAGE_KEYS:
-            e["kind"], e["field"], e["unit"] = "damage", DAMAGE_KEYS[k], "scale"
-        elif k in CONTROL_KEYS:
-            e["kind"], e["field"], e["unit"] = "control", k, "secs"
-        elif k in _FLIGHT_KEYS:
-            e["kind"], e["field"] = "flight", _FLIGHT_KEYS[k]
+        hit = _classify(k)
+        if hit:
+            e["kind"], e["field"], e["unit"] = hit
         return e
 
     bad = 0
