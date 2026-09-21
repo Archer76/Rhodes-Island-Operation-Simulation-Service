@@ -111,7 +111,7 @@ func pyStrStrict(m map[string]json.RawMessage, key string) (string, bool, error)
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err != nil {
-		return "", false, fmt.Errorf("名册字段 %s 不是字符串：%s", key, string(raw))
+		return "", false, fmt.Errorf("字段 %s 不是字符串：%s", key, string(raw))
 	}
 	return s, true, nil
 }

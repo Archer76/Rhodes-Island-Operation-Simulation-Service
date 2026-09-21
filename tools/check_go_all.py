@@ -47,6 +47,8 @@ SUITE = [
     ("面板", "tools/check_panel_go.py", "Go 同一帧七处读数 vs operator_view 的七个方法", False),
     #: 第 37 轮加的。名册原先是 Go 侧唯一零入口的输入，目标里点名的第四层。
     ("名册", "tools/check_roster_go.py", "Go 直读练度名册 vs plan.Roster.from_json", False),
+    #: 第 38 轮加的。目标里点名的第五层，此前同样零入口。
+    ("计划", "tools/check_plan_go.py", "Go 直读打法 vs plan.Plan.from_dict/validate", False),
 ]
 
 

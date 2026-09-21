@@ -86,6 +86,8 @@ type response struct {
 	Panel json.RawMessage `json:"panel,omitempty"`
 	//: `roster` 的应答：练度名册（见 `roster.go`）。
 	Roster json.RawMessage `json:"roster,omitempty"`
+	//: `plan` 的应答：打法（见 `plan.go`）。
+	Plan json.RawMessage `json:"plan,omitempty"`
 	Error string          `json:"error,omitempty"`
 }
 
@@ -376,6 +378,22 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Roster: raw}
+	case "plan":
+		// 丙阶段四·第十三批：Go 直读打法（见 `plan.go`）。
+		if req.Path == "" {
+			return response{ID: req.ID, OK: false,
+				Error: "plan 少了 path（打法文件路径）"}
+		}
+		pp, err := ReadPlan(req.Path)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(pp)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Plan: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。
