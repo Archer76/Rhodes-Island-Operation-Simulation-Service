@@ -39,6 +39,8 @@ SUITE = [
     #: 这正是本文件第 28-30 行那条教训的同一形状：**漏跑一套的症状是全绿，
     #: 只是那份绿少了一块**。新增判据时，别忘了往这里加一行。
     ("分类", "tools/check_classify_go.py", "Go 四张分类表/拆变体/降级 vs _classify", False),
+    #: 这一行是第 34 轮加的，**就是照第 37-40 行那条教训办的**（新判据落地即登记）。
+    ("生命上限", "tools/check_profile_go.py", "Go 生命上限加成一行 vs _max_hp_after_bonus", False),
 ]
 
 

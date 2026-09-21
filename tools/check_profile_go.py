@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""跨实现对拍：生命上限加成那一行（`_max_hp_after_bonus`）。
+
+## 为什么单独验这一行
+
+`simgo/skills.py:239-255` 的注释写明它**曾经整条没送**：规格里的 `max_hp`
+只有开场那一个静态值，于是「开技能把生命上限翻倍」的干员在 Go 侧少了一半血
+——HS-EX-8 第 3 手圣聆初雪承受 2058 就倒，原版要到 4116（正好一半），
+整局因此短了 18 秒。
+
+## 怎么验
+
+它是一个**纯函数**（只读 `_base_max_hp` / `max_hp` / `effects.buffs` 三处），
+所以可以用**网格输入**逐点比：期望值从 Python 的 `_max_hp_after_bonus` 直接取
+（配一个只带这三个属性的替身对象），不自己重写口径。
+
+★ 网格必须**覆盖三条边界**，否则这条判据很容易变成零信息量的绿：
+  ① 基准 > 0 与 `基准 <= 0`（回落那一支）；
+  ② `pct` 正 / 零 / 负；
+  ③ 基准为 0 与为负**分开**——`<= 0` 与 `< 0` 是两条不同的路。
+
+用法:
+    python tools\\check_profile_go.py
+    python tools\\check_profile_go.py --mutate
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import types
+from pathlib import Path
+
+sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+GO_BIN = os.environ.get(
+    "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
+DATA = ROOT / "data" / "gamedata"
+
+BASES = [0.0, -1.0, 1.0, 1000.0, 4116.0]
+CURS = [0.0, 500.0, 2058.0, 9999.0]
+PCTS = [-0.5, 0.0, 0.5, 1.0, 2.0]
+
+
+def go_maxhp(queries: list[dict]) -> list[float]:
+    env = dict(os.environ)
+    env["RIOS_DATA"] = str(DATA)
+    req = json.dumps({"id": 1, "cmd": "maxhp", "spec": queries}) + "\n"
+    p = subprocess.run([GO_BIN], input=req.encode("utf-8"),
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    if p.returncode != 0:
+        raise SystemExit("Go rc=%d：%s" % (p.returncode,
+                                           p.stderr.decode("utf-8", "replace")[:400]))
+    line = p.stdout.decode("utf-8", "replace").strip().splitlines()
+    if not line:
+        raise SystemExit("Go 没有回任何东西")
+    resp = json.loads(line[0])
+    if not resp.get("ok"):
+        raise SystemExit("Go 回 error：%s" % resp.get("error"))
+    return resp["maxhp"]
+
+
+def main() -> int:
+    from ak_tactic.simgo.skills import _max_hp_after_bonus
+
+    queries = [{"base": b, "cur": c, "pct": t}
+               for b in BASES for c in CURS for t in PCTS]
+    got = go_maxhp(queries)
+    mutate = "--mutate" in sys.argv
+    if mutate and got:
+        got[0] = got[0] + 1.0
+
+    bad = 0
+    branch = {"基准>0": 0, "基准<=0回落": 0, "pct非零": 0}
+    for q, g in zip(queries, got):
+        op = types.SimpleNamespace(_base_max_hp=q["base"], max_hp=q["cur"])
+        eff = types.SimpleNamespace(buffs={"max_hp": q["pct"]})
+        want = _max_hp_after_bonus(op, eff)
+        if q["base"] > 0:
+            branch["基准>0"] += 1
+        else:
+            branch["基准<=0回落"] += 1
+        if q["pct"] != 0:
+            branch["pct非零"] += 1
+        if abs(g - want) > 1e-9:
+            bad += 1
+            if bad <= 8:
+                print("✗ base=%g cur=%g pct=%g —— Go=%r Python=%r"
+                      % (q["base"], q["cur"], q["pct"], g, want))
+    print()
+    print("已比：生命上限加成那一行；网格 %d 点（base %d × cur %d × pct %d）"
+          % (len(queries), len(BASES), len(CURS), len(PCTS)))
+    print("★ 行使计数（三条边界各走了多少点）：%s"
+          % ", ".join("%s=%d" % (k, v) for k, v in branch.items()))
+    print()
+    if mutate:
+        if bad:
+            print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")
+            return 0
+        print("反向守卫：不成立 ✗")
+        return 1
+    print("结论：%d / %d 个点逐点一致" % (len(queries) - bad, len(queries)))
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

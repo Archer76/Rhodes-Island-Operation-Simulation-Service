@@ -76,7 +76,9 @@ type response struct {
 	Skills json.RawMessage `json:"skills,omitempty"`
 	//: `classify` 的应答：黑板键的归类（见 `classify.go`）。
 	Classes json.RawMessage `json:"classes,omitempty"`
-	Error   string          `json:"error,omitempty"`
+	//: `maxhp` 的应答：生命上限加成那一行（见 `profile.go`）。
+	MaxHP json.RawMessage `json:"maxhp,omitempty"`
+	Error string          `json:"error,omitempty"`
 }
 
 type pong struct {
@@ -277,6 +279,31 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("技能序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Skills: raw}
+	case "maxhp":
+		// 丙阶段四·第九批：生命上限加成那一行（纯函数，见 `profile.go`）。
+		if len(req.Spec) == 0 {
+			return response{ID: req.ID, OK: false,
+				Error: "maxhp 少了 spec（一批 {base,cur,pct}）"}
+		}
+		var qs []struct {
+			Base float64 `json:"base"`
+			Cur  float64 `json:"cur"`
+			Pct  float64 `json:"pct"`
+		}
+		if err := json.Unmarshal(req.Spec, &qs); err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("spec 不是参数数组：%v", err)}
+		}
+		vals := make([]float64, 0, len(qs))
+		for _, q := range qs {
+			vals = append(vals, MaxHPAfterBonus(q.Base, q.Cur, q.Pct))
+		}
+		raw, err := json.Marshal(vals)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, MaxHP: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。
