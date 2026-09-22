@@ -94,6 +94,26 @@ python tools\closeout_selfsufficiency.py
 | 规格·骨架装配 | `rios-sim/specgo.go` | 把已能造出的 12 个键装配成一份部分规格，并**自报还差哪 7 个**（键集拿 ast 从源文件核对） | `check_specgo_go.py` |
 | 规格·起始费用天赋 | `rios-sim/costbonus.go` | `squad_cost_bonus`：滤掉 `$` 后签好只剩 `cost` 才认（`deploys`／`skill_uses` 排程的起始费用要用它） | `check_costbonus_go.py` |
 | 规格·部署费用 | `rios-sim/deploycost.go` | 各自练度下的 `total["cost"]`（取数口径与干员判据同一份，不另立；这里只是把它单独取出来） | `check_costof_go.py` |
+| 规格·骨架装配 | `rios-sim/specgo.go` | 已落 14 个键；`deploys`／`skill_uses` 传了计划才有（`omitempty` 在这里承担语义） | `check_specgo_go.py` |
+
+---
+
+## 二·补 · 剩下 5 个键的**真实前置**（2026-09-21 量清）
+
+19 个顶层键已落 14。剩下 5 个**各自都压着一层不在 Go 的机制**——不是「再写 100 行」那种距离。
+这一节存在的意义：让下一轮不照着「看起来快」的顺序挑，而照着**真的能做完**的顺序挑。
+
+| 键 | 真实前置 | 距离 |
+|---|---|---|
+| `unsupported`（闸门） | 166 行，读 `inp.stage` ／部署表 ／敌人库（含雪与相性）。敌人库 **Go 已有**，是这 5 个里最好落的一个 | **推荐先做** |
+| `operators` | `_operator_spec`（162 行）→ 两套数值快照 → **技能效果层**（`effects_of(sim, op)`），而效果层要技能白名单与 `SkillEffects` 组装 | 远 |
+| `spawns` | `_unit_spec`（128 行）＋ 一条**没预料到的前置**：`routes` 来自 `eta.py:122` 的 `route_plans(stage)`，它依赖 `map.ground_path(…)`（寻路）与 **`r.legs(walk_map=…)`（一个可调用构建器）** | 远 |
+| `mechanisms`／`mech_config` | 机制层（每个活动一份、按需取用） | 远 |
+
+★ **`spawns` 那条要特别记**：实测 Go **只有消费侧**——`sim.go` 沿 `LegSpec` 走，
+而 `Legs` 是**从规格里收来的**（Python 给的）。生产侧（`route.legs(…)` 构建器 ＋
+`ground_path`）**Go 里没有**。所以在动手之前别把它当成「敌人库已有、顺手就能做」：
+那会写出**第二套路线逻辑**，而两套会各自「看着对」。
 
 ---
 
