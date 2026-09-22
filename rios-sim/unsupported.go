@@ -49,9 +49,7 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 )
@@ -284,17 +282,12 @@ var gateLineWhy = map[string]string{
 }
 
 // loadGateStage 取关卡：合成关卡走文件，真关卡走索引。
+//
+// ⚠ 合成关卡那一支与 `routeplans` / 出怪规格共用 `loadStageFromFile`
+// （`etaroutes.go`）——「一份口径只留一处」，两处各写一遍必然走散。
 func loadGateStage(level, path, difficulty string) (*Stage, error) {
 	if path != "" {
-		blob, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("合成关卡读不出来（%s）：%v", path, err)
-		}
-		var raw map[string]json.RawMessage
-		if err := json.Unmarshal(blob, &raw); err != nil {
-			return nil, fmt.Errorf("合成关卡不是合法 JSON（%s）：%v", path, err)
-		}
-		return ParseStage(raw, "", "", difficulty)
+		return loadStageFromFile(path, difficulty)
 	}
 	if level == "" {
 		return nil, fmt.Errorf("unsupported 少了 level（关卡号或 levelId）或 path（合成关卡 JSON）")

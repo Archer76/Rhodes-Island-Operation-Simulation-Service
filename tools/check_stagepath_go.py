@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""跨实现对拍：路线生产侧（`StageMap.ground_path` ＋ `Route.legs`）。
+"""跨实现对拍：路线生产侧（`StageMap.ground_path` ＋ `Route.legs` ＋ `eta.route_plans`）。
 
 ## 对的是什么
 
 * **寻路** `ak_tactic/gamedata/stage.py:172-226`；
-* **分段** `ak_tactic/gamedata/stage.py:415-481`（`Route.legs`）。
+* **分段** `ak_tactic/gamedata/stage.py:415-481`（`Route.legs`）；
+* **路线计划表** `ak_tactic/eta.py:122`（`route_plans`）＋ `:48`（`leading_wait`）。
 
-两者同属**路线生产侧**——它卡着 `spawns` 与 `unsupported` 两个键。合成一份
+三者同属**路线生产侧**——它卡着 `spawns` 与 `unsupported` 两个键。合成一份
 判据是因为它们同源同命：`legs` 的 `walk` 段就是靠 `ground_path` 一段段拼出来
-的（相邻两段之间还要 `pop()` 掉重复顶点），拆成两份判据只会让同一条路上出现
-两把尺子。
+的（相邻两段之间还要 `pop()` 掉重复顶点），而 `route_plans` 就是把这两样
+**按路线号组装成一张表**（`simgo/spec.py::_route_tables` 的形状，`spawns`
+真正消费的就是它）。拆成三份判据只会让同一条路上出现三把尺子。
+
+层次关系（上面那层调下面那层，不是三个并列的实现）：
+
+    route_plans  ──用──>  Route.legs  ──用──>  ground_path
 
 ## ★ 这条判据自己踩过的两个坑（写在这里防止再犯）
 
@@ -30,6 +36,20 @@
 不是缩放式（见 `rios-sim/stagelegs.go` 的 `gridDist`）。
 ⇒ 这里比的是 float **精确相等**，**没有容差**：加了容差就再也看不见那 1 ulp，
 而那正是花了四轮、先排除公式再排除仪器才逼出来的东西。
+`route_plans` 的 `wait` 同样逐位比（它走的是朴素 `+=`，不是 `sum()`）。
+
+## ★ 两个**结构上不可达**的分支：不是「没测到」，是可达性为零
+
+`eta.route_plans` 里有两处兜底，它们在现有数据上永远不执行。它们**照抄了**
+（照抄才叫同一个口径），但**不进行使计数**，而是登记成 `STRUCTURAL_ZERO`：
+
+| 分支 | 为什么不可达 | 守卫 |
+|---|---|---|
+| `if not pts:`（`eta.py:138`） | `ground_path` 的**三条出口全部非空**（同格 `[start]`、端点不可走 `[start, end]`、不连通 `[start, end]`） | 每跑一次就在 55 关上重量「有没有哪个 ground_path 返回空」，非 0 即红 |
+| `wait=0.0 if legs else w` 的 `else` 支（`spec.py:912`） | `Route.legs` 的 `flush()` 每次都至少产出 2 个点 ⇒ `legs` 恒非空 | 同上，重量「有没有哪条路线 legs 为空」 |
+
+★ 两条守卫**每跑一次都重算**（不是写死一句「不可达」）。哪天真出现了，
+这里会红，而红的意思是「该补合成夹具了」——不是「实现错了」。
 
 ## 合成夹具（缓存里一条 `DISAPPEAR` 都没有）
 
@@ -41,7 +61,7 @@ Go 走它自己的 `_level_index.json` ＋ `load` 入口，Python 走 `parse_sta
 
 ## 反向守卫（`--mutate`）
 
-四处**互相独立**的变异，各自必须被判红，缺一不算成立：
+八处**互相独立**的变异，各自必须被判红，缺一不算成立：
 
 | 变异 | 打在哪 | 证明什么 |
 |---|---|---|
@@ -49,6 +69,10 @@ Go 走它自己的 `_level_index.json` ＋ `load` 入口，Python 走 `parse_sta
 | 分段点列 | 第一条 walk 段首点 x+1 | 分段的点列比较是活的 |
 | 分段长度 | 第一条 walk 段 `length` **加 1 ulp** | **分辨得出 1 ulp**（贴边界） |
 | 分段秒数 | 第一条 vanish 段 `seconds` **加 1 ulp** | 离场时长那一栏是活的 |
+| 路线点列 | 第一条路线的 `points` 首点 x+1 | 计划表那一栏是活的（且与上面四条独立） |
+| 路线待命 | 第一条路线的 `wait` **加 1 ulp** | 入场待命逐位比 |
+| 路线段数 | 第一条路线的 `legs` 砍掉最后一段 | 段数比较是活的（不是只比前几段） |
+| 路线段长度 | 第一条路线的首个 walk 段 `length` **加 1 ulp** | 计划表里的段是**另一条命令**答的，独立于「分段长度」 |
 
 用法:
     python tools\\check_stagepath_go.py
@@ -74,12 +98,24 @@ GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
 DATA = ROOT / "data" / "gamedata"
 
-#: 四处独立变异的名字（`--mutate` 下四处都要「注入过 ＋ 判红过」）。
+#: 八处独立变异的名字（`--mutate` 下八处都要「注入过 ＋ 判红过」）。
 MUT_PATH_PTS = "寻路点列"
 MUT_LEG_PTS = "分段点列"
 MUT_LEG_LEN = "分段长度"
 MUT_LEG_SEC = "分段秒数"
-MUT_KEYS = (MUT_PATH_PTS, MUT_LEG_PTS, MUT_LEG_LEN, MUT_LEG_SEC)
+MUT_RP_PTS = "路线点列"
+MUT_RP_WAIT = "路线待命"
+MUT_RP_LEGS = "路线段数"
+MUT_RP_LEN = "路线段长度"
+MUT_KEYS = (MUT_PATH_PTS, MUT_LEG_PTS, MUT_LEG_LEN, MUT_LEG_SEC,
+            MUT_RP_PTS, MUT_RP_WAIT, MUT_RP_LEGS, MUT_RP_LEN)
+
+#: 两个**结构上不可达**的分支（见文件头）：它们不进行使计数，
+#: 但每跑一次都要重量一遍「可达性仍然为零」，非 0 即红。
+STRUCTURAL_ZERO = {
+    "path_fallback": "ground_path 返回空 ⇒ 退回 [起点]+路点+终点",
+    "legs_empty": "route_plans 拿到空 legs ⇒ spawns 侧走 wait=w 那一支",
+}
 
 #: 合成夹具：`synthetic_stage()` 造关卡，`write_synthetic()` 落成 Go 读得到的树。
 SYN_LEVEL_ID = "syn_legs_01"
@@ -319,11 +355,151 @@ def sum_naive(pts: list[list[int]]) -> float:
     return tot
 
 
+# --------------------------------------------------------------- 路线计划表
+
+def py_route_plan_coverage(st) -> dict:
+    """Python 侧独立数一遍 `route_plans` 的各条分支——用来核对 **Go 自报的计数**。
+
+    计数器本身也是一个断言（「我走到了这条分支」），它必须有两个来源：
+    被测方（Go 的 `covered`）与尺子（这里）。两边不等 ⇒ 判红。
+    """
+    from ak_tactic.eta import leading_wait
+    c = {"routes": 0, "has_move": 0, "no_move": 0, "walk_mode": 0,
+         "non_walk_mode": 0, "search_used": 0, "search_not_used_no_move": 0,
+         "search_empty": 0, "search_single_point": 0,
+         "search_straight_fallback": 0, "path_fallback": 0, "legs_empty": 0,
+         "wait_positive": 0}
+    for r in st.routes:
+        c["routes"] += 1
+        has_move = any(x.is_move or x.is_appear for x in r.checkpoints)
+        c["has_move" if has_move else "no_move"] += 1
+        c["walk_mode" if r.mode == "WALK" else "non_walk_mode"] += 1
+        pts = list(r.path or [])
+        if not has_move and r.mode == "WALK":
+            c["search_used"] += 1
+            p = st.map.ground_path(r.start, r.end)
+            if not p:
+                c["search_empty"] += 1
+            elif len(p) == 1:
+                c["search_single_point"] += 1
+            elif len(p) == 2 and (abs(p[1][0] - p[0][0]) > 1
+                                  or abs(p[1][1] - p[0][1]) > 1):
+                c["search_straight_fallback"] += 1
+            pts = p
+        elif not has_move:
+            c["search_not_used_no_move"] += 1
+        if not pts:
+            c["path_fallback"] += 1
+            pts = ([r.start] + [x.position for x in r.checkpoints if x.position]
+                   + [r.end])
+        if not r.legs(walk_map=st.map):
+            c["legs_empty"] += 1
+        if leading_wait(r) != 0:
+            c["wait_positive"] += 1
+    return c
+
+
+def compare_route_plans(tag: str, want: dict, rows: dict, seen: dict,
+                        guard: Guard, printed: list) -> int:
+    """逐路线比 `points` / `wait` / `legs`（三栏全精确）。
+
+    ★ 与 `compare_legs` 同一套纪律：**期望值先无条件算好**，分类只用于计数。
+    """
+    bad = 0
+    for idx in sorted(want):
+        before = bad
+        p = want[idx]
+        seen["路线计划"] += 1
+        if p.wait:
+            seen["计划 wait>0"] += 1
+        where = (tag, idx)
+        g = rows[idx]
+        missing = [k for k in ("index", "points", "wait", "legs") if k not in g]
+        if missing:
+            bad += 1
+            printed.append("✗ %s 路线 %d 缺字段：%s"
+                           % (tag, idx, "、".join(missing)))
+            continue
+        #: ---- 期望值（无条件算好）
+        w_pts = [[float(x), float(y)] for x, y in p.points]
+        w_wait = float(p.wait)
+        #: ---- 变异（每处只注入一次，落在最先走到的那条路线上）
+        if guard.want(MUT_RP_PTS) and g["points"]:
+            g["points"][0][0] += 1
+            guard.put(MUT_RP_PTS, where)
+        elif guard.want(MUT_RP_WAIT):
+            g["wait"] = math.nextafter(float(g["wait"]), math.inf)
+            guard.put(MUT_RP_WAIT, where)
+        elif guard.want(MUT_RP_LEGS) and g["legs"]:
+            g["legs"] = g["legs"][:-1]
+            guard.put(MUT_RP_LEGS, where)
+        g_pts = [[float(x), float(y)] for x, y in g["points"]]
+        same_pts = g_pts == w_pts
+        same_wait = float(g["wait"]) == w_wait
+        guard.note(MUT_RP_PTS, where, same_pts)
+        guard.note(MUT_RP_WAIT, where, same_wait)
+        if not same_pts:
+            bad += 1
+            if len(printed) < 8:
+                printed.append("✗ %s 路线 %d points 不同" % (tag, idx))
+                printed.append("    Python %r" % (w_pts,))
+                printed.append("    Go     %r" % (g_pts,))
+        if not same_wait:
+            bad += 1
+            if len(printed) < 8:
+                printed.append("✗ %s 路线 %d wait：Go=%r Python=%r"
+                               % (tag, idx, g["wait"], w_wait))
+        #: ---- 分段（与「分段」那一节同一套字段，但**另一条 Go 命令**答的）
+        wlegs, glegs = list(p.legs), g["legs"]
+        if len(glegs) != len(wlegs):
+            bad += 1
+            guard.note(MUT_RP_LEGS, where, False)
+            if len(printed) < 8:
+                printed.append("✗ %s 路线 %d 段数：Go=%d Python=%d"
+                               % (tag, idx, len(glegs), len(wlegs)))
+            continue
+        for li, (wl, gl) in enumerate(zip(wlegs, glegs)):
+            lwhere = (tag, idx, li)
+            seen["计划段"] += 1
+            w_kind = wl.kind
+            w_lpts = [list(q) for q in wl.points]
+            w_len = wl.length
+            w_sec = wl.seconds
+            lmiss = [k for k in ("kind", "points", "length", "seconds")
+                     if k not in gl]
+            if lmiss:
+                bad += 1
+                printed.append("✗ %s 路线 %d 第 %d 段缺字段：%s"
+                               % (tag, idx, li, "、".join(lmiss)))
+                continue
+            if gl["kind"] == "walk" and guard.want(MUT_RP_LEN):
+                gl["length"] = math.nextafter(float(gl["length"]), math.inf)
+                guard.put(MUT_RP_LEN, lwhere)
+            g_lpts = [list(map(int, q)) for q in gl["points"]]
+            same = {"kind": gl["kind"] == w_kind,
+                    "points": g_lpts == w_lpts,
+                    "length": float(gl["length"]) == float(w_len),
+                    "seconds": float(gl["seconds"]) == float(w_sec)}
+            guard.note(MUT_RP_LEN, lwhere, same["length"])
+            if all(same.values()):
+                seen["计划段逐字段一致"] += 1
+                continue
+            bad += 1
+            diff = [k for k, v in same.items() if not v]
+            if len(printed) < 8:
+                printed.append("✗ %s 路线 %d 第 %d 段（%s）：不一致的字段 %s"
+                               % (tag, idx, li, w_kind, "、".join(diff)))
+        if bad == before:
+            seen["计划表逐字段一致"] += 1
+    return bad
+
 def blank_seen() -> dict:
     return {"关卡": 0, "同格": 0, "端点不可走": 0, "正常寻路": 0, "路径一致": 0,
             "分段关卡": 0, "路线": 0, "段": 0, "walk 段": 0, "wait 段": 0,
             "vanish 段": 0, "FLY 路线": 0, "WAIT 源": 0, "DISAPPEAR 源": 0,
-            "接续去重（pop）": 0, "跨格步段": 0, "段逐字段一致": 0}
+            "接续去重（pop）": 0, "跨格步段": 0, "段逐字段一致": 0,
+            "计划表关卡": 0, "路线计划": 0, "计划 wait>0": 0, "计划段": 0,
+            "计划段逐字段一致": 0, "计划表逐字段一致": 0}
 
 
 def main() -> int:
@@ -333,9 +509,11 @@ def main() -> int:
     except Exception:                                       # noqa: BLE001
         levels = []
     from ak_tactic.gamedata.stage import load_stage, parse_stage
+    from ak_tactic.eta import route_plans
 
     print("Go 侧仪器：%s" % GO_BIN)
-    print("Python 侧权威：gamedata/stage.py 的 StageMap.ground_path ＋ Route.legs")
+    print("Python 侧权威：gamedata/stage.py 的 StageMap.ground_path ＋ Route.legs"
+          "，以及 eta.py 的 route_plans / leading_wait")
     print()
 
     mutate = "--mutate" in sys.argv
@@ -344,6 +522,10 @@ def main() -> int:
     bad = 0
     compared = 0
     seen = blank_seen()
+    go_seen: dict = {}
+    py_cov: dict = {}
+    struct_zero: dict = {k: 0 for k in STRUCTURAL_ZERO}
+    cov_mismatch: list[str] = []
     for lv in levels:
         try:
             st = load_stage(lv)
@@ -419,6 +601,32 @@ def main() -> int:
         seen["分段关卡"] += 1
         bad += compare_legs(lv, st.routes, want_legs, got_legs, seen, guard, printed)
 
+        # ---------------------------------------------------------- 路线计划表
+        #: ★ 期望值**无条件**算好：`eta.route_plans` 就是权威本身。
+        want_rp = route_plans(st)
+        got_rp = go_call("routeplans", lv, {})["route_plans"]
+        for k, v in (got_rp.get("covered") or {}).items():
+            go_seen[k] = go_seen.get(k, 0) + v
+        for k in STRUCTURAL_ZERO:
+            struct_zero[k] += int((got_rp.get("covered") or {}).get(k, 0))
+        cov = py_route_plan_coverage(st)
+        for k, v in cov.items():
+            py_cov[k] = py_cov.get(k, 0) + v
+        rows = {}
+        for r in got_rp["routes"]:
+            if r["index"] in rows:
+                bad += 1
+                printed.append("✗ %s 路线号 %d 在 Go 的应答里出现两次"
+                               % (lv, r["index"]))
+            rows[r["index"]] = r
+        if len(rows) != len(want_rp) or set(rows) != set(want_rp):
+            bad += 1
+            printed.append("✗ %s 路线计划条数：Go %d / Python %d（去重后 %d）"
+                           % (lv, len(got_rp["routes"]), len(want_rp), len(rows)))
+        else:
+            seen["计划表关卡"] += 1
+            bad += compare_route_plans(lv, want_rp, rows, seen, guard, printed)
+
     # ------------------------------------------------------------ 分段（合成夹具）
     syn_seen = blank_seen()
     with tempfile.TemporaryDirectory(prefix="rios-syn-legs-") as td:
@@ -442,15 +650,32 @@ def main() -> int:
         print("（只印前几处失配）")
     print()
 
+    #: 计数器自己也要有两个来源：Go 自报的 `covered` 与尺子独立数的那一份。
+    for k in sorted(py_cov):
+        if py_cov[k] != go_seen.get(k):
+            cov_mismatch.append("%s：Go 自报 %r，尺子数出 %r"
+                                % (k, go_seen.get(k), py_cov[k]))
+    if cov_mismatch:
+        print("★ 行使计数对不上（计数器与尺子是同一个量的两个来源）：")
+        for m in cov_mismatch:
+            print("    ✗ %s" % m)
+        print()
+
     print("已比：地面寻路 %d 关的全部路线 × {含斜向, 不含斜向} 共 %d 例；"
-          "路线分段 %d 关 %d 条路线 %d 段"
+          "路线分段 %d 关 %d 条路线 %d 段；路线计划表 %d 关 %d 条路线 %d 段"
           % (compared, seen["路径一致"] + bad, seen["分段关卡"],
-             seen["路线"], seen["段"]))
+             seen["路线"], seen["段"], seen["计划表关卡"],
+             seen["路线计划"], seen["计划段"]))
     print("★ 行使计数（真夹具）：%s"
           % ", ".join("%s=%d" % (k, v) for k, v in sorted(seen.items())))
+    print("★ 行使计数（Go 自报的 route_plans 分支）：%s"
+          % ", ".join("%s=%d" % (k, v) for k, v in sorted(go_seen.items())))
     print("★ 行使计数（合成夹具）：%s"
           % ", ".join("%s=%d" % (k, v) for k, v in sorted(syn_seen.items())))
     print()
+    if cov_mismatch:
+        print("结论：Go 自报的分支行使计数与尺子独立数出的不一致 —— 判红")
+        return 1
     if mutate:
         for k in MUT_KEYS:
             print("  变异「%s」：注入=%s 判红=%s"
@@ -462,7 +687,7 @@ def main() -> int:
             print("反向守卫：不成立 ✗（没做到「注入过并且判红」：%s）"
                   % "、".join(miss))
             return 1
-        print("反向守卫：四处独立变异（含两处 1 ulp）各判红 —— 成立 ✓")
+        print("反向守卫：八处独立变异（含三处 1 ulp）各判红 —— 成立 ✓")
         return 0
     if seen["正常寻路"] == 0 or seen["关卡"] == 0:
         print("结论：正常寻路一例都没比到 —— 判红（不是实现错，是判据自己瞎）")
@@ -470,6 +695,20 @@ def main() -> int:
     if seen["walk 段"] == 0 or seen["分段关卡"] == 0:
         print("结论：路线分段一例都没比到 —— 判红（不是实现错，是判据自己瞎）")
         return 1
+    if seen["路线计划"] == 0 or seen["计划表关卡"] == 0:
+        print("结论：路线计划表一例都没比到 —— 判红（不是实现错，是判据自己瞎）")
+        return 1
+    #: ★ 结构不可达的两条：**每跑一次都重量一遍**（不是写死一句「不可达」）。
+    #: 哪天真出现了，这里会红；红的意思是「该补合成夹具了」，不是「实现错了」。
+    for key, label in STRUCTURAL_ZERO.items():
+        if py_cov.get(key) or struct_zero[key]:
+            print("结论：%s 这条兜底**变成可达了**（尺子数出 %d 例、Go 自报 %d）"
+                  " —— 判红：它现在有行使，必须补一份合成夹具来判它"
+                  % (label, py_cov.get(key, 0), struct_zero[key]))
+            return 1
+    print("★ 结构不可达（现算，非写死）：%s"
+          % "；".join("%s=0（尺子与 Go 两侧同口径）" % STRUCTURAL_ZERO[k]
+                      for k in sorted(STRUCTURAL_ZERO)))
     #: 合成夹具要**自证行使**：否则它会悄悄退化成「跑过但什么都没覆盖」。
     for key, label in (("vanish 段", "DISAPPEAR→APPEAR 的离场段"),
                        ("FLY 路线", "FLY 不寻路的直线段"),
@@ -479,8 +718,10 @@ def main() -> int:
             print("结论：" + SYN_BAD_MSG % label)
             return 1
     print("结论：寻路 %d 例逐格一致；路线分段 %d 段逐字段一致"
-          "（含 length 逐位，另含合成夹具 %d 段）"
-          % (seen["路径一致"], seen["段逐字段一致"], syn_seen["段逐字段一致"]))
+          "（含 length 逐位，另含合成夹具 %d 段）；路线计划表 %d 条路线 "
+          "%d 段逐字段一致（points / wait / length / seconds 全精确）"
+          % (seen["路径一致"], seen["段逐字段一致"], syn_seen["段逐字段一致"],
+             seen["计划表逐字段一致"], seen["计划段逐字段一致"]))
     return 1 if bad else 0
 
 

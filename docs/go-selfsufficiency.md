@@ -21,7 +21,7 @@
 
 | 阻点 | 状态 | 下一轮的第一步 |
 |---|---|---|
-| **路线生产侧** | `ground_path` 已落（2594 例）；**`Route.legs` 也已落**（2157 段逐字段一致，`length` **逐位**） | 往上一层：`eta.py` 的 `route_plans`（`RoutePlan.points/legs/wait` ＋ `leading_wait` ＋ `polyline_length`）——它才是 `spawns`／`unsupported` 真正消费的那一层 |
+| **路线生产侧** | 三层**已全部落地**：`ground_path`（2594 例）、`Route.legs`（2157 段逐字段一致，`length` **逐位**）、`eta.route_plans`（1297 条路线逐字段一致） | 往上一层已不是路线：`spawns` 的 `_unit_spec`（敌人视图＋天桩链）与 `unsupported` 的敌人侧 |
 | 技能效果层 | 未动 | `effects_of(sim, op)` 的白名单与 `SkillEffects` 组装 |
 | 机制层 | 未动 | 每个活动一份、按需取用 |
 
@@ -90,7 +90,7 @@ python tools\closeout_selfsufficiency.py
 | 部分规格 `check_specgo_go.py` | 55 关 × 12 个值键 ＋ 键集账（ast 抽 19 键）＋ 24 份夹具 × 生产规格 ＋ **deploys 64 条** ＋ **6 份合成计划的 skill_uses 18 条**（故意乱序） | 全部一致 |
 | 费用天赋 `check_costbonus_go.py` | 12 种黑板形状 × 10 种队伍组合 | 10 / 10 次求解一致 |
 | 部署费用 `check_costof_go.py` | 24 份夹具 × **生产规格的 `deploys[].cost`** | 64 人次一致 |
-| 寻路 `check_stagepath_go.py` | 55 关的全部路线 × 两档斜向 ＋ **全部路线的分段计划**（另 7 条合成路线） | 2594 / 2594 逐格一致；分段 2157 / 2157 段逐字段一致（`length` **逐位**）＋ 合成 14 段 |
+| 寻路 `check_stagepath_go.py` | 55 关的全部路线 × 两档斜向 ＋ **全部路线的分段计划**（另 7 条合成路线）＋ **全部路线的计划表**（`eta.route_plans`） | 2594 / 2594 逐格一致；分段 2157 / 2157 段逐字段一致（`length` **逐位**）＋ 合成 14 段；计划表 1297 / 1297 条路线 2157 段逐字段一致（`points`/`wait`/`length`/`seconds` 全精确） |
 | 闸门 `check_unsupported_go.py` | 24 份夹具的生产规格 ＋ 5 例合成计划 ＋ 5 份合成关卡（另 6 条未搬线各配证人、1 处分歧） | 34 例逐条**同序**一致（其中 6 例有理由、共 9 条）＋ 已搬 7 条线的覆盖对账 |
 
 ---
@@ -121,6 +121,7 @@ python tools\closeout_selfsufficiency.py
 | 规格·部署费用 | `rios-sim/deploycost.go` | 各自练度下的 `total["cost"]`（取数口径与干员判据同一份，不另立；这里只是把它单独取出来） | `check_costof_go.py` |
 | 规格·地面寻路 | `rios-sim/stagepath.go` | `StageMap.ground_path`（Dijkstra；`"ALL"` 子串判定／`tile_hole` 不可走／不许斜穿墙角／**同距离按格坐标字典序决胜**） | `check_stagepath_go.py` |
 | 规格·路线分段 | `rios-sim/stagelegs.go` | `Route.legs`（三种段 `walk`／`wait`／`vanish`；`WALK` 寻路／`FLY` 直线；`flush()` 里相邻两段之间 `pop()` 去重；长度走 `sum()` 的 **Neumaier** 语义） | 同上（`legs` 命令并进这一套，不单列） |
+| 规格·路线计划表 | `rios-sim/etaroutes.go` | `eta.route_plans`：按路线号索引的 `{points, wait, legs}`（＝`_route_tables` 的形状，`spawns` 真正消费的那一层）＋ `leading_wait`（**只累加开头连续**的 `WAIT_FOR_SECONDS`） | 同上（`routeplans` 命令并进这一套，不单列） |
 | 规格·骨架装配 | `rios-sim/specgo.go` | 已落 14 个键；`deploys`／`skill_uses` 传了计划才有（`omitempty` 在这里承担语义） | `check_specgo_go.py` |
 | 规格·闸门 | `rios-sim/unsupported.go` | `unsupported_reasons` 的已搬部分：排程 3 条（召唤物／装置／撤退）＋ 技能槽号 ＋ 积雪 ×N ＋ 敌人侧 2 条（按病害值觉醒／BOSS 换弱点形态）；未搬的 6 条线具名列在 `unported` 里 | `check_unsupported_go.py` |
 
@@ -384,6 +385,47 @@ max·sqrt((dx/max)² + (dy/max)²)    与 math.dist   2062 处不符（各 1 ulp
   故判据自带一份最小合成关卡（Go 走自己的索引＋解析入口，Python 走
   `parse_stage`），并要求夹具**自证行使**：`vanish` 段 / `FLY` 路线 /
   接续去重 / 跨格步四项任一为 0 即判红。
+
+---
+
+### ★★ `eta.route_plans` 已落：路线生产侧三层闭合（2026-09-22，第 30 轮）
+
+**落点**：`rios-sim/etaroutes.go`（`routeplans` 命令，`main.go` 的
+`case "routeplans"` ＋ `response.RoutePlans`）。判据**并进**
+`tools/check_stagepath_go.py`（**不新增 SUITE 行**，与 `legs` 同一处置；
+`routeplans` 登记进 `closeout_selfsufficiency.py` 的 `EXTRA_JUDGED`）。
+
+**读数**（`python -X utf8 tools\check_stagepath_go.py`，rc=0）：
+寻路 2594 / 2594 逐格一致；路线分段 2157 / 2157 段逐字段一致；
+**路线计划表 55 关 1297 条路线 2157 段逐字段一致**（`points` / `wait` /
+`length` / `seconds` 四栏全部 float 精确相等）。反向守卫从四处扩到
+**八处**互相独立（新增：路线点列 / 路线待命 1 ulp / 路线段数 / 路线段长度 1 ulp），
+八处都做到「注入过 ＋ 判红过」。
+
+**这一层是「组装」而不是「再算一遍」**：`route_plans` 调 `Route.legs`，
+`Route.legs` 调 `ground_path`——三层同属一条链，所以判据也只有一份。
+
+★ **量出来的三件事**（都不是估的）：
+
+1. **`has_move` 的判据是 `MOVE` 或 `APPEAR_AT_POS`，不是「有没有 checkpoints」**
+   （`eta.py:131-133`），而寻路分支的判据是 **`mode == "WALK"` 精确相等**
+   （`:134`）。关卡数据里 `motionMode` 缺省解出来是**空串**（`stage.py:837`）——
+   写成 `.upper() == "WALK"` 或补默认值就会让那 117 条非 WALK 路线
+   **多走一次寻路**。实测分母：1297 条路线 = 有路点 989 ＋ 无路点 308；
+   308 里走寻路 238、因 mode 非 WALK 而不走寻路 70。
+2. **两个兜底是「结构上不可达」，不是「没测到」**：`ground_path` 的三条出口
+   全部非空（同格 `[start]`／端点不可走 `[start,end]`／不连通 `[start,end]`），
+   而 `Route.legs` 的 `flush()` 每次至少产出 2 个点 ⇒ `if not pts:` 与
+   `wait=0.0 if legs else w` 的 `else` 支**可达性为零**。两条都**照抄**
+   （照抄才叫同一个口径）但不进行使计数，改成 `STRUCTURAL_ZERO` ＋
+   **每次运行现算守卫**：一旦哪天真出现，判据当场红，红的意思是
+   「该补合成夹具了」。★ 顺带发现：`legs` 恒非空意味着
+   **`leading_wait` 在 `spawns` 那条路上是死值**——它只在计划表里可观测。
+3. **Go 自报的分支行使计数要与尺子独立数出的那一份相等**（`py_route_plan_coverage`
+   vs `covered`，13 项逐项比）：计数器本身也是一个断言，它必须有两个来源。
+   实测两侧逐项相同（`routes=1297, has_move=989, no_move=308, walk_mode=1180,
+   non_walk_mode=117, search_used=238, search_not_used_no_move=70,
+   wait_positive=26`，其余 0）。
 
 ---
 

@@ -92,6 +92,8 @@ type response struct {
 	Paths json.RawMessage `json:"paths,omitempty"`
 	//: `legs` 的应答：路线的分段计划（见 `stagelegs.go`）。
 	Legs json.RawMessage `json:"legs,omitempty"`
+	//: `routeplans` 的应答：按路线号索引的路线计划表（见 `etaroutes.go`）。
+	RoutePlans json.RawMessage `json:"route_plans,omitempty"`
 	//: `loadout` 的应答：名册与计划合起来之后的练度（见 `loadout.go`）。
 	Loadout json.RawMessage `json:"loadout,omitempty"`
 	//: `stageenv` 的应答：构建规格要用的关卡静态 8 项（见 `stageenv.go`）。
@@ -692,6 +694,26 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Legs: raw}
+	case "routeplans":
+		// 丙阶段四·第二十九批：路线计划表（`eta.route_plans`，见 `etaroutes.go`）。
+		// 关卡走 req.Level 或 req.Path（合成关卡），与 `stageenv` 同一口径。
+		var rq RoutePlansQuery
+		if len(req.Spec) > 0 {
+			if err := json.Unmarshal(req.Spec, &rq); err != nil {
+				return response{ID: req.ID, OK: false,
+					Error: fmt.Sprintf("routeplans 的 spec 解不开：%v", err)}
+			}
+		}
+		out, err := RoutePlansOf(req.Level, req.Path, rq.Difficulty)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(out)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, RoutePlans: raw}
 	case "unsupported":
 		// 丙阶段四·第二十八批：规格闸门（`simgo/spec.py::unsupported_reasons`）。
 		// 关卡走 req.Level 或 req.Path（合成关卡），与 `stageenv` 同一口径。

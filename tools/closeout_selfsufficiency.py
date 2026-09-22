@@ -79,7 +79,10 @@ NON_JUDGED = ("ping", "sim")
 #: `legs` 同理并进 `寻路`：两者同属**路线生产侧**，而 `legs` 的 `walk` 段
 #: 就是靠 `ground_path` 一段段拼出来的（中间还要 `pop()` 去重）——
 #: 拆成两行会让同一条路上出现两把尺子（见 `tools/check_stagepath_go.py` 文件头）。
-EXTRA_JUDGED = ("talentbonus", "specdeploys", "legs")
+#: `routeplans`（`eta.route_plans`）是这条链的**第三层、也是最上面那层**：
+#: 它把前两层组装成 `_route_tables` 的形状，`spawns` 真正消费的是它。
+#: 三层用同一份判据、同一套行使计数，仍然不单列。
+EXTRA_JUDGED = ("talentbonus", "specdeploys", "legs", "routeplans")
 
 
 def read(p: Path) -> str:
