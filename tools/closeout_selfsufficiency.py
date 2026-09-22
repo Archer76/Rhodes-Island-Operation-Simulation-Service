@@ -51,9 +51,10 @@ GO_DIR = ROOT / "rios-sim"
 
 #: 这份台账**自己声明**的数。改动它们必须与真实改动同批，否则本脚本会红。
 DECLARED = {
-    "suites": 14,          # 一 · 「十四套判据」「十四套守卫」
+    "suites": 15,          # 一 · 「十五套判据」「十五套守卫」
     "gaps": 6,             # 三 · 缺口表的行数
     "resolve_callsites": 1,  # 出 loadout.go 之外调 ResolveLoadout 的地方
+    "spec_builders": 1,    # 四 · Go 侧「造规格」的入口：BuildSpecPart（部分规格）
 }
 
 #: 判据套名 → Go 命令名。SUITE 的行里没有命令名，这一步只能显式登记。
@@ -62,6 +63,7 @@ COMMAND_OF = {
     "技能": "skill", "分类": "classify", "生命上限": "maxhp",
     "攻击间隔": "interval", "面板": "panel", "名册": "roster",
     "计划": "plan", "练度": "loadout", "关卡静态": "stageenv", "格表": "cells",
+    "部分规格": "specgo",
 }
 
 #: 有 Go 命令、但**有意**没有跨实现判据的两个。
@@ -217,7 +219,8 @@ def main() -> int:
 
     print("四 · 规格的来源（目标最后那半句的判据头）")
     one("规格入口 req.Spec 出现次数（只收不造）", n_spec_in >= 1, True)
-    one("Go 侧造规格的函数数", len(spec_builders), 0)
+    one("Go 侧造规格的函数数（已产出的入口）", len(spec_builders),
+        declared["spec_builders"])
     if spec_builders:
         for s in spec_builders:
             print("      命中：%s" % s)
@@ -247,13 +250,16 @@ def main() -> int:
     print("★ 目标状态：**未达成**")
     print("  已自足（每一层都有跨实现对拍判据）：%d 套" % declared["suites"])
     print("  未接（具名，见台账第三节）：%d 件" % declared["gaps"])
-    print("  ★ 规格仍由 Python 送：Go 侧**没有**从「计划＋名册」造规格的入口"
-          "（造规格的函数 0 个、ResolveLoadout 只被 loadout 命令调用 1 处），")
+    print("  ★ 规格仍由 Python 送：Go 侧**有** %d 个造规格的入口（%s），"
+          % (len(spec_builders), "、".join(spec_builders) or "无"))
+    print("    但它只造 19 个顶层键里的 12 个，且**不读计划／名册**；")
+    print("    `ResolveLoadout` 仍只被 loadout 命令调用 %d 处。" % n_resolve)
     print("    规格是从 req.Spec 收进来的（该字段在 main.go 出现 %d 次）。"
           % n_spec_in)
     print()
     print("  收口条件（三条全中才算达成，缺一不算）：")
-    print("    ① Go 侧出现从「关卡＋名册＋计划」造规格的入口；")
+    print("    ① Go 侧出现能造**齐 19 个键**、且输入是「关卡＋名册＋计划」的入口"
+          "（现在是 12/19，且不吃计划／名册）；")
     print("    ② 该入口有跨实现对拍判据，且登记进 SUITE（本脚本的第 2 节会跟着变）；")
     print("    ③ 台账第三节里「规格构造与闸门」那一行被移出，"
           "DECLARED['gaps'] 同批减一。")

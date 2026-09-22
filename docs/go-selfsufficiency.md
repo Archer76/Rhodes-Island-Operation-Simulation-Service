@@ -25,8 +25,8 @@
 python tools\check_go_all.py --selfcheck
 ```
 
-* 前半：**十四套判据现在不报红**；
-* 后半：**十四套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
+* 前半：**十五套判据现在不报红**；
+* 后半：**十五套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
 
 ★ 两个结论缺一不可：「全绿」只证明现在不报红；**没有反向守卫的绿是零信息量的绿**。
 
@@ -64,6 +64,7 @@ python tools\closeout_selfsufficiency.py
 | 练度 `check_loadout_go.py` | 全部 24 份夹具 × 真名册 ＋ 12 例合成 | 33 例逐字段一致 ＋ 3 例两边都拒 |
 | 关卡静态 `check_stageenv_go.py` | 缓存可达的 55 关 × 2 档难度 ＋ 8 例合成 | 126 例逐字段一致 |
 | 格表 `check_cells_go.py` | 缓存可达的 55 关 | 55 / 55 关两张格表逐格一致 |
+| 部分规格 `check_specgo_go.py` | 55 关 × 12 个值键 ＋ **键集账（ast 抽 19 键）** | 55 关逐项一致 ＋ 键集对账成立 |
 
 ---
 
@@ -88,6 +89,7 @@ python tools\closeout_selfsufficiency.py
 | 名册＋计划·练度解析 | `rios-sim/loadout.go` | 打法覆盖名册缺省、三条 `setdefault`、`char_id` 按名字回退（走 `character_table` 的**行序**取首个匹配） | `check_loadout_go.py` |
 | 规格·关卡静态 8 项 | `rios-sim/stageenv.go` | `build_spec` 19 个顶层键里不依赖 sim／干员／机制的那 8 个（`options` ＋ `runes` 的掩码消歧与两条改写） | `check_stageenv_go.py` |
 | 规格·两张格表 | `rios-sim/cells.go` | `goal_cells`（防守点格，按 (x,y) 排序）与 `highland_cells`（高台格，保持行序） | `check_cells_go.py` |
+| 规格·骨架装配 | `rios-sim/specgo.go` | 把已能造出的 12 个键装配成一份部分规格，并**自报还差哪 7 个**（键集拿 ast 从源文件核对） | `check_specgo_go.py` |
 
 ---
 

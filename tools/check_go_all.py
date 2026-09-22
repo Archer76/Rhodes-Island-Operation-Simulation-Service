@@ -56,6 +56,8 @@ SUITE = [
     ("关卡静态", "tools/check_stageenv_go.py", "Go 关卡静态 8 项 vs stage_env", False),
     #: 第 42 轮加的：规格里的两张格表（goal_cells / highland_cells）。
     ("格表", "tools/check_cells_go.py", "Go 两张格表 vs _find_goals/_highland_cells", False),
+    #: 本轮加的：把已能造出的键**装配**成一份部分规格，并对账 19 个顶层键。
+    ("部分规格", "tools/check_specgo_go.py", "Go 部分规格骨架 vs build_spec 的键集与值", False),
 ]
 
 

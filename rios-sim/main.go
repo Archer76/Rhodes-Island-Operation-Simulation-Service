@@ -94,6 +94,8 @@ type response struct {
 	StageEnv json.RawMessage `json:"stage_env,omitempty"`
 	//: `cells` 的应答：规格里的两张格表（见 `cells.go`）。
 	Cells json.RawMessage `json:"cells,omitempty"`
+	//: `specgo` 的应答：Go 现在能造出的那部分规格（见 `specgo.go`）。
+	SpecGo json.RawMessage `json:"spec_go,omitempty"`
 	Error string          `json:"error,omitempty"`
 }
 
@@ -492,6 +494,32 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Cells: raw}
+	case "specgo":
+		// 丙阶段四·第十八批：Go 自己造规格的骨架（见 `specgo.go`）。
+		if req.Level == "" {
+			return response{ID: req.ID, OK: false,
+				Error: "specgo 少了 level（给 levelId 或关卡号）"}
+		}
+		var sq struct {
+			Difficulty string  `json:"difficulty"`
+			MaxTime    float64 `json:"max_time"`
+		}
+		if len(req.Spec) > 0 {
+			if err := json.Unmarshal(req.Spec, &sq); err != nil {
+				return response{ID: req.ID, OK: false,
+					Error: fmt.Sprintf("spec 不是 {difficulty,max_time}：%v", err)}
+			}
+		}
+		sp, err := BuildSpecPart(req.Level, sq.Difficulty, sq.MaxTime)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(sp)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, SpecGo: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。
