@@ -70,6 +70,9 @@ type SpecPart struct {
 	//: 「已产出」——那是把「我没造」说成「我造了」。
 	Deploys []SpecDeploy `json:"deploys,omitempty"`
 
+	//: 同上：有输入才有的键，`omitempty` 承担语义。
+	SkillUses []SpecSkillUse `json:"skill_uses,omitempty"`
+
 	//: 19 个键里 Go **还造不出**的（判据会拿它跟 `spec.py` 的返回字面量对账）。
 	MissingKeys []string `json:"missing_keys"`
 	//: 产出但原版的门未接的键，见 `gatedKeys`。
@@ -108,13 +111,19 @@ func BuildSpecPart(level, difficulty string, maxTime float64,
 	if maxTime == 0 {
 		maxTime = 900.0
 	}
-	//: 传了计划才造 `deploys`——有输入才有的键。
+	//: 传了计划才造 `deploys` 与 `skill_uses`——有输入才有的键。
 	var deploys []SpecDeploy
+	var skillUses []SpecSkillUse
 	if planPath != "" {
 		var derr error
 		if deploys, derr = BuildDeploysFor(planPath, rosterPath); derr != nil {
 			return SpecPart{}, derr
 		}
+		pl, perr := ReadPlan(planPath)
+		if perr != nil {
+			return SpecPart{}, perr
+		}
+		skillUses = BuildSkillUses(pl)
 	}
 	missing := []string{}
 	produced := map[string]bool{}
@@ -123,6 +132,9 @@ func BuildSpecPart(level, difficulty string, maxTime float64,
 	}
 	if deploys != nil {
 		produced["deploys"] = true
+	}
+	if skillUses != nil {
+		produced["skill_uses"] = true
 	}
 	for _, k := range specKeysAll {
 		if !produced[k] {
@@ -145,6 +157,7 @@ func BuildSpecPart(level, difficulty string, maxTime float64,
 		HighlandCells: st.Map.HighlandCells(),
 		GoalCells:     st.Map.GoalCells(),
 		Deploys:       deploys,
+		SkillUses:     skillUses,
 		MissingKeys:   missing,
 		GatedKeys:     gated,
 		Difficulty:    difficulty,

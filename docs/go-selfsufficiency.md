@@ -64,7 +64,7 @@ python tools\closeout_selfsufficiency.py
 | 练度 `check_loadout_go.py` | 全部 24 份夹具 × 真名册 ＋ 12 例合成 | 33 例逐字段一致 ＋ 3 例两边都拒 |
 | 关卡静态 `check_stageenv_go.py` | 缓存可达的 55 关 × 2 档难度 ＋ 8 例合成 | 126 例逐字段一致 |
 | 格表 `check_cells_go.py` | 缓存可达的 55 关 | 55 / 55 关两张格表逐格一致 |
-| 部分规格 `check_specgo_go.py` | 55 关 × 12 个值键 ＋ 键集账（ast 抽 19 键）＋ **24 份夹具 × 生产规格 10 键 ＋ 装配后的 deploys（64 条 × 5 字段）** | 全部一致 |
+| 部分规格 `check_specgo_go.py` | 55 关 × 12 个值键 ＋ 键集账（ast 抽 19 键）＋ 24 份夹具 × 生产规格 ＋ **deploys 64 条** ＋ **6 份合成计划的 skill_uses 18 条**（故意乱序） | 全部一致 |
 | 费用天赋 `check_costbonus_go.py` | 12 种黑板形状 × 10 种队伍组合 | 10 / 10 次求解一致 |
 | 部署费用 `check_costof_go.py` | 24 份夹具 × **生产规格的 `deploys[].cost`** | 64 人次一致 |
 
@@ -104,7 +104,7 @@ python tools\closeout_selfsufficiency.py
 | **两套数值 profile** | **折算本身已全部落地**（`profile.go` 两行 ＋ `panelfold.go` 七处读数，合计 14548 个网格点/叉乘行）：核对下来原版那七个方法**只读实例属性**，替身对象即可当 oracle——原先以为非搭不可的 harness 省掉了。仍缺的是**喂它们的实时输入**（光环、翔虫机动、替身计时、击杀叠层、出手次数、阻挡、高台邻居、偷取攻速这些运行态），以及 `_profile` 自己「临时把开技能字段摆成开启态、读完立刻还原」的那段装配。 |
 | **练度 → 面板的接线** | 练度**已经解析出来了**（`rios-sim/loadout.go`，与 `Verifier._entry` 逐字段一致），但它**还没被送去算面板**：`opstats` 目前仍由调用方逐个送练度，没人把 `loadout` 的输出接进去。 |
 | **`skill` 的对象形态** | `Plan` 那一条指令的 `skill` 除整数外还可以是对象（丙方案），要 `_skill_from_json` 查技能书、按槽位/等级解成技能 id。本轮**未接**：Go 碰到对象就**具名拒收**，不假装读懂。好消息是 `fixtures/` 下 24 份打法的 `skill` 全是整数，走的是与改动前同一条路。 |
-| **规格构造与闸门** | `simgo/spec.py`（76 KB）＋ `simgo/skills.py` 的白名单。Go 现在仍收 Python 送来的 spec。★ **已落地 13 个键**：不依赖 sim／干员／机制的**关卡静态 8 项**（`stageenv.go`）、**两张格表**（`cells.go`）、以及**传了计划才有的 `deploys`**（`specdeploys.go`，24 份夹具 64 条 × 5 字段对生产规格）。剩下 6 个键：`operators`／`spawns`／`skill_uses`（要 `_operator_spec`／`_unit_spec`）与 `mechanisms`／`mech_config`／`unsupported`。 |
+| **规格构造与闸门** | `simgo/spec.py`（76 KB）＋ `simgo/skills.py` 的白名单。Go 现在仍收 Python 送来的 spec。★ **已落地 14 个键**：不依赖 sim／干员／机制的**关卡静态 8 项**（`stageenv.go`）、**两张格表**（`cells.go`）、以及**传了计划才有的 `deploys` 与 `skill_uses`**（`specdeploys.go`）。剩下 5 个键：`operators`／`spawns`（要 `_operator_spec`／`_unit_spec`）与 `mechanisms`／`mech_config`／`unsupported`。 |
 | **干员侧的其余天赋** | `advisor` 表里除已接的那几支之外的部分（`is_*` finder 一族里尚未逐条搬完的）。 |
 | **干员技能的性质** | 比如「技能改写攻击范围」的消费点。 |
 

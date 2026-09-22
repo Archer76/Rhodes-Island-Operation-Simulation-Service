@@ -48,6 +48,41 @@ type SpecDeploy struct {
 	AutoSkill bool    `json:"auto_skill"`
 }
 
+// SpecSkillUse 是 `skill_uses` 里的一条。
+//
+// 权威 `spec.py:1249-1251` 的 `[{"time": float(u.time), "cell": [x, y]}]`，
+// 而 `u` 来自 `sched.skill_uses`——它在 `verify.py:497-501` 被逐条追加：
+//
+//	for s in plan.skills:                      ← **计划里的顺序**，不排序
+//	    _at, pos, _d, _e = deployed[s.operator]  ← 该干员**落地时**的格子
+//	    sched.use_skill(pos, s.time)
+//
+// ⚠ 顺序是**计划给的**，不是按时刻排的：判据若按时刻重排就会与生产规格分叉，
+// 而两边都「看着合理」。
+type SpecSkillUse struct {
+	Time float64 `json:"time"`
+	Cell [2]int  `json:"cell"`
+}
+
+// BuildSkillUses 造 `skill_uses`（计划顺序）。
+func BuildSkillUses(plan PlayPlan) []SpecSkillUse {
+	pos := map[string][2]int{}
+	for _, d := range plan.Deploys {
+		pos[d.Operator] = d.Position
+	}
+	out := make([]SpecSkillUse, 0, len(plan.Skills))
+	for _, s := range plan.Skills {
+		p, ok := pos[s.Operator]
+		if !ok {
+			//: `Plan.validate` 已经拦过「给没部署的干员开技能」，走到这里
+			//: 说明校验被绕过了——不静默给 (0,0)，那会变成「在原点开技能」。
+			continue
+		}
+		out = append(out, SpecSkillUse{Time: s.Time, Cell: p})
+	}
+	return out
+}
+
 // BuildDeploys 造 `deploys` 那一串。
 func BuildDeploys(plan PlayPlan, roster RosterRead, stage *Stage) ([]SpecDeploy, error) {
 	rate := stage.Options.CostIncreaseTime

@@ -124,6 +124,32 @@ def build_spec_keys() -> list[str]:
     return [k.value for k in best.keys if isinstance(k, ast.Constant)]
 
 
+def _capture(raw: dict):
+    """把一份打法 dict 走生产路径抄成规格（合成用例用）。"""
+    import golden_go as G
+    from ak_tactic.frontend.inputs import SpecInputs
+    from ak_tactic.plan import Plan, Roster
+    from ak_tactic.simgo.spec import build_spec
+
+    class Only(G.SpecCapture):
+        def _run_other_engine(self, **kw):
+            try:
+                self.spec = build_spec(SpecInputs.from_sim(kw["sim"]),
+                                       allow_devices=True)
+            except Exception as e:                          # noqa: BLE001
+                self.spec_error = "%s: %s" % (type(e).__name__, e)
+            raise _Captured()
+
+    v = Only()
+    try:
+        v.run(Plan.from_dict(raw), roster=Roster.from_json(ROSTER_FIX))
+    except _Captured:
+        pass
+    except Exception as e:                                  # noqa: BLE001
+        return None, "%s: %s" % (type(e).__name__, e)
+    return v.spec, v.spec_error
+
+
 def go_specgo(level: str, difficulty: str = "", plan: str = "",
               roster: str = "") -> tuple[bool, object]:
     env = dict(os.environ)
@@ -282,6 +308,27 @@ def main() -> int:
         else:
             seen["传计划后 deploys 不再缺"] = \
                 seen.get("传计划后 deploys 不再缺", 0) + 1
+        if "skill_uses" in (got2.get("missing_keys") or []):
+            bad += 1
+            print("✗ 夹具 %s —— 传了计划却仍把 skill_uses 报成缺项" % name)
+        #: ---- `skill_uses`：按**计划顺序**，`cell` 取该干员的落点 ----
+        wsu = spec.get("skill_uses") or []
+        gsu = got2.get("skill_uses") or []
+        if len(gsu) != len(wsu):
+            bad += 1
+            print("✗ 夹具 %s skill_uses 条数：Go=%d 生产规格=%d"
+                  % (name, len(gsu), len(wsu)))
+        else:
+            for k, (g, w) in enumerate(zip(gsu, wsu)):
+                gm = [float(g.get("time"))] + [int(v) for v in (g.get("cell") or [])]
+                wm = [float(w.get("time"))] + [int(v) for v in (w.get("cell") or [])]
+                if gm == wm:
+                    seen["真规格 skill_uses 逐条"] = \
+                        seen.get("真规格 skill_uses 逐条", 0) + 1
+                else:
+                    bad += 1
+                    print("✗ 夹具 %s skill_uses[%d]：Go=%r 生产规格=%r"
+                          % (name, k, gm, wm))
         wd = spec.get("deploys") or []
         gd = got2.get("deploys") or []
         if len(gd) != len(wd):
@@ -302,6 +349,65 @@ def main() -> int:
                     print("✗ 夹具 %s deploys[%d].%s：Go=%r 生产规格=%r"
                           % (name, k, f, a, b))
     seen["夹具 × 真规格"] = real_cmp
+
+    #: ---- 第三部分：`skill_uses` ----
+    #: ⚠ 24 份夹具里**一条开技能都没有**（实测 0 份），所以第二部分那条
+    #: 只在比「两边都是空」。这一部分**合成**带开技能的计划，而且故意
+    #: **乱序**（计划里的先后 ≠ 时刻先后）——那正是要区分的那一点：
+    #: 原版按计划顺序产出，按时刻重排就会分叉。
+    import tempfile
+    skill_cases = 0
+    with tempfile.TemporaryDirectory() as td:
+        for f in sorted(FIXDIR.glob("*.json")):
+            if skill_cases >= 6:
+                break
+            try:
+                raw = json.loads(f.read_text(encoding="utf-8-sig"))
+            except Exception:                               # noqa: BLE001
+                continue
+            if not isinstance(raw, dict) or "deploys" not in raw:
+                continue
+            if len(raw.get("deploys") or []) < 2:
+                continue
+            ops = [d.get("operator") or d.get("name")
+                   for d in raw["deploys"]]
+            raw3 = dict(raw, skills=[
+                {"operator": ops[0], "time": 5.0, "slot": 1},
+                {"operator": ops[1], "time": 2.0, "slot": 2},
+                {"operator": ops[0], "time": 1.0, "slot": 3},
+            ])
+            spec3, err3 = _capture(raw3)
+            if spec3 is None:
+                print("· 合成 %s 没抄到规格：%s" % (f.name, err3))
+                continue
+            p3 = Path(td) / f.name
+            p3.write_text(json.dumps(raw3, ensure_ascii=False), encoding="utf-8")
+            level3 = str(raw3.get("stage") or "")
+            ok3, got3 = go_specgo(level3, "", str(p3), str(ROSTER_FIX))
+            if not ok3:
+                bad += 1
+                print("✗ 合成 %s —— Go 拒了：%s" % (f.name, got3))
+                continue
+            gsu, wsu = got3.get("skill_uses") or [], spec3.get("skill_uses") or []
+            if len(gsu) != len(wsu):
+                bad += 1
+                print("✗ 合成 %s skill_uses 条数：Go=%d 生产规格=%d"
+                      % (f.name, len(gsu), len(wsu)))
+                continue
+            okk = True
+            for k, (g, w) in enumerate(zip(gsu, wsu)):
+                gm = [float(g["time"])] + [int(v) for v in g["cell"]]
+                wm = [float(w["time"])] + [int(v) for v in w["cell"]]
+                if gm != wm:
+                    okk = False
+                    bad += 1
+                    print("✗ 合成 %s skill_uses[%d]：Go=%r 生产规格=%r"
+                          % (f.name, k, gm, wm))
+            if okk:
+                seen["合成 skill_uses 逐条"] = \
+                    seen.get("合成 skill_uses 逐条", 0) + len(gsu)
+                skill_cases += 1
+    seen["合成 fixture 数"] = skill_cases
 
     print()
     print("已比：部分规格骨架；%d 关（缓存可达）× %d 个值键 ＋ 键集账"
