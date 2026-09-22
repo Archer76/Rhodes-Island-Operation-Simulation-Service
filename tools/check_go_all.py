@@ -62,6 +62,8 @@ SUITE = [
     ("费用天赋", "tools/check_costbonus_go.py", "Go 初始部署费用天赋 vs squad_cost_bonus", False),
     #: 本轮加的：各自练度下的部署费用——`deploys[].cost`。
     ("部署费用", "tools/check_costof_go.py", "Go 部署费用 vs 生产规格的 deploys[].cost", False),
+    #: 本轮加的：地面寻路——「路线生产侧」的一半，卡着 spawns 与 unsupported。
+    ("寻路", "tools/check_stagepath_go.py", "Go 地面寻路 vs StageMap.ground_path", False),
 ]
 
 

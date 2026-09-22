@@ -25,8 +25,8 @@
 python tools\check_go_all.py --selfcheck
 ```
 
-* 前半：**十七套判据现在不报红**；
-* 后半：**十七套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
+* 前半：**十八套判据现在不报红**；
+* 后半：**十八套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
 
 ★ 两个结论缺一不可：「全绿」只证明现在不报红；**没有反向守卫的绿是零信息量的绿**。
 
@@ -67,6 +67,7 @@ python tools\closeout_selfsufficiency.py
 | 部分规格 `check_specgo_go.py` | 55 关 × 12 个值键 ＋ 键集账（ast 抽 19 键）＋ 24 份夹具 × 生产规格 ＋ **deploys 64 条** ＋ **6 份合成计划的 skill_uses 18 条**（故意乱序） | 全部一致 |
 | 费用天赋 `check_costbonus_go.py` | 12 种黑板形状 × 10 种队伍组合 | 10 / 10 次求解一致 |
 | 部署费用 `check_costof_go.py` | 24 份夹具 × **生产规格的 `deploys[].cost`** | 64 人次一致 |
+| 寻路 `check_stagepath_go.py` | 55 关的全部路线 × 两档斜向 | 2594 / 2594 逐格一致 |
 
 ---
 
@@ -94,6 +95,7 @@ python tools\closeout_selfsufficiency.py
 | 规格·骨架装配 | `rios-sim/specgo.go` | 把已能造出的 12 个键装配成一份部分规格，并**自报还差哪 7 个**（键集拿 ast 从源文件核对） | `check_specgo_go.py` |
 | 规格·起始费用天赋 | `rios-sim/costbonus.go` | `squad_cost_bonus`：滤掉 `$` 后签好只剩 `cost` 才认（`deploys`／`skill_uses` 排程的起始费用要用它） | `check_costbonus_go.py` |
 | 规格·部署费用 | `rios-sim/deploycost.go` | 各自练度下的 `total["cost"]`（取数口径与干员判据同一份，不另立；这里只是把它单独取出来） | `check_costof_go.py` |
+| 规格·地面寻路 | `rios-sim/stagepath.go` | `StageMap.ground_path`（Dijkstra；`"ALL"` 子串判定／`tile_hole` 不可走／不许斜穿墙角／**同距离按格坐标字典序决胜**） | `check_stagepath_go.py` |
 | 规格·骨架装配 | `rios-sim/specgo.go` | 已落 14 个键；`deploys`／`skill_uses` 传了计划才有（`omitempty` 在这里承担语义） | `check_specgo_go.py` |
 
 ---

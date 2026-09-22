@@ -88,6 +88,8 @@ type response struct {
 	Roster json.RawMessage `json:"roster,omitempty"`
 	//: `plan` 的应答：打法（见 `plan.go`）。
 	Plan json.RawMessage `json:"plan,omitempty"`
+	//: `path` 的应答：地面寻路（见 `stagepath.go`）。
+	Paths json.RawMessage `json:"paths,omitempty"`
 	//: `loadout` 的应答：名册与计划合起来之后的练度（见 `loadout.go`）。
 	Loadout json.RawMessage `json:"loadout,omitempty"`
 	//: `stageenv` 的应答：构建规格要用的关卡静态 8 项（见 `stageenv.go`）。
@@ -639,6 +641,27 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, SpecDeploys: raw}
+	case "path":
+		// 丙阶段四·第二十六批：地面寻路（见 `stagepath.go`）。
+		if req.Level == "" {
+			return response{ID: req.ID, OK: false,
+				Error: "path 少了 level（给 levelId 或关卡号）"}
+		}
+		var pq []PathQuery
+		if err := json.Unmarshal(req.Spec, &pq); err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("spec 不是寻路数组：%v", err)}
+		}
+		paths, err := GroundPaths(req.Level, pq)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(paths)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Paths: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。

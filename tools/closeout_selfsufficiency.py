@@ -51,7 +51,7 @@ GO_DIR = ROOT / "rios-sim"
 
 #: 这份台账**自己声明**的数。改动它们必须与真实改动同批，否则本脚本会红。
 DECLARED = {
-    "suites": 17,          # 一 · 「十七套判据」「十七套守卫」
+    "suites": 18,          # 一 · 「十八套判据」「十八套守卫」
     "gaps": 6,             # 三 · 缺口表的行数
     "resolve_callsites": 2,  # 出 loadout.go 之外调 ResolveLoadout 的地方
                              # （loadout 命令 ＋ specdeploys 的规格构造）
@@ -65,6 +65,7 @@ COMMAND_OF = {
     "攻击间隔": "interval", "面板": "panel", "名册": "roster",
     "计划": "plan", "练度": "loadout", "关卡静态": "stageenv", "格表": "cells",
     "部分规格": "specgo", "费用天赋": "costbonus", "部署费用": "costof",
+    "寻路": "path",
 }
 
 #: 有 Go 命令、但**有意**没有跨实现判据的两个。
