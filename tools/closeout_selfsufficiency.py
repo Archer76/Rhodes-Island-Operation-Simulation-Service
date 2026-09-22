@@ -76,7 +76,10 @@ NON_JUDGED = ("ping", "sim")
 #: 有判据、但**并进别的套里**判的命令（不单列一行）。
 #: `talentbonus` 是 `费用天赋` 那一套的第二部分：同一个函数、同一份权威，
 #: 拆成两行只会让「一套判据」这个词变模糊。
-EXTRA_JUDGED = ("talentbonus", "specdeploys")
+#: `legs` 同理并进 `寻路`：两者同属**路线生产侧**，而 `legs` 的 `walk` 段
+#: 就是靠 `ground_path` 一段段拼出来的（中间还要 `pop()` 去重）——
+#: 拆成两行会让同一条路上出现两把尺子（见 `tools/check_stagepath_go.py` 文件头）。
+EXTRA_JUDGED = ("talentbonus", "specdeploys", "legs")
 
 
 def read(p: Path) -> str:

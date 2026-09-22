@@ -90,6 +90,8 @@ type response struct {
 	Plan json.RawMessage `json:"plan,omitempty"`
 	//: `path` 的应答：地面寻路（见 `stagepath.go`）。
 	Paths json.RawMessage `json:"paths,omitempty"`
+	//: `legs` 的应答：路线的分段计划（见 `stagelegs.go`）。
+	Legs json.RawMessage `json:"legs,omitempty"`
 	//: `loadout` 的应答：名册与计划合起来之后的练度（见 `loadout.go`）。
 	Loadout json.RawMessage `json:"loadout,omitempty"`
 	//: `stageenv` 的应答：构建规格要用的关卡静态 8 项（见 `stageenv.go`）。
@@ -662,6 +664,32 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Paths: raw}
+	case "legs":
+		// 丙阶段四·第二十七批：路线分段计划（见 `stagelegs.go`）。
+		// `spec` 是**路线号数组**（`routes` 数组下标），应答与它一一对应。
+		if req.Level == "" {
+			return response{ID: req.ID, OK: false,
+				Error: "legs 少了 level（给 levelId 或关卡号）"}
+		}
+		if len(req.Spec) == 0 {
+			return response{ID: req.ID, OK: false,
+				Error: "legs 少了 spec（一批路线号）"}
+		}
+		var idx []int
+		if err := json.Unmarshal(req.Spec, &idx); err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("spec 不是路线号数组：%v", err)}
+		}
+		legs, err := RouteLegsOf(req.Level, idx)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(legs)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Legs: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。
@@ -687,7 +715,7 @@ func handle(req *request, started string) response {
 	default:
 		return response{ID: req.ID, OK: false,
 			Error: fmt.Sprintf(
-				"不认识的命令：%q（支持 ping / sim / load / enemies / opstats / range / skill / classify）",
+				"不认识的命令：%q（支持 ping / sim / load / enemies / opstats / range / skill / classify / path / legs）",
 				req.Cmd)}
 	}
 }

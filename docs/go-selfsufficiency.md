@@ -3,7 +3,7 @@
 > **本文性质**：**手写文档**（不是生成物）。数字是**写这一版时现跑**的读数，
 > 引用时请连命令与时刻一起引——它不会自己更新。
 >
-> 最后核对：2026-09-20 ｜ 判据入口 `python tools\check_go_all.py --selfcheck`
+> 最后核对：2026-09-22 ｜ 判据入口 `python tools\check_go_all.py --selfcheck`
 
 ---
 
@@ -21,7 +21,7 @@
 
 | 阻点 | 状态 | 下一轮的第一步 |
 |---|---|---|
-| **路线生产侧** | `ground_path` 已落（2594 例）；`Route.legs` 写过一次，55 关里 54 关全过 | **只剩一个探针**：`act31side_05` 路线 1 第 8 段，逐元素打印两侧 `points`（公式与仪器都已排除） |
+| **路线生产侧** | `ground_path` 已落（2594 例）；**`Route.legs` 也已落**（2157 段逐字段一致，`length` **逐位**） | 往上一层：`eta.py` 的 `route_plans`（`RoutePlan.points/legs/wait` ＋ `leading_wait` ＋ `polyline_length`）——它才是 `spawns`／`unsupported` 真正消费的那一层 |
 | 技能效果层 | 未动 | `effects_of(sim, op)` 的白名单与 `SkillEffects` 组装 |
 | 机制层 | 未动 | 每个活动一份、按需取用 |
 
@@ -90,7 +90,7 @@ python tools\closeout_selfsufficiency.py
 | 部分规格 `check_specgo_go.py` | 55 关 × 12 个值键 ＋ 键集账（ast 抽 19 键）＋ 24 份夹具 × 生产规格 ＋ **deploys 64 条** ＋ **6 份合成计划的 skill_uses 18 条**（故意乱序） | 全部一致 |
 | 费用天赋 `check_costbonus_go.py` | 12 种黑板形状 × 10 种队伍组合 | 10 / 10 次求解一致 |
 | 部署费用 `check_costof_go.py` | 24 份夹具 × **生产规格的 `deploys[].cost`** | 64 人次一致 |
-| 寻路 `check_stagepath_go.py` | 55 关的全部路线 × 两档斜向 | 2594 / 2594 逐格一致 |
+| 寻路 `check_stagepath_go.py` | 55 关的全部路线 × 两档斜向 ＋ **全部路线的分段计划**（另 7 条合成路线） | 2594 / 2594 逐格一致；分段 2157 / 2157 段逐字段一致（`length` **逐位**）＋ 合成 14 段 |
 
 ---
 
@@ -119,6 +119,7 @@ python tools\closeout_selfsufficiency.py
 | 规格·起始费用天赋 | `rios-sim/costbonus.go` | `squad_cost_bonus`：滤掉 `$` 后签好只剩 `cost` 才认（`deploys`／`skill_uses` 排程的起始费用要用它） | `check_costbonus_go.py` |
 | 规格·部署费用 | `rios-sim/deploycost.go` | 各自练度下的 `total["cost"]`（取数口径与干员判据同一份，不另立；这里只是把它单独取出来） | `check_costof_go.py` |
 | 规格·地面寻路 | `rios-sim/stagepath.go` | `StageMap.ground_path`（Dijkstra；`"ALL"` 子串判定／`tile_hole` 不可走／不许斜穿墙角／**同距离按格坐标字典序决胜**） | `check_stagepath_go.py` |
+| 规格·路线分段 | `rios-sim/stagelegs.go` | `Route.legs`（三种段 `walk`／`wait`／`vanish`；`WALK` 寻路／`FLY` 直线；`flush()` 里相邻两段之间 `pop()` 去重；长度走 `sum()` 的 **Neumaier** 语义） | 同上（`legs` 命令并进这一套，不单列） |
 | 规格·骨架装配 | `rios-sim/specgo.go` | 已落 14 个键；`deploys`／`skill_uses` 传了计划才有（`omitempty` 在这里承担语义） | `check_specgo_go.py` |
 
 ---
@@ -155,7 +156,7 @@ fps            speed_scale           ranged_enemies     enemy_windup
 
 | 要搬的 | 行数 | Go 侧 |
 |---|---|---|
-| `Route.legs` | 67 | `ground_path` 已落 |
+| `Route.legs` | 67 | ✅ **已落**（第 29 轮，`stagelegs.go`；2157 段逐字段一致） |
 | 技能效果组装 | ≈480 | 黑板解析、状态机参数 |
 | 机制·规格侧 `mech.py` | 537 | 运行期 ≈170 KB |
 | 装置层 `devices.py` | 419 | 部分在 `wire.go` |
@@ -233,7 +234,7 @@ if gm != wm:                              # ← 前两支走到这里时，wm �
 海象运算符。想看「这个用例属于哪一类」可以，但**分类与期望值必须是两件事**，
 期望值要在循环开头无条件算好。
 
-### 路线生产侧·另一半 `Route.legs`（2026-09-21，第 23 轮，待落）
+### 路线生产侧·另一半 `Route.legs`（2026-09-21，第 23 轮；**已落，见第 29 轮**）
 
 `ground_path` 已落（18 套判据里的「寻路」），另一半是 `Route.legs`
 （`stage.py:415-481`，67 行）。**已经读透**，落它的条件齐了：
@@ -265,7 +266,7 @@ is_appear = (type == "APPEAR_AT_POS")
 
 ★ 这条更正本身就是「推测不算数，读一次再写」的实例——本目标里第四次。
 
-### `Route.legs` 卡住的那一处：**公式已排除**（2026-09-21，第 25-26 轮）
+### `Route.legs` 卡住的那一处：**公式已排除**（2026-09-21，第 25-26 轮；**第 29 轮已解**）
 
 Go 版写过一次、跑通了：**55 关里 54 关全过**，`walk` / `wait` / `vanish`
 三种分段与路径点集逐项相同。失配只在 `act31side_05` 的 5 条路线上，
@@ -294,7 +295,7 @@ dist / hypot / sqrt(平方和) / 按 CPython 写的缩放式   → 四种全给 
 一眼就能看出是点列不同还是累加不同。第 25 轮打印的是完整点列、看着相同——
 但那是**视图**，不是逐元素比对的结果；两者不同就说明问题出在别处。
 
-### ★ 收窄到「点列」这一步的推理（第 28 轮）
+### ★ 收窄到「点列」这一步的推理（第 28 轮；**里面有一处默认是错的，见第 29 轮**）
 
 第 28 轮查了两件事，把答案逼出来了：
 
@@ -324,6 +325,63 @@ dist / hypot / sqrt(平方和) / 按 CPython 写的缩放式   → 四种全给 
 剩下的路只有一条：**重写判据（按 `(关卡, 路线号, 斜向)` 显式建键）＋ 重加
 `path` 命令并回显 query，一次跑完**。那件事需要一个完整的会话余量，
 不适合在推理占满上下文之后再挤。
+
+### ★★ `Route.legs` 已落 ＋ 两个 1 ulp 的根因（2026-09-22，第 29 轮）
+
+**落点**：`rios-sim/stagelegs.go`（`legs` 命令，`main.go` 的 `case "legs"`
+＋ `response.Legs`）。判据**并进** `tools/check_stagepath_go.py`
+（**不新增 SUITE 行**；`legs` 登记进 `closeout_selfsufficiency.py` 的
+`EXTRA_JUDGED`，表示「判了但不单列」）。
+
+**读数**：寻路 2594 / 2594 逐格一致；**路线分段 55 关 1297 条路线 2157 段
+逐字段一致**（`kind` / `points` / `length` / `seconds`，其中 `length` 是
+**逐位相等**）；另有一套 7 条路线的**合成夹具**（14 段）覆盖缓存里没有的分支。
+
+**根因是「点列必有一错」这条推理的反面：点列一直是对的，错的是浮点语义——
+而且有两处、彼此无关。**
+
+探针（正是上一轮点名的那个：`act31side_05` 路线 1 第 8 段，24 点 23 步
+**逐元素**打印）结果：两侧点列**逐元素完全相同**，`length` 的差来自求和算法：
+
+| 算法 | 读数 |
+|---|---|
+| Python `sum(math.dist(...))`（权威 `_polyline_length`） | `24.242640687119284` |
+| Python `math.fsum` | `24.242640687119284` |
+| Python 朴素左到右累加 | `24.242640687119287` ← **旧 Go 的读数** |
+
+★ **CPython 3.12 起，内建 `sum()` 对浮点走 Neumaier 补偿求和**
+（`Objects/bltinmodule.c` 的 `builtin_sum`），给的是**正确舍入**的和；
+Go 的 `total += …` 是朴素累加，20 次加法各带一次舍入 ⇒ 高 1 ulp。
+⇒ 台账上一版那句「逐项值相同 ＋ 公式相同 ＋ 累加顺序相同 ⇒ 和必须相同」
+**默认了累加就是朴素加法**。这条推理本身是错的，而它把两轮导向了「点列」。
+
+**第二个 1 ulp，来源与求和无关**：修完求和之后，`act31side_09` 的 5 条路线
+又差 1 ulp（`11.099019513592786` vs `…784`）。根因是每步距离的算法：
+`math.dist` 是**平方和开方**，不是缩放式——**台账与代码注释里的
+「CPython 缩放式」是记错的**。实测 dx, dy ∈ [0,80) 共 6400 个格点：
+
+```
+sqrt(dx² + dy²)                    与 math.dist   0 处不符
+max·sqrt((dx/max)² + (dy/max)²)    与 math.dist   2062 处不符（各 1 ulp）
+```
+
+单位步下两者逐位相同 —— 这正是它又藏了一轮的原因（那个探针的段全是单位步）。
+只有**跨格步**照得出来：端点不可走／不连通时 `ground_path` 退回直线，真夹具里
+这样的段有 **62** 个。
+（`math.hypot` 另测：6400 个格点上与 `sqrt(平方和)` **0 处不符**，
+所以 `eta.py` 的 `polyline_length` 在整数点上不受这一条影响——
+但那边的 `sum(hypot(...))` 同样是 **Neumaier 语义**，往上一层时不许换成朴素累加。）
+
+**判据怎么防住它**（这一条是本轮的主要产出）：
+
+* `length` 与 `seconds` 比的是 float **精确相等**，**没有容差**——
+  加容差就再也看不见 1 ulp；
+* 反向守卫四处**互相独立**、每处都要「注入过 ＋ 判红过」：
+  寻路点列 / 分段点列 / **分段长度加 1 ulp** / **分段秒数加 1 ulp**；
+* 缓存 55 关里 `DISAPPEAR` **一条都没有** ⇒ `vanish` 分支在真夹具上零行使，
+  故判据自带一份最小合成关卡（Go 走自己的索引＋解析入口，Python 走
+  `parse_stage`），并要求夹具**自证行使**：`vanish` 段 / `FLY` 路线 /
+  接续去重 / 跨格步四项任一为 0 即判红。
 
 ---
 
