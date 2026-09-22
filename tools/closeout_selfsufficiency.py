@@ -51,7 +51,7 @@ GO_DIR = ROOT / "rios-sim"
 
 #: 这份台账**自己声明**的数。改动它们必须与真实改动同批，否则本脚本会红。
 DECLARED = {
-    "suites": 12,          # 一 · 「十二套判据」「十二套守卫」
+    "suites": 13,          # 一 · 「十三套判据」「十三套守卫」
     "gaps": 6,             # 三 · 缺口表的行数
     "resolve_callsites": 1,  # 出 loadout.go 之外调 ResolveLoadout 的地方
 }
@@ -61,7 +61,7 @@ COMMAND_OF = {
     "关卡": "load", "敌人": "enemies", "干员": "opstats", "范围": "range",
     "技能": "skill", "分类": "classify", "生命上限": "maxhp",
     "攻击间隔": "interval", "面板": "panel", "名册": "roster",
-    "计划": "plan", "练度": "loadout",
+    "计划": "plan", "练度": "loadout", "关卡静态": "stageenv",
 }
 
 #: 有 Go 命令、但**有意**没有跨实现判据的两个。

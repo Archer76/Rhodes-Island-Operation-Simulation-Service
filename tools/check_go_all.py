@@ -51,6 +51,9 @@ SUITE = [
     ("练度", "tools/check_loadout_go.py", "Go 练度解析 vs Verifier._entry/_by_name", False),
     #: 第 38 轮加的。目标里点名的第五层，此前同样零入口。
     ("计划", "tools/check_plan_go.py", "Go 直读打法 vs plan.Plan.from_dict/validate", False),
+    #: 第 41 轮加的：「Go 自己构造规格」的第一块（build_spec 19 个顶层键里
+    #: 不依赖 sim／干员／机制的那 8 个）。
+    ("关卡静态", "tools/check_stageenv_go.py", "Go 关卡静态 8 项 vs stage_env", False),
 ]
 
 

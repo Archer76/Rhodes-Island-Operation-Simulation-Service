@@ -90,6 +90,8 @@ type response struct {
 	Plan json.RawMessage `json:"plan,omitempty"`
 	//: `loadout` 的应答：名册与计划合起来之后的练度（见 `loadout.go`）。
 	Loadout json.RawMessage `json:"loadout,omitempty"`
+	//: `stageenv` 的应答：构建规格要用的关卡静态 8 项（见 `stageenv.go`）。
+	StageEnv json.RawMessage `json:"stage_env,omitempty"`
 	Error string          `json:"error,omitempty"`
 }
 
@@ -437,6 +439,41 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Loadout: raw}
+	case "stageenv":
+		// 丙阶段四·第十六批：构建规格要用的关卡静态 8 项（见 `stageenv.go`）。
+		// 这是「Go 自己构造规格」的第一块——`build_spec` 19 个顶层键里
+		// 不依赖 sim／干员／机制的那 8 个。
+		if req.Level == "" && req.Path == "" {
+			return response{ID: req.ID, OK: false,
+				Error: "stageenv 少了 level（给 levelId 或关卡号）或 path（关卡 JSON）"}
+		}
+		difficulty := "NORMAL"
+		if len(req.Spec) > 0 {
+			var q struct {
+				Difficulty string `json:"difficulty"`
+			}
+			if err := json.Unmarshal(req.Spec, &q); err != nil {
+				return response{ID: req.ID, OK: false,
+					Error: fmt.Sprintf("spec 不是 {difficulty}：%v", err)}
+			}
+			if q.Difficulty != "" {
+				difficulty = q.Difficulty
+			}
+		}
+		envOut, err := LoadStageEnv(req.Level, difficulty)
+		if req.Path != "" {
+			//: 合成关卡（判据用）走这条路：它不在关卡索引里。
+			envOut, err = LoadStageEnvFile(req.Path, difficulty)
+		}
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(envOut)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, StageEnv: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。

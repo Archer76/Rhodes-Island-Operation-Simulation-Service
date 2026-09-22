@@ -25,8 +25,8 @@
 python tools\check_go_all.py --selfcheck
 ```
 
-* 前半：**十二套判据现在不报红**；
-* 后半：**十二套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
+* 前半：**十三套判据现在不报红**；
+* 后半：**十三套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
 
 ★ 两个结论缺一不可：「全绿」只证明现在不报红；**没有反向守卫的绿是零信息量的绿**。
 
@@ -62,6 +62,7 @@ python tools\closeout_selfsufficiency.py
 | 名册 `check_roster_go.py` | 真夹具 ＋ 11 例合成（口径各不相同） | 10 例逐字段一致 ＋ 1 例登记分歧 ＋ 1 例两边都拒 |
 | 计划 `check_plan_go.py` | **`fixtures/` 下全部 24 份打法夹具**＋ 24 例合成 | 32 例逐字段一致 ＋ 1 例登记分歧 |
 | 练度 `check_loadout_go.py` | 全部 24 份夹具 × 真名册 ＋ 12 例合成 | 33 例逐字段一致 ＋ 3 例两边都拒 |
+| 关卡静态 `check_stageenv_go.py` | 缓存可达的 55 关 × 2 档难度 ＋ 8 例合成 | 126 例逐字段一致 |
 
 ---
 
@@ -84,6 +85,7 @@ python tools\closeout_selfsufficiency.py
 | 名册·练度 | `rios-sim/roster.go` | MAA OperBox 导出与森空岛名册两种外形（`own` 恒等过滤／`or` 兜底／按名做键／插入序） | `check_roster_go.py` |
 | 计划·打法 | `rios-sim/plan.go` | 部署／撤退／技能三条指令序列 ＋ `validate` 四条 ＋ `__post_init__` 三条（坐标截断、朝向表、技能槽 0–3） | `check_plan_go.py` |
 | 名册＋计划·练度解析 | `rios-sim/loadout.go` | 打法覆盖名册缺省、三条 `setdefault`、`char_id` 按名字回退（走 `character_table` 的**行序**取首个匹配） | `check_loadout_go.py` |
+| 规格·关卡静态 8 项 | `rios-sim/stageenv.go` | `build_spec` 19 个顶层键里不依赖 sim／干员／机制的那 8 个（`options` ＋ `runes` 的掩码消歧与两条改写） | `check_stageenv_go.py` |
 
 ---
 
@@ -94,7 +96,7 @@ python tools\closeout_selfsufficiency.py
 | **两套数值 profile** | **折算本身已全部落地**（`profile.go` 两行 ＋ `panelfold.go` 七处读数，合计 14548 个网格点/叉乘行）：核对下来原版那七个方法**只读实例属性**，替身对象即可当 oracle——原先以为非搭不可的 harness 省掉了。仍缺的是**喂它们的实时输入**（光环、翔虫机动、替身计时、击杀叠层、出手次数、阻挡、高台邻居、偷取攻速这些运行态），以及 `_profile` 自己「临时把开技能字段摆成开启态、读完立刻还原」的那段装配。 |
 | **练度 → 面板的接线** | 练度**已经解析出来了**（`rios-sim/loadout.go`，与 `Verifier._entry` 逐字段一致），但它**还没被送去算面板**：`opstats` 目前仍由调用方逐个送练度，没人把 `loadout` 的输出接进去。 |
 | **`skill` 的对象形态** | `Plan` 那一条指令的 `skill` 除整数外还可以是对象（丙方案），要 `_skill_from_json` 查技能书、按槽位/等级解成技能 id。本轮**未接**：Go 碰到对象就**具名拒收**，不假装读懂。好消息是 `fixtures/` 下 24 份打法的 `skill` 全是整数，走的是与改动前同一条路。 |
-| **规格构造与闸门** | `simgo/spec.py`（76 KB）＋ `simgo/skills.py` 的白名单。Go 现在仍收 Python 送来的 spec。 |
+| **规格构造与闸门** | `simgo/spec.py`（76 KB）＋ `simgo/skills.py` 的白名单。Go 现在仍收 Python 送来的 spec。★ **第一块已落地**：19 个顶层键里不依赖 sim／干员／机制的**关卡静态 8 项**（`rios-sim/stageenv.go`，126 例对拍）。剩下 11 个键：`operators`／`deploys`／`spawns`／`skill_uses`（要 `_operator_spec` 等，162 行起）与 `mechanisms`／`mech_config`／`highland_cells`／`goal_cells`。 |
 | **干员侧的其余天赋** | `advisor` 表里除已接的那几支之外的部分（`is_*` finder 一族里尚未逐条搬完的）。 |
 | **干员技能的性质** | 比如「技能改写攻击范围」的消费点。 |
 

@@ -123,6 +123,8 @@ type Stage struct {
 	Branches    map[string][]BranchAction `json:"branches"`
 	Spawns      []EnemySpawn            `json:"spawns"`
 	Options     StageOptions            `json:"options"`
+	//: 关卡 rune（`runes` 数组）。构建规格的静态 8 项要用它，见 `stageenv.go`。
+	Runes []Rune `json:"runes"`
 }
 
 // EnemyRef 是 `enemyDbRefs` 的一条：这一关引用了哪个敌人、用哪一档。
@@ -262,10 +264,15 @@ func ParseStage(raw map[string]json.RawMessage, levelID, code, difficulty string
 	if err != nil {
 		return nil, fmt.Errorf("options：%w", err)
 	}
+	runes, err := parseRunes(raw["runes"])
+	if err != nil {
+		return nil, fmt.Errorf("runes：%w", err)
+	}
 	return &Stage{
 		LevelID: levelID, Code: code, Difficulty: difficulty,
 		Map: world, Routes: routes, ExtraRoutes: extra,
 		Branches: branches, Spawns: spawns, Options: opts,
+		Runes: runes,
 	}, nil
 }
 
