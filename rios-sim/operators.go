@@ -64,49 +64,40 @@ const (
 	opsRedeployDefault = 70.0
 )
 
-// OperatorUnported 是 `_operator_spec` 会产出、而 Go 这一轮**不产出**的 10 个键。
+// OperatorUnported 是 `_operator_spec` 会产出、而 Go 这一轮**不产出**的 3 个键。
 //
-// 为什么它们进不了段 A：要 `op.skill.effects`（`skill` / `active`）与五段
-// **天赋派生装配**——`_team_auras_of`(96 行) / `_shield_of`(34) / `_talent_dodge`(28) /
-// `blessing`(21) / `regen_aura`(26)。这五段的共同点是读 `d.talents` 现算，
-// 而 Go 侧的天赋解析目前只覆盖 `operator_traits.go` 那几条。
+// ★ **逐条写清「为什么是它」**——不写清楚，`unported` 会变成一个没人敢动的黑洞：
 //
-// ★ **逐条写清「为什么是它」，其中一条是「其实已经能搬」**——不写清楚，
-// `unported` 会变成一个没人敢动的黑洞：
+//	skill / active  要 `skills.skill_spec(inp, d)`（`skills.py:277-317`）：整段
+//	                技能效果装配，`op.skill.effects` 那一层 Go 还没有。★ 而且
+//	                **24 份夹具的 64 人次里 `deploys[*].skill` 全是 0**
+//	                （现数 `{'0': 64}`）⇒ 这一支在真夹具上**零行使**，
+//	                接它之前得先造一份绑了 `SkillLevel` 的合成计划。
+//	shield          要 `_shield_of(d)`：读 `d.talents[*].effects` 的
+//	                `shield_max_layers` / `shield_layers_on_deploy`（取大者）等
+//	                **五个 `shield_*` 字段**。★ 那五个字段是 `apply_text_rules`
+//	                写出来的，而**它在技能侧全表 0 技能命中**（1810 技能 / 11012 级
+//	                里只有 2 个技能命中另外几个字段）——可 64 人次里 `shield`
+//	                非空 **11 次**，来源是**天赋侧**的同一批字段名。
+//	                ⇒ 天赋侧与技能侧**共用一个字段名空间**，接它要先给天赋侧
+//	                单独取证，不能顺手当成「技能侧那一套」。
 //
-//	skill / active      要 `skills.skill_spec(inp, d)`（`skills.py:277-317`）：整段
-//	                    技能效果装配，`op.skill.effects` 那一层 Go 还没有。
-//	heals               ★ **这条其实已经能搬**：判据就是特性正文里含
-//	                    `"恢复友方单位生命"`（**与 Python 同一句、同一数据源**，
-//	                    即 `character_table` 的 `description`），Go 侧现成字段是
-//	                    `TextDerived.Heals`；实测 64 人次里 **9 次**被行使
-//	                    （可逐位判）。本笔**故意不扩范围**，留在这里是为了让
-//	                    「哪天回头接」有落点，不是因为它难。
-//	blessing_save /     要 `frontend/talent_finders.find_blessing` 的两个黑板键
-//	blessing_self_freeze （`c2e_freeze` / `freeze`），且**不能**读运行期属性
-//	                    （`sim.py:3417` 部署那一刻才挂，取规格时是 0）。
-//	shield              要 `_shield_of(d)`：读 `d.talents` 的 `shield_max_layers` /
-//	                    `shield_layers_on_deploy` 取大者，送**比例**不送绝对值。
-//	regen_aura          要 `find_regen` ＋ `find_medic_monument`（两个天赋黑板），
-//	                    `strict` 那一位还跟着 `inp.heal_mode` 走。
-//	team_auras          要 `_team_auras_of(d, op)`（96 行，最长的一段）。
-//	talent_dodge_phys / 要 `_talent_dodge(op, d)`（`find_damage_block`）。
-//	talent_dodge_arts
+// ★ 上一轮在这里的 `heals` **已经产出**（见 `OperatorUnportedReady` 的说明）。
 //
 // ★ 这一份是**具名的**：判据会把它与 Go 应答里的 `unported` 做**双向集合比对**
 // （像 `check_spawns_go.py` 那样），并每次运行重量一次「Python 那一侧实际送出了
 // 其中几个」——哪天 Go 接上了，这里会先红，而不是等到某次对拍少送一个键。
 var OperatorUnported = []string{
-	"skill", "active", "heals",
-	"blessing_save", "blessing_self_freeze", "shield",
-	"regen_aura", "team_auras",
-	"talent_dodge_phys", "talent_dodge_arts",
+	"skill", "active", "shield",
 }
 
-// OperatorUnportedReady 是 `unported` 里**其实已经能搬**的那几个——
-// 守卫用：判据会拿它去问 `TextDerived.Heals` 一侧「这个数还在不在」，
-// 免得 `heals` 这种「只因不扩范围而留着」的条目被读成「Go 还做不到」。
-var OperatorUnportedReady = []string{"heals"}
+// OperatorUnportedReady 已**清空**（原来只有 `heals`）。
+//
+// `heals` 现在**已产出**（`TextDerived.Heals`，与 Python 同判据同数据源，
+// 64 人次里 9 次被行使）。留着这个空表是为了让判据那边的同名守卫继续存在：
+// 它答的是「`unported` 里还有没有**其实已经能搬**的条目」——
+// 清空之后那句守卫变成「必须为空」，一旦谁再往里塞一条能搬的，它会红。
+var OperatorUnportedReady = []string{}
 
 // OperatorViewFields 是 `_operator_spec` 读 `op` 的 **29** 个属性名（含 4 个方法）。
 //
@@ -165,12 +156,31 @@ type OperatorOut struct {
 
 	PowerAttackCount *int     `json:"power_attack_count,omitempty"`
 	PowerAttackScale *float64 `json:"power_attack_scale,omitempty"`
+
+	//: ---- 天赋派生（段 B 的第一批）----
+	//:
+	//: ⚠ 这七个键**不用** `wire.go` 的 `TeamAuraSpec` / `RegenAuraSpec`：
+	//: 那两个结构体的 json 标签带 `omitempty`，而 Python 那边 `atk_pct` /
+	//: `def_pct` / `nation_mult` 是**每次都送**的（值可以是 0）。用它们会让
+	//: 「Go 少一个键」与「Python 送了个 0」长得一样，而**数值本身对得上**
+	//: ——判据只比值就抓不到这一类。所以这里用裸 map／指针，键完全由我们写。
+	Heals              *bool            `json:"heals,omitempty"`
+	BlessingSave       *float64         `json:"blessing_save,omitempty"`
+	BlessingSelfFreeze *float64         `json:"blessing_self_freeze,omitempty"`
+	RegenAura          map[string]any   `json:"regen_aura,omitempty"`
+	TeamAuras          []map[string]any `json:"team_auras,omitempty"`
+	TalentDodgePhys    *float64         `json:"talent_dodge_phys,omitempty"`
+	TalentDodgeArts    *float64         `json:"talent_dodge_arts,omitempty"`
 }
 
 // OperatorsParams 是这次构造的**入参回执**（人读的痕迹，判据不看它）。
 type OperatorsParams struct {
 	Plan   string `json:"plan"`
 	Roster string `json:"roster"`
+	//: `getattr(inp, "heal_mode", "range")`——只影响 `regen_aura.strict` 那一位
+	//: （`target` = 严格读法：只算光环落地之后才进场的友方）。**生产路径恒
+	//: `range`**，所以这一位由调用方给定、判据两侧各跑一次（与 `p3r_armed` 同形）。
+	HealMode string `json:"heal_mode,omitempty"`
 }
 
 // OperatorsBundle 是 `operators` 命令的一整份应答。
@@ -195,6 +205,10 @@ var OperatorsCoveredKeys = []string{
 	"splash_radius_nonzero", "highland_splash_scale_nonzero",
 	"highland_splash_sluggish_nonzero",
 	"combo_hits_gt1", "power_attack_count_gt0",
+	//: ---- 段 B 第一批（天赋派生）----
+	"heals_true", "blessing_nonzero", "regen_aura_nonzero",
+	"team_auras_nonzero", "talent_dodge_nonzero",
+	"regen_strict_true", "regen_strict_false",
 }
 
 // newOperatorsCovered 造一张**每个键都在、值为 0** 的计数表。
@@ -385,7 +399,8 @@ func operatorRange(code, direction string, pos [2]int) ([][2]int, bool, bool, er
 // buildOperatorOut 造 `operators[i]`，并把这一次**行使到了哪些条件键**记进
 // `covered`（零信息量的绿要防：某个键 64 次一次都没送出去，它的「逐位相等」
 // 就是「两边都没有」这种空洞的相等）。
-func buildOperatorOut(r DeployRow, covered map[string]int) (OperatorOut, error) {
+func buildOperatorOut(r DeployRow, covered map[string]int,
+	healMode string) (OperatorOut, error) {
 	e := r.Entry
 	trust := 0.0
 	if e.Trust != nil {
@@ -526,7 +541,148 @@ func buildOperatorOut(r DeployRow, covered map[string]int) (OperatorOut, error) 
 		sc := pyOrOne(st.PowerAttack.Scale)
 		out.PowerAttackCount, out.PowerAttackScale = &n, &sc
 	}
+
+	//: ---- 天赋派生（段 B 第一批）----
+	//:
+	//: 权威那五段（`_shield_of` 除外）的共同点：**读 `d.talents` 现算，不读运行期
+	//: 属性**——`op.blessing_*` / `op.shield_*` / `op.talent_dodge_*` 要到
+	//: `_do_deploy` 那一刻才被写上（`sim.py:3417` / `3157` / `2688`），而规格
+	//: 正是**在那之前**取的。读运行期只会读到 0，而「规格里是 0」与「这个干员
+	//: 本来就没有」在 Go 那边长得一模一样 —— 是**静默**的。
+	talents, err := charTalents(e.CharID, e.Elite, e.Level, e.Potential)
+	if err != nil {
+		return OperatorOut{}, fmt.Errorf("%s（%s）的天赋：%v", r.Operator, e.CharID, err)
+	}
+	//: `heals`：Python 读 `op.heals`，Go 侧同一判据的现成字段是
+	//: `TextDerived.Heals`（特性正文含「恢复友方单位生命」）。
+	if st.TextDerived.Heals {
+		covered["heals_true"]++
+		b := true
+		out.Heals = &b
+	}
+	//: `blessing_save` / `blessing_self_freeze`：判据是 `find_blessing` 的两个
+	//: 黑板键**同时**在（`c2e_freeze` / `freeze`），只在 `c2e_freeze > 0` 时送。
+	if tb, ok := tfFindBlessing(talents); ok {
+		save := bbValue(tb.Blackboard, "c2e_freeze", 0.0)
+		if save > 0.0 {
+			covered["blessing_nonzero"]++
+			fz := bbValue(tb.Blackboard, "freeze", 0.0)
+			out.BlessingSave, out.BlessingSelfFreeze = &save, &fz
+		}
+	}
+	//: `talent_dodge_phys` / `_arts`：`find_damage_block` 的 `prob`，**两个键同值**。
+	//: 只在任一个非零时送（原版是 `if talent_phys or talent_arts:`）。
+	if tb, ok := tfFindDamageBlock(talents); ok {
+		v := bbValue(tb.Blackboard, "prob", 0.0)
+		if v != 0.0 {
+			covered["talent_dodge_nonzero"]++
+			out.TalentDodgePhys, out.TalentDodgeArts = &v, &v
+		}
+	}
+	//: `regen_aura`：**五个键一律写**（Python 一个都不省）。
+	//: `strict` 跟 `inp.heal_mode` 走——生产路径恒 `range` ⇒ false，
+	//: 但这里把两支都计上数，免得「那一支从没跑过」与「那一支跑了 0 次」混成一个。
+	if tb, ok := tfFindRegen(talents); ok {
+		covered["regen_aura_nonzero"]++
+		nation, mult := "", 1.0
+		if tm, ok := tfFindMedicMonument(talents); ok {
+			nation = tfRhodesNation
+			mult = bbValue(tm.Blackboard, "rhodes_bonus", 1.0)
+		}
+		strict := healMode == "target"
+		if strict {
+			covered["regen_strict_true"]++
+		} else {
+			covered["regen_strict_false"]++
+		}
+		out.RegenAura = map[string]any{
+			"hp_per_sec":  bbValue(tb.Blackboard, "hp_recovery_per_sec", 0.0),
+			"duration":    bbValue(tb.Blackboard, "buff_duration", 0.0),
+			"nation":      nation,
+			"nation_mult": mult,
+			"strict":      strict,
+		}
+	}
+	//: `team_auras`：五条互不重叠的探测器，**顺序是契约**（Python 那个 list 的顺序）。
+	//:
+	//: ⚠ `double_scale` **每次都送**：原版那个字段的默认值是 2.0，
+	//: 靠 `omitempty` 省掉它，Go 侧读到的就是 0——主人一开技能，加成会被乘成 0。
+	if auras := teamAurasOf(talents, out.Name, e.CharID); len(auras) > 0 {
+		covered["team_auras_nonzero"]++
+		out.TeamAuras = auras
+	}
 	return out, nil
+}
+
+// teamAurasOf 复刻 `_team_auras_of`（`spec.py:551-644`）。
+//
+// 一名干员可以同时命中多条（「万众巨潮」与「特种作战策略」是并列的两条天赋），
+// 所以是 list；**顺序**与权威逐个相同（team → class → covenant → angel → dispatch）。
+func teamAurasOf(talents []resolvedTalent, owner, charID string) []map[string]any {
+	out := []map[string]any{}
+	if tb, ok, faction := tfFindTeamAura(talents); ok {
+		atk := bbValue(tb.Blackboard, "atk", 0.0)
+		def := bbValue(tb.Blackboard, "def", 0.0)
+		if faction {
+			//: 「万众巨潮」：只在主人技能期间生效，且对【乌萨斯学生自治团】
+			//: **按 char_id 名单**翻倍。
+			out = append(out, map[string]any{
+				"owner": owner, "atk_pct": atk, "def_pct": def,
+				"skill_only":    true,
+				"faction":       append([]string{}, tfStudentTeam...),
+				"faction_scale": bbValue(tb.Blackboard, "scale_bonus", 2.0),
+				"double_scale":  2.0,
+			})
+		} else {
+			//: 「青色怒火」：常驻 ＋ 主人开技能时加倍。
+			out = append(out, map[string]any{
+				"owner": owner, "atk_pct": atk, "def_pct": def,
+				"double_scale": 2.0,
+			})
+		}
+	}
+	if tb, prof, ok := tfFindClassAura(talents); ok {
+		out = append(out, map[string]any{
+			"owner":   owner,
+			"atk_pct": bbValue(tb.Blackboard, "atk", 0.0),
+			"def_pct": bbValue(tb.Blackboard, "def", 0.0),
+			//: ⚠ 这里是**主职业代号**（`TANK`），不是阵营 char_id 名单。
+			"profession":   prof,
+			"double_scale": 2.0,
+		})
+	}
+	if tb, ok := tfFindAmmoCovenant(talents); ok {
+		out = append(out, map[string]any{
+			"owner":           owner,
+			"atk_pct":         bbValue(tb.Blackboard, "atk", 0.0),
+			"def_pct":         bbValue(tb.Blackboard, "def", 0.0),
+			"double_scale":    bbValue(tb.Blackboard, "mult", 2.0),
+			"ammo_skill_only": true,
+			//: 按**势力**翻倍（【拉特兰】），与按名单翻倍是两种数据形态。
+			"nation_double": tfLateranoNation,
+		})
+	}
+	if tb, ok := tfFindAngelBlessing(talents); ok {
+		out = append(out, map[string]any{
+			"owner":        owner,
+			"atk_pct":      bbValue(tb.Blackboard, "atk", 0.0),
+			"def_pct":      0.0,
+			"self_only":    true,
+			"double_scale": 2.0,
+		})
+	}
+	if tb, ok := tfFindLimitDispatch(talents); ok {
+		out = append(out, map[string]any{
+			"owner":   owner,
+			"atk_pct": bbValue(tb.Blackboard, "atk", 0.0),
+			"def_pct": 0.0,
+			//: `faction_only` 是**筛选**（不匹配的一律 0），不是 `nation_double`
+			//: 那种「该势力 ×2、别人 ×1」。两个字段别混。
+			"faction_only": tfRhodesNation,
+			"double_scale": 2.0,
+		})
+	}
+	return out
 }
 
 // ---------------------------------------------------------------- 入口
@@ -553,7 +709,7 @@ func BuildOperators(plan PlayPlan, roster RosterRead,
 	covered := newOperatorsCovered()
 	out := make([]OperatorOut, 0, len(rows))
 	for _, r := range rows {
-		o, err := buildOperatorOut(r, covered)
+		o, err := buildOperatorOut(r, covered, params.HealMode)
 		if err != nil {
 			return nil, err
 		}
@@ -573,9 +729,14 @@ func BuildOperators(plan PlayPlan, roster RosterRead,
 }
 
 // BuildOperatorsFor 从两条路径读入，造 `operators`（命令用）。
-func BuildOperatorsFor(planPath, rosterPath string) (*OperatorsBundle, error) {
+//
+// `healMode` 空串按权威的默认值 `range` 走（`getattr(inp, "heal_mode", "range")`）。
+func BuildOperatorsFor(planPath, rosterPath, healMode string) (*OperatorsBundle, error) {
 	if planPath == "" {
 		return nil, fmt.Errorf("operators 少了 plan 路径")
+	}
+	if healMode == "" {
+		healMode = "range"
 	}
 	plan, err := ReadPlan(planPath)
 	if err != nil {
@@ -592,5 +753,5 @@ func BuildOperatorsFor(planPath, rosterPath string) (*OperatorsBundle, error) {
 		return nil, err
 	}
 	return BuildOperators(plan, rs, st,
-		OperatorsParams{Plan: planPath, Roster: rosterPath})
+		OperatorsParams{Plan: planPath, Roster: rosterPath, HealMode: healMode})
 }

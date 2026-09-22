@@ -87,8 +87,11 @@ SUITE = [
     #: （原版这两个键是同一个循环里的两次 append），所以两者共用 `BuildDeployRows`。
     #: 期望值取 24 份夹具的**生产规格**（64 人次）；另有一条「地基」量测：
     #: Go 的 `OperatorStats.Total[...]` 与活对象 `op.current_atk()` 是不是同一个数。
+    #: 产出面：**32 个键**（含条件键的存在性），另 3 个（`skill`/`active`/`shield`）
+    #: 具名进 `unported` —— 这里的 32/3 与本行第三栏的文字都只是给人读的标签，
+    #: 真正的数由判据每次**现算**（`check_operators_go.py` §7）。
     ("干员规格", "tools/check_operators_go.py",
-     "Go operators vs simgo/spec.py 的 _operator_spec（段 A 25 键逐位）", False),
+     "Go operators vs simgo/spec.py 的 _operator_spec（产出 32 键逐位）", False),
 ]
 
 

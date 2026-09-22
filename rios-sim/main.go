@@ -136,7 +136,7 @@ type response struct {
 	ViewFields []string `json:"view_fields,omitempty"`
 	//: 同一个函数读 `d` 的 3 个属性名（`position` / `direction` / `talents`）。
 	DeployFields []string `json:"deploy_fields,omitempty"`
-	Error string          `json:"error,omitempty"`
+	Error        string   `json:"error,omitempty"`
 }
 
 type pong struct {
@@ -806,6 +806,8 @@ func handle(req *request, started string) response {
 		var oq struct {
 			Plan   string `json:"plan"`
 			Roster string `json:"roster"`
+			//: `heal_mode`（缺省 `range`）——只影响 `regen_aura.strict` 那一位。
+			HealMode string `json:"heal_mode,omitempty"`
 		}
 		if err := json.Unmarshal(req.Spec, &oq); err != nil {
 			return response{ID: req.ID, OK: false,
@@ -814,7 +816,7 @@ func handle(req *request, started string) response {
 		if oq.Plan == "" {
 			return response{ID: req.ID, OK: false, Error: "operators 少了 plan 路径"}
 		}
-		bundle, err := BuildOperatorsFor(oq.Plan, oq.Roster)
+		bundle, err := BuildOperatorsFor(oq.Plan, oq.Roster, oq.HealMode)
 		if err != nil {
 			return response{ID: req.ID, OK: false, Error: err.Error()}
 		}

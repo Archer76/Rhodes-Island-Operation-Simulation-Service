@@ -13,7 +13,7 @@
 
 | 尺子 | 量什么 | 红了说明什么 |
 |---|---|---|
-| 生产规格 `operators[i]` | Go 的 25 个键 | **实现错** |
+| 生产规格 `operators[i]` | Go 产出的那些键（32） | **实现错** |
 | 本脚本从**活对象**现取的读数（`op.current_atk()` 等，自己写一遍表达式） | 同一批 25 个键 | **尺子错**（`_operator_spec` 读的属性里有两个说法） |
 
 两条各自独立判定、各自报。这样「红」能归因到实现还是归因到判据
@@ -81,8 +81,8 @@ GO_BIN = os.environ.get(
 DATA = ROOT / "data" / "gamedata"
 ROSTER_FIX = ROOT / "fixtures" / "roster_max_modelled.json"
 
-#: 段 A：Go 这一轮**产出**的 25 个键（13 无条件 ＋ 12 条件）。
-#: ★ 25 不是 26：段 A 25 ＋ 段 B 10 ＝ **35** ＝ `wire.go::OperatorSpec` 的 json 键数，
+#: Go **产出**的 32 个键（13 无条件 ＋ 12 条件 ＋ 7 天赋派生）。
+#: ★ 32 ＋ 3 ＝ **35** ＝ `wire.go::OperatorSpec` 的 json 键数，
 #: §7 每次运行现数这三者并断言相等（不写死「35」这几个字）。
 PORTED = (
     "char_id", "name", "cell", "max_hp", "atk", "def", "res", "interval",
@@ -92,20 +92,18 @@ PORTED = (
     "highland_splash_scale", "highland_splash_sluggish",
     "combo_hits", "combo_hit_scale", "combo_damage_scale",
     "power_attack_count", "power_attack_scale",
+    #: ---- 天赋派生（段 B 第一批）：九个 finder ＋ `TextDerived.Heals` ----
+    "heals", "blessing_save", "blessing_self_freeze", "regen_aura",
+    "team_auras", "talent_dodge_phys", "talent_dodge_arts",
 )
 
-#: 段 B：具名不产出的 10 个键。与 `rios-sim/operators.go::OperatorUnported` 是
-#: 同一份清单的两面。
-UNPORTED = (
-    "skill", "active", "heals",
-    "blessing_save", "blessing_self_freeze", "shield",
-    "regen_aura", "team_auras",
-    "talent_dodge_phys", "talent_dodge_arts",
-)
+#: 仍**不产出**的 3 个键。与 `rios-sim/operators.go::OperatorUnported` 同源。
+UNPORTED = ("skill", "active", "shield")
 
-#: unported 里**其实已经能搬**的那些 → 为什么。守卫拿它去要一次**量测**（§6），
-#: 免得这种条目被读成「Go 还做不到」，变成没人敢动的黑洞。
-UNPORTED_READY = {"heals": "TextDerived.Heals（特性正文含「恢复友方单位生命」）"}
+#: `unported` 里**其实已经能搬**的那些 → 为什么。★ 现已**清空**：
+#: `heals` 这一批已经产出（`TextDerived.Heals`），所以这份表必须为空——
+#: 一旦谁再往 `unported` 里塞一条其实能搬的，§6 会红。
+UNPORTED_READY: dict = {}
 
 #: 两条现算的结构性守卫。值是「这条守卫答的是什么」。
 STRUCTURAL_ZERO = {
@@ -120,13 +118,23 @@ COVERED_KEYS = (
     "splash_radius_nonzero", "highland_splash_scale_nonzero",
     "highland_splash_sluggish_nonzero",
     "combo_hits_gt1", "power_attack_count_gt0",
+    #: ---- 段 B 第一批（天赋派生）----
+    "heals_true", "blessing_nonzero", "regen_aura_nonzero",
+    "team_auras_nonzero", "talent_dodge_nonzero",
+    "regen_strict_true", "regen_strict_false",
 )
 
 MUT_ATK = "atk 加 1 ulp"
 MUT_SPLASH = "splash_damage_scale 加 1 ulp"
 MUT_CELL = "cell 的 x+1"
 MUT_DROP = "删掉一条 operator"
-MUT_KEYS = (MUT_ATK, MUT_SPLASH, MUT_CELL, MUT_DROP)
+#: ---- 段 B 第一批新增的四条（各自落在**不同的键**上，不挤在一条 elif 链里）----
+MUT_HEALS = "翻转 heals"
+MUT_AURA = "team_auras[0].atk_pct 加 1 ulp"
+MUT_REGEN = "regen_aura.hp_per_sec 加 1 ulp"
+MUT_DODGE = "talent_dodge_phys 加 1 ulp"
+MUT_KEYS = (MUT_ATK, MUT_SPLASH, MUT_CELL, MUT_DROP,
+            MUT_HEALS, MUT_AURA, MUT_REGEN, MUT_DODGE)
 
 MIN_INTERVAL = 0.05
 ASPD_MIN = 20.0
@@ -332,11 +340,46 @@ def live_expect(op, d, prov) -> dict:
         out["power_attack_count"] = power
         out["power_attack_scale"] = float(
             getattr(op, "power_attack_scale", 1.0) or 1.0)
+    #: ---- 天赋派生（段 B 第一批）----
+    #: ★ 用**生产者本人**（`frontend/talent_finders` 的九个 finder），
+    #: 不在这里另写一遍判据——那正是这条判据存在的意义。
+    from ak_tactic.frontend import talent_finders as _tf
+    from ak_tactic.simgo.spec import (_shield_of, _talent_dodge,
+                                      _team_auras_of)
+    _ = _shield_of  #: `shield` 仍在 unported，不在这里比
+    if getattr(op, "heals", False):
+        out["heals"] = True
+    bless = _tf.find_blessing(getattr(d, "talents", None) or [])
+    bsave = float(bless.value("c2e_freeze", 0.0) or 0.0) if bless else 0.0
+    if bsave > 0.0:
+        out["blessing_save"] = bsave
+        out["blessing_self_freeze"] = float(
+            (bless.value("freeze", 0.0) or 0.0) if bless else 0.0)
+    phys, arts = _talent_dodge(op, d)
+    if phys or arts:
+        out["talent_dodge_phys"] = phys
+        out["talent_dodge_arts"] = arts
+    regen = _tf.find_regen(getattr(d, "talents", None) or [])
+    if regen is not None:
+        mon = _tf.find_medic_monument(getattr(d, "talents", None) or [])
+        out["regen_aura"] = {
+            "hp_per_sec": float(regen.value("hp_recovery_per_sec", 0.0) or 0.0),
+            "duration": float(regen.value("buff_duration", 0.0) or 0.0),
+            "nation": (_tf.RHODES_NATION if mon is not None else ""),
+            "nation_mult": (float(mon.value("rhodes_bonus", 1.0) or 1.0)
+                            if mon is not None else 1.0),
+            "strict": False,   #: 生产路径恒 `heal_mode=range`
+        }
+    auras = _team_auras_of(d, op)
+    if auras:
+        out["team_auras"] = auras
     return out
 
 
-def live_counters(op, prov, code_ok: bool, origin_added: bool) -> dict:
+def live_counters(op, d, prov, code_ok: bool, origin_added: bool) -> dict:
     """判据这一侧**独立**数一遍 `covered` 那些分支（不看 Go 的读数）。"""
+    from ak_tactic.frontend import talent_finders as _tf
+    tal = getattr(d, "talents", None) or []
     c = {k: 0 for k in COVERED_KEYS}
     c["range_code_in_table" if code_ok else "range_code_missing"] = 1
     if origin_added:
@@ -355,6 +398,26 @@ def live_counters(op, prov, code_ok: bool, origin_added: bool) -> dict:
         c["combo_hits_gt1"] = 1
     if int(getattr(op, "power_attack_count", 0) or 0) > 0:
         c["power_attack_count_gt0"] = 1
+    #: ---- 段 B 第一批（天赋派生）：判据独立数一遍同样的分支 ----
+    if getattr(op, "heals", False):
+        c["heals_true"] = 1
+    bless = _tf.find_blessing(tal)
+    if bless is not None and float(bless.value("c2e_freeze", 0.0) or 0.0) > 0.0:
+        c["blessing_nonzero"] = 1
+    blk = _tf.find_damage_block(tal)
+    if blk is not None and float(blk.value("prob", 0.0) or 0.0) != 0.0:
+        c["talent_dodge_nonzero"] = 1
+    if _tf.find_regen(tal) is not None:
+        c["regen_aura_nonzero"] = 1
+        c["regen_strict_false"] = 1   #: 生产路径恒 `range`
+    #: ⚠ 这里必须与 Go 同口径：**五个探测器任一命中**都算（`_team_auras_of`
+    #: 里 class / covenant / angel / dispatch 四条各自也能单独产出条目）。
+    #: 只判 `find_team_aura` 会让「Go 多算了」被读成计数不一致。
+    if (_tf.find_team_aura(tal) is not None or _tf.find_class_aura(tal) is not None
+            or _tf.find_ammo_covenant(tal) is not None
+            or _tf.find_angel_blessing(tal) is not None
+            or _tf.find_limit_dispatch(tal) is not None):
+        c["team_auras_nonzero"] = 1
     return c
 
 
@@ -466,7 +529,8 @@ def main() -> int:
 
     # ============================================================ 2/3 · 67 人次主循环
     print()
-    print("§2 Go 的 25 个键 vs 生产规格；§3 生产规格 vs 活对象读数")
+    print("§2 Go 产出的 %d 个键 vs 生产规格；§3 生产规格 vs 活对象读数"
+          % len(PORTED))
     real_fixtures = 0
     for f in sorted((ROOT / "fixtures").glob("*.json")):
         try:
@@ -509,7 +573,7 @@ def main() -> int:
                 origin_added = (0, 0) not in cells
             except Exception:                               # noqa: BLE001
                 code_ok, origin_added = False, False
-            for k, v in live_counters(op, prov, code_ok, origin_added).items():
+            for k, v in live_counters(op, d, prov, code_ok, origin_added).items():
                 live_cov[k] += v
             if op.current_range_id() is not None:
                 struct_zero["range_id_rewritten"] += 1
@@ -539,7 +603,8 @@ def main() -> int:
         resp = go_operators(str(ROOT / "fixtures" / f.name), str(ROSTER_FIX))
         got = resp["operators"]
 
-        # ---- 四处独立变异（各自拒绝已被占用的夹具 ⇒ 四条独立的路）
+        # ---- 八处独立变异（各自拒绝已被占用的夹具 ⇒ 八条独立的路；
+        #      候选面小的先挑，见下面 MUT_DODGE 那一段的说明）
         if guard.want(MUT_ATK) and guard.free(f.name) and got:
             got[0]["atk"] = math.nextafter(float(got[0]["atk"]), math.inf)
             guard.put(MUT_ATK, (f.name, 0))
@@ -556,6 +621,40 @@ def main() -> int:
         if guard.want(MUT_DROP) and guard.free(f.name) and len(got) >= 2:
             got.pop()
             guard.put(MUT_DROP, (f.name, "len"))
+        #: ---- 段 B 第一批的四条：各自落在**不同的键**上，且都先在**行内找**
+        #: 一个真正带这个键的人次（找不到就不注入，`guard.free` 保证不撞夹具）。
+        #:
+        #: ⚠ **顺序有讲究**：`talent_dodge_phys` 全 24 份夹具里只有 **2 人次**
+        #: 带（实测），所以它必须**先挑**——排在最后时那两份夹具早被前面四条
+        #: 占走，`guard.free` 全是 False，它会一次都注入不上（第一版就是这样：
+        #: 「注入=否」，反向守卫直接不成立）。候选面小的先挑。
+        if guard.want(MUT_DODGE) and guard.free(f.name):
+            for i, o in enumerate(got):
+                if o.get("talent_dodge_phys"):
+                    o["talent_dodge_phys"] = math.nextafter(
+                        float(o["talent_dodge_phys"]), math.inf)
+                    guard.put(MUT_DODGE, (f.name, i))
+                    break
+        if guard.want(MUT_HEALS) and guard.free(f.name):
+            for i, o in enumerate(got):
+                if o.get("heals"):
+                    o["heals"] = False
+                    guard.put(MUT_HEALS, (f.name, i))
+                    break
+        if guard.want(MUT_AURA) and guard.free(f.name):
+            for i, o in enumerate(got):
+                if o.get("team_auras"):
+                    o["team_auras"][0]["atk_pct"] = math.nextafter(
+                        float(o["team_auras"][0]["atk_pct"]), math.inf)
+                    guard.put(MUT_AURA, (f.name, i))
+                    break
+        if guard.want(MUT_REGEN) and guard.free(f.name):
+            for i, o in enumerate(got):
+                if o.get("regen_aura"):
+                    o["regen_aura"]["hp_per_sec"] = math.nextafter(
+                        float(o["regen_aura"]["hp_per_sec"]), math.inf)
+                    guard.put(MUT_REGEN, (f.name, i))
+                    break
 
         # ---- §2 实现 vs 权威
         if len(got) != len(want_ops):
@@ -597,6 +696,14 @@ def main() -> int:
                            g_same or k != "splash_damage_scale")
                 guard.note(MUT_CELL, (f.name, i),
                            g_same or k != "cell")
+                guard.note(MUT_HEALS, (f.name, i),
+                           g_same or k != "heals")
+                guard.note(MUT_AURA, (f.name, i),
+                           g_same or k != "team_auras")
+                guard.note(MUT_REGEN, (f.name, i),
+                           g_same or k != "regen_aura")
+                guard.note(MUT_DODGE, (f.name, i),
+                           g_same or k != "talent_dodge_phys")
                 if g_same:
                     continue
                 slot_bad = True
@@ -776,7 +883,8 @@ def main() -> int:
         if miss:
             print("反向守卫：不成立 ✗（没做到「注入过并且判红」：%s）" % "、".join(miss))
             return 1
-        print("反向守卫：四处独立变异各判红 —— 成立 ✓（分母 %d 人次）" % n_compared)
+        print("反向守卫：%d 处独立变异各判红 —— 成立 ✓（分母 %d 人次）"
+              % (len(MUT_KEYS), n_compared))
         return 0
     if n_compared == 0 or not real_fixtures:
         print("结论：一个人次都没比到 —— 判红（不是实现错，是判据自己瞎）")
