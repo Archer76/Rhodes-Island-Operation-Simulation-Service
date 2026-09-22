@@ -128,6 +128,42 @@ python tools\closeout_selfsufficiency.py
 19 个顶层键已落 14。剩下 5 个**各自都压着一层不在 Go 的机制**——不是「再写 100 行」那种距离。
 这一节存在的意义：让下一轮不照着「看起来快」的顺序挑，而照着**真的能做完**的顺序挑。
 
+### ★ 四轮测量的结论（重设目标后）：这一节的三处估计都要下调
+
+重设目标后的头四轮**一行代码没写，只做测量**——因为前一个目标里「排序依据是估计
+不是读数」赔掉过三整轮。量出来的结果，推翻了我自己写在这一节里的三处判断：
+
+| 原先写的 | 实测 |
+|---|---|
+| 技能效果层「要技能白名单与 `SkillEffects` 组装」（当成远） | **≈480 行**：`SkillBook._parse_level` 190 ＋ `SkillLevel` 15 方法/114 ＋ `SkillEffects` 13 方法/171 ＋ `OperatorSkill` 24。入口也不是 `effects_of`（`simgo/skills.py:83`，仅 23 行的薄编排），而是 `SkillBook`。**输入侧一半已在 Go**（`effects.go` 的黑板解析、`skillmeta.go` 的状态机参数）。 |
+| 机制层「远」 | 缺的只有**规格生成侧** `simgo/mech.py` **537 行**（`_pile_device_spec` 114、`farmland_spec` 79、`names_for` 15…）；**运行期 Go 早就有了一大块**——`rios-sim/mech/` ≈170 KB（`mech.go` 34 KB、`huai_shu_li.go` 57 KB、`snow.go` 35 KB、`chain.go` 6 KB）。 |
+| 规格构造「要一个能起 `sim` 的 harness」 | **这个障碍不存在。** `spec.py` 用到的 `inp.<attr>` **一共 13 种**，`mech.py` 不额外加任何。 |
+
+```
+stage ×15      range_provider ×2     environment_difficulty
+snow_fields    devices               deployments
+goal_cells     enemy_at              species_provider
+fps            speed_scale           ranged_enemies     enemy_windup
+```
+
+其中 **10 个 Go 已有**（`stageenv.go`、排程、`cells.go`、`enemy.go`、`range.go`）。
+剩下三个：`snow_fields` **恒空**（`inputs.py:300` 明写「不许改成『现在有几片』」）、
+`species_provider` = `lib.species_of`（**enemydb 查表，不在 gamedata 里**）、
+`devices` = `frontend/devices.py` **419 行**。
+
+⇒ **剩余工作全景（约 1600 行，全部可指名、各有 Go 侧对照物）**：
+
+| 要搬的 | 行数 | Go 侧 |
+|---|---|---|
+| `Route.legs` | 67 | `ground_path` 已落 |
+| 技能效果组装 | ≈480 | 黑板解析、状态机参数 |
+| 机制·规格侧 `mech.py` | 537 | 运行期 ≈170 KB |
+| 装置层 `devices.py` | 419 | 部分在 `wire.go` |
+| 三个小 provider | <100 | 两个已有 |
+
+**这不是「76 KB 的墙」。** 前一个目标把它当成墙，是这段工作里最贵的一次误判——
+它直接决定了后面许多轮的排序。
+
 | 键 | 真实前置 | 距离 |
 |---|---|---|
 | **路线生产侧**（`eta.py` 的 `route_plans` ＋ `leading_wait` ＋ `polyline_length` ＋ `_walk_visits`，以及 `route.legs(…)` 与 `map.ground_path(…)` 的来处） | **它是 `spawns` 与 `unsupported` 的共同阻点**——不是某个键各自的坑 | **真正的下一步** |
