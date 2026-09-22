@@ -50,6 +50,65 @@ VALUE_KEYS = ("stage", "fps", "max_time", "life", "cost_init", "cost_max",
               "cost_time", "enemy_windup", "ranged_enemies", "speed_scale",
               "highland_cells", "goal_cells")
 
+#: 两张格表在原版是**有条件的**（积雪机制／`highland_splash_scale`），Go 无条件
+#: 产出 ⇒ 对**真规格**时只比其余 10 个键，两张格表另记一行。
+REAL_KEYS = tuple(k for k in VALUE_KEYS if not k.endswith("cells"))
+
+FIXDIR = ROOT / "fixtures"
+ROSTER_FIX = FIXDIR / "roster_max_modelled.json"
+
+
+class _Captured(Exception):
+    """哨兵：规格抄到了就停，不必把那一局跑完。"""
+
+
+def real_specs():
+    """用**生产路径**产规格：`SpecCapture` 的钩子里抄完就抛，不跑判决。
+
+    ⚠ `SpecCapture`（`tools/golden_go.py:94`）本身会把那一局交给 Go 跑完，
+    对判据来说太慢；这里只借它的钩子点——`_run_other_engine` 正是
+    「排好程、还没跑」那一刻，`build_spec` 就在那一行被调用。
+    """
+    sys.path.insert(0, str(ROOT / "tools"))
+    import golden_go as G
+    from ak_tactic.frontend.inputs import SpecInputs
+    from ak_tactic.plan import Plan, Roster
+    from ak_tactic.simgo.spec import build_spec
+
+    class CaptureOnly(G.SpecCapture):
+        def _run_other_engine(self, **kw):
+            try:
+                self.spec = build_spec(SpecInputs.from_sim(kw["sim"]),
+                                       allow_devices=True)
+            except Exception as e:                          # noqa: BLE001
+                self.spec_error = "%s: %s" % (type(e).__name__, e)
+            raise _Captured()
+
+    roster = Roster.from_json(ROSTER_FIX)
+    out = []
+    for f in sorted(FIXDIR.glob("*.json")):
+        try:
+            raw = json.loads(f.read_text(encoding="utf-8-sig"))
+        except Exception:                                   # noqa: BLE001
+            continue
+        if not isinstance(raw, dict) or ("deploys" not in raw
+                                         and "deploy" not in raw):
+            continue
+        v = CaptureOnly()
+        try:
+            v.run(Plan.from_dict(raw), roster=roster)
+        except _Captured:
+            pass
+        except Exception as e:                              # noqa: BLE001
+            out.append((f.name, None, "%s: %s" % (type(e).__name__, e), None))
+            continue
+        #: ⚠ 第三个返回值必须是**计划里的关卡 id**，不是规格里的 `stage`：
+        #: 规格的 `stage` 是**显示代号**（`HS-EX-8`），而 `#f#` 那道四星档只住在
+        #: id（`act31side_ex08#f#`）上。拿代号去查关卡会落到普通档，
+        #: 症状是 `life` 得 3 而生产规格是 1——**判据自己把难度弄丢了**。
+        out.append((f.name, v.spec, v.spec_error, str(raw.get("stage") or "")))
+    return out
+
 
 def build_spec_keys() -> list[str]:
     """从源文件里抽 `build_spec` 返回字面量的键——**不手抄**。"""
@@ -65,12 +124,14 @@ def build_spec_keys() -> list[str]:
     return [k.value for k in best.keys if isinstance(k, ast.Constant)]
 
 
-def go_specgo(level: str, difficulty: str = "NORMAL") -> tuple[bool, object]:
+def go_specgo(level: str, difficulty: str = "") -> tuple[bool, object]:
     env = dict(os.environ)
     env["RIOS_DATA"] = str(DATA)
-    req = json.dumps({"id": 1, "cmd": "specgo", "level": level,
-                      "spec": {"difficulty": difficulty}}) + "\n"
-    p = subprocess.run([GO_BIN], input=req.encode("utf-8"),
+    #: 难度传空 = 让 Go 走它与原版同一句兜底（关卡自己的档 → NORMAL）。
+    req = {"id": 1, "cmd": "specgo", "level": level}
+    if difficulty:
+        req["spec"] = {"difficulty": difficulty}
+    p = subprocess.run([GO_BIN], input=(json.dumps(req) + "\n").encode("utf-8"),
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     if p.returncode != 0:
         raise SystemExit("Go rc=%d：%s" % (p.returncode,
@@ -117,7 +178,10 @@ def main() -> int:
             continue
         compared += 1
         inp = types.SimpleNamespace(stage=st)
-        want = dict(stage_env(st, environment_difficulty="NORMAL"))
+        #: 期望值同样走原版那句兜底（`spec.py:1209-1212`），不是写死 NORMAL
+        #: ——写死会让四星档关卡两边一起错。
+        diff = str(getattr(st, "difficulty", "") or "NORMAL")
+        want = dict(stage_env(st, environment_difficulty=diff))
         want["stage"] = str(getattr(st, "code", "") or "")
         want["max_time"] = DEFAULT_MAX_TIME
         want["goal_cells"] = [[x, y] for x, y in sorted(_find_goals(inp))]
@@ -165,9 +229,46 @@ def main() -> int:
             bad += 1
             print("✗ gated_keys 变了：%r" % got["gated_keys"])
 
+    #: ---- 第二部分：拿**生产规格**当期望值（夹具全量）----
+    real_bad_before = bad
+    real_cmp = 0
+    real_err = 0
+    for name, spec, err, lv_id in real_specs():
+        if spec is None:
+            real_err += 1
+            print("· 夹具 %s —— 生产路径没抄到规格：%s" % (name, err))
+            continue
+        level = lv_id or str(spec.get("stage") or "")
+        ok, got = go_specgo(level)
+        if not ok:
+            bad += 1
+            print("✗ 夹具 %s（关卡 %s）—— Go 拒了：%s" % (name, level, got))
+            continue
+        real_cmp += 1
+        for k in REAL_KEYS:
+            if k not in spec:
+                continue
+            a, b = got[k], spec[k]
+            if k == "stage":
+                same = (a == b)
+            elif k in ("fps", "life"):
+                same = int(a) == int(b)
+            elif isinstance(b, bool):
+                same = bool(a) == b
+            else:
+                same = abs(float(a) - float(b)) < 1e-9
+            if same:
+                seen["真规格 " + k] = seen.get("真规格 " + k, 0) + 1
+            else:
+                bad += 1
+                print("✗ 夹具 %s %s：Go=%r 生产规格=%r" % (name, k, a, b))
+    seen["夹具 × 真规格"] = real_cmp
+
     print()
     print("已比：部分规格骨架；%d 关（缓存可达）× %d 个值键 ＋ 键集账"
           % (compared, len(VALUE_KEYS)))
+    print("      另：%d 份夹具 × **生产规格**的 %d 个非门控键"
+          % (real_cmp, len(REAL_KEYS)))
     print("★ 行使计数：")
     for k, n in sorted(seen.items()):
         print("    %-20s %d" % (k, n))

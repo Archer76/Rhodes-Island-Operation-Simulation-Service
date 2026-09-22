@@ -64,7 +64,7 @@ python tools\closeout_selfsufficiency.py
 | 练度 `check_loadout_go.py` | 全部 24 份夹具 × 真名册 ＋ 12 例合成 | 33 例逐字段一致 ＋ 3 例两边都拒 |
 | 关卡静态 `check_stageenv_go.py` | 缓存可达的 55 关 × 2 档难度 ＋ 8 例合成 | 126 例逐字段一致 |
 | 格表 `check_cells_go.py` | 缓存可达的 55 关 | 55 / 55 关两张格表逐格一致 |
-| 部分规格 `check_specgo_go.py` | 55 关 × 12 个值键 ＋ **键集账（ast 抽 19 键）** | 55 关逐项一致 ＋ 键集对账成立 |
+| 部分规格 `check_specgo_go.py` | 55 关 × 12 个值键 ＋ 键集账（ast 抽 19 键）＋ **24 份夹具 × 生产规格 10 键** | 全部一致 |
 
 ---
 

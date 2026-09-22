@@ -80,12 +80,22 @@ type SpecPart struct {
 // ⚠ 不能写死 600：`BattleSimulator.run` 的 600 只是默认值，写死会让
 // 「打到 814 秒才赢」的作业在 Go 侧被截断，判决从胜利变成超时。
 func BuildSpecPart(level, difficulty string, maxTime float64) (SpecPart, error) {
-	if difficulty == "" {
-		difficulty = "NORMAL"
-	}
 	st, err := LoadStage(level)
 	if err != nil {
 		return SpecPart{}, err
+	}
+	//: ⚠ 难度的兜底**不是我编的**，是原版 `spec.py:1209-1212` 那一句：
+	//: `inp.environment_difficulty or stage.difficulty or "NORMAL"`。
+	//: 写成恒 NORMAL 会让**四星档关卡**（关卡索引里 `difficulty` 非 NORMAL 的
+	//: 那些，如 `hsex08f`）丢掉 `global_lifepoint` 的生命点改写——
+	//: 实测：`life` 得 3，生产规格是 1。
+	//: 是「拿生产规格当期望值」那条判据把它抓出来的：我自己拼的期望值也假设了
+	//: NORMAL，于是两边一起错、上一轮判据**还绿着**。
+	if difficulty == "" {
+		difficulty = st.Difficulty
+	}
+	if difficulty == "" {
+		difficulty = "NORMAL"
 	}
 	env := StageEnv(st.Options, st.Runes, difficulty)
 	if maxTime == 0 {
