@@ -14,6 +14,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -112,12 +114,32 @@ def main() -> int:
     #: （没有反向守卫的绿是零信息量的绿）。
     selfcheck = "--selfcheck" in sys.argv
     guards: list[tuple[str, int]] = []
+    #: ★ **仪器只解析一次，显式下传给每一套判据**（2026-09-23 修）。
+    #:
+    #: 为什么必须这么做：各判据的默认路径**不统一**——`check_stage_go.py` 默认
+    #: `rios-sim-stage1.exe`、`check_enemy_go.py` 默认 `rios-sim-stage2.exe`，其余
+    #: 默认 `rios-sim-stage3.exe`。而 `subprocess.run` 不传 `env` 时继承父环境，
+    #: 于是「父环境没设 `RIOS_SIM_BIN`」＝那两套量的是**几天前的二进制**，还照样
+    #: 印 ✓。实测：那样跑「关卡」全绿，而换成当天的 exe 后 **55/55 关全红**
+    #: （失配键 `stage.runes`）——一道假绿盖住了一处真红，而且它骗过了两次
+    #: 「全绿」结论。所以这里解析一次、下传，并把仪器身份印在表头。
+    #:
+    #: ⚠ 找不到仪器就**大声失败**，不退回任何默认（本仓在「默认路径最危险」上
+    #: 栽过不止一次：`e7be3da5`、`5e8ca0db`）。
+    exe = os.environ.get("RIOS_SIM_BIN") or str(
+        ROOT / "out" / "acceptance" / "rios-sim-stage3.exe")
+    if not Path(exe).is_file():
+        raise SystemExit("找不到仪器 %s —— 默认路径必须大声失败" % exe)
+    child_env = {**os.environ, "RIOS_SIM_BIN": exe}
+    instr = hashlib.sha256(Path(exe).read_bytes()).hexdigest()[:16]
+    print("仪器：%s" % exe)
+    print("     sha256(16)=%s（每一套判据都用这一枚）" % instr)
     print("取证范围：缓存可达的关卡 %d 个（喂给需要清单的那两套判据）" % len(lvls))
     for name, script, what, wants_levels in SUITE:
         cmd = [PY, "-X", "utf8", str(ROOT / script)]
         if wants_levels:
             cmd += lvls
-        p = subprocess.run(cmd, cwd=str(ROOT), capture_output=True)
+        p = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, env=child_env)
         out = p.stdout.decode("utf-8", "replace")
         #: 从各自输出里抠出「结论：」那一行；抠不到就明说抠不到（不当成通过）。
         verdict = ""
@@ -130,7 +152,7 @@ def main() -> int:
             if wants_levels:
                 #: 守卫只需一个样本就够证明「红得起来」，喂全量太慢。
                 gc += lvls[:1]
-            gp = subprocess.run(gc, cwd=str(ROOT), capture_output=True)
+            gp = subprocess.run(gc, cwd=str(ROOT), capture_output=True, env=child_env)
             #: 约定：`--mutate` 下 **rc=0 = 守卫成立**（真的判红了）。
             guards.append((name, gp.returncode))
 

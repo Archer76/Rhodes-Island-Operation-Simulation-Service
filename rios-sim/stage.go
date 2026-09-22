@@ -124,7 +124,15 @@ type Stage struct {
 	Spawns      []EnemySpawn            `json:"spawns"`
 	Options     StageOptions            `json:"options"`
 	//: 关卡 rune（`runes` 数组）。构建规格的静态 8 项要用它，见 `stageenv.go`。
-	Runes []Rune `json:"runes"`
+	//:
+	//: ⚠ 标签是 `json:"-"`：这个字段**只在 Go 内部用**，不许出门。原版
+	//: `load_stage` 的处理结果里**没有** `runes` 这个键（它住在 `st.raw` 里），
+	//: 所以带上键名会让 `load` 应答多送一个键——`tools/check_stage_go.py` 的
+	//: 键集比对会判红（实测 55/55 关）。
+	//:
+	//: 去掉键名**不影响读入**：加载器是**手工构造** `Stage` 的（`runes` 走
+	//: `parseRunes(raw["runes"])`，见本文件 `Load` 那一段），不经过结构体反序列化。
+	Runes []Rune `json:"-"`
 }
 
 // EnemyRef 是 `enemyDbRefs` 的一条：这一关引用了哪个敌人、用哪一档。

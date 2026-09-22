@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 GO_BIN = os.environ.get(
-    "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage1.exe"))
+    "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
 DATA = ROOT / "data" / "gamedata"
 
 
