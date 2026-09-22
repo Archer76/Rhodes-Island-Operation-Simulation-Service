@@ -1,6 +1,10 @@
 package main
 
-import "strings"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
 
 // costbonus.go：初始部署费用天赋（丙阶段四·第二十批）。
 //
@@ -35,4 +39,42 @@ func SquadCostBonus(boards []map[string]float64) float64 {
 		}
 	}
 	return total
+}
+
+// TalentCostBonus 从**真实天赋表**算出这名干员的数额。
+//
+// 这一步才是排程真正要用的：原版是
+// `squad_cost_bonus(self.talents.for_operator(char_id, elite, level, potential))`
+// （`verify.py:398-405`），即先按 (精英, 等级, 潜能) 解出候选天赋、再判签。
+//
+// ⚠ 非数值的键**也要参与判签**（原版判的是键列表），所以它们用 0 占位——
+// 只有 `cost` 的**值**会被读走，别的键只要有名字就够。
+func TalentCostBonus(charID string, elite, level, potential int) (float64, error) {
+	tbl, err := loadCharTable()
+	if err != nil {
+		return 0, err
+	}
+	raw, ok := tbl[charID]
+	if !ok || string(raw) == "null" {
+		return 0, fmt.Errorf("character_table 里没有 %q", charID)
+	}
+	var char struct {
+		Talents []json.RawMessage `json:"talents"`
+	}
+	if err := json.Unmarshal(raw, &char); err != nil {
+		return 0, fmt.Errorf("%s 的天赋解析失败：%w", charID, err)
+	}
+	boards := []map[string]float64{}
+	for _, t := range resolveTalents(char.Talents, elite, level, potential) {
+		bb := map[string]float64{}
+		for k, v := range t.Blackboard {
+			if f, ok := toFloat(v); ok {
+				bb[k] = f
+			} else {
+				bb[k] = 0
+			}
+		}
+		boards = append(boards, bb)
+	}
+	return SquadCostBonus(boards), nil
 }

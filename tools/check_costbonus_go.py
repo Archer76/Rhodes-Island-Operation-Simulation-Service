@@ -82,8 +82,52 @@ def go_costbonus(queries: list[dict]) -> list[float]:
     return resp["cost_bonus"]
 
 
+def find_cost_talent_chars(limit: int) -> list[str]:
+    """从全表里捞出**真有**「单键 cost」天赋的干员。
+
+    ⚠ 为什么要捞：名册夹具那 20 位里一个都没有（实测非零 0 例），
+    只拿名册当网格等于**只验了「返回 0」那一条支**——那是一片零信息量的绿。
+    """
+    blob = json.loads((DATA / "raw.githubusercontent.com" / "excel" /
+                       "character_table.json").read_text(encoding="utf-8"))
+    out: list[str] = []
+    for cid, c in blob.items():
+        if not cid.startswith("char_"):
+            continue
+        hit = False
+        for t in c.get("talents") or []:
+            for cand in t.get("candidates") or []:
+                keys = [b.get("key") for b in (cand.get("blackboard") or [])]
+                sig = [k for k in keys if k and not k.startswith("$")]
+                if sig == ["cost"]:
+                    hit = True
+        if hit:
+            out.append(cid)
+            if len(out) >= limit:
+                break
+    return out
+
+
+def go_talentbonus(cfgs: list[dict]) -> list[float]:
+    env = dict(os.environ)
+    env["RIOS_DATA"] = str(DATA)
+    req = json.dumps({"id": 1, "cmd": "talentbonus", "spec": cfgs}) + "\n"
+    p = subprocess.run([GO_BIN], input=req.encode("utf-8"),
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    if p.returncode != 0:
+        raise SystemExit("Go rc=%d：%s" % (p.returncode,
+                                           p.stderr.decode("utf-8", "replace")[:400]))
+    line = p.stdout.decode("utf-8", "replace").strip().splitlines()
+    resp = json.loads(line[0]) if line else {}
+    if not resp.get("ok"):
+        raise SystemExit("Go 回 error：%s" % resp.get("error"))
+    return resp["talent_bonus"]
+
+
 def main() -> int:
     from ak_tactic.battle.talents import squad_cost_bonus
+    from ak_tactic.operator import TalentBook
+    from ak_tactic.plan import Roster
 
     #: 一份入参 = 一次求解：全队的天赋黑板。用叉乘把「命中/不命中/混杂」全走一遍。
     picks = [(), (1,), (5,), (7,), (0, 2), (1, 2), (5, 5), (7, 7), (1, 7), (2, 3, 5)]
@@ -115,6 +159,49 @@ def main() -> int:
     print("★ 行使计数：%s"
           % ", ".join("%s=%d" % (k, v) for k, v in sorted(seen.items())))
     unchecked = [k for k, v in seen.items() if v == 0]
+    #: ---- 第二部分：从**真实天赋表**算（这才是排程要用的那一步）----
+    tb = TalentBook()
+    ros = Roster.from_json(ROOT / "fixtures" / "roster_max_modelled.json")
+    cfgs, wants = [], []
+    for _name, e in ros.entries.items():
+        for pot in (1, 3, 6):
+            cfgs.append({"char_id": e["char_id"], "elite": e["elite"],
+                         "level": e["level"], "potential": pot})
+            wants.append(squad_cost_bonus(tb.for_operator(
+                e["char_id"], elite=e["elite"], level=e["level"],
+                potential=pot)))
+    #: ⚠ 名册那 20 位里一个带这条天赋的都没有（实测非零 0 例）⇒ 只验到了
+    #: 「返回 0」那一条支。这里从**全表**捞真有这条天赋的干员补进网格。
+    picked = find_cost_talent_chars(limit=8)
+    added = 0
+    for cid in picked:
+        for elite, level, pot in ((2, 90, 6), (2, 90, 1), (0, 1, 1), (1, 55, 3)):
+            w = squad_cost_bonus(tb.for_operator(
+                cid, elite=elite, level=level, potential=pot))
+            if w:
+                cfgs.append({"char_id": cid, "elite": elite, "level": level,
+                             "potential": pot})
+                wants.append(w)
+                added += 1
+    print("★ 全表里带「单键 cost」天赋的干员捞到 %d 位，其中 %d 组练度数额非零"
+          % (len(picked), added))
+    real = go_talentbonus(cfgs)
+    if mutate and real:
+        real[0] = real[0] + 1.0
+    nonzero = sum(1 for w in wants if w)
+    for c, g, w in zip(cfgs, real, wants):
+        if abs(g - w) > 1e-9:
+            bad += 1
+            if bad <= 8:
+                print("✗ 真实天赋 %s（精英%d/等级%d/潜能%d）—— Go=%r Python=%r"
+                      % (c["char_id"], c["elite"], c["level"], c["potential"],
+                         g, w))
+        else:
+            seen["真实天赋逐人一致"] = seen.get("真实天赋逐人一致", 0) + 1
+    seen["真实天赋非零"] = nonzero
+    print()
+    print("已比（第二部分）：%d 位干员 × 3 档潜能，对拍 TalentBook.for_operator"
+          "（其中 %d 例数额非零）" % (len(cfgs), nonzero))
     print()
     if mutate:
         if bad:

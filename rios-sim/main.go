@@ -100,6 +100,8 @@ type response struct {
 	CostBonus json.RawMessage `json:"cost_bonus,omitempty"`
 	//: `costof` 的应答：各自练度下的部署费用（见 `deploycost.go`）。
 	CostOf json.RawMessage `json:"cost_of,omitempty"`
+	//: `talentbonus` 的应答：从真实天赋表算的初始部署费用数额（见 `costbonus.go`）。
+	TalentBonus json.RawMessage `json:"talent_bonus,omitempty"`
 	Error string          `json:"error,omitempty"`
 }
 
@@ -574,6 +576,37 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, CostOf: raw}
+	case "talentbonus":
+		// 丙阶段四·第二十二批：从**真实天赋表**算初始部署费用数额（见 `costbonus.go`）。
+		if len(req.Spec) == 0 {
+			return response{ID: req.ID, OK: false,
+				Error: "talentbonus 少了 spec（一批 {char_id,elite,level,potential}）"}
+		}
+		var qs []struct {
+			CharID    string `json:"char_id"`
+			Elite     int    `json:"elite"`
+			Level     int    `json:"level"`
+			Potential int    `json:"potential"`
+		}
+		if err := json.Unmarshal(req.Spec, &qs); err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("spec 不是参数数组：%v", err)}
+		}
+		vals := make([]float64, 0, len(qs))
+		for _, q := range qs {
+			n, err := TalentCostBonus(q.CharID, q.Elite, q.Level, q.Potential)
+			if err != nil {
+				return response{ID: req.ID, OK: false,
+					Error: fmt.Sprintf("%s：%v", q.CharID, err)}
+			}
+			vals = append(vals, n)
+		}
+		raw, err := json.Marshal(vals)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, TalentBonus: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。

@@ -71,6 +71,11 @@ COMMAND_OF = {
 #: 数出 14 ≠ 12 的假红。等式本身写错了，不是登记漏了。
 NON_JUDGED = ("ping", "sim")
 
+#: 有判据、但**并进别的套里**判的命令（不单列一行）。
+#: `talentbonus` 是 `费用天赋` 那一套的第二部分：同一个函数、同一份权威，
+#: 拆成两行只会让「一套判据」这个词变模糊。
+EXTRA_JUDGED = ("talentbonus",)
+
 
 def read(p: Path) -> str:
     return p.read_text(encoding="utf-8")
@@ -206,8 +211,10 @@ def main() -> int:
     one("判据套名都有命令映射", len(missing_cmd), 0)
     if missing_cmd:
         print("      没映射到的套：%s" % "、".join(missing_cmd))
-    one("命令面减去有意无判据的两个", len(cmds) - len(NON_JUDGED), len(rows))
-    stray = sorted(set(cmds) - set(COMMAND_OF.values()) - set(NON_JUDGED))
+    one("命令面减去有意无判据的两个", len(cmds) - len(NON_JUDGED) - len(EXTRA_JUDGED),
+        len(rows))
+    stray = sorted(set(cmds) - set(COMMAND_OF.values()) - set(NON_JUDGED)
+                   - set(EXTRA_JUDGED))
     one("既非判据命令也非 ping/sim 的余项", len(stray), 0)
     if stray:
         print("      余项：%s" % "、".join(stray))
