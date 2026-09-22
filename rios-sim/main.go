@@ -511,14 +511,17 @@ func handle(req *request, started string) response {
 		var sq struct {
 			Difficulty string  `json:"difficulty"`
 			MaxTime    float64 `json:"max_time"`
+			Plan       string  `json:"plan"`
+			Roster     string  `json:"roster"`
 		}
 		if len(req.Spec) > 0 {
 			if err := json.Unmarshal(req.Spec, &sq); err != nil {
 				return response{ID: req.ID, OK: false,
-					Error: fmt.Sprintf("spec 不是 {difficulty,max_time}：%v", err)}
+					Error: fmt.Sprintf("spec 不是 {difficulty,max_time,plan,roster}：%v", err)}
 			}
 		}
-		sp, err := BuildSpecPart(req.Level, sq.Difficulty, sq.MaxTime)
+		sp, err := BuildSpecPart(req.Level, sq.Difficulty, sq.MaxTime,
+			sq.Plan, sq.Roster)
 		if err != nil {
 			return response{ID: req.ID, OK: false, Error: err.Error()}
 		}

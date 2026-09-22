@@ -64,6 +64,12 @@ type SpecPart struct {
 	HighlandCells [][2]int `json:"highland_cells"`
 	GoalCells     [][2]int `json:"goal_cells"`
 
+	//: ⚠ `omitempty` 在这里**是语义的一部分**，不是省字节：`deploys` 是
+	//: **有输入才有的键**——没传计划就没有它，于是它在 `missing_keys` 里。
+	//: 去掉了 `omitempty`，没传计划时它会以 `null` 出现，键集账会把它算成
+	//: 「已产出」——那是把「我没造」说成「我造了」。
+	Deploys []SpecDeploy `json:"deploys,omitempty"`
+
 	//: 19 个键里 Go **还造不出**的（判据会拿它跟 `spec.py` 的返回字面量对账）。
 	MissingKeys []string `json:"missing_keys"`
 	//: 产出但原版的门未接的键，见 `gatedKeys`。
@@ -79,7 +85,8 @@ type SpecPart struct {
 // （`verifier.py:93` 与 `verify.py:410`）实际调 `sim.run` 用的值。
 // ⚠ 不能写死 600：`BattleSimulator.run` 的 600 只是默认值，写死会让
 // 「打到 814 秒才赢」的作业在 Go 侧被截断，判决从胜利变成超时。
-func BuildSpecPart(level, difficulty string, maxTime float64) (SpecPart, error) {
+func BuildSpecPart(level, difficulty string, maxTime float64,
+	planPath, rosterPath string) (SpecPart, error) {
 	st, err := LoadStage(level)
 	if err != nil {
 		return SpecPart{}, err
@@ -101,10 +108,21 @@ func BuildSpecPart(level, difficulty string, maxTime float64) (SpecPart, error) 
 	if maxTime == 0 {
 		maxTime = 900.0
 	}
+	//: 传了计划才造 `deploys`——有输入才有的键。
+	var deploys []SpecDeploy
+	if planPath != "" {
+		var derr error
+		if deploys, derr = BuildDeploysFor(planPath, rosterPath); derr != nil {
+			return SpecPart{}, derr
+		}
+	}
 	missing := []string{}
 	produced := map[string]bool{}
 	for _, k := range specKeysProduced {
 		produced[k] = true
+	}
+	if deploys != nil {
+		produced["deploys"] = true
 	}
 	for _, k := range specKeysAll {
 		if !produced[k] {
@@ -126,6 +144,7 @@ func BuildSpecPart(level, difficulty string, maxTime float64) (SpecPart, error) 
 		SpeedScale:    env.SpeedScale,
 		HighlandCells: st.Map.HighlandCells(),
 		GoalCells:     st.Map.GoalCells(),
+		Deploys:       deploys,
 		MissingKeys:   missing,
 		GatedKeys:     gated,
 		Difficulty:    difficulty,
