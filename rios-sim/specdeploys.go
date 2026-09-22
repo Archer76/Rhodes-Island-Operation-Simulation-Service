@@ -83,8 +83,34 @@ func BuildSkillUses(plan PlayPlan) []SpecSkillUse {
 	return out
 }
 
-// BuildDeploys 造 `deploys` 那一串。
-func BuildDeploys(plan PlayPlan, roster RosterRead, stage *Stage) ([]SpecDeploy, error) {
+// DeployRow 是一条**解算完的部署**：练度 ＋ 费用 ＋ 落地时刻 ＋ 计划里的下标。
+//
+// 为什么单独抽出来（第二十四批 `operators` 要用）：`build_spec` 里 `deploys` 与
+// `operators` 是**同一个循环**里的两次 append ——
+//
+//	for d in sorted(sch.deployments, key=lambda d: d.time):
+//	    operators.append(_operator_spec(inp, d))     # 顺序 = 这一串
+//	    deploys.append({...})
+//
+// 所以两个键的**次序口径只能有一份**。各写一遍的症状是「两个键各自看着都合理、
+// 但第 7 位起错开一格」——而配错人的面板在判决上只表现为「某个干员数字不对」。
+type DeployRow struct {
+	//: `plan.Deploys` 里的下标（**排序前**的先后，配对用）。
+	PlanIdx   int
+	Operator  string
+	Position  [2]int
+	Direction string
+	Entry     LoadoutEntry
+	Cost      int
+	//: 落地时刻（费用模型算出来的）。排序键。
+	At        float64
+	AutoSkill bool
+}
+
+// BuildDeployRows 复刻 `verify.py:393-480` 的费用模型，返回**按落地时刻稳定排序**
+// 的行。顺序与 `sorted(sch.deployments, key=lambda d: d.time)` 逐个相同。
+func BuildDeployRows(plan PlayPlan, roster RosterRead,
+	stage *Stage) ([]DeployRow, error) {
 	rate := stage.Options.CostIncreaseTime
 	if rate == 0 {
 		//: 原版在这一支会 `ZeroDivisionError`；Go 的浮点除零静默给 ±Inf，
@@ -92,13 +118,9 @@ func BuildDeploys(plan PlayPlan, roster RosterRead, stage *Stage) ([]SpecDeploy,
 		return nil, fmt.Errorf("关卡的 cost_increase_time 是 0，费用速率无法折算")
 	}
 	budget := stage.Options.InitialCost
-	type row struct {
-		at   float64
-		spec SpecDeploy
-	}
-	rows := make([]row, 0, len(plan.Deploys))
+	rows := make([]DeployRow, 0, len(plan.Deploys))
 	now := 0.0
-	for _, d := range plan.Deploys {
+	for i, d := range plan.Deploys {
 		e, err := ResolveLoadout(d, roster)
 		if err != nil {
 			return nil, err
@@ -141,17 +163,30 @@ func BuildDeploys(plan PlayPlan, roster RosterRead, stage *Stage) ([]SpecDeploy,
 			budget = math.Max(0.0, budget-float64(cost))
 		}
 		now = at
-		rows = append(rows, row{at: at, spec: SpecDeploy{
-			Time: at, CharID: e.CharID, Cost: cost, AutoSkill: d.AutoSkill,
-		}})
+		rows = append(rows, DeployRow{
+			PlanIdx: i, Operator: d.Operator, Position: d.Position,
+			Direction: d.Direction, Entry: e, Cost: cost, At: at,
+			AutoSkill: d.AutoSkill,
+		})
 	}
 	//: 原版 `sorted(sch.deployments, key=lambda d: d.time)`——**稳定**排序，
 	//: 同时刻的两条保持计划里的先后。
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].at < rows[j].at })
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].At < rows[j].At })
+	return rows, nil
+}
+
+// BuildDeploys 造 `deploys` 那一串。
+func BuildDeploys(plan PlayPlan, roster RosterRead, stage *Stage) ([]SpecDeploy, error) {
+	rows, err := BuildDeployRows(plan, roster, stage)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]SpecDeploy, 0, len(rows))
 	for i, r := range rows {
-		r.spec.Index = i
-		out = append(out, r.spec)
+		out = append(out, SpecDeploy{
+			Time: r.At, Index: i, CharID: r.Entry.CharID, Cost: r.Cost,
+			AutoSkill: r.AutoSkill,
+		})
 	}
 	return out, nil
 }

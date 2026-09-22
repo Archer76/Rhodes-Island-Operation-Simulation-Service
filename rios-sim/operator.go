@@ -75,18 +75,22 @@ type OperatorCalcConfig struct {
 // 四份来源分开留着（与 `OperatorStats` 同构），对拍时逐份比——
 // 只比 `total` 会让「base 错、抵消后 total 对」这种情形溜过去。
 type OperatorStats struct {
-	CharID         string             `json:"char_id"`
-	Elite          int                `json:"elite"`
-	Level          int                `json:"level"`
-	Trust          float64            `json:"trust"`
-	Potential      int                `json:"potential"`
-	Module         string             `json:"module"`
-	ModuleLevel    int                `json:"module_level"`
-	Base           map[string]any     `json:"base"`
-	TrustBonus     map[string]any     `json:"trust_bonus"`
-	PotentialBonus map[string]any     `json:"potential_bonus"`
-	ModuleBonus    map[string]any     `json:"module_bonus"`
-	Total          map[string]any     `json:"total"`
+	CharID string `json:"char_id"`
+	//: 干员名（`stats.py:306` 的 `self.name = char.get("name") or char_id`）——
+	//: 规格的 `name` 就是它（`_operator_spec` 的 `op.name or op.char_id`）。
+	//: 与 `char_id` 同源、同一条 fallback，所以住在这里而不是调用方现查一次表。
+	Name           string         `json:"name"`
+	Elite          int            `json:"elite"`
+	Level          int            `json:"level"`
+	Trust          float64        `json:"trust"`
+	Potential      int            `json:"potential"`
+	Module         string         `json:"module"`
+	ModuleLevel    int            `json:"module_level"`
+	Base           map[string]any `json:"base"`
+	TrustBonus     map[string]any `json:"trust_bonus"`
+	PotentialBonus map[string]any `json:"potential_bonus"`
+	ModuleBonus    map[string]any `json:"module_bonus"`
+	Total          map[string]any `json:"total"`
 	//: 攻速加成（天赋常驻 ＋ 模组特性改写，见 `operator_aspd.go`）。
 	//: 匿名嵌入把 `aspd_flat` / `aspd_when_free` / `aspd_high_ground` 平铺出来——
 	//: 与 `verify.py:326` 那三行同名，对拍要同形。
@@ -97,8 +101,8 @@ type OperatorStats struct {
 	PowerAttack
 	//: 特性：生命流失速率 与 特性溅射的几何那一半（`operator_traits.go`）。
 	//: 与 `verify.py:333/334/340` 的字段名同形；「没有这条」一律是 0。
-	SplashRadius  float64 `json:"splash_radius"`
-	SplashScale   float64 `json:"splash_scale"`
+	SplashRadius float64 `json:"splash_radius"`
+	SplashScale  float64 `json:"splash_scale"`
 	//: 天赋「汹涌怒火」叠上去的三项（`traits.py:251-270`）。**「没有这条」分别是
 	//: 1.0 / 0.0 / 0.0**——`damage_scale` 的「没有」是 1.0 不是 0（它是乘数）。
 	SplashDamageScale      float64 `json:"splash_damage_scale"`
@@ -356,15 +360,15 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 		return nil, fmt.Errorf("character_table 里没有 %q", cfg.CharID)
 	}
 	var char struct {
-		Name       string            `json:"name"`
-		Phases     []json.RawMessage `json:"phases"`
-		Favor      []json.RawMessage `json:"favorKeyFrames"`
-		Potentials []json.RawMessage `json:"potentialRanks"`
-		Talents    []json.RawMessage `json:"talents"`
-		Trait      json.RawMessage   `json:"trait"`
-		Description string           `json:"description"`
-		NationID   string            `json:"nationId"`
-		Profession string            `json:"profession"`
+		Name        string            `json:"name"`
+		Phases      []json.RawMessage `json:"phases"`
+		Favor       []json.RawMessage `json:"favorKeyFrames"`
+		Potentials  []json.RawMessage `json:"potentialRanks"`
+		Talents     []json.RawMessage `json:"talents"`
+		Trait       json.RawMessage   `json:"trait"`
+		Description string            `json:"description"`
+		NationID    string            `json:"nationId"`
+		Profession  string            `json:"profession"`
 	}
 	if err := json.Unmarshal(raw, &char); err != nil {
 		return nil, fmt.Errorf("%s 的表项解析失败：%w", cfg.CharID, err)
@@ -391,6 +395,11 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 		Module: cfg.Module, ModuleLevel: cfg.ModuleLevel,
 		TrustBonus: map[string]any{}, PotentialBonus: map[string]any{},
 		ModuleBonus: map[string]any{},
+	}
+	//: `stats.py:306` 的 `char.get("name") or char_id`——空名回落到 id（不是空串）。
+	st.Name = char.Name
+	if st.Name == "" {
+		st.Name = cfg.CharID
 	}
 	st.Base = interpolateKeyframes(parseFrames(ph.KeyFrames),
 		float64(cfg.Level), rounding)

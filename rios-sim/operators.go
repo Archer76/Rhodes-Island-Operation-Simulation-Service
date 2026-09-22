@@ -1,0 +1,596 @@
+package main
+
+// operators.go：规格里 `operators` 那一串——**按部署顺序、每个部署人次一份干员规格**
+// （丙阶段四·第二十四批）。
+//
+// ## 权威
+//
+// 一处拼起来的：
+//
+//	spec.py:1230-1233   operators.append(_operator_spec(inp, d))   ← sorted(sch.deployments, key=time)
+//	spec.py:681-842     _operator_spec                              ← 顶层 13 键 ＋ 22 个条件键
+//
+// 之所以与 `deploys` 共用 `BuildDeployRows`：原版这两个键是**同一个循环里的两次
+// append**，次序只能有一份口径（见 `specdeploys.go::DeployRow`）。
+//
+// ## 本轮落地的是哪 25 个键（段 A）
+//
+//	无条件 13：char_id / name / cell / max_hp / atk / def / res / interval /
+//	           damage_type / block_cnt / deploy_cost / redeploy_time / range
+//	条件 12：  nation_id / profession                                    （取值非空才送）
+//	           splash_radius / splash_scale / splash_damage_scale /
+//	           highland_splash_scale / highland_splash_sluggish          （radius > 0 才送）
+//	           combo_hits / combo_hit_scale / combo_damage_scale         （hits > 1 才送）
+//	           power_attack_count / power_attack_scale                   （count > 0 才送）
+//
+// ★ **是 25 不是 26**：`_operator_spec` 一共产出 **35** 个键（13 ＋ 22），
+// 段 A 25 ＋ 段 B 10 ＝ 35。这一行是现数的，不是抄来的。
+//
+// ## 真正要搬的不是 `inp`，是**活对象**
+//
+// `_operator_spec` 只读三个 `inp.<attr>`（`range_provider` / `heals` / `effect_source`），
+// 而它读 `op.<29 个属性> ＋ d.<3 个>`。那 29 ＋ 3 个名字在这里以常量形式
+// **自报**（`OperatorViewFields` / `OperatorDeployFields`），判据拿 `ast` 从
+// `spec.py` 里抽一遍与它**双向比对**——「我以为的清单」不能当清单用。
+//
+// ## 两条**现算**的结构性守卫（判据里重量，非 0 即红）
+//
+//  1. `op.current_range_id()`：技能改写范围那条。取规格发生在跑之前，
+//     那时 `skill_active` 恒为 False ⇒ 恒 `None` ⇒ 走干员自己的 rangeId。
+//     Go 这一侧**没有**「技能改写范围」这条路；哪天它非空了，这一段就不成立。
+//  2. `op.redeploy_time`：`kw` 里**没有**这个键（`verify.py:314-355` 逐行可查），
+//     所以它恒等于 `OperatorView` 的默认值 **70.0**。Go 送的就是这个常量——
+//     不是 `respawnTime`（面板里那个数**没有**被 `_operator_spec` 读到）。
+//
+// ## 具名缺口（不许静默）
+//
+//  * `normalize_direction` 的**别名表**（`right` / `R` / `右` …）未读——与
+//    `range.go` 同一口径：四个正名以外的朝向**大声失败**。原版那条路会
+//    `except Exception: pass` 悄悄退化成「自身格 ＋ 前方三格」，Go 不照抄那个静默。
+//  * 段 B 的 10 个键**不产出**，具名进 `unported`（见 `OperatorUnported`）。
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"sort"
+)
+
+const (
+	//: `spec.py` 的 `MIN_INTERVAL` / `ASPD_MIN`（与 `operator_view.py:42-43` 同源）。
+	opsMinInterval = 0.05
+	opsAspdMin     = 20.0
+	//: `OperatorView.redeploy_time` 的默认值——`kw` 里没有这个键，所以恒是它。
+	opsRedeployDefault = 70.0
+)
+
+// OperatorUnported 是 `_operator_spec` 会产出、而 Go 这一轮**不产出**的 10 个键。
+//
+// 为什么它们进不了段 A：要 `op.skill.effects`（`skill` / `active`）与五段
+// **天赋派生装配**——`_team_auras_of`(96 行) / `_shield_of`(34) / `_talent_dodge`(28) /
+// `blessing`(21) / `regen_aura`(26)。这五段的共同点是读 `d.talents` 现算，
+// 而 Go 侧的天赋解析目前只覆盖 `operator_traits.go` 那几条。
+//
+// ★ **逐条写清「为什么是它」，其中一条是「其实已经能搬」**——不写清楚，
+// `unported` 会变成一个没人敢动的黑洞：
+//
+//	skill / active      要 `skills.skill_spec(inp, d)`（`skills.py:277-317`）：整段
+//	                    技能效果装配，`op.skill.effects` 那一层 Go 还没有。
+//	heals               ★ **这条其实已经能搬**：判据就是特性正文里含
+//	                    `"恢复友方单位生命"`（**与 Python 同一句、同一数据源**，
+//	                    即 `character_table` 的 `description`），Go 侧现成字段是
+//	                    `TextDerived.Heals`；实测 64 人次里 **9 次**被行使
+//	                    （可逐位判）。本笔**故意不扩范围**，留在这里是为了让
+//	                    「哪天回头接」有落点，不是因为它难。
+//	blessing_save /     要 `frontend/talent_finders.find_blessing` 的两个黑板键
+//	blessing_self_freeze （`c2e_freeze` / `freeze`），且**不能**读运行期属性
+//	                    （`sim.py:3417` 部署那一刻才挂，取规格时是 0）。
+//	shield              要 `_shield_of(d)`：读 `d.talents` 的 `shield_max_layers` /
+//	                    `shield_layers_on_deploy` 取大者，送**比例**不送绝对值。
+//	regen_aura          要 `find_regen` ＋ `find_medic_monument`（两个天赋黑板），
+//	                    `strict` 那一位还跟着 `inp.heal_mode` 走。
+//	team_auras          要 `_team_auras_of(d, op)`（96 行，最长的一段）。
+//	talent_dodge_phys / 要 `_talent_dodge(op, d)`（`find_damage_block`）。
+//	talent_dodge_arts
+//
+// ★ 这一份是**具名的**：判据会把它与 Go 应答里的 `unported` 做**双向集合比对**
+// （像 `check_spawns_go.py` 那样），并每次运行重量一次「Python 那一侧实际送出了
+// 其中几个」——哪天 Go 接上了，这里会先红，而不是等到某次对拍少送一个键。
+var OperatorUnported = []string{
+	"skill", "active", "heals",
+	"blessing_save", "blessing_self_freeze", "shield",
+	"regen_aura", "team_auras",
+	"talent_dodge_phys", "talent_dodge_arts",
+}
+
+// OperatorUnportedReady 是 `unported` 里**其实已经能搬**的那几个——
+// 守卫用：判据会拿它去问 `TextDerived.Heals` 一侧「这个数还在不在」，
+// 免得 `heals` 这种「只因不扩范围而留着」的条目被读成「Go 还做不到」。
+var OperatorUnportedReady = []string{"heals"}
+
+// OperatorViewFields 是 `_operator_spec` 读 `op` 的 **29** 个属性名（含 4 个方法）。
+//
+// 判据用 `ast` 从 `spec.py` 的 `_operator_spec` 里现抽一份（`op.<x>` 与
+// `getattr(op, "<x>", …)` 两种写法），与这里的**双向**比对。
+var OperatorViewFields = []string{
+	"attack_interval", "attack_speed", "attack_type", "block_cnt", "char_id",
+	"combo_damage_scale", "combo_hit_scale", "combo_hits",
+	"current_atk", "current_defense", "current_range_id", "current_res",
+	"deploy_cost", "direction", "elite", "heals",
+	"highland_splash_scale", "highland_splash_sluggish", "max_hp", "name",
+	"nation_id", "position", "power_attack_count", "power_attack_scale",
+	"profession", "redeploy_time", "splash_damage_scale", "splash_radius",
+	"splash_scale",
+}
+
+// OperatorDeployFields 是 `_operator_spec` 读 `d` 的 3 个属性名。
+var OperatorDeployFields = []string{"direction", "position", "talents"}
+
+// OperatorOut 是 `operators[i]` 的一条。
+//
+// ★ 为什么**不**直接用 `wire.go::OperatorSpec`：那个结构体是给模拟器**读**的，
+// 它的条件键靠 `omitempty` 表达「不送」——而 `splash_scale` 这一个是
+// 「送、且值可以是 `0.0`」：`omitempty` 会把它静默吃掉，症状是 Python 有键、
+// Go 没有，而两边的**数值**对得上（判据只看值就抓不到）。
+// 所以这里用**指针**表达存在性，键名与 `OperatorSpec` 逐个相同；
+// 判据比对「Go 实际送出的键集 ∪ unported ＝ `OperatorSpec` 的 35 个键」。
+type OperatorOut struct {
+	CharID string `json:"char_id"`
+	Name   string `json:"name"`
+	Cell   [2]int `json:"cell"`
+
+	MaxHP          float64  `json:"max_hp"`
+	ATK            float64  `json:"atk"`
+	DEF            float64  `json:"def"`
+	RES            float64  `json:"res"`
+	AttackInterval float64  `json:"interval"`
+	DamageType     string   `json:"damage_type"`
+	BlockCnt       int      `json:"block_cnt"`
+	DeployCost     int      `json:"deploy_cost"`
+	RedeployTime   float64  `json:"redeploy_time"`
+	Range          [][2]int `json:"range"`
+
+	NationID   *string `json:"nation_id,omitempty"`
+	Profession *string `json:"profession,omitempty"`
+
+	SplashRadius           *float64 `json:"splash_radius,omitempty"`
+	SplashScale            *float64 `json:"splash_scale,omitempty"`
+	SplashDamageScale      *float64 `json:"splash_damage_scale,omitempty"`
+	HighlandSplashScale    *float64 `json:"highland_splash_scale,omitempty"`
+	HighlandSplashSluggish *float64 `json:"highland_splash_sluggish,omitempty"`
+
+	ComboHits        *int     `json:"combo_hits,omitempty"`
+	ComboHitScale    *float64 `json:"combo_hit_scale,omitempty"`
+	ComboDamageScale *float64 `json:"combo_damage_scale,omitempty"`
+
+	PowerAttackCount *int     `json:"power_attack_count,omitempty"`
+	PowerAttackScale *float64 `json:"power_attack_scale,omitempty"`
+}
+
+// OperatorsParams 是这次构造的**入参回执**（人读的痕迹，判据不看它）。
+type OperatorsParams struct {
+	Plan   string `json:"plan"`
+	Roster string `json:"roster"`
+}
+
+// OperatorsBundle 是 `operators` 命令的一整份应答。
+type OperatorsBundle struct {
+	Operators    []OperatorOut
+	Unported     []string
+	Covered      map[string]int
+	Scanned      int
+	Params       OperatorsParams
+	ViewFields   []string
+	DeployFields []string
+}
+
+// OperatorsCoveredKeys 是 `covered` 的**全部**计数器。
+//
+// ★ 全部预置为 0 再往上加，不用「有才出现」的 map：漏一个键的症状是
+// 「这一档没被行使到」与「这一档的计数器根本不存在」长得一模一样，
+// 而后者会让两侧的行使计数对账**静默少比一项**（判据的尺子少一格）。
+var OperatorsCoveredKeys = []string{
+	"range_code_in_table", "range_code_missing", "range_origin_added",
+	"nation_id_empty", "profession_empty",
+	"splash_radius_nonzero", "highland_splash_scale_nonzero",
+	"highland_splash_sluggish_nonzero",
+	"combo_hits_gt1", "power_attack_count_gt0",
+}
+
+// newOperatorsCovered 造一张**每个键都在、值为 0** 的计数表。
+func newOperatorsCovered() map[string]int {
+	out := make(map[string]int, len(OperatorsCoveredKeys))
+	for _, k := range OperatorsCoveredKeys {
+		out[k] = 0
+	}
+	return out
+}
+
+// ---------------------------------------------------------------- 取值小工具
+
+// totalRequire 取一个**必须有**的面板项（原版是 `float(t["atk"])` 这种写法，
+// 缺键会 `TypeError`）。缺键在这里也要**大声失败**，不许静默给 0——
+// 静默给 0 的症状是「这名干员面板是 0」，而规格看上去是完整的。
+func totalRequire(m map[string]any, key string) (float64, error) {
+	v, ok := m[key]
+	if !ok {
+		return 0, fmt.Errorf("面板 total 里没有 %s", key)
+	}
+	f, ok := toFloat(v)
+	if !ok {
+		return 0, fmt.Errorf("面板 %s 不是数：%T", key, v)
+	}
+	return f, nil
+}
+
+// totalOrDef 复刻 `float(t.get(k, d) or d)`：键不在用 d，值是 0 也用 d。
+func totalOrDef(m map[string]any, key string, def float64) (float64, error) {
+	v, ok := m[key]
+	if !ok {
+		return def, nil
+	}
+	f, ok := toFloat(v)
+	if !ok {
+		return 0, fmt.Errorf("面板 %s 不是数：%T", key, v)
+	}
+	if f == 0 {
+		return def, nil
+	}
+	return f, nil
+}
+
+// pyOrOne 复刻 `float(getattr(op, k, 1.0) or 1.0)`——**「没有这条」是 1.0**。
+// 写成 0 会让每一位没有这条的干员在 Go 那边被当成 0 倍率。
+func pyOrOne(v float64) float64 {
+	if v == 0 {
+		return 1.0
+	}
+	return v
+}
+
+// ---------------------------------------------------------------- 范围
+
+// operatorRangeCode 复刻 `verify.py:204-207` 的 `range_id_of`：
+// `phases[clamp(elite)].rangeId or "1-1"`。
+//
+// ⚠ 夹取与 `OperatorStatsFor` 的**大声失败**不同口径：原版这里 `min` 到最后一阶，
+// 所以 `elite` 越界在取范围这一步不会报错。照抄。
+func operatorRangeCode(charID string, elite int) (string, error) {
+	tbl, err := loadCharTable()
+	if err != nil {
+		return "", err
+	}
+	raw, ok := tbl[charID]
+	if !ok || string(raw) == "null" {
+		return "", fmt.Errorf("character_table 里没有 %q", charID)
+	}
+	var c struct {
+		Phases []struct {
+			RangeID string `json:"rangeId"`
+		} `json:"phases"`
+	}
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return "", fmt.Errorf("%s 的 phases 解析失败：%w", charID, err)
+	}
+	if len(c.Phases) == 0 {
+		return "", fmt.Errorf("%s 一个精英阶段都没有", charID)
+	}
+	e := elite
+	if e < 0 {
+		e = 0
+	}
+	if e > len(c.Phases)-1 {
+		e = len(c.Phases) - 1
+	}
+	code := c.Phases[e].RangeID
+	if code == "" {
+		code = "1-1"
+	}
+	return code, nil
+}
+
+// facingVector 复刻 `geometry.facing`：认不出的一律朝右。
+func facingVector(direction string) [2]int {
+	switch direction {
+	case "Left":
+		return [2]int{-1, 0}
+	case "Up":
+		return [2]int{0, -1}
+	case "Down":
+		return [2]int{0, 1}
+	default:
+		return [2]int{1, 0}
+	}
+}
+
+// degenerateRange 复刻 `range_of` 的退化范围：自身格 ＋ 朝向前方三格。
+func degenerateRange(direction string, pos [2]int) [][2]int {
+	f := facingVector(direction)
+	out := make([][2]int, 0, 4)
+	for i := 0; i <= 3; i++ {
+		out = append(out, [2]int{pos[0] + f[0]*i, pos[1] + f[1]*i})
+	}
+	sortRangeCells(out)
+	return out
+}
+
+// sortRangeCells 复刻 Python 的 `sorted([int(x), int(y)] for …)`：按 (x, y) 字典序。
+//
+// ⚠ 名字带 `Range` 是**必须的**：本包已经有一个 `sortCells`（`mechspec.go:644`，
+// 另一条会话的机制规格在用）。两个都叫 `sortCells` 时 `go build` 直接报
+// 「redeclared in this block」——实测撞过一次；这正是「同一个名字在同一个包里
+// 只能有一个宿主」在**同一语言内**的样子（跨语言的同名不同义是另一回事）。
+func sortRangeCells(cells [][2]int) {
+	sort.Slice(cells, func(i, j int) bool {
+		if cells[i][0] != cells[j][0] {
+			return cells[i][0] < cells[j][0]
+		}
+		return cells[i][1] < cells[j][1]
+	})
+}
+
+// operatorRange 复刻 `RangeProvider.__call__` ＋ `geometry.range_of`：
+//
+//	code = range_id or range_id_of(char_id, elite)
+//	cells = 表[code]（本表自身格恒 (0,0)，不必平移）
+//	if 取不到 code: 退化范围（自身格 ＋ 前方三格）
+//	cells ∪ {(0,0)}          ← block_of 恒为 1（`verify.py:210` 的 lambda）
+//	footprint(cells, direction, position)   ← 旋转 ＋ 平移
+//
+// 返回值第二个是**行使计数**用的两个标记：代号在不在表里、以及这一次是不是
+// 靠 `∪ {(0,0)}` 补上的（实测 64 人次里有 1 次真的靠它——`4-3` 那张表不含自身格）。
+func operatorRange(code, direction string, pos [2]int) ([][2]int, bool, bool, error) {
+	switch direction {
+	case "Right", "Up", "Left", "Down":
+	default:
+		//: 原版走 `normalize_direction` 的别名表，认不出就 `except Exception: pass`
+		//: 静默退化成「自身格 ＋ 前方三格」。Go 不照抄那个静默——`range.go` 已经
+		//: 把这条定成具名缺口（只认四个正名），在集成处同样大声失败。
+		return nil, false, false, fmt.Errorf(
+			"认不出的朝向 %q（`operators` 只认 Right/Left/Up/Down 四个正名；"+
+				"原版的别名表未读，见 range.go 文件头）", direction)
+	}
+	tbl, err := LoadRangeTable()
+	if err != nil {
+		return nil, false, false, err
+	}
+	raw, inTable := tbl[code]
+	if !inTable {
+		return degenerateRange(direction, pos), false, false, nil
+	}
+	rel := make(map[Cell]bool, len(raw)+1)
+	for _, c := range raw {
+		rel[c] = true
+	}
+	added := !rel[Cell{0, 0}]
+	rel[Cell{0, 0}] = true
+	list := make([]Cell, 0, len(rel))
+	for c := range rel {
+		list = append(list, c)
+	}
+	fp, err := Footprint(list, direction, pos[0], pos[1])
+	if err != nil {
+		return nil, false, false, err
+	}
+	out := make([][2]int, 0, len(fp))
+	for _, c := range fp {
+		out = append(out, [2]int{c[0], c[1]})
+	}
+	sortRangeCells(out)
+	return out, true, added, nil
+}
+
+// ---------------------------------------------------------------- 一条干员规格
+
+// buildOperatorOut 造 `operators[i]`，并把这一次**行使到了哪些条件键**记进
+// `covered`（零信息量的绿要防：某个键 64 次一次都没送出去，它的「逐位相等」
+// 就是「两边都没有」这种空洞的相等）。
+func buildOperatorOut(r DeployRow, covered map[string]int) (OperatorOut, error) {
+	e := r.Entry
+	trust := 0.0
+	if e.Trust != nil {
+		trust = float64(*e.Trust)
+	}
+	module := ""
+	if e.Module != nil {
+		module = *e.Module
+	}
+	modLevel := 0
+	if e.ModuleLevel != nil {
+		modLevel = *e.ModuleLevel
+	}
+	cfg := OperatorCalcConfig{
+		CharID: e.CharID, Elite: e.Elite, Level: e.Level, Trust: trust,
+		Potential: e.Potential, Module: module, ModuleLevel: modLevel,
+	}
+	st, err := OperatorStatsFor(cfg, "round")
+	if err != nil {
+		return OperatorOut{}, err
+	}
+	t := st.Total
+
+	atk, err := totalRequire(t, "atk")
+	if err != nil {
+		return OperatorOut{}, fmt.Errorf("%s：%v", e.CharID, err)
+	}
+	def, err := totalRequire(t, "def")
+	if err != nil {
+		return OperatorOut{}, fmt.Errorf("%s：%v", e.CharID, err)
+	}
+	maxHP, err := totalRequire(t, "maxHp")
+	if err != nil {
+		return OperatorOut{}, fmt.Errorf("%s：%v", e.CharID, err)
+	}
+	res, err := totalOrDef(t, "magicResistance", 0.0)
+	if err != nil {
+		return OperatorOut{}, fmt.Errorf("%s：%v", e.CharID, err)
+	}
+	base, err := totalOrDef(t, "baseAttackTime", 1.0)
+	if err != nil {
+		return OperatorOut{}, fmt.Errorf("%s：%v", e.CharID, err)
+	}
+	//: ⚠ 攻速 = 面板 ＋ 天赋/模组特性给的那一份（`verify.py:326` 的 `+ aspd.flat`）。
+	//: 漏掉 `AttackSpeedBonus.Flat` 的症状是**间隔整体偏大**：实测 64 人次里
+	//: 8 人次非零（能天使一族，面板 100 / 加成后 115，间隔 0.8695652173913043）。
+	aspd, err := totalOrDef(t, "attackSpeed", 100.0)
+	if err != nil {
+		return OperatorOut{}, fmt.Errorf("%s：%v", e.CharID, err)
+	}
+	spd := aspd + st.AttackSpeedBonus.Flat
+	interval := math.Max(opsMinInterval, base*100.0/math.Max(opsAspdMin, spd))
+
+	blockCnt, err := totalOrDef(t, "blockCnt", 0.0)
+	if err != nil {
+		return OperatorOut{}, fmt.Errorf("%s：%v", e.CharID, err)
+	}
+	//: 部署费用走**具名入口** `CostOf`（`deploycost.go`），不在这里另取一遍
+	//: `total["cost"]`——同一个量两份取法迟早会分叉，而 `deploys[].cost` 用的
+	//: 正是 `CostOf`，两处必须是同一个数。
+	cost, err := CostOf(cfg)
+	if err != nil {
+		return OperatorOut{}, fmt.Errorf("%s（%s）的部署费用：%v",
+			r.Operator, e.CharID, err)
+	}
+
+	code, err := operatorRangeCode(e.CharID, e.Elite)
+	if err != nil {
+		return OperatorOut{}, err
+	}
+	cells, inTable, originAdded, err := operatorRange(code, r.Direction, r.Position)
+	if err != nil {
+		return OperatorOut{}, fmt.Errorf("%s（%s）：%v", r.Operator, e.CharID, err)
+	}
+	if inTable {
+		covered["range_code_in_table"]++
+	} else {
+		covered["range_code_missing"]++
+	}
+	if originAdded {
+		covered["range_origin_added"]++
+	}
+
+	out := OperatorOut{
+		CharID: e.CharID, Name: st.Name, Cell: r.Position,
+		MaxHP: maxHP, ATK: atk, DEF: def, RES: res,
+		AttackInterval: interval, DamageType: st.TextDerived.DamageType,
+		BlockCnt: int(blockCnt), DeployCost: cost,
+		//: ⚠ 常量 70.0，**不是** `total["respawnTime"]`：`verify.py:314-355` 的
+		//: `kw` 里没有 `redeploy_time`，所以原版读到的恒是 `OperatorView` 的
+		//: 默认值。这一点由判据每次现算（非 0 即红），见文件头第 2 条。
+		RedeployTime: opsRedeployDefault,
+		Range:        cells,
+	}
+	//: 势力代号：取不到就是空串（等于不翻倍），原版据此**不送这个键**。
+	if st.NationID != "" {
+		v := st.NationID
+		out.NationID = &v
+	} else {
+		covered["nation_id_empty"]++
+	}
+	if st.Profession != "" {
+		v := st.Profession
+		out.Profession = &v
+	} else {
+		covered["profession_empty"]++
+	}
+	//: 职业特性溅射：`radius > 0` 才整族送出去。
+	if st.SplashRadius > 0.0 {
+		covered["splash_radius_nonzero"]++
+		rad, sc := st.SplashRadius, st.SplashScale
+		out.SplashRadius, out.SplashScale = &rad, &sc
+		ds := pyOrOne(st.SplashDamageScale)
+		out.SplashDamageScale = &ds
+		if st.HighlandSplashScale > 0.0 {
+			covered["highland_splash_scale_nonzero"]++
+			hi := st.HighlandSplashScale
+			out.HighlandSplashScale = &hi
+			if st.HighlandSplashSluggish > 0.0 {
+				covered["highland_splash_sluggish_nonzero"]++
+				sl := st.HighlandSplashSluggish
+				out.HighlandSplashSluggish = &sl
+			}
+		}
+	}
+	//: 普攻连击：「没有这条」是 1 / 1.0 / 1.0，原版判的是 `> 1`。
+	if st.ComboAttack.Hits > 1 {
+		covered["combo_hits_gt1"]++
+		h := st.ComboAttack.Hits
+		hs := pyOrOne(st.ComboAttack.HitScale)
+		ds := pyOrOne(st.ComboAttack.DamageScale)
+		out.ComboHits, out.ComboHitScale, out.ComboDamageScale = &h, &hs, &ds
+	}
+	//: 「强击瓶专家」：`count > 0` 才送，`scale` 的「没有这条」是 1.0。
+	if st.PowerAttack.Count > 0 {
+		covered["power_attack_count_gt0"]++
+		n := st.PowerAttack.Count
+		sc := pyOrOne(st.PowerAttack.Scale)
+		out.PowerAttackCount, out.PowerAttackScale = &n, &sc
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------- 入口
+
+// BuildOperators 造 `operators` 那一串（以及 unported / covered / 两份字段表）。
+func BuildOperators(plan PlayPlan, roster RosterRead,
+	stage *Stage, params OperatorsParams) (*OperatorsBundle, error) {
+	rows, err := BuildDeployRows(plan, roster, stage)
+	if err != nil {
+		return nil, err
+	}
+	//: 配对靠 `char_id`：`Plan.validate` 保证同一份计划里干员不重复。
+	//: 这一条**要在代码里也拦一次**——静默配错人的症状是「某个干员数字不对」，
+	//: 而那是所有症状里最难往「配错」上想的一种。
+	seen := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		if seen[r.Entry.CharID] {
+			return nil, fmt.Errorf(
+				"同一份计划里 %s 出现了两次——`operators` 按 char_id 配对，"+
+					"重复会让两个键的次序口径分叉", r.Entry.CharID)
+		}
+		seen[r.Entry.CharID] = true
+	}
+	covered := newOperatorsCovered()
+	out := make([]OperatorOut, 0, len(rows))
+	for _, r := range rows {
+		o, err := buildOperatorOut(r, covered)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return &OperatorsBundle{
+		Operators: out,
+		Unported:  append([]string{}, OperatorUnported...),
+		Covered:   covered,
+		//: `scanned` 与 `len(Operators)` **同源**（不是第二次计数）：一个量只能
+		//: 有一个口径来源，两处各数一遍迟早印出两个数。
+		Scanned:      len(out),
+		Params:       params,
+		ViewFields:   append([]string{}, OperatorViewFields...),
+		DeployFields: append([]string{}, OperatorDeployFields...),
+	}, nil
+}
+
+// BuildOperatorsFor 从两条路径读入，造 `operators`（命令用）。
+func BuildOperatorsFor(planPath, rosterPath string) (*OperatorsBundle, error) {
+	if planPath == "" {
+		return nil, fmt.Errorf("operators 少了 plan 路径")
+	}
+	plan, err := ReadPlan(planPath)
+	if err != nil {
+		return nil, err
+	}
+	var rs RosterRead
+	if rosterPath != "" {
+		if rs, err = ReadRoster(rosterPath); err != nil {
+			return nil, err
+		}
+	}
+	st, err := LoadStage(plan.Stage)
+	if err != nil {
+		return nil, err
+	}
+	return BuildOperators(plan, rs, st,
+		OperatorsParams{Plan: planPath, Roster: rosterPath})
+}
