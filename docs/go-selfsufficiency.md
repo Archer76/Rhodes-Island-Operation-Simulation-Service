@@ -105,9 +105,10 @@ python tools\closeout_selfsufficiency.py
 
 | 键 | 真实前置 | 距离 |
 |---|---|---|
-| `unsupported`（闸门） | 166 行，读 `inp.stage` ／部署表 ／敌人库（含雪与相性）。敌人库 **Go 已有**，是这 5 个里最好落的一个 | **推荐先做** |
-| `operators` | `_operator_spec`（162 行）→ 两套数值快照 → **技能效果层**（`effects_of(sim, op)`），而效果层要技能白名单与 `SkillEffects` 组装 | 远 |
-| `spawns` | `_unit_spec`（128 行）＋ 一条**没预料到的前置**：`routes` 来自 `eta.py:122` 的 `route_plans(stage)`，它依赖 `map.ground_path(…)`（寻路）与 **`r.legs(walk_map=…)`（一个可调用构建器）** | 远 |
+| **路线生产侧**（`eta.py` 的 `route_plans` ＋ `leading_wait` ＋ `polyline_length` ＋ `_walk_visits`，以及 `route.legs(…)` 与 `map.ground_path(…)` 的来处） | **它是 `spawns` 与 `unsupported` 的共同阻点**——不是某个键各自的坑 | **真正的下一步** |
+| `unsupported`（闸门） | 166 行。★ **更正**：上一版这里写「敌人库 Go 已有、最好落」，那是**估的**。量过之后：`_enemy_reasons` → `mech._spawns_of(inp)` → `_route_tables(inp.stage)` → `eta.route_plans` ⇒ **它压在路线生产侧上**，与 `spawns` 同一条 | 远（同 spawns） |
+| `operators` | `_operator_spec`（162 行）→ 两套数值快照 → **技能效果层**（`effects_of(sim, op)`），而效果层要技能白名单与 `SkillEffects` 组装 | 远（同 effects 层） |
+| `spawns` | `_unit_spec`（128 行）＋ 路线生产侧 | 远（同路线生产侧） |
 | `mechanisms`／`mech_config` | 机制层（每个活动一份、按需取用） | 远 |
 
 ★ **`spawns` 那条要特别记**：实测 Go **只有消费侧**——`sim.go` 沿 `LegSpec` 走，
