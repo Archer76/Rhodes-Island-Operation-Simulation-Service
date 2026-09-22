@@ -98,6 +98,8 @@ type response struct {
 	SpecGo json.RawMessage `json:"spec_go,omitempty"`
 	//: `costbonus` 的应答：初始部署费用天赋的数额（见 `costbonus.go`）。
 	CostBonus json.RawMessage `json:"cost_bonus,omitempty"`
+	//: `costof` 的应答：各自练度下的部署费用（见 `deploycost.go`）。
+	CostOf json.RawMessage `json:"cost_of,omitempty"`
 	Error string          `json:"error,omitempty"`
 }
 
@@ -546,6 +548,32 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, CostBonus: raw}
+	case "costof":
+		// 丙阶段四·第二十一批：部署费用（见 `deploycost.go`）。
+		if len(req.Spec) == 0 {
+			return response{ID: req.ID, OK: false,
+				Error: "costof 少了 spec（一批 OperatorCalcConfig）"}
+		}
+		var cfgs []OperatorCalcConfig
+		if err := json.Unmarshal(req.Spec, &cfgs); err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("spec 不是参数数组：%v", err)}
+		}
+		vals := make([]int, 0, len(cfgs))
+		for _, c := range cfgs {
+			n, err := CostOf(c)
+			if err != nil {
+				return response{ID: req.ID, OK: false,
+					Error: fmt.Sprintf("%s：%v", c.CharID, err)}
+			}
+			vals = append(vals, n)
+		}
+		raw, err := json.Marshal(vals)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, CostOf: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。

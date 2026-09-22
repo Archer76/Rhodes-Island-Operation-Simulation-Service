@@ -60,6 +60,8 @@ SUITE = [
     ("部分规格", "tools/check_specgo_go.py", "Go 部分规格骨架 vs build_spec 的键集与值", False),
     #: 本轮加的：初始部署费用天赋——`deploys`／`skill_uses` 排程的起始费用要用它。
     ("费用天赋", "tools/check_costbonus_go.py", "Go 初始部署费用天赋 vs squad_cost_bonus", False),
+    #: 本轮加的：各自练度下的部署费用——`deploys[].cost`。
+    ("部署费用", "tools/check_costof_go.py", "Go 部署费用 vs 生产规格的 deploys[].cost", False),
 ]
 
 

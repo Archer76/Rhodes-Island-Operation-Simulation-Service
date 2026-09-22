@@ -25,8 +25,8 @@
 python tools\check_go_all.py --selfcheck
 ```
 
-* 前半：**十六套判据现在不报红**；
-* 后半：**十六套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
+* 前半：**十七套判据现在不报红**；
+* 后半：**十七套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
 
 ★ 两个结论缺一不可：「全绿」只证明现在不报红；**没有反向守卫的绿是零信息量的绿**。
 
@@ -66,6 +66,7 @@ python tools\closeout_selfsufficiency.py
 | 格表 `check_cells_go.py` | 缓存可达的 55 关 | 55 / 55 关两张格表逐格一致 |
 | 部分规格 `check_specgo_go.py` | 55 关 × 12 个值键 ＋ 键集账（ast 抽 19 键）＋ **24 份夹具 × 生产规格 10 键** | 全部一致 |
 | 费用天赋 `check_costbonus_go.py` | 12 种黑板形状 × 10 种队伍组合 | 10 / 10 次求解一致 |
+| 部署费用 `check_costof_go.py` | 24 份夹具 × **生产规格的 `deploys[].cost`** | 64 人次一致 |
 
 ---
 
@@ -92,6 +93,7 @@ python tools\closeout_selfsufficiency.py
 | 规格·两张格表 | `rios-sim/cells.go` | `goal_cells`（防守点格，按 (x,y) 排序）与 `highland_cells`（高台格，保持行序） | `check_cells_go.py` |
 | 规格·骨架装配 | `rios-sim/specgo.go` | 把已能造出的 12 个键装配成一份部分规格，并**自报还差哪 7 个**（键集拿 ast 从源文件核对） | `check_specgo_go.py` |
 | 规格·起始费用天赋 | `rios-sim/costbonus.go` | `squad_cost_bonus`：滤掉 `$` 后签好只剩 `cost` 才认（`deploys`／`skill_uses` 排程的起始费用要用它） | `check_costbonus_go.py` |
+| 规格·部署费用 | `rios-sim/deploycost.go` | 各自练度下的 `total["cost"]`（取数口径与干员判据同一份，不另立；这里只是把它单独取出来） | `check_costof_go.py` |
 
 ---
 
