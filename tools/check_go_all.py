@@ -74,6 +74,19 @@ SUITE = [
     #: 分支（悬空路线号 / 关卡本地定义）由合成关卡补，且夹具**自证行使**。
     ("出怪规格", "tools/check_spawns_go.py",
      "Go 出怪规格 vs simgo/spec.py 的 _spawn_spec/_view/_unit_spec", False),
+    #: 本轮加的：**机制规格**（`mechanisms` ＋ `mech_config`）。★ 期望值由
+    #: `build_spec` **自己**在「关卡 ＋ 空排程」这个口径上产出（不手抄组装），
+    #: 并用 24 份夹具的**生产口径**（带计划）对账：田地必须逐字段相同、
+    #: `mechanisms` 的差必须恰好是 `snow.field`。`groups` 的**列表次序**
+    #: 复刻不了（Python 从 set 里 pop），判据按格集合口径比并把顺序差印成读数。
+    ("机制规格", "tools/check_mechspec_go.py",
+     "Go mechanisms/mech_config vs build_spec（空排程口径）", False),
+    #: 本轮加的：**干员规格**（`operators`）。★ 顺序与 `deploys` **同一份口径**
+    #: （原版这两个键是同一个循环里的两次 append），所以两者共用 `BuildDeployRows`。
+    #: 期望值取 24 份夹具的**生产规格**（64 人次）；另有一条「地基」量测：
+    #: Go 的 `OperatorStats.Total[...]` 与活对象 `op.current_atk()` 是不是同一个数。
+    ("干员规格", "tools/check_operators_go.py",
+     "Go operators vs simgo/spec.py 的 _operator_spec（段 A 25 键逐位）", False),
 ]
 
 

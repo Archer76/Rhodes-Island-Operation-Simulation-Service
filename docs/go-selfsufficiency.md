@@ -48,8 +48,8 @@
 python tools\check_go_all.py --selfcheck
 ```
 
-* 前半：**二十套判据现在不报红**；
-* 后半：**二十套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
+* 前半：**二十一套判据现在不报红**；
+* 后半：**二十一套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
 
 ★ 两个结论缺一不可：「全绿」只证明现在不报红；**没有反向守卫的绿是零信息量的绿**。
 
@@ -93,6 +93,8 @@ python tools\closeout_selfsufficiency.py
 | 寻路 `check_stagepath_go.py` | 55 关的全部路线 × 两档斜向 ＋ **全部路线的分段计划**（另 7 条合成路线）＋ **全部路线的计划表**（`eta.route_plans`） | 2594 / 2594 逐格一致；分段 2157 / 2157 段逐字段一致（`length` **逐位**）＋ 合成 14 段；计划表 1297 / 1297 条路线 2157 段逐字段一致（`points`/`wait`/`length`/`seconds` 全精确） |
 | 闸门 `check_unsupported_go.py` | 24 份夹具的生产规格 ＋ 5 例合成计划 ＋ 5 份合成关卡（另 6 条未搬线各配证人、1 处分歧） | 34 例逐条**同序**一致（其中 6 例有理由、共 9 条）＋ 已搬 7 条线的覆盖对账 |
 | 出怪规格 `check_spawns_go.py` | 24 份夹具的**生产规格**（`spec["spawns"]`）＋ 3 份合成关卡（悬空路线号 / 关卡本地定义 / 未实现修饰层拒跑） | 1154 / 1154 条逐字段一致（65 个键全比）＋ 合成 6 条 ＋ 拒跑 1 例；两侧**逐夹具**比过 264 项次行使计数 |
+| 机制规格 `check_mechspec_go.py` | 缓存可达的 55 关（**空排程口径**）＋ 24 份夹具的**生产口径**对账 | 55 / 55 关逐字段一致（有田地 29 / 无田地 26；每关 23 个标量 ＋ 四张表）＋ 生产口径 24 份：田地逐字段相同、`mechanisms` 差恰为雪 |
+| 干员规格 `check_operators_go.py` | 24 份夹具的**生产规格**（`spec["operators"]`）＝ **64 人次**；另有一把**量尺子**的对照（同一批键从活对象现取一遍） | 64 / 64 人次逐位一致（段 A 的 25 个键，**含条件键的存在性**）；`covered` 十项行使计数逐夹具两侧相符；段 B 的 10 个键具名 `unported`（其中 `heals` 并列量测：`opstats.heals` 64 次比过、0 处不一致）；两条现算结构零 0/64 |
 
 ---
 
@@ -126,7 +128,9 @@ python tools\closeout_selfsufficiency.py
 | 规格·骨架装配 | `rios-sim/specgo.go` | 已落 14 个键；`deploys`／`skill_uses` 传了计划才有（`omitempty` 在这里承担语义） | `check_specgo_go.py` |
 | 规格·闸门 | `rios-sim/unsupported.go` | `unsupported_reasons` 的已搬部分：排程 3 条（召唤物／装置／撤退）＋ 技能槽号 ＋ 积雪 ×N ＋ 敌人侧 2 条（按病害值觉醒／BOSS 换弱点形态）；未搬的 6 条线具名列在 `unported` 里 | `check_unsupported_go.py` |
 | 规格·出怪 | `rios-sim/spawns.go` | `_spawn_spec`／`_view`／`_unit_spec`／`_reborn_summons_spec`：出怪表逐事件一条 65 键规格（含天桩-乙的 `diver`/`mark`、重生召唤的逐格路线表）。两个 Go 拿不到的输入具名列在 `unported` | `check_spawns_go.py` |
+| 规格·机制 | `rios-sim/mechspec.go` | `mechanisms` ＋ `mech_config`：环境 rune（`env_system_new` 的两道门）／田地格与四邻连片／播种（逐格那处歧义照搬）／断田／19 键田地规格／装置（pump 全字段、pile 顶层字段）；口径是**关卡＋难度，不吃计划**，多传一个键就具名失败 | `check_mechspec_go.py` |
 | 规格·难度乘数 | `rios-sim/stagemul.go` | `stage_mul.py` 的 `enemy_attribute_mul`（属性乘数，可点名敌人）。另两类黑板乘数**具名拒跑**（见下） | 同上（并进出怪规格那一套） |
+| 规格·干员 | `rios-sim/operators.go` | `_operator_spec`：按部署人次一位干员规格，段 A 的 25 个键（面板 `/` 条件键的存在性 `/` 整张攻击范围）。顺序与 `deploys` **共用** `specdeploys.go::BuildDeployRows`（同一个循环的两次 append，次序只能有一份口径）。段 B 的 10 个键具名 `unported`（每条写清为什么是它；`heals` 那条注明「其实已可搬」并配量测） | `check_operators_go.py` |
 
 ---
 

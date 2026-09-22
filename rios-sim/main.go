@@ -114,6 +114,28 @@ type response struct {
 	SpecDeploys json.RawMessage `json:"spec_deploys,omitempty"`
 	//: `unsupported` 的应答：规格闸门的理由（见 `unsupported.go`）。
 	Unsupported json.RawMessage `json:"unsupported,omitempty"`
+	//: `mechspec` 的应答：`mechanisms` 与 `mech_config` 两个顶层键（见 `mechspec.go`）。
+	MechSpec json.RawMessage `json:"mech_spec,omitempty"`
+	//: `operators` 的应答：规格里的 `operators` 那一串（见 `operators.go`）。
+	//: ★ 与 `spawns` 那种「一个键装一个小对象」不同：这一段是**六个平铺的顶层键**，
+	//: 判据逐键读——`operators` 是值，另五个是账（未产出清单／行使计数／分母／
+	//: 入参回执／两张读取面字段表）。
+	Operators json.RawMessage `json:"operators,omitempty"`
+	//: Go **不产出**的那 10 个键（具名，不许静默省略）。
+	Unported []string `json:"unported,omitempty"`
+	//: 每个条件键**被行使了几次**——零信息量的绿要防（没送出过的键，它的
+	//: 「逐位相等」是「两边都没有」这种空洞的相等）。
+	Covered map[string]int `json:"covered,omitempty"`
+	//: 这一次造了几份干员规格（＝ `len(operators)`，同源不重数）。
+	//: 用**指针**：`omitempty` 会让 0 消失，而「一条都没造出来」正是最该被看见的
+	//: 那种读数——判据拿不到 `scanned` 时无法与分母对账，会静默变成「比到 0 条」。
+	Scanned *int `json:"scanned,omitempty"`
+	//: 入参回执（`{plan, roster}`）：这份读数是**从哪两条路径**读出来的。
+	Params json.RawMessage `json:"params,omitempty"`
+	//: `_operator_spec` 读 `op` 的 29 个属性名——判据拿 `ast` 现抽一份与它**双向**比。
+	ViewFields []string `json:"view_fields,omitempty"`
+	//: 同一个函数读 `d` 的 3 个属性名（`position` / `direction` / `talents`）。
+	DeployFields []string `json:"deploy_fields,omitempty"`
 	Error string          `json:"error,omitempty"`
 }
 
@@ -756,6 +778,60 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Unsupported: raw}
+	case "mechspec":
+		// 丙阶段四·第三十一批：`mechanisms` 与 `mech_config` 两个顶层键
+		// （见 `mechspec.go`）。口径是**关卡 ＋ 难度，不吃计划**。
+		mq, err := ParseMechQuery(req.Spec)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		mout, err := MechSpecBuild(req.Level, req.Path, mq)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(mout)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, MechSpec: raw}
+	case "operators":
+		// 丙阶段四·第三十二批：规格里的 `operators` 那一串（见 `operators.go`）。
+		// 口径与 `specdeploys` 同形：`spec` 是 `{plan, roster}`，
+		// 顺序与它**同一份**（两个键在原版是同一个循环里的两次 append）。
+		if len(req.Spec) == 0 {
+			return response{ID: req.ID, OK: false,
+				Error: "operators 少了 spec（{plan, roster}）"}
+		}
+		var oq struct {
+			Plan   string `json:"plan"`
+			Roster string `json:"roster"`
+		}
+		if err := json.Unmarshal(req.Spec, &oq); err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("spec 不是 {plan, roster}：%v", err)}
+		}
+		if oq.Plan == "" {
+			return response{ID: req.ID, OK: false, Error: "operators 少了 plan 路径"}
+		}
+		bundle, err := BuildOperatorsFor(oq.Plan, oq.Roster)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		oraw, err := json.Marshal(bundle.Operators)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		praw, err := json.Marshal(bundle.Params)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true,
+			Operators: oraw, Unported: bundle.Unported, Covered: bundle.Covered,
+			Scanned: &bundle.Scanned, Params: praw,
+			ViewFields: bundle.ViewFields, DeployFields: bundle.DeployFields}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。

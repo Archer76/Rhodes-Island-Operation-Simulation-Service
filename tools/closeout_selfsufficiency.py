@@ -51,11 +51,17 @@ GO_DIR = ROOT / "rios-sim"
 
 #: 这份台账**自己声明**的数。改动它们必须与真实改动同批，否则本脚本会红。
 DECLARED = {
-    "suites": 20,          # 一 · 「二十套判据」「二十套守卫」
+    #: ⚠ **现数**：`len(SUITE)` 才是权威（本行与它必须相等，第 2 节会量）。
+    #: 两条会话各 +1 时，「都改成 +1」必丢一次——所以这里是数出来的，不是算出来的。
+    "suites": 22,          # 一 · 「二十二套判据」「二十二套守卫」
     "gaps": 6,             # 三 · 缺口表的行数
     "resolve_callsites": 2,  # 出 loadout.go 之外调 ResolveLoadout 的地方
                              # （loadout 命令 ＋ specdeploys 的规格构造）
-    "spec_builders": 1,    # 四 · Go 侧「造规格」的入口：BuildSpecPart（部分规格）
+    #: ⚠ 从 1 改成 2（2026-09-23）：`mechspec.go:MechSpecBuild` 让这个具名代理
+    #: 多命中一条。它是**真的**又一个造规格的入口（造 `mechanisms` ＋ `mech_config`
+    #: 两个键），所以改的是**声明**——不把函数改名去躲开这个计数（那正是「让守卫
+    #: 迁就措辞」）。数的是入口个数，不是「造齐 19 键的入口个数」。
+    "spec_builders": 2,    # 四 · Go 侧「造规格」的入口：BuildSpecPart ＋ MechSpecBuild
 }
 
 #: 判据套名 → Go 命令名。SUITE 的行里没有命令名，这一步只能显式登记。
@@ -66,6 +72,7 @@ COMMAND_OF = {
     "计划": "plan", "练度": "loadout", "关卡静态": "stageenv", "格表": "cells",
     "部分规格": "specgo", "费用天赋": "costbonus", "部署费用": "costof",
     "寻路": "path", "闸门": "unsupported", "出怪规格": "spawns",
+    "机制规格": "mechspec", "干员规格": "operators",
 }
 
 #: 有 Go 命令、但**有意**没有跨实现判据的两个。
@@ -148,12 +155,15 @@ def resolve_callsites() -> tuple[int, list[str]]:
 
 
 def spec_entry_points() -> list[str]:
-    """Go 侧「造规格」的函数。现在的答案是**没有**。
+    """Go 侧「造规格」的函数（**部分规格也算一个入口**）。
 
-    判据是**具名的代理**：`rios-sim/` 里没有任何函数名同时含 Spec 与
-    Build/From/Make（那种形状才是「从别的输入造一份规格出来」）。
-    代理会说谎的方式是有人换个名字写，所以这里把命中的行也印出来，
-    不只看个数。
+    判据是**具名的代理**：函数名同时含 Spec 与 Build/From/Make/New
+    （那种形状才是「从别的输入造一份规格出来」）。
+    代理会说谎的方式是有人换个名字写，所以这里把命中的行也印出来，不只看个数。
+
+    ⚠ 它数的是**入口个数**，不是「造齐了 19 个键的入口个数」——那一条由
+    `main()` 里印的那句「只造 19 个顶层键里的 N 个」负责。所以 2 不代表目标更近：
+    现在这两个入口一共覆盖 14 / 19 个键，且**没有一个是「关卡＋名册＋计划」全吃**的。
     """
     pat = re.compile(r"^func\s+(?:\([^)]*\)\s*)?(\w*Spec\w*)\(", re.M)
     out = []
