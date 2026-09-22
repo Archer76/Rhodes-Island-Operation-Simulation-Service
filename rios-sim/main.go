@@ -88,6 +88,8 @@ type response struct {
 	Roster json.RawMessage `json:"roster,omitempty"`
 	//: `plan` 的应答：打法（见 `plan.go`）。
 	Plan json.RawMessage `json:"plan,omitempty"`
+	//: `loadout` 的应答：名册与计划合起来之后的练度（见 `loadout.go`）。
+	Loadout json.RawMessage `json:"loadout,omitempty"`
 	Error string          `json:"error,omitempty"`
 }
 
@@ -394,6 +396,47 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Plan: raw}
+	case "loadout":
+		// 丙阶段四·第十四批：名册与计划合起来的练度解析（见 `loadout.go`）。
+		if len(req.Spec) == 0 {
+			return response{ID: req.ID, OK: false,
+				Error: "loadout 少了 spec（{plan, roster}）"}
+		}
+		var q struct {
+			Plan   string `json:"plan"`
+			Roster string `json:"roster"`
+		}
+		if err := json.Unmarshal(req.Spec, &q); err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("spec 不是 {plan, roster}：%v", err)}
+		}
+		if q.Plan == "" {
+			return response{ID: req.ID, OK: false, Error: "loadout 少了 plan 路径"}
+		}
+		pp, err := ReadPlan(q.Plan)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		var rs RosterRead
+		if q.Roster != "" {
+			if rs, err = ReadRoster(q.Roster); err != nil {
+				return response{ID: req.ID, OK: false, Error: err.Error()}
+			}
+		}
+		out := make([]LoadoutEntry, 0, len(pp.Deploys))
+		for _, d := range pp.Deploys {
+			e, err := ResolveLoadout(d, rs)
+			if err != nil {
+				return response{ID: req.ID, OK: false, Error: err.Error()}
+			}
+			out = append(out, e)
+		}
+		raw, err := json.Marshal(out)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Loadout: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。
