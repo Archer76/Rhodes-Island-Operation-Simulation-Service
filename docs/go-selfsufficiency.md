@@ -191,10 +191,20 @@ if gm != wm:                              # ← 前两支走到这里时，wm �
 * **`flush()` 里那条接续**：相邻两段之间 `pts.pop()` 去掉重复顶点——
   漏了它折线会多一个重复点，长度不变而 `points` 不同。
 
-**唯一还差的读数**：三个判定谓词的**确切写法**——`is_move` / `is_appear` /
-`is_wait`（`stage.py:283-300`，共约 7 行）。已知的线索：`leading_wait` 用的是
-`type != "WAIT_FOR_SECONDS"`，所以 `is_wait` 就是它；`is_move` / `is_appear`
-按 `MOVE` / `APPEAR_AT_POS` 推测——**但推测不算数，读一次再写**。
+**唯一还差的读数**：三个判定谓词的**确切写法**（`stage.py:282-302`）。已读，
+并**更正本台账上一版的一处推测**：
+
+```
+is_move   = (type == "MOVE")
+is_wait   = (type.startswith("WAIT"))     ← ★ 不是 == "WAIT_FOR_SECONDS"
+is_appear = (type == "APPEAR_AT_POS")
+```
+
+上一版这里写的是「`is_wait` 必为 `WAIT_FOR_SECONDS`」——**那是推测，而且是错的**。
+`startswith` 与 `==` 在这种地方的分叉不会有任何判据报警：遇到别的 `WAIT*`
+类型时按 `==` 写会**漏判成等待**，于是那条 checkpoint 既不 flush 也不记秒数。
+
+★ 这条更正本身就是「推测不算数，读一次再写」的实例——本目标里第四次。
 剩下的路只有一条：**重写判据（按 `(关卡, 路线号, 斜向)` 显式建键）＋ 重加
 `path` 命令并回显 query，一次跑完**。那件事需要一个完整的会话余量，
 不适合在推理占满上下文之后再挤。
