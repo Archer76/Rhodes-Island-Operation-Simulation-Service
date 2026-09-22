@@ -54,6 +54,8 @@ SUITE = [
     #: 第 41 轮加的：「Go 自己构造规格」的第一块（build_spec 19 个顶层键里
     #: 不依赖 sim／干员／机制的那 8 个）。
     ("关卡静态", "tools/check_stageenv_go.py", "Go 关卡静态 8 项 vs stage_env", False),
+    #: 第 42 轮加的：规格里的两张格表（goal_cells / highland_cells）。
+    ("格表", "tools/check_cells_go.py", "Go 两张格表 vs _find_goals/_highland_cells", False),
 ]
 
 

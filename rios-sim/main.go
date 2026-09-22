@@ -92,6 +92,8 @@ type response struct {
 	Loadout json.RawMessage `json:"loadout,omitempty"`
 	//: `stageenv` 的应答：构建规格要用的关卡静态 8 项（见 `stageenv.go`）。
 	StageEnv json.RawMessage `json:"stage_env,omitempty"`
+	//: `cells` 的应答：规格里的两张格表（见 `cells.go`）。
+	Cells json.RawMessage `json:"cells,omitempty"`
 	Error string          `json:"error,omitempty"`
 }
 
@@ -474,6 +476,22 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, StageEnv: raw}
+	case "cells":
+		// 丙阶段四·第十七批：规格里的两张格表——防守点格与高台格（见 `cells.go`）。
+		if req.Level == "" {
+			return response{ID: req.ID, OK: false,
+				Error: "cells 少了 level（给 levelId 或关卡号）"}
+		}
+		ct, err := CellsOf(req.Level)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(ct)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Cells: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。
