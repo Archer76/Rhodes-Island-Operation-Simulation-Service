@@ -94,6 +94,8 @@ type response struct {
 	Legs json.RawMessage `json:"legs,omitempty"`
 	//: `routeplans` 的应答：按路线号索引的路线计划表（见 `etaroutes.go`）。
 	RoutePlans json.RawMessage `json:"route_plans,omitempty"`
+	//: `spawns` 的应答：出怪规格（见 `spawns.go`）。
+	Spawns json.RawMessage `json:"spawns,omitempty"`
 	//: `loadout` 的应答：名册与计划合起来之后的练度（见 `loadout.go`）。
 	Loadout json.RawMessage `json:"loadout,omitempty"`
 	//: `stageenv` 的应答：构建规格要用的关卡静态 8 项（见 `stageenv.go`）。
@@ -714,6 +716,26 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, RoutePlans: raw}
+	case "spawns":
+		// 丙阶段四·第三十批：出怪规格（`simgo/spec.py::_spawn_spec`，见 `spawns.go`）。
+		// 关卡走 req.Level 或 req.Path（合成关卡）。**不吃计划**——出怪表是关卡数据。
+		var sq SpawnsQuery
+		if len(req.Spec) > 0 {
+			if err := json.Unmarshal(req.Spec, &sq); err != nil {
+				return response{ID: req.ID, OK: false,
+					Error: fmt.Sprintf("spawns 的 spec 解不开：%v", err)}
+			}
+		}
+		out, err := SpawnsOf(req.Level, req.Path, sq.Difficulty, sq.P3RArmed)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(out)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Spawns: raw}
 	case "unsupported":
 		// 丙阶段四·第二十八批：规格闸门（`simgo/spec.py::unsupported_reasons`）。
 		// 关卡走 req.Level 或 req.Path（合成关卡），与 `stageenv` 同一口径。

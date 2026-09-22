@@ -10,7 +10,7 @@
 ## 〇·零 · 停在哪、为什么停、从哪接（2026-09-21 收束）
 
 **停在哪**：目标「把 `simgo/spec.py` 的规格构造整层搬进 Go」跑完了它那一轮预算
-（30 轮）。**19 个顶层键已落 14**，18 套判据全绿，本台账的收口量测一致。
+（30 轮）。**19 个顶层键已落 15**，20 套判据全绿，本台账的收口量测一致。
 规格**仍由 Python 经 `req.Spec` 送进 Go**——目标最后那半句**没有达成**。
 
 **为什么停**：不是卡在技术上，是**那个会话的判断预算用尽**。最后几轮的形状
@@ -48,8 +48,8 @@
 python tools\check_go_all.py --selfcheck
 ```
 
-* 前半：**十九套判据现在不报红**；
-* 后半：**十九套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
+* 前半：**二十套判据现在不报红**；
+* 后半：**二十套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
 
 ★ 两个结论缺一不可：「全绿」只证明现在不报红；**没有反向守卫的绿是零信息量的绿**。
 
@@ -92,6 +92,7 @@ python tools\closeout_selfsufficiency.py
 | 部署费用 `check_costof_go.py` | 24 份夹具 × **生产规格的 `deploys[].cost`** | 64 人次一致 |
 | 寻路 `check_stagepath_go.py` | 55 关的全部路线 × 两档斜向 ＋ **全部路线的分段计划**（另 7 条合成路线）＋ **全部路线的计划表**（`eta.route_plans`） | 2594 / 2594 逐格一致；分段 2157 / 2157 段逐字段一致（`length` **逐位**）＋ 合成 14 段；计划表 1297 / 1297 条路线 2157 段逐字段一致（`points`/`wait`/`length`/`seconds` 全精确） |
 | 闸门 `check_unsupported_go.py` | 24 份夹具的生产规格 ＋ 5 例合成计划 ＋ 5 份合成关卡（另 6 条未搬线各配证人、1 处分歧） | 34 例逐条**同序**一致（其中 6 例有理由、共 9 条）＋ 已搬 7 条线的覆盖对账 |
+| 出怪规格 `check_spawns_go.py` | 24 份夹具的**生产规格**（`spec["spawns"]`）＋ 3 份合成关卡（悬空路线号 / 关卡本地定义 / 未实现修饰层拒跑） | 1154 / 1154 条逐字段一致（65 个键全比）＋ 合成 6 条 ＋ 拒跑 1 例；两侧**逐夹具**比过 264 项次行使计数 |
 
 ---
 
@@ -124,12 +125,14 @@ python tools\closeout_selfsufficiency.py
 | 规格·路线计划表 | `rios-sim/etaroutes.go` | `eta.route_plans`：按路线号索引的 `{points, wait, legs}`（＝`_route_tables` 的形状，`spawns` 真正消费的那一层）＋ `leading_wait`（**只累加开头连续**的 `WAIT_FOR_SECONDS`） | 同上（`routeplans` 命令并进这一套，不单列） |
 | 规格·骨架装配 | `rios-sim/specgo.go` | 已落 14 个键；`deploys`／`skill_uses` 传了计划才有（`omitempty` 在这里承担语义） | `check_specgo_go.py` |
 | 规格·闸门 | `rios-sim/unsupported.go` | `unsupported_reasons` 的已搬部分：排程 3 条（召唤物／装置／撤退）＋ 技能槽号 ＋ 积雪 ×N ＋ 敌人侧 2 条（按病害值觉醒／BOSS 换弱点形态）；未搬的 6 条线具名列在 `unported` 里 | `check_unsupported_go.py` |
+| 规格·出怪 | `rios-sim/spawns.go` | `_spawn_spec`／`_view`／`_unit_spec`／`_reborn_summons_spec`：出怪表逐事件一条 65 键规格（含天桩-乙的 `diver`/`mark`、重生召唤的逐格路线表）。两个 Go 拿不到的输入具名列在 `unported` | `check_spawns_go.py` |
+| 规格·难度乘数 | `rios-sim/stagemul.go` | `stage_mul.py` 的 `enemy_attribute_mul`（属性乘数，可点名敌人）。另两类黑板乘数**具名拒跑**（见下） | 同上（并进出怪规格那一套） |
 
 ---
 
 ## 二·补 · 剩下 5 个键的**真实前置**（2026-09-21 量清）
 
-19 个顶层键已落 14。剩下 5 个**各自都压着一层不在 Go 的机制**——不是「再写 100 行」那种距离。
+19 个顶层键已落 15。剩下 4 个**各自都压着一层不在 Go 的机制**——不是「再写 100 行」那种距离。
 这一节存在的意义：让下一轮不照着「看起来快」的顺序挑，而照着**真的能做完**的顺序挑。
 
 ### ★ 四轮测量的结论（重设目标后）：这一节的三处估计都要下调
@@ -429,6 +432,73 @@ max·sqrt((dx/max)² + (dy/max)²)    与 math.dist   2062 处不符（各 1 ulp
 
 ---
 
+### ★★ `spawns` 已落：出怪规格进 Go（2026-09-22，第 30 轮）
+
+**落点**：`rios-sim/spawns.go`（`spawns` 命令）＋ `rios-sim/stagemul.go`
+（关卡 `runes` 的敌人修饰层）＋ `rios-sim/main.go` 的 `case "spawns"`。
+判据 `tools/check_spawns_go.py`（**新增 SUITE 行「出怪规格」**，19 → 20 套）。
+
+**读数**（`python -X utf8 tools\check_spawns_go.py`，rc=0）：
+**1154 / 1154 条出怪逐字段一致**（一份规格 65 个键全比，含 `diver` / `mark` /
+`legs` / `reborn_summons`），期望值取 24 份夹具的**生产规格**（`build_spec`）；
+另有 3 份合成关卡 6 条 ＋ 1 例拒跑（见下）。反向守卫五处互相独立、每处
+「注入过 ＋ 判红过」：`hp` 加 1 ulp ／ 翻转 `diver` ／ 删掉 `mark` ／
+`legs` 段 `length` 加 1 ulp ／ 篡改 Go 自报的 `wire.matched`。
+★ 拒跑那一条自己也有反向守卫：把 `UnportedRuneMuls` 那道闸拆掉、拿 scratch 二进制
+跑一遍，syn C **当场判红**（`Go 应答 ok=True`）——这是「拒跑」这句断言的取证。
+
+★ **四件量出来的事**：
+
+1. **替身必须自证**。合成用例走的是 `_spawn_spec(inp, …)` 配一个只带四个属性的
+   命名空间（`build_spec` 要计划＋名册＋干员计算器，合成关卡走不通）。这个替身
+   与生产路径**逐位比过 24 份夹具**，第一版 23/24——差的那份正是四星档（见第 2 条）。
+2. **关卡 `runes` 的敌人修饰层原本整层不在 Go**。`plan-hsex08f.json`
+   （`act31side_ex08#f#`，`difficulty=FOUR_STAR`）的每条规格 `atk/def/hp`
+   **少乘一个 ×1.2**——而 `_unit_spec` 的其余字段全对，所以这是一条**只会静默**
+   的差。根因：权威的取数口是**包过的**（`sim.py:402-411` 的 `parse_rune_muls`
+   ＋ `wrap_enemy_at`），而 Go 的 `LoadEnemyLibrary()` 直接给出库里的值。
+   已搬 `enemy_attribute_mul`（含老键名 `ebuff_attribute`）；
+   `enemy_talent_blackb_mul` / `enemy_skill_blackb_mul` **具名拒跑**——
+   它们乘完还必须重跑派生字段（`derive_blackboard_fields`），少了那一步
+   乘数会落在**一张没人再读的表**上，而 Go 侧一行都没有。
+   ⇒ 宁可拒跑，也不按普通档算出一份「看着对」的规格。
+   ★ 这条**拒跑本身是被判的**（syn C）：造一份挂着天赋黑板乘数的合成关卡，
+   Python 侧现推出那条乘数作证人，Go 必须回 `ok=false` 且**点名**那一条；
+   把 `UnportedRuneMuls` 拆掉再跑，判据当场红。
+3. **零覆盖分支的两种处置**（含义不同，不许压成一个）：
+   * `routes.get(route_index)` 的**默认支**（悬空路线号 ⇒ `legs` 空）与
+     `enemy_stats` 的**关卡本地定义**回退（`useDb:false` ＋ `with_overwrite`）
+     —— 真夹具 **0 例** ⇒ **补合成夹具**（`syn A` / `syn B`），且夹具自证行使
+     （`悬空路线号=3`、`本地定义=2`）。
+   * `mark` 的 `except` 支 —— **结构不可达**（`PILE_MARK` 的每个值都在库里，
+     `At()` 对已存在的 key 永不失败）⇒ `STRUCTURAL_ZERO` ＋ **每次运行现算守卫**：
+     判据每次重新核「`PILE_MARK` 的哪个值取不到档位」，一旦有 ⇒ 判红。
+4. **`species_provider` 是「读了但没有消费者」**，不是「漏搬」：
+   `enemy_view` 把它算进 `e.species`，而 `_unit_spec` 一个字都不读它。
+   证人用**哨兵 provider**（返回一个固定串）——`e.species` 确实变成那个串，
+   而 24 份夹具的 `spawns` **逐位不变**。顺带量到：本机 `lib.species_of` 返回 `''`
+   （enemydb 是可再生的派生物，可能不在）。
+   `total_attack`（⇒ `p3r_armed`）同理：Go 没有装置层，字段由命令参数给定，
+   **两侧各跑一次 true/false** 证明这个字段本身是好的，而输入通道具名进 `unported`。
+
+★ **三条守卫的形状**（都是「尺子也要有两个来源」）：
+* **`view_fields` 双向相等**：Go 自报它覆盖的 `e.<attr>` 清单（`spawns.go::viewFields`），
+  判据用 ast 从 `_unit_spec` / `_spawn_spec` / `_reborn_summons_spec` /
+  `cannot_clear` 抽读取点，要求**集合相等**——少了是静默给零值，多了是搬了没人读的字段。
+  实测 63 == 63。★ 这条守卫当场照出两个名字错：`p3r` 应为 `p3r_raw`、
+  `reborn_summons` 那一处来自 `_reborn_summons_spec`（原扫描没盖到它）。
+* **行使计数逐夹具两侧比**：`covered`（Go 自报）与尺子独立数出的 11 个键 ×
+  24 份夹具 = **264 项次**。Go 侧的全部计数器**一律落键（0 也落）**——
+  第一版只 `hit()` 不初始化，0 次的键整个消失，判据把它读成「这条线没接」。
+* **形状自检 `wire`**：把造好的 `spawns` 送进 Go **自己的消费结构**
+  （`wire.go::SpawnSpec`）解一遍，再拿解出来的聚合量与**原 map** 对账。
+  为什么值得做：字段名打错一个字母在跨实现对拍里是「两边都少一个键」，
+  只有拿真消费结构解一次才照得出来。★ 这条对账自己也踩过一次：
+  第一版拿「`p3r_armed` 为 true 的个数」比「解码后非 nil 的个数」，
+  在 `false` 的那 72 条上必然不等——**是尺子错，不是对象错**。
+
+---
+
 ## 三 · 未接的部分（具名，不是「没提就是没有」）
 
 | 缺口 | 说明 |
@@ -436,7 +506,7 @@ max·sqrt((dx/max)² + (dy/max)²)    与 math.dist   2062 处不符（各 1 ulp
 | **两套数值 profile** | **折算本身已全部落地**（`profile.go` 两行 ＋ `panelfold.go` 七处读数，合计 14548 个网格点/叉乘行）：核对下来原版那七个方法**只读实例属性**，替身对象即可当 oracle——原先以为非搭不可的 harness 省掉了。仍缺的是**喂它们的实时输入**（光环、翔虫机动、替身计时、击杀叠层、出手次数、阻挡、高台邻居、偷取攻速这些运行态），以及 `_profile` 自己「临时把开技能字段摆成开启态、读完立刻还原」的那段装配。 |
 | **练度 → 面板的接线** | 练度**已经解析出来了**（`rios-sim/loadout.go`，与 `Verifier._entry` 逐字段一致），但它**还没被送去算面板**：`opstats` 目前仍由调用方逐个送练度，没人把 `loadout` 的输出接进去。 |
 | **`skill` 的对象形态** | `Plan` 那一条指令的 `skill` 除整数外还可以是对象（丙方案），要 `_skill_from_json` 查技能书、按槽位/等级解成技能 id。本轮**未接**：Go 碰到对象就**具名拒收**，不假装读懂。好消息是 `fixtures/` 下 24 份打法的 `skill` 全是整数，走的是与改动前同一条路。 |
-| **规格构造与闸门** | `simgo/spec.py`（76 KB）＋ `simgo/skills.py` 的白名单。Go 现在仍收 Python 送来的 spec。★ **已落地 14 个键**：不依赖 sim／干员／机制的**关卡静态 8 项**（`stageenv.go`）、**两张格表**（`cells.go`）、以及**传了计划才有的 `deploys` 与 `skill_uses`**（`specdeploys.go`）。剩下 5 个键：`operators`／`spawns`（要 `_operator_spec`／`_unit_spec`）与 `mechanisms`／`mech_config`／`unsupported`。 |
+| **规格构造与闸门** | `simgo/spec.py`（76 KB）＋ `simgo/skills.py` 的白名单。Go 现在仍收 Python 送来的 spec。★ **已落地 15 个键**：不依赖 sim／干员／机制的**关卡静态 8 项**（`stageenv.go`）、**两张格表**（`cells.go`）、**传了计划才有的 `deploys` 与 `skill_uses`**（`specdeploys.go`），以及**出怪表**（`spawns.go`，不吃计划）。剩下 4 个键：`operators`（要 `_operator_spec` 与两套数值快照）与 `mechanisms`／`mech_config`／`unsupported`（机制层）。 |
 | **干员侧的其余天赋** | `advisor` 表里除已接的那几支之外的部分（`is_*` finder 一族里尚未逐条搬完的）。 |
 | **干员技能的性质** | 比如「技能改写攻击范围」的消费点。 |
 

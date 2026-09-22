@@ -69,6 +69,11 @@ SUITE = [
     #: 敌人侧造合成关卡；判据里印了每条线被行使几次，行使 0 次的必须登记。
     ("闸门", "tools/check_unsupported_go.py",
      "Go 闸门 vs unsupported_reasons 的理由、顺序与未搬线清单", False),
+    #: 本轮加的：**出怪规格**（`spawns`）。它**不吃计划**（出怪表是关卡数据），
+    #: 所以期望值直接取 24 份夹具的**生产规格**（1154 条）；两个真夹具零行使的
+    #: 分支（悬空路线号 / 关卡本地定义）由合成关卡补，且夹具**自证行使**。
+    ("出怪规格", "tools/check_spawns_go.py",
+     "Go 出怪规格 vs simgo/spec.py 的 _spawn_spec/_view/_unit_spec", False),
 ]
 
 
