@@ -173,6 +173,28 @@ if gm != wm:                              # ← 前两支走到这里时，wm �
 **教训（值得单独记）**：分支内的赋值语句不要在分支外使用——尤其是
 海象运算符。想看「这个用例属于哪一类」可以，但**分类与期望值必须是两件事**，
 期望值要在循环开头无条件算好。
+
+### 路线生产侧·另一半 `Route.legs`（2026-09-21，第 23 轮，待落）
+
+`ground_path` 已落（18 套判据里的「寻路」），另一半是 `Route.legs`
+（`stage.py:415-481`，67 行）。**已经读透**，落它的条件齐了：
+
+* **Go 侧字段齐备**：`Route{Index, Mode, Start, End, Checkpoints}`、
+  `Checkpoint{Type, Position *[2]int, Wait}`——`Position` 还是三态指针，
+  正合「`WAIT_FOR_SECONDS` 与 `DISAPPEAR` 的 position 是 `(0,0)` 占位、
+  当坐标用会画出穿过地图原点的假路径」那条。
+* **算法**：`WALK` 模式下相邻路点之间**沿可行走地块寻路**（调的就是刚落地的
+  `ground_path`）；`FLY` 模式是直线、不寻路。输出是 `RouteLeg` 序列，
+  三种 kind：`walk`（带 `points` 与折线长）、`vanish`（`DISAPPEAR` 之后、
+  下一个 `APPEAR_AT_POS` 之前的所有 `WAIT_FOR_SECONDS` 之和）、
+  `wait`（等待秒数）。
+* **`flush()` 里那条接续**：相邻两段之间 `pts.pop()` 去掉重复顶点——
+  漏了它折线会多一个重复点，长度不变而 `points` 不同。
+
+**唯一还差的读数**：三个判定谓词的**确切写法**——`is_move` / `is_appear` /
+`is_wait`（`stage.py:283-300`，共约 7 行）。已知的线索：`leading_wait` 用的是
+`type != "WAIT_FOR_SECONDS"`，所以 `is_wait` 就是它；`is_move` / `is_appear`
+按 `MOVE` / `APPEAR_AT_POS` 推测——**但推测不算数，读一次再写**。
 剩下的路只有一条：**重写判据（按 `(关卡, 路线号, 斜向)` 显式建键）＋ 重加
 `path` 命令并回显 query，一次跑完**。那件事需要一个完整的会话余量，
 不适合在推理占满上下文之后再挤。
