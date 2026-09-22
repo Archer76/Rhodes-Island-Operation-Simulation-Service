@@ -48,8 +48,8 @@
 python tools\check_go_all.py --selfcheck
 ```
 
-* 前半：**十八套判据现在不报红**；
-* 后半：**十八套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
+* 前半：**十九套判据现在不报红**；
+* 后半：**十九套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
 
 ★ 两个结论缺一不可：「全绿」只证明现在不报红；**没有反向守卫的绿是零信息量的绿**。
 
@@ -91,6 +91,7 @@ python tools\closeout_selfsufficiency.py
 | 费用天赋 `check_costbonus_go.py` | 12 种黑板形状 × 10 种队伍组合 | 10 / 10 次求解一致 |
 | 部署费用 `check_costof_go.py` | 24 份夹具 × **生产规格的 `deploys[].cost`** | 64 人次一致 |
 | 寻路 `check_stagepath_go.py` | 55 关的全部路线 × 两档斜向 ＋ **全部路线的分段计划**（另 7 条合成路线） | 2594 / 2594 逐格一致；分段 2157 / 2157 段逐字段一致（`length` **逐位**）＋ 合成 14 段 |
+| 闸门 `check_unsupported_go.py` | 24 份夹具的生产规格 ＋ 5 例合成计划 ＋ 5 份合成关卡（另 6 条未搬线各配证人、1 处分歧） | 34 例逐条**同序**一致（其中 6 例有理由、共 9 条）＋ 已搬 7 条线的覆盖对账 |
 
 ---
 
@@ -121,6 +122,7 @@ python tools\closeout_selfsufficiency.py
 | 规格·地面寻路 | `rios-sim/stagepath.go` | `StageMap.ground_path`（Dijkstra；`"ALL"` 子串判定／`tile_hole` 不可走／不许斜穿墙角／**同距离按格坐标字典序决胜**） | `check_stagepath_go.py` |
 | 规格·路线分段 | `rios-sim/stagelegs.go` | `Route.legs`（三种段 `walk`／`wait`／`vanish`；`WALK` 寻路／`FLY` 直线；`flush()` 里相邻两段之间 `pop()` 去重；长度走 `sum()` 的 **Neumaier** 语义） | 同上（`legs` 命令并进这一套，不单列） |
 | 规格·骨架装配 | `rios-sim/specgo.go` | 已落 14 个键；`deploys`／`skill_uses` 传了计划才有（`omitempty` 在这里承担语义） | `check_specgo_go.py` |
+| 规格·闸门 | `rios-sim/unsupported.go` | `unsupported_reasons` 的已搬部分：排程 3 条（召唤物／装置／撤退）＋ 技能槽号 ＋ 积雪 ×N ＋ 敌人侧 2 条（按病害值觉醒／BOSS 换弱点形态）；未搬的 6 条线具名列在 `unported` 里 | `check_unsupported_go.py` |
 
 ---
 

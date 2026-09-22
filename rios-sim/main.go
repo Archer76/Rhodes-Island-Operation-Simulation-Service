@@ -108,6 +108,8 @@ type response struct {
 	TalentBonus json.RawMessage `json:"talent_bonus,omitempty"`
 	//: `specdeploys` 的应答：规格里的 `deploys` 那一串（见 `specdeploys.go`）。
 	SpecDeploys json.RawMessage `json:"spec_deploys,omitempty"`
+	//: `unsupported` 的应答：规格闸门的理由（见 `unsupported.go`）。
+	Unsupported json.RawMessage `json:"unsupported,omitempty"`
 	Error string          `json:"error,omitempty"`
 }
 
@@ -690,6 +692,26 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Legs: raw}
+	case "unsupported":
+		// 丙阶段四·第二十八批：规格闸门（`simgo/spec.py::unsupported_reasons`）。
+		// 关卡走 req.Level 或 req.Path（合成关卡），与 `stageenv` 同一口径。
+		var gq GateQuery
+		if len(req.Spec) > 0 {
+			if err := json.Unmarshal(req.Spec, &gq); err != nil {
+				return response{ID: req.ID, OK: false,
+					Error: fmt.Sprintf("spec 不是 {plan,roster,difficulty,allow_devices,allow_skills}：%v", err)}
+			}
+		}
+		gout, err := UnsupportedGate(req.Level, req.Path, gq)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(gout)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Unsupported: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。

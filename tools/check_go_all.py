@@ -64,6 +64,11 @@ SUITE = [
     ("部署费用", "tools/check_costof_go.py", "Go 部署费用 vs 生产规格的 deploys[].cost", False),
     #: 本轮加的：地面寻路——「路线生产侧」的一半，卡着 spawns 与 unsupported。
     ("寻路", "tools/check_stagepath_go.py", "Go 地面寻路 vs StageMap.ground_path", False),
+    #: 本轮加的：规格闸门（`unsupported_reasons`）。★ 24 份夹具的期望值**全是空表**
+    #: （实测合计 0 条），所以这一套的信息量全在**合成夹具**上——计划侧换 dict、
+    #: 敌人侧造合成关卡；判据里印了每条线被行使几次，行使 0 次的必须登记。
+    ("闸门", "tools/check_unsupported_go.py",
+     "Go 闸门 vs unsupported_reasons 的理由、顺序与未搬线清单", False),
 ]
 
 
