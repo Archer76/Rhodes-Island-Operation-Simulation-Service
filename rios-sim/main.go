@@ -102,6 +102,8 @@ type response struct {
 	CostOf json.RawMessage `json:"cost_of,omitempty"`
 	//: `talentbonus` 的应答：从真实天赋表算的初始部署费用数额（见 `costbonus.go`）。
 	TalentBonus json.RawMessage `json:"talent_bonus,omitempty"`
+	//: `specdeploys` 的应答：规格里的 `deploys` 那一串（见 `specdeploys.go`）。
+	SpecDeploys json.RawMessage `json:"spec_deploys,omitempty"`
 	Error string          `json:"error,omitempty"`
 }
 
@@ -607,6 +609,33 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, TalentBonus: raw}
+	case "specdeploys":
+		// 丙阶段四·第二十三批：规格里的 `deploys` 那一串（见 `specdeploys.go`）。
+		if len(req.Spec) == 0 {
+			return response{ID: req.ID, OK: false,
+				Error: "specdeploys 少了 spec（{plan, roster}）"}
+		}
+		var dq struct {
+			Plan   string `json:"plan"`
+			Roster string `json:"roster"`
+		}
+		if err := json.Unmarshal(req.Spec, &dq); err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("spec 不是 {plan, roster}：%v", err)}
+		}
+		if dq.Plan == "" {
+			return response{ID: req.ID, OK: false, Error: "specdeploys 少了 plan 路径"}
+		}
+		ds, err := BuildDeploysFor(dq.Plan, dq.Roster)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(ds)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, SpecDeploys: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。

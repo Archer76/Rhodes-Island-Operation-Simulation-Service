@@ -53,7 +53,8 @@ GO_DIR = ROOT / "rios-sim"
 DECLARED = {
     "suites": 17,          # 一 · 「十七套判据」「十七套守卫」
     "gaps": 6,             # 三 · 缺口表的行数
-    "resolve_callsites": 1,  # 出 loadout.go 之外调 ResolveLoadout 的地方
+    "resolve_callsites": 2,  # 出 loadout.go 之外调 ResolveLoadout 的地方
+                             # （loadout 命令 ＋ specdeploys 的规格构造）
     "spec_builders": 1,    # 四 · Go 侧「造规格」的入口：BuildSpecPart（部分规格）
 }
 
@@ -74,7 +75,7 @@ NON_JUDGED = ("ping", "sim")
 #: 有判据、但**并进别的套里**判的命令（不单列一行）。
 #: `talentbonus` 是 `费用天赋` 那一套的第二部分：同一个函数、同一份权威，
 #: 拆成两行只会让「一套判据」这个词变模糊。
-EXTRA_JUDGED = ("talentbonus",)
+EXTRA_JUDGED = ("talentbonus", "specdeploys")
 
 
 def read(p: Path) -> str:
@@ -231,7 +232,7 @@ def main() -> int:
     if spec_builders:
         for s in spec_builders:
             print("      命中：%s" % s)
-    one("ResolveLoadout 的调用点（仅 loadout 命令）", n_resolve,
+    one("ResolveLoadout 的调用点（loadout ＋ 规格构造）", n_resolve,
         declared["resolve_callsites"])
     if resolve_where:
         print("      落点：%s" % "、".join(resolve_where))
@@ -260,7 +261,8 @@ def main() -> int:
     print("  ★ 规格仍由 Python 送：Go 侧**有** %d 个造规格的入口（%s），"
           % (len(spec_builders), "、".join(spec_builders) or "无"))
     print("    但它只造 19 个顶层键里的 12 个，且**不读计划／名册**；")
-    print("    `ResolveLoadout` 仍只被 loadout 命令调用 %d 处。" % n_resolve)
+    print("    `ResolveLoadout` 被 %d 处调用（loadout 命令 ＋ specdeploys 的规格构造）。"
+          % n_resolve)
     print("    规格是从 req.Spec 收进来的（该字段在 main.go 出现 %d 次）。"
           % n_spec_in)
     print()

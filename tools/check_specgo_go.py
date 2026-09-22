@@ -124,6 +124,23 @@ def build_spec_keys() -> list[str]:
     return [k.value for k in best.keys if isinstance(k, ast.Constant)]
 
 
+def go_specdeploys(plan: str) -> list[dict]:
+    env = dict(os.environ)
+    env["RIOS_DATA"] = str(DATA)
+    req = {"id": 1, "cmd": "specdeploys",
+           "spec": {"plan": plan, "roster": str(ROSTER_FIX)}}
+    p = subprocess.run([GO_BIN], input=(json.dumps(req) + "\n").encode("utf-8"),
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    if p.returncode != 0:
+        raise SystemExit("Go rc=%d：%s" % (p.returncode,
+                                           p.stderr.decode("utf-8", "replace")[:400]))
+    line = p.stdout.decode("utf-8", "replace").strip().splitlines()
+    resp = json.loads(line[0]) if line else {}
+    if not resp.get("ok"):
+        raise SystemExit("Go 回 error：%s" % resp.get("error"))
+    return resp["spec_deploys"]
+
+
 def go_specgo(level: str, difficulty: str = "") -> tuple[bool, object]:
     env = dict(os.environ)
     env["RIOS_DATA"] = str(DATA)
@@ -262,6 +279,31 @@ def main() -> int:
             else:
                 bad += 1
                 print("✗ 夹具 %s %s：Go=%r 生产规格=%r" % (name, k, a, b))
+        #: ---- `deploys` 那一串：按 `time` 排序后的整条链 ----
+        wd = spec.get("deploys") or []
+        try:
+            gd = go_specdeploys(str(ROOT / "fixtures" / name))
+        except SystemExit as e:
+            bad += 1
+            print("✗ 夹具 %s deploys —— %s" % (name, e))
+            continue
+        if len(gd) != len(wd):
+            bad += 1
+            print("✗ 夹具 %s deploys 条数：Go=%d 生产规格=%d"
+                  % (name, len(gd), len(wd)))
+            continue
+        for k, (g, w) in enumerate(zip(gd, wd)):
+            for f in ("time", "index", "char_id", "cost", "auto_skill"):
+                a, b = g.get(f), w.get(f)
+                ok_f = (a == b if f in ("index", "char_id", "auto_skill")
+                        else abs(float(a) - float(b)) < 1e-9)
+                if ok_f:
+                    seen["真规格 deploys." + f] = \
+                        seen.get("真规格 deploys." + f, 0) + 1
+                else:
+                    bad += 1
+                    print("✗ 夹具 %s deploys[%d].%s：Go=%r 生产规格=%r"
+                          % (name, k, f, a, b))
     seen["夹具 × 真规格"] = real_cmp
 
     print()
