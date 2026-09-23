@@ -65,6 +65,40 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
+import freeze_baseline as GB                                   # noqa: E402
+
+#: ★ **本套是捆绑判据**：11 段，其中 4 段**不适用等值冻结**——见 `SECTIONS`。
+#: 这不是「懒得转」，是「冻了会造假」：那 4 段里 3 段两侧都是 Python（冻住＝
+#: 让同一份冻值跟自己比＝恒等假绿），1 段期望值取自**源码文本**（冻住＝
+#: 每次改源码都该重录＝永久假红）。
+SECTIONS = [
+    {"id": "§1 生产规格(24 份)", "class": "frozen",
+     "why": "Python 生产规格 ↔ Go go_spawns，逐条出怪逐字段"},
+    {"id": "§1 变异守卫", "class": "frozen",
+     "why": "冻的 want ↔ 被变异的 Go（注入一处必判红）"},
+    {"id": "§1 行使计数", "class": "frozen",
+     "why": "py_counters ↔ Go covered，同一夹具两侧各数一遍"},
+    {"id": "§2 替身等价性", "class": "python_both",
+     "why": "harness()（Python）↔ spec['spawns']（也是 Python）——两侧同源，"
+            "冻住就是让同一份冻值跟自己比（恒等假绿）"},
+    {"id": "§3 合成关卡 syn A/B", "class": "frozen",
+     "why": "harness()（Python）↔ Go go_spawns（合成关卡走真夹具零行使的两条支）"},
+    {"id": "§3b 拒跑 syn C", "class": "frozen",
+     "why": "Go 必须拒跑并点名 ↔ Python 侧现推的乘数证人"},
+    {"id": "§4 species_provider 敏感性", "class": "python_both",
+     "why": "a = harness(...) ↔ b = harness(...)，两侧都是 Python——"
+            "冻住等于把「这个 provider 到底有没有消费者」这条控制组删掉"},
+    {"id": "§5 p3r_armed 对拍", "class": "frozen",
+     "why": "w_false/w_true（Python）↔ g_false/g_true（Go），两档各跑一次"},
+    {"id": "§5 armed_moved 控制组", "class": "python_both",
+     "why": "w_false ↔ w_true，两侧都是 Python——它是控制组，"
+            "冻住就变成零信息量的绿"},
+    {"id": "§6-Go 清单与 wire 自检", "class": "frozen",
+     "why": "Go 自报的 unported/view_fields/wire ↔ 脚本常量与 Go 自解"},
+    {"id": "§6-源码", "class": "source_coupled",
+     "why": "PILE_MARK 现推 + ast 读 `ak_tactic` 源码文本 ⇒ 等值冻它＝"
+            "每次改源码都该重录＝永久假红（与「敌方机制」同型）"},
+]
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -72,6 +106,9 @@ DATA = ROOT / "data" / "gamedata"
 
 #: Go 侧**拿不到**的输入。与 `rios-sim/spawns.go::spawnsUnported` 是同一份清单的两面。
 UNPORTED = ("species_provider", "total_attack")
+
+#: 夹具目录（`fixture_records()` 按内容 sha16 枚举它）。
+FIXDIR = ROOT / "fixtures"
 
 #: 结构不可达的分支：不进行使计数，但每次运行都重量一遍它的可达性（非 0 即红）。
 STRUCTURAL_ZERO = {
@@ -205,6 +242,23 @@ def fixtures():
     """24 份夹具的**生产规格**（借 `check_specgo_go.real_specs`，只抄规格不跑判决）。"""
     import check_specgo_go as C
     return C.real_specs()
+
+
+def fixture_records() -> list[dict]:
+    """查询集：带 `deploys`/`deploy` 的那些夹具，**身份＝文件内容 sha16**。
+
+    ★ 数据侧取数（只读文件字节），**不 import `ak_tactic`** ⇒ 冻结档也跑得动。
+    ★ `fixtures/` 是**活的注册表**（别的会话会加夹具）⇒ 这一份要进对账。
+    """
+    out = []
+    for f in sorted(FIXDIR.glob("*.json")):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:                                   # noqa: BLE001
+            continue
+        if isinstance(d, dict) and ("deploys" in d or "deploy" in d):
+            out.append({"name": f.name, "sha16": GB.file_sha16(f)})
+    return out
 
 
 def harness(raw: dict, level_id: str, *, enemy_at, species_provider=None,
@@ -431,6 +485,9 @@ def py_counters(level: str, want: list) -> dict:
 # --------------------------------------------------------------- 主流程
 
 def main() -> int:
+    G = GB.bind("出怪规格", __file__)
+    #: ★ **逐段声明覆盖面**（第四态的依据）。工具按 `class` 计数，不按形容词。
+    G.sections(SECTIONS)
     mutate = "--mutate" in sys.argv
     guard = Guard(mutate)
     printed: list[str] = []
@@ -438,29 +495,64 @@ def main() -> int:
     seen: dict = {}
     go_cov: dict = {}
 
-    from ak_tactic.gamedata.enemy import EnemyLibrary
-    lib = EnemyLibrary()
+    #: ⚠ `EnemyLibrary` 是 Python 侧的（冻结档禁止 import）⇒ 只在非冻结档建。
+    #: 它被 §3/§4/§5/§6-源码 用；那几段在冻结档本来就跑不到。
+    lib = None
+    if G.mode != GB.CHECK:
+        from ak_tactic.gamedata.enemy import EnemyLibrary
+        lib = EnemyLibrary()
 
     print("Go 侧仪器：%s" % GO_BIN)
-    print("Python 侧权威：simgo/spec.py 的 _spawn_spec / _view / _unit_spec"
-          " / _reborn_summons_spec")
+    if G.mode == GB.CHECK:
+        #: ★ 这一行**只用来打印**，但它在冻结档会把 `ak_tactic` 拉进来 ⇒ 必须分支
+        #: （练度那一套就是被这种「只用来打印」的 import 把 rc 从 6 变成 1 的）。
+        print("Python 侧权威（默认档）：simgo/spec.py 的 _spawn_spec / _view / _unit_spec")
+    else:
+        print("Python 侧权威：simgo/spec.py 的 _spawn_spec / _view / _unit_spec"
+              " / _reborn_summons_spec")
     print()
 
     # ============================================================ 1 · 24 份夹具
-    specs = fixtures()
-    ok = [(n, s, lv) for n, s, e, lv in specs if s is not None]
-    print("§1 生产规格：24 份夹具，抄到 %d 份，抄不到 %d 份"
-          % (len(ok), len(specs) - len(ok)))
-    if len(ok) != len(specs):
-        bad += 1
-        printed.append("✗ 有夹具的规格抄不到（见 check_specgo_go）")
+    #: 查询集：24 份夹具（带 `deploys` 的那些）。**身份＝夹具文件的内容 sha16**（数据侧算，
+    #: 冻结档也跑得动）。`fixtures()`（`check_specgo_go.real_specs`）只有 Python 侧能跑
+    #: ⇒ 冻结档改从冻的那份清单读 ⇒ **记录被消费** ⇒ 本套可以开 P4。
+    live_fix = fixture_records()
+    cov = G.coverage("spawns", [(r["name"], r["sha16"]) for r in live_fix])
+    covered = {tuple(x) for x in cov.covered} if G.mode == GB.CHECK else None
+    G.batch_consumed()
+    if G.mode == GB.CHECK:
+        fix_batch = G.expect(("query", "spawn_fixtures"), lambda: live_fix)
+        lv_map = G.expect(("consts", "fixture_levels"), lambda: {})
+        ok = [(r["name"], None, lv_map[r["name"]]) for r in fix_batch
+              if r["name"] in lv_map]
+        print("§1 生产规格：冻结档按**冻的那一批** %d 份夹具走"
+              "（清单身份＝夹具内容 sha16；关卡号是判定参数，一并冻住）" % len(ok))
+    else:
+        specs = fixtures()
+        ok = [(n, s, lv) for n, s, e, lv in specs if s is not None]
+        if G.mode == GB.RECORD:
+            #: ② 查询集与判定参数：写进基线（冻结档不读它们作**判定**之外的事）。
+            G.expect(("query", "spawn_fixtures"), lambda: live_fix)
+            G.expect(("consts", "fixture_levels"),
+                     lambda: {n: lv for n, _s, _e, lv in specs})
+        print("§1 生产规格：24 份夹具，抄到 %d 份，抄不到 %d 份"
+              % (len(ok), len(specs) - len(ok)))
+        if len(ok) != len(specs):
+            bad += 1
+            printed.append("✗ 有夹具的规格抄不到（见 check_specgo_go）")
     n_spawn = 0
     n_bad_spawn = 0
     tot = {}
     cov_bad = []
     cov_keys_checked = 0
     for name, spec, lv in ok:
-        want = spec["spawns"]
+        fsha = dict((r["name"], r["sha16"]) for r in live_fix).get(name, "")
+        if G.mode == GB.CHECK and covered is not None and (name, fsha) not in covered:
+            #: 未覆盖的**不比**（对账里已具名）——猜＝自己写一份期望值。
+            continue
+        #: ★ 期望值只能从这里来。键带**夹具内容 sha16** ⇒ 夹具一改内容，键就配不上。
+        want = G.expect(("spawns", name, fsha),
+                        lambda name=name, spec=spec: spec["spawns"])
         resp = go_spawns(level=lv)
         got = resp["spawns"]
         n_spawn += len(want)
