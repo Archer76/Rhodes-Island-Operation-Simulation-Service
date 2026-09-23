@@ -150,7 +150,7 @@ python -X utf8 tools\freeze_baseline.py --status
 | 17 | 部署费用 | `check_costof_go.py` | **已转**（**归另一个会话**，25 值；本会话只读不碰） | `Plan` / `Roster` / `Verifier` / `OperatorCalculator` | 乙 |
 | 18 | 寻路 | `check_stagepath_go.py` | **未转** | `eta.leading_wait` / `eta.route_plans` / `load_stage` | 乙 |
 | 19 | 闸门 | `check_unsupported_go.py` | **未转** | `spec.unsupported_reasons` 一族 | 乙 |
-| 20 | 出怪规格 | `check_spawns_go.py` | **未转** | `parse_stage` / `_route_tables` / `_spawn_spec` / `stage_mul` / `enemy_view` | 乙 |
+| 20 | 出怪规格 | `check_spawns_go.py` | **◐ 部分覆盖**（56 值；**11 段里 7 段可冻**，4 段不适用；控制组 P1/P2/P2b/P3 成立，P3b ⊘、**P4 ⊘ 具名**；**永不进「跑通」的分子**） | `parse_stage` / `_route_tables` / `_spawn_spec` / `stage_mul` / `enemy_view` | 乙 · **已核（部分）** |
 | 21 | 机制规格 | `check_mechspec_go.py` | **未转** | `build_spec` 一族 | 乙 |
 | 22 | 单一入口 | `check_buildspec_go.py` | **未转** | `build_spec` 一族 / `battle.sim.make_total_attack` | 乙 |
 | 23 | 干员规格 | `check_operators_go.py` | **已转**（**归另一个会话**，25 值；键形＝`["operators", 夹具名, **夹具 sha16**, **名册 sha16**]` 一份夹具一条；`input_identity=True`／`batch_consumed=False`；本会话只读不碰） | `build_spec` / `talent_finders` / `OperatorCalculator` / `Verifier` | 乙 |
@@ -581,6 +581,48 @@ sha16 改掉／删掉一个 `["enemy",…]` 键，再用 `RIOS_GOLDEN_DIR` 指�
 
 本次迁移是**换尺子**（期望值来源从「Python 现场」换成「冻结文件」）。
 按 `docs/baseline-flip-list.md` 的规矩：**换尺子的同一个提交里就要写下哪些条目因此不红了**。
-本文件 §3 逐套给出「已转 / 未转 / 不适用于冻结」，**未转的一律具名**——没有第三种写法。
+本文件 §3 逐套给出「已转 / **◐ 部分覆盖** / 未转 / 不适用于冻结」，**未转的一律具名**。
 另：本次迁移**不改变任何判据的比较逻辑与结论**，每一套在转好的那一刻，
 默认档与冻结档**必须同时绿**（§8 节点二那张「改前 vs 改后」表就是这条的证据）。
+
+### 节点七 · 第四态「部分覆盖」（工具）＋ 出怪规格（第一套 partial）
+
+**为什么会有第四态**：`出怪规格` 是**捆绑判据**，11 段里 4 段**不适用等值冻结**：
+
+| 段 | 类 | 为什么 |
+| --- | --- | --- |
+| §2 替身等价性 | `python_both` | `harness()`（Python）↔ `spec["spawns"]`（也是 Python） |
+| §4 species_provider 敏感性 | `python_both` | `a` ↔ `b` 两侧都是 `harness()`——**它是控制组** |
+| §5 `armed_moved` 控制组 | `python_both` | `w_false` ↔ `w_true`，两侧都是 Python |
+| §6-源码 | `source_coupled` | `PILE_MARK` 现推 ＋ `ast` 读 `ak_tactic` 源码文本 |
+
+冻那三段＝**让同一份冻值跟自己比**（恒等假绿）；冻第四段＝每次改源码都该重录（永久假红）。
+
+**四条规矩与实测**：
+
+| 规矩 | 落地 | 实测 |
+| --- | --- | --- |
+| ① 套逐段声明、工具**现算** | `G.sections([{id, class, why}])`；`class` 只允许 `frozen`／`python_both`／`source_coupled`；**缺 `why` 或类别不合法 ⇒ rc=6 具名拒绝** | 正例 `(总,可冻,未覆盖)=(2,1,1)`；两个反例都被拦 |
+| ② **永不进「跑通」的分子** | `--status` 读基线里的 `sections_uncovered`；rc=0 但有未覆盖段 ⇒ 记 `部分覆盖`、`◐` 标记 | `◐ 出怪规格 冻结rc=0 默认档=绿`；四分账 `跑通 0 ＋ 部分覆盖 1 ＋ 待转 0 ＋ 不适用 0 ＝ 1` |
+| ③ check 档**每次都印未覆盖段**（按名字） | **由 runner 自动印**（不依赖套作者记得写）＋ 通道 summary 再带一次 | 4 段逐条印出 |
+| ④ 套自己的**结论行**带上它 | `G.uncovered_sections_text()` | `结论：出怪规格 1154 / 1154 条逐字段一致（…）（本套冻结覆盖 7/11 段；§2 替身等价性 python_both／§4 …／§5 …／§6-源码 source_coupled 不适用等值冻结）` |
+
+**出怪规格的读数**（2026-09-24 05:0x，仪器 sha16 `908e2d2edce63543`）：
+
+| # | 命令 | rc | 读数 |
+| --- | --- | --- | --- |
+| 1 | 默认档（改前 vs 改后） | 0 / 0 | 两档**逐字相同**：`§1 生产规格：24 份夹具，抄到 24 份`；`结论：出怪规格 1154 / 1154 条逐字段一致`（结论行现在多带覆盖面前缀） |
+| 2 | `--record 出怪规格` | 0 | 38.9 s；**56 值 ＝ 1 查询集 ＋ 3 判定参数 ＋ 52 期望值**；`sections=7/11`、`batch_consumed=False` |
+| 3 | `--status 出怪规格 --show` | **1** | `◐` 部分覆盖；**0 / 1 套**（不进分子）；冻结档 `56 次全部命中`／`ak_tactic 已封死` |
+| 4 | 冻结档自身 | 0 | 4 段具名跳过 ＋ 结论行带覆盖面 |
+| 5 | `--control 出怪规格` | 0 | P1 rc=1／P2 盲区 rc=0／P2b 看见／**P3 rc=6（删 `hsex8.json/afbf9938…` 共 2 键）**／P3b ⊘／**P4 ⊘ 具名** |
+
+★ **控制组又逮到两处**（都是真的）：
+1. **P3 的「对象」分错了组**——原来按「键的前两位」分组，会把**同一个对象的多个标签**
+   （`spawns`／`counters`）拆成好几组 ⇒ 它挑中 `counters` 那一组去删，套报的是
+   「缺键」（通道错）而不是「对象集变了」，于是 P3 判「没被判成对象变了」——**假红**。
+   修法：分组的锚改成「**内容 sha 那一位前面的那个分量**」（`(名, sha)`）；
+   全工具的 P3 一起变（对无 sha 的套与「每对象一键」的套，删的是同一批键 ⇒ 无回归）。
+2. **我自己的 `batch_consumed` 声明是错的**——本套的**内容 sha 取自现读夹具**
+   （键里的 sha 不来自记录），所以改记录里的 sha 判决不变 ⇒ **记录没被消费** ⇒
+   P4 在这套上红不起来。撤掉声明后 P4 如实报 ⊘ 具名（内容身份住在键里）。

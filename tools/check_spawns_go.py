@@ -519,7 +519,10 @@ def main() -> int:
     live_fix = fixture_records()
     cov = G.coverage("spawns", [(r["name"], r["sha16"]) for r in live_fix])
     covered = {tuple(x) for x in cov.covered} if G.mode == GB.CHECK else None
-    G.batch_consumed()
+    #: ⚠ **本套的批次记录不被消费**：内容 sha 取自**现读的夹具**（`live_fix`），
+    #: 记录只回答「录的是哪一批」＋提供关卡号（判定参数）。实测：`--control` 的 P4
+    #: 改坏记录里的 sha16 ⇒ 判决不变 ⇒ **不该声明 `batch_consumed`**（声明了就是假话，
+    #: 会得到一条红不起来的探针）。内容身份住在**键**里 ⇒ P4 不适用，具名。
     if G.mode == GB.CHECK:
         fix_batch = G.expect(("query", "spawn_fixtures"), lambda: live_fix)
         lv_map = G.expect(("consts", "fixture_levels"), lambda: {})
@@ -616,7 +619,8 @@ def main() -> int:
                 for d in first_diffs(w, g, "", [], 4):
                     printed.append("      %s" % d)
         #: ---- 行使计数：**同一个夹具**两侧各数一遍（跨夹具的合计不能直接比）
-        py_cov = py_counters(lv, want)
+        py_cov = G.expect(("counters", name, fsha),
+                          lambda lv=lv, want=want: py_counters(lv, want))
         go_cov = resp.get("covered") or {}
         for k, v in py_cov.items():
             tot[k] = tot.get(k, 0) + v
@@ -639,32 +643,50 @@ def main() -> int:
     # ============================================================ 2 · 替身等价
     print()
     print("§2 合成用例的替身（直接调 `_spawn_spec`）与生产路径（`build_spec`）等价性")
-    harness_bad = 0
-    for name, spec, lv in ok:
-        raw = load_level_raw(lv)
-        eat = wrapped_enemy_at(lib, raw, difficulty_of(lv))
-        got = harness(raw, lv, enemy_at=eat, species_provider=lib.species_of)
-        if not same(got, spec["spawns"]):
-            harness_bad += 1
-            if len(printed) < 20:
-                printed.append("✗ 替身与生产路径不同：%s" % name)
-                for d in first_diffs(spec["spawns"], got, "", [], 3):
-                    printed.append("      %s" % d)
-    print("   %d / %d 份夹具逐位相同" % (len(ok) - harness_bad, len(ok)))
-    if harness_bad:
-        bad += 1
+    if G.mode == GB.CHECK:
+        #: ★ **本段不适用等值冻结**：两侧都是 Python（`harness()` 与 `spec["spawns"]`）
+        #: ⇒ 冻住就是让同一份冻值跟自己比（恒等假绿）。冻结档**跳过并具名印出**，
+        #: 而不是把它冻成一条恒真的判据。
+        print("   ⊘ **本档不覆盖这一段**（python_both）：两侧都是 Python，"
+              "等值冻结会造出恒等假绿")
+    else:
+        harness_bad = 0
+        for name, spec, lv in ok:
+            raw = load_level_raw(lv)
+            eat = wrapped_enemy_at(lib, raw, difficulty_of(lv))
+            got = harness(raw, lv, enemy_at=eat, species_provider=lib.species_of)
+            if not same(got, spec["spawns"]):
+                harness_bad += 1
+                if len(printed) < 20:
+                    printed.append("✗ 替身与生产路径不同：%s" % name)
+                    for d in first_diffs(spec["spawns"], got, "", [], 3):
+                        printed.append("      %s" % d)
+        print("   %d / %d 份夹具逐位相同" % (len(ok) - harness_bad, len(ok)))
+        if harness_bad:
+            bad += 1
 
     # ============================================================ 3 · 合成夹具
     print()
     print("§3 零覆盖分支的合成夹具")
-    real_key = ok[0][1]["spawns"][0]["enemy_id"] if ok else ""
+    #: ★ `real_key` 是 **Python 侧输入**（夹具生产规格里第一条出怪的 id）⇒ 一并冻住。
+    #: 冻结档不能现算它（`ok[0][1]` 在冻结档是 None）。
+    if G.mode == GB.CHECK:
+        real_key = G.expect(("consts", "syn_real_key"), lambda: "")
+    else:
+        _rk = ok[0][1]["spawns"][0]["enemy_id"] if (ok and ok[0][1]) else ""
+        real_key = G.expect(("consts", "syn_real_key"), lambda: _rk)
     with tempfile.TemporaryDirectory(prefix="rios-syn-spawns-") as td:
         tmp = Path(td)
         for tag, raw in (("syn A 悬空路线号", syn_dangling(real_key)),
                          ("syn B 关卡本地定义", syn_local(real_key))):
             path = write_syn(tmp, raw)
-            want = harness(raw, raw["_levelId"], enemy_at=lib.get,
-                           species_provider=lib.species_of)
+            #: ★ 期望值只能从这里来。键带**合成关卡原文的 sha16**（临时目录名不能进键）。
+            _raw_sha = GB.sh16(json.dumps(raw, sort_keys=True, ensure_ascii=False)
+                               .encode("utf-8"))
+            want = G.expect(("syn", tag, _raw_sha),
+                            lambda raw=raw: harness(raw, raw["_levelId"],
+                                                    enemy_at=lib.get,
+                                                    species_provider=lib.species_of))
             got = go_spawns(path=path)["spawns"]
             lit = []
             if tag.startswith("syn A"):
@@ -699,16 +721,22 @@ def main() -> int:
 
         # ======================================================== 4 · 拒跑
         #: syn C：关卡挂着 Go 未实现的敌人修饰层（天赋黑板乘数）⇒ 必须**拒跑**。
-        from ak_tactic.frontend.stage_mul import parse_rune_muls
         bad_raw = syn_bad_rune(real_key)
         path_c = write_syn(tmp, bad_raw)
-        witness = [m for m in parse_rune_muls(bad_raw["runes"], "NORMAL")
-                   if m.kind != "attr"]
+        #: ★ 证人（Python 现推的乘数）也要冻：它从**源码文本**之外的 `parse_rune_muls`
+        #: 来，冻的是**结果**（kind 列表），不是源码——所以它属于可冻段。
+        if G.mode == GB.CHECK:
+            witness = G.expect(("consts", "bad_rune_witness"), lambda: [])
+        else:
+            from ak_tactic.frontend.stage_mul import parse_rune_muls
+            _w = sorted(m.kind for m in parse_rune_muls(bad_raw["runes"], "NORMAL")
+                        if m.kind != "attr")
+            witness = G.expect(("consts", "bad_rune_witness"), lambda: _w)
         resp_c = go_spawns_raw(path=path_c)
         print()
         print("§3b Go 未实现的敌人修饰层：Python 侧现推的乘数 %d 条（%s）；"
               "Go 应答 ok=%r"
-              % (len(witness), "、".join(sorted(m.kind for m in witness)),
+              % (len(witness), "、".join(sorted(witness)),
                  resp_c.get("ok")))
         if not witness:
             bad += 1
@@ -731,62 +759,88 @@ def main() -> int:
         #: （`data/*.sqlite`，可再生的派生物、本机可能不在），返回空串时
         #: 这条证人会**因为环境**而红——那是假红。哨兵法与数据无关。
         SENTINEL = "证人-萨卡兹"
-        from ak_tactic.frontend.enemy_view import enemy_view
-        stats = lib.get(real_key, 0)
-        v_with = enemy_view(stats, enemy_id=real_key, level=0, route=[], legs=[],
-                            t=0.0, species_provider=lambda _i: SENTINEL)
-        v_without = enemy_view(stats, enemy_id=real_key, level=0, route=[],
-                               legs=[], t=0.0, species_provider=None)
-        #: 顺带量一次**真 provider 在不在**（enemydb 可缺，这一条只登记不判红）。
-        try:
-            real_species = lib.species_of(real_key)
-        except Exception as exc:                              # noqa: BLE001
-            real_species = "<取不到：%s>" % type(exc).__name__
-        #: 证人②：它进不进规格？（逐位比 24 份夹具的替身产物）
-        eff = 0
-        for name, spec, lv in ok:
-            raw = load_level_raw(lv)
-            eat = wrapped_enemy_at(lib, raw, difficulty_of(lv))
-            a = harness(raw, lv, enemy_at=eat, species_provider=lambda _i: SENTINEL)
-            b = harness(raw, lv, enemy_at=eat, species_provider=None)
-            if not same(a, b):
-                eff += 1
-                if len(printed) < 30:
-                    printed.append("✗ %s：species_provider 影响到了 spawns" % name)
-        print()
-        print("§4 species_provider：哨兵 provider 下 `e.species`=%r（None 时=%r）；"
-              "换掉 provider 后 spawns 不同的夹具 %d / %d"
-              % (v_with.species, v_without.species, eff, len(ok)))
-        print("   真 provider `lib.species_of(%s)` = %r（enemydb 可缺席，只登记不判红）"
-              % (real_key, real_species))
-        if v_with.species != SENTINEL or v_without.species != "":
-            bad += 1
-            printed.append("✗ species_provider 的证人①不成立（provider 没被调？）")
-        if eff:
-            bad += 1
-            printed.append("✗ species_provider 竟有消费者 —— unported 的理由不成立了")
+        if G.mode == GB.CHECK:
+            #: ★ **本段不适用等值冻结**：证人②两侧都是 Python（`a` 与 `b` 都是
+            #: `harness()`）⇒ 冻住等于把「这个 provider 到底有没有消费者」这条
+            #: **控制组**删掉。冻结档跳过并具名印出。
+            print()
+            print("§4 species_provider：⊘ **本档不覆盖这一段**（python_both）——"
+                  "a/b 两侧都是 harness()，等值冻结会把控制组变成恒等的绿")
+        else:
+            from ak_tactic.frontend.enemy_view import enemy_view
+            stats = lib.get(real_key, 0)
+            v_with = enemy_view(stats, enemy_id=real_key, level=0, route=[], legs=[],
+                                t=0.0, species_provider=lambda _i: SENTINEL)
+            v_without = enemy_view(stats, enemy_id=real_key, level=0, route=[],
+                                   legs=[], t=0.0, species_provider=None)
+            #: 顺带量一次**真 provider 在不在**（enemydb 可缺，这一条只登记不判红）。
+            try:
+                real_species = lib.species_of(real_key)
+            except Exception as exc:                          # noqa: BLE001
+                real_species = "<取不到：%s>" % type(exc).__name__
+            #: 证人②：它进不进规格？（逐位比 24 份夹具的替身产物）
+            eff = 0
+            for name, spec, lv in ok:
+                raw = load_level_raw(lv)
+                eat = wrapped_enemy_at(lib, raw, difficulty_of(lv))
+                a = harness(raw, lv, enemy_at=eat,
+                            species_provider=lambda _i: SENTINEL)
+                b = harness(raw, lv, enemy_at=eat, species_provider=None)
+                if not same(a, b):
+                    eff += 1
+                    if len(printed) < 30:
+                        printed.append("✗ %s：species_provider 影响到了 spawns" % name)
+            print()
+            print("§4 species_provider：哨兵 provider 下 `e.species`=%r（None 时=%r）；"
+                  "换掉 provider 后 spawns 不同的夹具 %d / %d"
+                  % (v_with.species, v_without.species, eff, len(ok)))
+            print("   真 provider `lib.species_of(%s)` = %r（enemydb 可缺席，只登记不判红）"
+                  % (real_key, real_species))
+            if v_with.species != SENTINEL or v_without.species != "":
+                bad += 1
+                printed.append("✗ species_provider 的证人①不成立（provider 没被调？）")
+            if eff:
+                bad += 1
+                printed.append("✗ species_provider 竟有消费者 —— unported 的理由不成立了")
 
         # ======================================================== 5 · p3r_armed
         print()
         print("§5 p3r_armed：两侧各跑一次 true / false")
         lv0 = ok[0][2]
-        raw0 = load_level_raw(lv0)
-        eat0 = wrapped_enemy_at(lib, raw0, difficulty_of(lv0))
-        w_false = harness(raw0, lv0, enemy_at=eat0, species_provider=lib.species_of)
-        w_true = harness(raw0, lv0, enemy_at=eat0, species_provider=lib.species_of,
-                         total_attack=object())
+        #: ★ 对拍那一路（Python ↔ Go）可冻；控制组那一路（`w_false` ↔ `w_true`）
+        #: 两侧都是 Python ⇒ 冻结档不覆盖它（见段表）。
+        if G.mode == GB.CHECK:
+            w_false = G.expect(("p3r", "false", lv0), lambda: [])
+            w_true = G.expect(("p3r", "true", lv0), lambda: [])
+        else:
+            raw0 = load_level_raw(lv0)
+            eat0 = wrapped_enemy_at(lib, raw0, difficulty_of(lv0))
+            w_false = G.expect(
+                ("p3r", "false", lv0),
+                lambda: harness(raw0, lv0, enemy_at=eat0,
+                                species_provider=lib.species_of))
+            w_true = G.expect(
+                ("p3r", "true", lv0),
+                lambda: harness(raw0, lv0, enemy_at=eat0,
+                                species_provider=lib.species_of,
+                                total_attack=object()))
         g_false = go_spawns(level=lv0, p3r_armed=False)
         g_true = go_spawns(level=lv0, p3r_armed=True)
-        armed_moved = any(a.get("p3r_armed") != b.get("p3r_armed")
-                          for a, b in zip(w_false, w_true))
-        print("   Python：total_attack 从 None 换成在场，p3r_armed 有变化=%s；"
-              "Go：false/true 两跑 p3r_armed 有变化=%s"
-              % (armed_moved,
-                 any(a.get("p3r_armed") != b.get("p3r_armed")
-                     for a, b in zip(g_false["spawns"], g_true["spawns"]))))
-        if not armed_moved:
-            bad += 1
-            printed.append("✗ p3r_armed 的控制组没动 —— 这条判据是零信息量的绿")
+        if G.mode == GB.CHECK:
+            print("   ⊘ **本档不覆盖 `armed_moved` 控制组**（python_both）："
+                  "w_false/w_true 两侧都是 Python")
+        else:
+            armed_moved = any(a.get("p3r_armed") != b.get("p3r_armed")
+                              for a, b in zip(w_false, w_true))
+            print("   Python：total_attack 从 None 换成在场，p3r_armed 有变化=%s；"
+                  "Go：false/true 两跑 p3r_armed 有变化=%s"
+                  % (armed_moved,
+                     any(a.get("p3r_armed") != b.get("p3r_armed")
+                         for a, b in zip(g_false["spawns"], g_true["spawns"]))))
+            if not armed_moved:
+                bad += 1
+                printed.append("✗ p3r_armed 的控制组没动 —— 这条判据是零信息量的绿")
+        print("   Go 两跑：false/true 零信息量检查外的对拍见下")
         for tag, w, g in (("p3r_armed=false", w_false, g_false["spawns"]),
                           ("p3r_armed=true", w_true, g_true["spawns"])):
             if same(w, g):
@@ -802,42 +856,50 @@ def main() -> int:
     print("§6 结构不可达 / 清单 / 形状")
     #: (a) `mark` 的 except 支：可达当且仅当 `PILE_MARK` 的某个值不在库里。
     got0 = go_spawns(level=ok[0][2]) if ok else {}
-    pm = pile_mark_from_source()
-    missing = []
-    for k, v in sorted(pm.items()):
+    if G.mode == GB.CHECK:
+        #: ★ (a)(b)(d) 三条的期望值取自**源码文本**（`PILE_MARK` 现推、
+        #: `ast` 读 `ak_tactic` 的读取点）⇒ 等值冻它＝每次改源码都该重录＝
+        #: **永久假红**。冻结档跳过并具名印出（与「敌方机制」同型）。
+        print("   ⊘ **本档不覆盖 §6-源码**（source_coupled）：PILE_MARK 现推 ＋ "
+              "ast 读 `ak_tactic` 源码文本——等值冻结会变成永久假红")
+    else:
+        pm = pile_mark_from_source()
+        missing = []
+        for k, v in sorted(pm.items()):
+            try:
+                lib.get(v, 0)
+            except Exception:                                 # noqa: BLE001
+                missing.append((k, v))
+        print("   PILE_MARK %d 条（乙 → 天标），其中取不到档位的 %d 条"
+              % (len(pm), len(missing)))
+        if missing:
+            bad += 1
+            printed.append("✗ `mark` 的 except 支**变成可达了**（%r）—— 补合成夹具"
+                           % (missing,))
+        #: (b) Go 那张表必须与 Python 现推的那张**逐条相同**（不是「看着像」）。
         try:
-            lib.get(v, 0)
+            go_pm = json.loads(json.dumps(pm))
         except Exception:                                     # noqa: BLE001
-            missing.append((k, v))
-    print("   PILE_MARK %d 条（乙 → 天标），其中取不到档位的 %d 条"
-          % (len(pm), len(missing)))
-    if missing:
-        bad += 1
-        printed.append("✗ `mark` 的 except 支**变成可达了**（%r）—— 补合成夹具"
-                       % (missing,))
-    #: (b) Go 那张表必须与 Python 现推的那张**逐条相同**（不是「看着像」）。
-    try:
-        go_pm = json.loads(json.dumps(pm))
-    except Exception:                                         # noqa: BLE001
-        go_pm = None
-    if go_pm != pm:
-        bad += 1
-        printed.append("✗ PILE_MARK 表不一致")
+            go_pm = None
+        if go_pm != pm:
+            bad += 1
+            printed.append("✗ PILE_MARK 表不一致")
+        #: (d) 视图字段：ast 抽出的读取点与 Go 自报的清单**双向相等**。
+        reads = python_view_reads()
+        go_fields = set(got0.get("view_fields") or []) if ok else set()
+        if reads != go_fields:
+            bad += 1
+            printed.append("✗ view_fields 不相等：Python 读了但 Go 没有 %r；"
+                           "Go 有但 Python 不读 %r"
+                           % (sorted(reads - go_fields), sorted(go_fields - reads)))
+        print("   view_fields：Python 读 %d 个 / Go 报 %d 个，%s"
+              % (len(reads), len(go_fields),
+                 "相等 ✓" if reads == go_fields else "不等 ✗"))
     #: (c) unported 清单两侧一致（防「哪天 Go 接上了却没人回头看」）。
     if ok and sorted(got0.get("unported") or []) != sorted(UNPORTED):
         bad += 1
         printed.append("✗ unported 清单：Go=%r 判据=%r"
                        % (got0.get("unported"), list(UNPORTED)))
-    #: (d) 视图字段：ast 抽出的读取点与 Go 自报的清单**双向相等**。
-    reads = python_view_reads()
-    go_fields = set(got0.get("view_fields") or []) if ok else set()
-    if reads != go_fields:
-        bad += 1
-        printed.append("✗ view_fields 不相等：Python 读了但 Go 没有 %r；"
-                       "Go 有但 Python 不读 %r"
-                       % (sorted(reads - go_fields), sorted(go_fields - reads)))
-    print("   view_fields：Python 读 %d 个 / Go 报 %d 个，%s"
-          % (len(reads), len(go_fields), "相等 ✓" if reads == go_fields else "不等 ✗"))
     #: (e) 形状自检：Go 造的 spawns 能被 Go 自己的消费结构解回来，且聚合量对得上。
     if ok:
         w = got0.get("wire") or {}
@@ -856,6 +918,23 @@ def main() -> int:
 
     # ============================================================ 输出
     print()
+    if G.mode == GB.CHECK and not cov.ok:
+        print(cov.report("spawns", len(live_fix)))
+        #: ★ 两种因分开列：**同一份夹具换了内容**与**多/少了几份夹具**都落在
+        #: extra/missing 两栏、长得一样，而下一个人要靠这句话决定重录还是查对象集。
+        ex = {g[0] for g in cov.extra}
+        ms = {g[0] for g in cov.missing}
+        chg, add, gone = sorted(ex & ms), sorted(ex - ms), sorted(ms - ex)
+        if chg:
+            print("  · ★ **内容变了**（同一份夹具、内容 sha 变了，%d 份）：%s"
+                  % (len(chg), "、".join(chg[:8])))
+        if add:
+            print("  · **对象集变了**（新增，%d 份）：%s"
+                  % (len(add), "、".join(add[:8])))
+        if gone:
+            print("  · **对象集变了**（这次没问、但冻着，%d 份）：%s"
+                  % (len(gone), "、".join(gone[:8])))
+        print()
     for line in printed[:40]:
         print(line)
     if len(printed) > 40:
@@ -874,14 +953,25 @@ def main() -> int:
             return 1
         print("反向守卫：五处独立变异各判红 —— 成立 ✓")
         return 0
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
     if n_spawn == 0 or not ok:
         print("结论：一条出怪都没比到 —— 判红（不是实现错，是判据自己瞎）")
         return 1
+    #: ★ **结论行带上覆盖面**（第四态的第四条规矩）：读这一行的人当场就知道
+    #: 这一档没覆盖哪几段，不用另外去跑 `--status`。
     print("结论：出怪规格 %d / %d 条逐字段一致（24 份夹具的生产规格，"
           "含 diver / mark / legs / reborn_summons 全部 65 个键）；"
-          "合成夹具 3 份覆盖真夹具零行使的两个分支 ＋ 判「未实现的修饰层拒跑」"
-          % (n_spawn - n_bad_spawn, n_spawn))
-    return 1 if bad else 0
+          "合成夹具 3 份覆盖真夹具零行使的两个分支 ＋ 判「未实现的修饰层拒跑」%s"
+          % (n_spawn - n_bad_spawn, n_spawn, G.uncovered_sections_text()))
+    if bad:
+        #: 覆盖段**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+        return 1
+    if G.mode == GB.CHECK and not cov.ok:
+        #: 覆盖段一致，但**对象集/内容变了** ⇒ 读数不可用（rc=6），不是判据红。
+        return GB.RC_CHANNEL
+    return 0
 
 
 if __name__ == "__main__":

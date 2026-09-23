@@ -1197,8 +1197,17 @@ def cmd_control(names: list[str], timeout: float) -> int:
                     parts = json.loads(k)
                 except (TypeError, ValueError):
                     continue
-                if isinstance(parts, list) and len(parts) >= 2:
-                    groups.setdefault(tuple(parts[:2]), []).append(k)
+                if not isinstance(parts, list) or len(parts) < 2:
+                    continue
+                #: ★ 分组的锚＝**内容 sha 那一位前面的那个分量**。键常常长成
+                #: `(标签, 名, sha, …)`／`(标签, 关卡, sha, id, lv)`——按「前两位」
+                #: 分组会把**同一个对象的多个标签**拆成好几组（实测 出怪规格：
+                #: 它挑中了 `counters` 那一组，删掉后套报「缺键」而不是「对象集变了」，
+                #: 于是 P3 判「没被判成对象变了」——又一条假红）。
+                idx = next((i for i, x in enumerate(parts)
+                            if isinstance(x, str) and _HEX16.match(x)), None)
+                gk = (parts[idx - 1], parts[idx]) if idx else tuple(parts[:2])
+                groups.setdefault(gk, []).append(k)
             pick_g = max(groups, key=lambda g: len(groups[g])) if groups else None
             if pick_g is None:
                 print("  ✗ P3 跳过：基线里挑不出「按对象分组」的键")
