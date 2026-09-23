@@ -244,6 +244,10 @@ def _now() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+#: 拦截器响过的名字（用来把「还没转完」判成 **rc=6**，而不是让 ImportError 变成 rc=1）。
+_BLOCKED: list[str] = []
+
+
 class AkBlocker:
     """`check` 档下把 `ak_tactic` 物理封死。
 
@@ -254,10 +258,15 @@ class AkBlocker:
     def find_spec(self, fullname, path=None, target=None):     # noqa: ANN001
         head = fullname.split(".")[0]
         if head in FORBIDDEN:
+            #: ★ 记一笔。否则这个 ImportError 会以 **rc=1**（＝**判据红**的码）
+            #: 退出去，而它真正的意思是「**还没转完**」（rc=6）——
+            #: 两个完全不同的意思又被压进同一个数（本轮实测：练度那一套就是这样，
+            #: 一行只用来打印的 `import ak_tactic.verify` 把 rc 从 6 变成 1）。
+            _BLOCKED.append(fullname)
             raise ImportError(
                 "★ 冻结基线模式（RIOS_GOLDEN=check）禁止 import %s ——\n"
                 "  这一套里还有取期望值的地方没走 freeze_baseline.expect()，"
-                "或那里面的 import 写在模块顶层。\n"
+                "或那里面的 import 写在模块顶层（含**只用来打印**的那种）。\n"
                 "  这是「还没转完」的具名信号（rc=6），**不是判据红**。" % fullname)
         return None
 
@@ -598,6 +607,16 @@ def resolve_exe() -> str:
 NOT_APPLICABLE: dict[str, str] = {
     "命令面": "被测方就是 Python CLI（spawn `python -m ak_tactic stage …`）——它测的是 "
               "Python，不是从 Python 取期望值，所以没有「Python 侧的期望值」可冻。",
+    "敌方机制": "它的期望值**不从 Python 取**：判据是「数据侧现算键空间」与"
+                "「**两台引擎的源码文本**现算消费面」（`rios-sim/*.go` 与 `ak_tactic/**.py`）"
+                "两面求差 ⇒ 冻 Python 的输出**没有宾语**。"
+                "若改冻 Go 自己的产物（已消费／具名 unported／未建模三类划分），"
+                "其输入**含 Go 源码本身** ⇒ 任何一次改 Go 都会让它失效（rc=6 该重录），"
+                "那就是本仓记过的「**永久假红等于没有判据**」。"
+                "⇒ 正确定位是**棘轮/账本**（「已消费集合不许缩小」），不是等值基线；"
+                "那是另一种工具形状。"
+                "⚠ 附带一条：它**读** Python 源码文本（不调它），所以 `ak_tactic/` 删掉之后"
+                "它「Python 侧有落点」那条腿的定义要重估。",
 }
 
 
@@ -735,6 +754,16 @@ def _runner(argv: list[str]) -> int:
                 "★ 冻结基线防线：套「%s」从未绑定通道（脚本没调 "
                 "freeze_baseline.bind()）⇒ **未转**，rc=6。\n"
                 "  这不是判据红：把它读成绿才是真错。\n" % script.name)
+            sys.stderr.flush()
+            os._exit(RC_CHANNEL)
+        if _BLOCKED:
+            #: ★ 「还没转完」必须退 **6**，不能让它以 ImportError 的身份退 1
+            #: （1 是**判据红**的码）。两者压成一个数，读的人就无法分辨
+            #: 「该去看实现」还是「该去把这一套转完」。
+            sys.stderr.write(
+                "★ 冻结基线防线：拦截器响过（import %s）⇒ **未转完**，rc=6。\n"
+                "  这不是判据红——把那一处 import 搬进 oracle 函数里，"
+                "或改走 G.expect()。\n" % "、".join(_BLOCKED[:3]))
             sys.stderr.flush()
             os._exit(RC_CHANNEL)
         if m == CHECK and ch.n_miss:
@@ -1076,11 +1105,17 @@ def cmd_control(names: list[str], timeout: float) -> int:
         else:
             groups: dict[tuple, list[str]] = {}
             for k in sorted(values):
+                if k.startswith(_NON_EXPECT_PREFIX):
+                    #: ★ 只对**期望值键**分组。把 `("query", …)`／`("consts", …)`
+                    #: 也放进来，会挑中一个「不是对象」的键去删——实测（练度那一套）
+                    #: 它挑中了 `consts/loadout_names`，删掉之后套直接报错 rc=1，
+                    #: 于是 P3 判「没被判成对象变了」——一条**假红**。
+                    continue
                 try:
                     parts = json.loads(k)
                 except (TypeError, ValueError):
                     continue
-                if isinstance(parts, list) and len(parts) >= 2 and parts[0] != "query":
+                if isinstance(parts, list) and len(parts) >= 2:
                     groups.setdefault(tuple(parts[:2]), []).append(k)
             pick_g = max(groups, key=lambda g: len(groups[g])) if groups else None
             if pick_g is None:
