@@ -13,7 +13,7 @@ package main
 // 之所以与 `deploys` 共用 `BuildDeployRows`：原版这两个键是**同一个循环里的两次
 // append**，次序只能有一份口径（见 `specdeploys.go::DeployRow`）。
 //
-// ## 本轮落地的是哪 25 个键（段 A）
+// ## 这一段落地的是哪 33 个键（判据眼里的「段 A」）
 //
 //	无条件 13：char_id / name / cell / max_hp / atk / def / res / interval /
 //	           damage_type / block_cnt / deploy_cost / redeploy_time / range
@@ -22,9 +22,14 @@ package main
 //	           highland_splash_scale / highland_splash_sluggish          （radius > 0 才送）
 //	           combo_hits / combo_hit_scale / combo_damage_scale         （hits > 1 才送）
 //	           power_attack_count / power_attack_scale                   （count > 0 才送）
+//	天赋派生 8：heals / blessing_save / blessing_self_freeze / regen_aura /
+//	           team_auras / talent_dodge_phys / talent_dodge_arts / shield
 //
-// ★ **是 25 不是 26**：`_operator_spec` 一共产出 **35** 个键（13 ＋ 22），
-// 段 A 25 ＋ 段 B 10 ＝ 35。这一行是现数的，不是抄来的。
+// ★ **是 33 不是 34**：`_operator_spec` 一共产出 **35** 个键（13 ＋ 22），
+// 段 A 33 ＋ 段 B 2 ＝ 35。这一行是现数的，不是抄来的。
+//
+// ★ 标着「段 B」的那个数字是**判据那一侧的**分段（`check_operators_go.py` 的
+// `PORTED` / `UNPORTED`），不是本文件的分段——本文件只负责「产出」。
 //
 // ## 真正要搬的不是 `inp`，是**活对象**
 //
@@ -47,13 +52,15 @@ package main
 //  * `normalize_direction` 的**别名表**（`right` / `R` / `右` …）未读——与
 //    `range.go` 同一口径：四个正名以外的朝向**大声失败**。原版那条路会
 //    `except Exception: pass` 悄悄退化成「自身格 ＋ 前方三格」，Go 不照抄那个静默。
-//  * 段 B 的 10 个键**不产出**，具名进 `unported`（见 `OperatorUnported`）。
+//  * 段 B 剩的 2 个键（`skill` / `active`）**不产出**，具名进 `unported`
+//    （见 `OperatorUnported`）。
 
 import (
 	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 )
 
 const (
@@ -64,7 +71,7 @@ const (
 	opsRedeployDefault = 70.0
 )
 
-// OperatorUnported 是 `_operator_spec` 会产出、而 Go 这一轮**不产出**的 3 个键。
+// OperatorUnported 是 `_operator_spec` 会产出、而 Go 这一轮**不产出**的 2 个键。
 //
 // ★ **逐条写清「为什么是它」**——不写清楚，`unported` 会变成一个没人敢动的黑洞：
 //
@@ -73,14 +80,11 @@ const (
 //	                **24 份夹具的 64 人次里 `deploys[*].skill` 全是 0**
 //	                （现数 `{'0': 64}`）⇒ 这一支在真夹具上**零行使**，
 //	                接它之前得先造一份绑了 `SkillLevel` 的合成计划。
-//	shield          要 `_shield_of(d)`：读 `d.talents[*].effects` 的
-//	                `shield_max_layers` / `shield_layers_on_deploy`（取大者）等
-//	                **五个 `shield_*` 字段**。★ 那五个字段是 `apply_text_rules`
-//	                写出来的，而**它在技能侧全表 0 技能命中**（1810 技能 / 11012 级
-//	                里只有 2 个技能命中另外几个字段）——可 64 人次里 `shield`
-//	                非空 **11 次**，来源是**天赋侧**的同一批字段名。
-//	                ⇒ 天赋侧与技能侧**共用一个字段名空间**，接它要先给天赋侧
-//	                单独取证，不能顺手当成「技能侧那一套」。
+//
+// ★ `shield` **已经产出**（`shieldOf`，见下面那一段的说明）：它读的是
+// `d.talents[*].effects` 的五个 `shield_*` 字段（`_shield_of` 取 cap 的较大者），
+// 而那一族字段由 `apply_text_rules` 的「护盾破裂」支写出来——判据**只认正文**，
+// 天赋侧全库只有两条命中（泥岩「沃土予身」6 档、空弦「铁弦」2 档，现数）。
 //
 // ★ 上一轮在这里的 `heals` **已经产出**（见 `OperatorUnportedReady` 的说明）。
 //
@@ -88,7 +92,7 @@ const (
 // （像 `check_spawns_go.py` 那样），并每次运行重量一次「Python 那一侧实际送出了
 // 其中几个」——哪天 Go 接上了，这里会先红，而不是等到某次对拍少送一个键。
 var OperatorUnported = []string{
-	"skill", "active", "shield",
+	"skill", "active",
 }
 
 // OperatorUnportedReady 已**清空**（原来只有 `heals`）。
@@ -171,6 +175,19 @@ type OperatorOut struct {
 	TeamAuras          []map[string]any `json:"team_auras,omitempty"`
 	TalentDodgePhys    *float64         `json:"talent_dodge_phys,omitempty"`
 	TalentDodgeArts    *float64         `json:"talent_dodge_arts,omitempty"`
+
+	//: ---- 段 B 第二批：`_shield_of` ----
+	//:
+	//: ★ 直接用**消费者的** `wire.go::ShieldSpec`，不另立一个同键结构体：
+	//: 这五个键（`max_layers` / `layers` / `interval` / `break_heal_ratio` /
+	//: `break_sp`）**一个口径一个宿主**——生产侧与消费侧各写一份，
+	//: 迟早漂成两个契约（`sim.go:607` 就是读它的那一处）。
+	//:
+	//: ⚠ 与上面那七个**相反**：那些不能用 `wire` 的类型，是因为那两族结构体的
+	//: json 标签带 `omitempty`（值 0 会被静默吃掉）。`ShieldSpec` 的五个内部键
+	//: **都没有 `omitempty`**，所以它能原样当生产侧的落点；「没有护盾」由
+	//: **指针为 nil** 表达（`omitempty`），与 Python 的 `None` 同义。
+	Shield *ShieldSpec `json:"shield,omitempty"`
 }
 
 // OperatorsParams 是这次构造的**入参回执**（人读的痕迹，判据不看它）。
@@ -209,6 +226,11 @@ var OperatorsCoveredKeys = []string{
 	"heals_true", "blessing_nonzero", "regen_aura_nonzero",
 	"team_auras_nonzero", "talent_dodge_nonzero",
 	"regen_strict_true", "regen_strict_false",
+	//: ---- 段 B 第二批 ----
+	//: `shield` 非空的人次（**不是**「字段非空」那种空口径：它数的是
+	//: `_shield_of` 真的返回了一份配置的那些人次）。判据那一侧**独立**再数一遍
+	//: （`check_operators_go.py::live_counters`），两数不等即红。
+	"shield_nonzero",
 }
 
 // newOperatorsCovered 造一张**每个键都在、值为 0** 的计数表。
@@ -611,7 +633,90 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		covered["team_auras_nonzero"]++
 		out.TeamAuras = auras
 	}
+	//: ---- 段 B 第二批：`_shield_of`（层数护盾）----
+	//:
+	//: 与上面那五段同一个姿势：**读 `d.talents` 现算**，不读 `op.shield_*`
+	//: ——那一族属性要到 `_do_deploy` 里 `_attach_talent_shield`
+	//: （`sim.py:3157-3182`）才被写上，而规格正是在**那之前**取的。
+	if sh := shieldOf(talents); sh != nil {
+		covered["shield_nonzero"]++
+		out.Shield = sh
+	}
 	return out, nil
+}
+
+// shieldOf 复刻 `_shield_of`（`spec.py:647-678`）：这一次部署的**层数护盾**配置，
+// 这个干员没有护盾就返回 `nil`（＝ Python 的 `None`，`_operator_spec` 据此**不送**键）。
+//
+// ## 三处必须照抄的口径
+//
+//  1. **只取第一个命中的**：原版那一句是 `return`，不是求并集。所以「同时带两条
+//     护盾天赋」时后面的那条被丢掉——Go 也丢掉（`return` 而不是继续扫）。
+//  2. **cap 取大者**：`max(shield_max_layers, shield_layers_on_deploy)`，**送的是
+//     cap 而不是黑板上的 `max_times`**。实证：空弦「铁弦」的黑板只有 `sp`，
+//     `max_times` 缺键 ⇒ `shield_max_layers=0`，可正文写着「获得**一层**护盾」
+//     ⇒ `cap = max(0, 1) = 1` ⇒ **这一位仍然有护盾**。写成 `max_times` 会让
+//     她整条天赋静默消失（层数 0 ⇒ 跳过 ⇒ Go 少送一个键，而两边的数都对得上）。
+//  3. **`cap <= 0` 就跳过**：不是「送一份全 0 的配置」。
+//
+// ## 五个字段从哪来：`apply_text_rules` 的「护盾破裂」支
+//
+// 见 `shieldEffectOf`。**判据是正文，不是黑板键**——天赋侧全库（1375 位干员、
+// 全部候选）只有 8 条候选命中「正文同时含【护盾】与【破裂】」，落在两个人身上：
+// 泥岩「沃土予身」（6 档）与空弦「铁弦」（2 档）。现数，取证见
+// `check_operators_go.py` 的同名判据与交付回报。
+func shieldOf(talents []resolvedTalent) *ShieldSpec {
+	for _, t := range talents {
+		maxLayers, layers, interval, healRatio, sp := shieldEffectOf(t)
+		cap := maxLayers
+		if layers > cap {
+			cap = layers
+		}
+		if cap <= 0 {
+			continue
+		}
+		return &ShieldSpec{
+			MaxLayers: cap, Layers: layers, Interval: interval,
+			BreakHealRatio: healRatio, BreakSP: sp,
+		}
+	}
+	return nil
+}
+
+// shieldEffectOf 复刻 `apply_text_rules` 的「护盾破裂」那一段（`skill.py:2073-2092`）
+// **在一条天赋上**求值——不是（全部为 0 的）`SkillEffects` 默认值。
+//
+// 逐句对应（**原文照抄，故整段包反引号**——代码里的字符串字面量不许改成「」，
+// 改了就成了另一段代码）：
+//
+//	`if "护盾" in description and "破裂" in description:`   ← 两个词**都要在**
+//	`    eff.shield_interval        = float(bb.get("interval") or 0.0)`
+//	`    eff.shield_max_layers      = int(bb.get("max_times") or 0)`
+//	`    layers                     = int(bb.get("times") or 0)`
+//	`    if not layers and "一层护盾" in description: layers = 1`
+//	`    eff.shield_break_heal_ratio= float(bb.get("hp_ratio") or 0.0)`
+//	`    eff.shield_break_sp        = float(bb.get("sp") or 0.0)`
+//
+// ⚠ 那两个 `or 0.0` 的含义是「**键不在**（`None`）当 0」——`bbValue` 的默认值
+// 就是这个口径；键在、值是 0 时也一样是 0，两种写法在这里同值。
+func shieldEffectOf(t resolvedTalent) (maxLayers, layers int,
+	interval, healRatio, sp float64) {
+	if !strings.Contains(t.Description, "护盾") ||
+		!strings.Contains(t.Description, "破裂") {
+		return 0, 0, 0, 0, 0
+	}
+	interval = bbValue(t.Blackboard, "interval", 0.0)
+	maxLayers = int(bbValue(t.Blackboard, "max_times", 0.0))
+	layers = int(bbValue(t.Blackboard, "times", 0.0))
+	//: 部署时给几层：泥岩在黑板 `times` 里；空弦的黑板只有 `sp`，层数写在正文
+	//: （「获得**一层**护盾」）——**按正文取，不猜**。注意判据是字面「一层护盾」：
+	//: 泥岩的正文写的是「1层护盾」，所以走到的是上面那行（`times=1`），不是这里。
+	if layers == 0 && strings.Contains(t.Description, "一层护盾") {
+		layers = 1
+	}
+	healRatio = bbValue(t.Blackboard, "hp_ratio", 0.0)
+	sp = bbValue(t.Blackboard, "sp", 0.0)
+	return maxLayers, layers, interval, healRatio, sp
 }
 
 // teamAurasOf 复刻 `_team_auras_of`（`spec.py:551-644`）。

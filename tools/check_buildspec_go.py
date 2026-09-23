@@ -222,20 +222,21 @@ def plan_variants() -> list[tuple[str, dict]]:
 
 # ---------------------------------------------------------------- 比较
 
-#: **已登记的「Go 侧缺这个键」**：每条都对应某个生产者 `unported` 里的具名条目。
-#: 判据只放行「**这一条路径**、且差别恰是 Go 侧 `<缺>`」；路径对不对、方向对不对、
-#: 有没有别的东西一起变，都要单独断言（不是给整块开容差）。
+#: **已登记的「Go 侧缺这个键」** —— ★ **本批清空**（2026-09-23，第三十八批）。
 #:
-#:   - `farmland.devices[].child` ← `mechspec` 的 unported（天桩召唤链四跳模板要
-#:     `_pile_device_spec`）
-#:   - `operators[].shield` / `skill` / `active` ← `operators` 的 `OperatorUnported`
-#:     （技能装配那一层与 `_shield_of` 的五个 `shield_*` 字段）
-REGISTERED_MISSING: tuple[tuple[str, str], ...] = (
-    (r"^\.mech_config\.huai_shu_li\.farmland\.devices\[\d+\]\.child$", "mechspec"),
-    (r"^\.operators\[\d+\]\.shield$", "operators"),
-    (r"^\.operators\[\d+\]\.skill$", "operators"),
-    (r"^\.operators\[\d+\]\.active$", "operators"),
-)
+#:   · `farmland.devices[].child` ⇒ **已搬进 Go**（天桩召唤链四跳），条目已摘；
+#:   · `operators[].shield`       ⇒ **已搬进 Go**（天赋侧五个 `shield_*`），条目已摘。
+#:
+#: 剩下的两条（`operators[].skill`／`active`）**也没有留**：它们在 80 个用例里
+#: **一次都没被走到**（24 份夹具的 `deploys[].skill` 全是 0，所以规格里根本
+#: 不会出现这两个键）⇒ 留着就是一张**没人走的放行表**，那是真回归最好的藏身处
+#: （「又缺了」与「本来就登记着」长得一模一样）。本文件自己的守卫会判红，
+#: 这次红得对：**表该空**。
+#:
+#: ⚠ 于是现在**任何**「Go 缺了权威有的键」都判红。哪天真有夹具用上技能槽，
+#: 它会红——那正是要的信号：要么把 `skill` 搬进 Go，要么**连证据一起**登记
+#: （「它在这一例里真的被缺到了」），不许只加一行正则。
+REGISTERED_MISSING: tuple[tuple[str, str], ...] = ()
 REGISTERED_RX = tuple((re.compile(p), src) for p, src in REGISTERED_MISSING)
 
 MISSING = "<缺>"
@@ -429,14 +430,21 @@ def allowance_guards(cases: list[dict]) -> tuple[list[str], dict]:
 
       · 反向：把一条**没登记**的缺键造出来（删掉 Go 侧的 `operators[0].max_hp`）
         ⇒ 必须判红。**它红不了，这张表就是一块万能挡板。**
-      · 正向：把一条**登记过**的缺键造出来（删掉 `operators[0].shield`）
-        ⇒ **不该**判红（否则登记形同虚设，整条路会变成假红）。
+      · 正向：**真用例里必须真的出现「登记过、也确实缺」的路径**，而且它**不**判红。
 
-    两条都要**真的落到对象上**（删掉了才作数）——空转的守卫比没有守卫更坏。
+    ⚠ 正向那一条**改过一次**（2026-09-23，第三十八批）：原来写的是
+    `pretend("operators[0].shield")` —— 那是个**空转守卫**：`shield` 当时在 Go 侧
+    **本来就不存在**（未搬），「从 Go 的规格里删掉它」是**空操作** ⇒ 永远不判红
+    ⇒ 守卫恒过，两边都没被证过。本文件自己的 docstring 早就写着「空转的守卫比
+    没有守卫更坏」，这条正是那个形状。现在改成**要求证据存在**：
+    登记表里至少要有一条路径在真用例里**真的**被用到，否则这条守卫判红
+    （空表要么是过期了、要么是没人走 —— 两种都该看，不该绿）。
     """
     problems: list[str] = []
-    cnt = {"registered_paths": {}, "unregistered_red": 0, "registered_green": 0}
-    #: ① 报告：86 条登记缺键**按路径分组**印出来（不让它变成看不见的一坨）。
+    cnt = {"registered_paths": {}, "unregistered_red": 0, "registered_green": 0,
+           "registered_vacuous": 0}
+    #: ① 报告：登记缺键**按路径分组**印出来（不让它变成看不见的一坨）。
+    #: 条数**现算**，不写死（上一版这里的注释写着 86，那是 child 75 ＋ shield 11）。
     for c in cases:
         py, go = c["py"], c["go"]["spec"]
         _, one, _snow = diff_one(py, go, c["name"])
@@ -461,9 +469,17 @@ def allowance_guards(cases: list[dict]) -> tuple[list[str], dict]:
     else:
         problems.append("allowance 反向守卫不成立：造了一条**没登记**的缺键"
                         "（operators[0].max_hp）却没判红 —— 这张表成了万能挡板")
-    if pretend("operators[0].shield"):
-        problems.append("allowance 正向守卫不成立：**登记过**的缺键（operators[0].shield）"
-                        "被判红了 —— 登记形同虚设，整条路会变成假红")
+    #: 正向：**要证据**。`registered_paths` 是从真用例的 diff 里数出来的，
+    #: 它非空才说明这张表**真的被走到过**（而不是空转或过期）。
+    #: ★ 本批清空之后这条反向来写：**表必须空**（空表 = 任何缺键都判红）。
+    #: 谁要往里加一行，就得同时说明「它在哪一例里真的被缺到了」——只加正则不加
+    #: 证据，这条守卫会红。
+    if REGISTERED_MISSING:
+        cnt["registered_vacuous"] = 1
+        problems.append("allowance 表非空（%d 条），但 80 个用例里被走到的只有 %s "
+                        "—— 每一行都必须能指着「它真被缺到的那一例」，否则它就是"
+                        "真回归的藏身处。本批已清空：child 与 shield 都搬进 Go 了"
+                        % (len(REGISTERED_MISSING), sorted(cnt["registered_paths"]) or "无"))
     else:
         cnt["registered_green"] = 1
     return problems, cnt

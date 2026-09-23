@@ -110,6 +110,39 @@ def query_body(name: str, *, allow_devices: bool = True,
             "allow_devices": allow_devices, "allow_skills": allow_skills}
 
 
+#: ★★ 2026-09-23（第三十八批）**必须补这一例**：
+#: 24 份真夹具原先有 **11 例「两边都拒跑」**，所以「拒跑那半边」是被真行使的；
+#: 那两个键（`farmland.devices[].child`、`operators[].shield`）搬进 Go 之后，
+#: 这 11 例**全部变成真判决** ⇒ 拒跑那半边**零行使** ⇒ 本套自己的覆盖率判据
+#: 当场判红（"一例都没拒跑"）。**正确的处置是补一例把它走回来**，
+#: 不是把那条要求删掉——删掉就成了「用降低覆盖换绿」。
+#:
+#: 用的触发器是**字段驱动**的那条（`unsupported.go` 的「技能槽号 N」）：
+#: 拿一份真夹具、把第一个部署的 `skill` 从 0 改成 1（整数）⇒ 闸门报理由。
+SYNTH_NAME = "（合成）第一个部署 skill=1"
+SYNTH_BASE = "hsex8.json"
+SYNTH_MARK = "技能槽号"
+
+
+def synth_reading() -> dict:
+    """合成一例**两边都拒跑**的读数（见 `SYNTH_NAME` 的注释）。"""
+    import check_specgo_go as C
+
+    lv = next(lv for n, _s, _e, lv in C.real_specs() if n == SYNTH_BASE)
+    raw = json.loads((FIXDIR / SYNTH_BASE).read_text(encoding="utf-8-sig"))
+    raw["deploys"][0]["skill"] = 1
+    body = {"plan": raw, "roster": ROSTER_FIX,
+            "allow_devices": True, "allow_skills": False}
+    rq, rb = go_call([{"id": 1, "cmd": "sim", "level": lv, "spec": body},
+                      {"id": 2, "cmd": "buildspec", "level": lv, "spec": body}])
+    if not rb.get("ok"):
+        raise SystemExit("合成例的 buildspec 失败：%s" % rb.get("error"))
+    built = rb["build_spec"]["spec"]
+    ro, = go_call([{"id": 3, "cmd": "sim", "spec": built}])
+    return {"name": SYNTH_NAME, "level": lv, "query": rq,
+            "built": rb["build_spec"], "old": ro, "spec": built}
+
+
 def build_readings() -> list[dict]:
     """每个夹具问三次：查询形式、buildspec（拿它当旧形式的规格）、旧形式。"""
     import check_specgo_go as C
@@ -128,6 +161,7 @@ def build_readings() -> list[dict]:
         ro, = go_call([{"id": 3, "cmd": "sim", "spec": built}])
         out.append({"name": name, "level": lv, "query": rq, "built": rb["build_spec"],
                     "old": ro, "spec": built})
+    out.append(synth_reading())
     return out
 
 
@@ -152,10 +186,17 @@ def compare(readings: list[dict]) -> tuple[list[str], dict]:
                                    str(o.get("error"))[:120]))
             else:
                 cov["same_error"] += 1
-                if KNOWN_REFUSAL not in str(q.get("error")):
-                    problems.append("%s：两边同因拒跑，但不是已知那条（%s）——"
-                                    "拒跑的理由变了，本判据的登记要重看"
-                                    % (r["name"], str(q.get("error"))[:80]))
+                #: ⚠ 2026-09-23（第三十八批）：真夹具里**已经没有**拒跑的了
+                #: （`farmland.devices[].child` 搬进 Go 之后 11 例全部变成真判决），
+                #: 现在这一支由**合成例**行使，理由也从「天桩没带召唤模板」
+                #: 换成了字段驱动的那条「技能槽号」。两条都是**具名**的：
+                #: 认不出来就判红（拒跑的理由变了，本判据的登记要重看）。
+                want = SYNTH_MARK if r["name"] == SYNTH_NAME else KNOWN_REFUSAL
+                if want not in str(q.get("error")):
+                    problems.append("%s：两边同因拒跑，但不是预期的那个理由"
+                                    "（要到 %r，现得 %r）——拒跑的理由变了，"
+                                    "本判据的登记要重看"
+                                    % (r["name"], want, str(q.get("error"))[:90]))
         else:
             cov["both_ok"] += 1
             d = diff(q.get("verdict"), o.get("verdict"))
@@ -195,8 +236,15 @@ def compare(readings: list[dict]) -> tuple[list[str], dict]:
         #: ——那两个 `life` 是**两个量**：规格里的是**初始**生命点，判决里的是
         #: **打完之后剩的**（这 24 份里有 5 份打完剩 0，正是漏怪漏光的那些关）。
         #: 第一版就是这么写的，于是 5 例假红（红的是判据，不是实现）。
-        #: 正确的判据是两条：① 自造规格的初始生命点必须 > 0（跑之后取的会是 0）；
-        #: ② 剩下的不可能比初始的多。
+        #:
+        #: ★ 2026-09-23（第三十八批）**从区间改成恒等式**：原来的写法是
+        #: 「`0 <= 剩下的 <= 初始`」——而漏怪是会**漏过头的**（`plan-hs07` 现在
+        #: 5 漏 / 初始 3 ⇒ 剩 −2），于是它判红。那不是实现错，是**判据当时
+        #: 没有这种夹具**：24 份里原先最多漏满。
+        #: 真语义是一条**恒等式**（每漏一只扣 1 点，不夹零）：
+        #:     剩下的 == 初始 − 漏数
+        #: 它比区间**更强**（区间对「漏 2 只却只扣 1 点」是绿的），而且照样能抓
+        #: 「跑完之后才取的规格」（那时初始会是 0，而 `0 − 漏数` 对不上活着的场次）。
         if r["spec"].get("life", 0) <= 0:
             problems.append("%s：自造规格的 `life`=%r ≤ 0 —— 规格像是**跑完之后**取的"
                             "（权威那边跑完 life=0，那种规格一帧不跑就判负）"
@@ -204,9 +252,12 @@ def compare(readings: list[dict]) -> tuple[list[str], dict]:
         if q.get("ok"):
             v = q.get("verdict") or {}
             left = v.get("life")
-            if not (isinstance(left, int) and 0 <= left <= int(r["spec"].get("life", 0))):
-                problems.append("%s：判决里剩下的 life=%r 落在 [0, %r] 之外"
-                                % (r["name"], left, r["spec"].get("life")))
+            leaks = v.get("leaks")
+            want = int(r["spec"].get("life", 0)) - int(leaks or 0)
+            if not (isinstance(left, int) and left == want):
+                problems.append("%s：判决里剩下的 life=%r ≠ 初始 %r − 漏 %r = %r"
+                                "（每漏一只扣 1 点、不夹零）"
+                                % (r["name"], left, r["spec"].get("life"), leaks, want))
     return problems, cov
 
 

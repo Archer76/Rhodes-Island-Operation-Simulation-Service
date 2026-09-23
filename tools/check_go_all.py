@@ -93,11 +93,12 @@ SUITE = [
     #: （原版这两个键是同一个循环里的两次 append），所以两者共用 `BuildDeployRows`。
     #: 期望值取 24 份夹具的**生产规格**（64 人次）；另有一条「地基」量测：
     #: Go 的 `OperatorStats.Total[...]` 与活对象 `op.current_atk()` 是不是同一个数。
-    #: 产出面：**32 个键**（含条件键的存在性），另 3 个（`skill`/`active`/`shield`）
-    #: 具名进 `unported` —— 这里的 32/3 与本行第三栏的文字都只是给人读的标签，
-    #: 真正的数由判据每次**现算**（`check_operators_go.py` §7）。
+    #: 产出面：**33 个键**（含条件键的存在性）—— ★ 2026-09-23（第三十八批）把
+    #: `shield` 从「具名 unported」搬进了**产出面**（32 → 33）；另 2 个
+    #: （`skill`／`active`）具名进 `unported`。这里的 33/2 与本行第三栏的文字
+    #: 都只是给人读的标签，真正的数由判据每次**现算**（`check_operators_go.py` §7）。
     ("干员规格", "tools/check_operators_go.py",
-     "Go operators vs simgo/spec.py 的 _operator_spec（产出 32 键逐位）", False),
+     "Go operators vs simgo/spec.py 的 _operator_spec（产出 33 键逐位）", False),
     #: 本轮加的：**自造规格的 `sim`**——`sim` 的第二种入参形式（关卡＋名册＋计划），
     #: Go 内部调 `buildspec` 造规格再跑。★ 判据是**差分**，不是对拍 Python：
     #: 同一关同一计划下「查询形式」的判决必须与「先 buildspec 再送规格」逐路径相同，

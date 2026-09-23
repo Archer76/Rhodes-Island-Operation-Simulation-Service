@@ -66,6 +66,19 @@ const (
 	mechPileKey    = "trap_146_dhdcr" //: 天桩：召唤链的起点
 )
 
+// 天桩召唤链的三个数，逐条照 `frontend/mech_consts.py` 抄（原文是
+// `PILE_SUMMON_DELAY` / `PILE_POLLUT_FULL` / `PILE_SELF_BIND`）。
+//
+// ⚠ **不许在 Go 里二次推导、也不许给它们兜默认值**：这三个数是「原文里的数字」，
+// 甲什么时候召唤乙、病害值到多少算满、乙登场自缚几秒，全靠它们。
+// 权威那边曾经写成 `getattr(_sim_mod, "PILE_SUMMON_DELAY", 1.25)`，
+// 而那个默认值**恰好等于真值** ⇒ 「取不到」永远看不出来（已改成直取）。
+const (
+	mechPileSummonDelay = 1.25  //: PILE_SUMMON_DELAY：甲监测满 ⇒ 隔多久召乙
+	mechPilePollutFull  = 100.0 //: PILE_POLLUT_FULL：病害值满值（甲监测的分母）
+	mechPileSelfBind    = 1.0   //: PILE_SELF_BIND：乙登场自缚秒数
+)
+
 // 田地/病害常数，逐条照 `frontend/environment.py:80-102` 抄。
 const (
 	mechPollutMin      = 0.0
@@ -108,13 +121,13 @@ type MechOut struct {
 	Params map[string]any `json:"params"`
 }
 
-//: 未搬的两条线。与判据脚本的 `UNPORTED` 同源，两边不一致时判据会红。
+//: 未搬的一条线。与判据脚本的 `UNPORTED` 同源，两边不一致时判据会红。
 var mechUnportedLines = []string{
-	//: `mech_config.farmland.devices[].child`：天桩那一条召唤链的四跳模板
-	//: （装置→甲→乙→天标）住在 `mech._pile_device_spec`，它要 `spec._unit_spec`
-	//: ——敌人规格那一层还没进 Go。**顶层的 kind/key/cell/direction 照造**，
-	//: 缺的只有 `child`；它的条数逐关现算，记在 `scanned.devices_pile`。
-	"farmland.devices[].child",
+	//: ⚠ `mech_config.farmland.devices[].child` **已搬进 Go**（2026-09-23，第三十八批）：
+	//: 装置 → 甲（`branch_id` → `branches` → `actions[].enemyKey`）→ 乙（甲的
+	//: `awake_enemy_key`）→ 天标（`pileMarkKey`），三份规格都走
+	//: `spawnCtx.unitSpec`（＝`_unit_spec`，与出怪表同一个口径）。原来登记在这里的
+	//: 那一行已删，判据同步把它从 `unported` 移到**逐字段比**。
 	//: 雪：`snow_mech_spec` 要 `snow_spec` → `d.talents` 的「无垠的雪景」
 	//: （`frontend/talent_finders.find_snow`），而且它按**排程**判——
 	//: 本命令不吃计划 ⇒ 这一支在**本口径下恒不可达**（判据每次现算并断言为 0）。
@@ -252,6 +265,223 @@ func (fs *mechFarmland) sever(c mech.Cell) {
 	fs.rebuildIndex()
 }
 
+// ---------------------------------------------------------------- 天桩召唤链
+//
+// 复刻 `mech.py:244 _pile_device_spec`：**装置 → 甲 → 乙 → 天标**四跳。
+// 四跳里三跳是「谁造谁」，全在结构化字段里、**不在正文里猜**：
+//
+//	装置 → 甲：装置 predefine 的 `overrideSkillBlackboard[branch_id]`
+//	           → 关卡 `branches[branch].actions[].enemyKey`（`pileChildKeyOf`）
+//	甲 → 乙  ：甲自己的 `awake_enemy_key`（读它的天赋黑板）
+//	乙 → 天标：`pileMarkKey`（与出怪表那条路**同一个函数**，全链唯一还要查表的一跳）
+//
+// 三名单位都走 `spawnCtx.unitSpec`（＝`_unit_spec`，与出怪表**同一个口径**），
+// 所以这里不新写任何一份单位规格的拼装。
+//
+// ⚠ **两处必须写死，不能指望从对象上读**：原版是在 `_pile_tick` **运行期**写上的，
+// 而规格是**开战前的快照**，此刻对象上还是默认值。
+//
+//   · 甲的 `unblockable = true`（不可阻挡是它的**常驻天赋**，与监测态无关）。
+//     漏了它的后果不是「甲能被挡」这么轻：甲一旦进了 `op.blocking`，
+//     索敌的**第一段规则**（先打自己挡住的）就会把主目标判给它 ——
+//     `hsex07` 实测 杀 −1／用时 −1.0s。权威在那条注释里自陈踩过一次。
+//   · 甲的 `invincible = awake_value > 0`（监测态无敌，原版 `child.monitor`）。
+
+// pileChildFallback 是 `PILE_CHILD`（`enemy_rules.py:46-48`）：装置 key → 甲的 key。
+//
+// **退路**——正常走上面那条结构化查询；只有整条支线都查不到时才用它
+// （权威：`if device.key not in PILE_CHILD: return ("", None)`，即宁可不召唤）。
+var pileChildFallback = map[string]string{
+	"trap_146_dhdcr": "enemy_1398_dhdcr",
+}
+
+// branchPrefixOf 复刻 `gamedata/stage.py:574 branch_prefix`：装置 key 的**末段**
+// 就是支线名去掉 `branch_` 之后那部分（`trap_146_dhdcr` → `branch_dhdcr`）。
+//
+// ⚠ 空串的含义是「**这个装置没有支线语义**」，不是「取不到」：阻流阀
+// （`trap_139_dhtl`）与泵站（`trap_140_dhsb`）就靠它挡在门外——不挡的话
+// 它们会误领一条天桩的支线（权威实测：`act31side_08` 的 26 个装置各召一名甲）。
+func branchPrefixOf(deviceKey string) string {
+	i := strings.LastIndex(deviceKey, "_")
+	if i < 0 {
+		return ""
+	}
+	tail := deviceKey[i+1:]
+	if tail == "" || tail == deviceKey {
+		return ""
+	}
+	return "branch_" + tail
+}
+
+// branchFor 复刻 `Stage.branch_for`（`stage.py:654`）：把装置的 `branch_id`
+// 解析成**本关真实存在**的支线名。判据按可靠性从高到低：
+//
+//  1. 装置自己写了 `branch_id` 且本关有这条支线 → 直接用它（本活动 8 个带天桩的
+//     关卡全走这条）；
+//  2. 没写 → 先试 `{prefix}_1`（技能默认黑板 `sktok_dhdcr` 写的正是它）；
+//  3. 还找不到 → 本关**只有一条**以该前缀开头的支线时用它（`act31side_ex08`）；
+//  4. 都不成立 → 空串：**宁可不召唤，也不猜错一条路**。
+//
+// ⚠ 第 2、3 条是**推断**，已登记在 `docs/verdicts-pending.md`。
+func branchFor(branches map[string][]BranchAction, branchID, prefix string) string {
+	if branchID != "" {
+		if _, ok := branches[branchID]; ok {
+			return branchID
+		}
+	}
+	if prefix == "" {
+		return ""
+	}
+	if _, ok := branches[prefix+"_1"]; ok {
+		return prefix + "_1"
+	}
+	hits := make([]string, 0, 2)
+	for b := range branches {
+		if b == prefix || strings.HasPrefix(b, prefix+"_") {
+			hits = append(hits, b)
+		}
+	}
+	if len(hits) == 1 {
+		return hits[0]
+	}
+	return ""
+}
+
+// pileChildKeyOf 复刻 `enemy_rules.py:96 pile_spec`：装置 → **它召唤的那名甲**。
+//
+// 返回 (甲的 key, 走的是哪条路)。第二条只是**取证口径**（结构化／退路／没有），
+// 它不进规格：权威那边 `_pile_spec` 同时返回一条 `extraRoutes` 路径，但那**不是
+// 甲的行进计划**——甲的天赋第一句就是「自缚」，那条路径只作留档
+// （全活动 32 个天桩逐关核过：每个装置格都等于它那条路径的起点格）。
+func pileChildKeyOf(st *Stage, deviceKey, branchID string) (string, string) {
+	branch := branchFor(st.Branches, branchID, branchPrefixOf(deviceKey))
+	for _, act := range st.Branches[branch] {
+		if act.EnemyKey == "" {
+			continue
+		}
+		return act.EnemyKey, "structured"
+	}
+	if k, ok := pileChildFallback[deviceKey]; ok {
+		return k, "fallback"
+	}
+	return "", "none"
+}
+
+// pileChain 造一条天桩召唤链。取数口径与 `SpawnsOf` **逐字相同**
+// （`statsFor`：先取数、后过难度乘数），因为两名单位必须是**同一种口径**下的
+// 同一只敌人——两边各算一遍必然有一天走散。
+type pileChain struct {
+	ctx  *spawnCtx
+	defs []localEnemyDef
+}
+
+func newPileChain(st *Stage, raw map[string]json.RawMessage, difficulty string,
+	covered map[string]int) (*pileChain, error) {
+	defs, err := parseLocalEnemyDefs(raw)
+	if err != nil {
+		return nil, err
+	}
+	lib, err := LoadEnemyLibrary()
+	if err != nil {
+		return nil, err
+	}
+	defs2 := st.Difficulty
+	if defs2 == "" {
+		defs2 = "NORMAL"
+	}
+	muls := ParseRuneMuls(st.Runes, defs2)
+	cnt := &spawnCounter{Covered: covered, Scanned: map[string]int{}}
+	return &pileChain{
+		defs: defs,
+		ctx: &spawnCtx{st: st, defs: defs, lib: lib, locals: localEnemies(defs),
+			muls: muls, p3rArmed: false, cnt: cnt, pathCache: map[string][][2]int{}},
+	}, nil
+}
+
+// specAt 造一名单位在**某一格**上的规格（`_view` ＋ `_unit_spec` 那一对）。
+// `route` 只给一个点：甲自缚、乙与天标都是原地出现，权威三处实参都这么传。
+//
+// ⚠ 三个返回值都要：**规格**进输出，而 `awake_*` 那几个在 `EnemyStats` 上、
+// `attach_damage` 只在 `enemyView` 上（它不在 `_unit_spec` 的输出里，
+// 只进天标那一份规格）——少拿一个就得回去重造一遍。
+func (c *pileChain) specAt(key string, cell [2]float64) (map[string]any, *enemyView, *EnemyStats, error) {
+	level := summonLevel(c.defs, key)
+	es, err := c.ctx.statsFor(key, level)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	route := [][2]float64{cell}
+	v := viewOf(es, key, level, nil, route, c.ctx.lib, c.ctx.p3rArmed)
+	spec, err := c.ctx.unitSpec(v, 0.0, 0)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return spec, v, es, nil
+}
+
+// chainOf 复刻 `_pile_device_spec` 的组装那一段（权威同一个键序、同一个层级）。
+//
+// 返回 nil 表示**这一只天桩没有模板**——权威在那里是 `return None`（`try/except`
+// 包着整段），于是规格里没有 `child` 键。**照抄，但计数**：静默少一个键不会有
+// 任何判据报警，所以调用方必须把「建不出来」与「建得出来」分开记。
+func (c *pileChain) chainOf(st *Stage, d mechDevice, covered map[string]int) map[string]any {
+	key, how := pileChildKeyOf(st, d.key, d.branchID)
+	covered["pile_child_"+how]++
+	if key == "" {
+		return nil
+	}
+	cell := [2]float64{float64(d.cell[0]), float64(d.cell[1])}
+	pspec, _, pes, err := c.specAt(key, cell)
+	if err != nil {
+		covered["pile_parent_failed"]++
+		return nil
+	}
+	pspec["static"] = true
+	pspec["unblockable"] = true // 常驻天赋：**必须写死**，见上面那段注释
+	awake := pes.AwakeValue
+	pspec["invincible"] = awake > 0
+	pspec["awake_value"] = awake
+	pspec["awake_hp_ratio"] = pes.AwakeHPRatio
+	pspec["awake_summon_ratio"] = pes.AwakeSummonRatio
+	pspec["awake_summon_cnt"] = pes.AwakeSummonCnt
+	pspec["awake_enemy_key"] = pes.AwakeEnemyKey
+	pspec["summon_delay"] = mechPileSummonDelay
+	pspec["pollut_full"] = mechPilePollutFull
+
+	diverKey := pes.AwakeEnemyKey
+	if diverKey == "" {
+		return pspec
+	}
+	dspec, _, _, err := c.specAt(diverKey, cell)
+	if err != nil {
+		covered["pile_diver_failed"]++
+		return pspec
+	}
+	dspec["static"] = false // 乙会扑向干员，不是自缚
+	dspec["self_bind"] = mechPileSelfBind
+	dspec["hit_radius"] = 0.5 //: 原版「贴到目标格」的判据
+	mk := pileMarkKey(c.defs, diverKey)
+	covered["pile_diver"]++
+	if mk != "" {
+		if mspec, mv, _, err := c.specAt(mk, cell); err == nil {
+			mspec["static"] = true
+			mspec["unblockable"] = true
+			//: ⚠ `attach_damage` **不在** `_unit_spec` 的输出里，只进天标这一份规格
+			//: （`enemyView.AttachDamage`）——照 `markSpec` 那处的口径。
+			mspec["attach_damage"] = mv.AttachDamage
+			mspec["attach_radius"] = 0.3
+			dspec["mark"] = mspec
+			covered["pile_mark"]++
+		} else {
+			//: 权威这里也是 `if mark is not None`——取不到就**没有 mark 键**，
+			//: 不算整条链失败。计数，不静默。
+			covered["pile_mark_failed"]++
+		}
+	}
+	pspec["summon"] = dspec
+	return pspec
+}
+
 // ---------------------------------------------------------------- 装置
 //
 // 复刻 `frontend/devices.py:201-233` 的 `parse_devices`：唯一来源是
@@ -261,6 +491,25 @@ type mechDevice struct {
 	key       string
 	cell      mech.Cell
 	direction string
+	//: 装置 predefine 的 `overrideSkillBlackboard` 里那一项 `branch_id`
+	//: （`devices.py:186 branch_id_of`）：它是「这只装置属于哪条支线」的唯一来源，
+	//: 天桩靠它找到自己召唤的甲。取不到就是空串——**空串是「没写」**，
+	//: 由 `branchFor` 的第 2/3 条推断接手，不是「读失败」。
+	branchID string
+}
+
+// branchIDOf 复刻 `frontend/devices.py:186 branch_id_of`：从装置 predefine 里取
+// `branch_id`（`overrideSkillBlackboard` 的一项，值是 `valueStr`）。
+func branchIDOf(kb []struct {
+	Key      string `json:"key"`
+	ValueStr string `json:"valueStr"`
+}) string {
+	for _, it := range kb {
+		if it.Key == "branch_id" {
+			return it.ValueStr
+		}
+	}
+	return ""
 }
 
 func parseMechDevices(raw map[string]json.RawMessage, height int) ([]mechDevice, error) {
@@ -274,6 +523,13 @@ func parseMechDevices(raw map[string]json.RawMessage, height int) ([]mechDevice,
 				Col *int `json:"col"`
 			} `json:"position"`
 			Direction string `json:"direction"`
+			//: ⚠ 键名是 `overrideSkillBlackboard`（**不是** `skillBlackboard`），
+			//: 且它是一个**数组**、`branch_id` 藏在 `key`／`valueStr` 里。
+			//: 读错的名字不会报错——它只会让 `branchID` 恒空，于是天桩找不到甲。
+			OverrideSkillBlackboard []struct {
+				Key      string `json:"key"`
+				ValueStr string `json:"valueStr"`
+			} `json:"overrideSkillBlackboard"`
 		} `json:"tokenInsts"`
 	}
 	if r, ok := raw["predefines"]; ok && len(r) > 0 {
@@ -291,6 +547,7 @@ func parseMechDevices(raw map[string]json.RawMessage, height int) ([]mechDevice,
 			//: ⚠ row 是游戏内部口径（自下而上），**翻一次**
 			cell:      mech.Cell{*it.Position.Col, height - 1 - *it.Position.Row},
 			direction: strings.ToUpper(it.Direction),
+			branchID:  branchIDOf(it.OverrideSkillBlackboard),
 		})
 	}
 	return out, nil
@@ -563,6 +820,10 @@ func buildMechFarmland(st *Stage, raw map[string]json.RawMessage, difficulty str
 	if err != nil {
 		return mechFarmlandOut{}, scanned, err
 	}
+	//: 召唤链那一串**行使计数**。本命令的口径里 `scanned` 就是行使计数
+	//: （见 `MechOut.Scanned` 的注释「每条线被喂进去多少输入」），所以最后并回
+	//: 同一张表；键一律 `pile_` 开头，与既有的键不撞。
+	covered := map[string]int{}
 	scanned["devices"] = len(devices)
 	blockers := 0
 	for _, d := range devices {
@@ -612,22 +873,54 @@ func buildMechFarmland(st *Stage, raw map[string]json.RawMessage, difficulty str
 	//: 阻流阀不送——它只剩「被拆还原」一条动作，而开场那次断田**已经算进
 	//: 上面的 groups/severed 里了**（`mech.py:380-404` 的注释说的就是这件事）。
 	pileCount := 0
+	pileChild := 0
+	pileNoChild := 0
+	var chain *pileChain
 	for _, d := range devices {
 		kind := mechKindOf(d.key)
 		if kind != "pile" && kind != "pump" {
 			continue
 		}
-		if kind == "pile" {
-			pileCount++
-		}
-		out.Devices = append(out.Devices, mechDeviceOut{
+		outd := mechDeviceOut{
 			Kind: kind, Key: d.key, Cell: [2]int{d.cell[0], d.cell[1]},
 			Direction: d.direction,
-			//: ← `Child` 不填：天桩的召唤链模板要 `_unit_spec`（见 unported）。
-		})
+		}
+		if kind == "pile" {
+			pileCount++
+			//: 天桩的召唤链模板：**规格要在开战前把整条链备好**，因为甲/乙/天标
+			//: 都是「谁造谁」推出来的、运行期临时算不出来（权威 `_pile_device_spec`）。
+			//: 建不出来就**不填** `child`（权威 `return None` 那条），由运行期
+			//: 具名拒跑 —— 一只不会召唤的天桩与「这一关没有天桩」在判决上分不开。
+			if chain == nil {
+				c, err := newPileChain(st, raw, difficulty, covered)
+				if err != nil {
+					return mechFarmlandOut{}, scanned, err
+				}
+				chain = c
+			}
+			if cs := chain.chainOf(st, d, covered); cs != nil {
+				blob, err := json.Marshal(cs)
+				if err != nil {
+					return mechFarmlandOut{}, scanned, err
+				}
+				outd.Child = blob
+				pileChild++
+			} else {
+				pileNoChild++
+			}
+		}
+		out.Devices = append(out.Devices, outd)
 	}
 	scanned["devices_pile"] = pileCount
 	scanned["devices_pump"] = len(out.Devices) - pileCount
+	//: ★ 两个计数**必须分开**：`device_pile_child` 是「真产出了几例」（行使证据），
+	//: `devices_pile_nochild` 是「建不出来几只」。压成一个数的话，
+	//: 「链建好了」与「链全是空的」长得一模一样。
+	scanned["devices_pile_child"] = pileChild
+	scanned["devices_pile_nochild"] = pileNoChild
+	for k, v := range covered {
+		scanned[k] = v
+	}
 	return out, scanned, nil
 }
 

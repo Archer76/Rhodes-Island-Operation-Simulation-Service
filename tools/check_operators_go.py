@@ -13,8 +13,8 @@
 
 | 尺子 | 量什么 | 红了说明什么 |
 |---|---|---|
-| 生产规格 `operators[i]` | Go 产出的那些键（32） | **实现错** |
-| 本脚本从**活对象**现取的读数（`op.current_atk()` 等，自己写一遍表达式） | 同一批 25 个键 | **尺子错**（`_operator_spec` 读的属性里有两个说法） |
+| 生产规格 `operators[i]` | Go 产出的那些键（33） | **实现错** |
+| 本脚本从**活对象**现取的读数（`op.current_atk()` 等，自己写一遍表达式） | 同一批 33 个键 | **尺子错**（`_operator_spec` 读的属性里有两个说法） |
 
 两条各自独立判定、各自报。这样「红」能归因到实现还是归因到判据
 ——本项目为此记过：两把相同的尺子互证不构成核对，但**一把尺子量两个对象**
@@ -36,23 +36,25 @@ Go 送的是 `OperatorStats.Total[...]` 那一套。**两者是不是同一个�
    读到的恒是 `OperatorView` 的默认值 **70.0**；Go 送的就是这个常量。
    哪天它不再是 70.0（比如 `kw` 里补了 `respawnTime`），Go 必须跟着改。
 
-## 具名 unported（10 个键）
+## 具名 unported（2 个键）
 
-`skill / active / heals / blessing_save / blessing_self_freeze / shield /
-regen_aura / team_auras / talent_dodge_phys / talent_dodge_arts`
+`skill / active`（要 `skills.skill_spec` 那整段技能效果装配）。
 
 与 Go 应答里的 `unported` 做**双向集合比对**，并每次运行重量「Python 那一侧
-实际送出了其中几个」＋「Go 是不是偷偷送了一个」。其中 `heals` 是
-**「其实已经能搬、本笔故意不扩范围」**那一条：§6 拿 `opstats` 的
-`heals` 字段与生产规格**逐人次比一次**，把「能搬」从一句声明变成一次量测。
+实际送出了其中几个」＋「Go 是不是偷偷送了一个」。
+
+★ `shield` **已经从这张表里移出**（段 B → 段 A）：它现在**逐位比**（`_shield_of`
+的五个字段），并额外配了一条**双向对照**——判据自己数一遍
+「shield 非空的人次」（`live_counters`），与 Go 的 `covered.shield_nonzero` 比。
+§6 仍然量着 `heals`（拿 `opstats` 的字段与生产规格**逐人次比一次**）。
 
 ## 反向守卫（`--mutate`）
 
-四处**互相独立**的注入，每处都要「注入过 ＋ 判红过」，落在**不同字段、不同代码路径**：
+九处**互相独立**的注入，每处都要「注入过 ＋ 判红过」，落在**不同字段、不同代码路径**：
 ① `atk` 加 1 ulp（浮点面板那条读法）；② `splash_damage_scale` 加 1 ulp
 （条件块的浮点，且**必须落在真有这条特性的人次上**）；③ `cell` 的 x+1（整数坐标）；
-④ 删掉一条 operator（分母由 N 变 N−1）。四处各自拒绝「已被别处占用的夹具」，
-所以是四条独立的路，不是同一条 elif 链上的四个分支。
+④ 删掉一条 operator（分母由 N 变 N−1）；⑤~⑨ 段 B 那五个键各一处。
+每处各自拒绝「已被别处占用的夹具」，所以是九条独立的路，不是同一条 elif 链上的九个分支。
 
 用法:
     python tools\\check_operators_go.py
@@ -81,8 +83,8 @@ GO_BIN = os.environ.get(
 DATA = ROOT / "data" / "gamedata"
 ROSTER_FIX = ROOT / "fixtures" / "roster_max_modelled.json"
 
-#: Go **产出**的 32 个键（13 无条件 ＋ 12 条件 ＋ 7 天赋派生）。
-#: ★ 32 ＋ 3 ＝ **35** ＝ `wire.go::OperatorSpec` 的 json 键数，
+#: Go **产出**的 33 个键（13 无条件 ＋ 12 条件 ＋ 8 天赋派生）。
+#: ★ 33 ＋ 2 ＝ **35** ＝ `wire.go::OperatorSpec` 的 json 键数，
 #: §7 每次运行现数这三者并断言相等（不写死「35」这几个字）。
 PORTED = (
     "char_id", "name", "cell", "max_hp", "atk", "def", "res", "interval",
@@ -95,10 +97,12 @@ PORTED = (
     #: ---- 天赋派生（段 B 第一批）：九个 finder ＋ `TextDerived.Heals` ----
     "heals", "blessing_save", "blessing_self_freeze", "regen_aura",
     "team_auras", "talent_dodge_phys", "talent_dodge_arts",
+    #: ---- 段 B 第二批：`_shield_of`（层数护盾）----
+    "shield",
 )
 
-#: 仍**不产出**的 3 个键。与 `rios-sim/operators.go::OperatorUnported` 同源。
-UNPORTED = ("skill", "active", "shield")
+#: 仍**不产出**的 2 个键。与 `rios-sim/operators.go::OperatorUnported` 同源。
+UNPORTED = ("skill", "active")
 
 #: `unported` 里**其实已经能搬**的那些 → 为什么。★ 现已**清空**：
 #: `heals` 这一批已经产出（`TextDerived.Heals`），所以这份表必须为空——
@@ -122,6 +126,8 @@ COVERED_KEYS = (
     "heals_true", "blessing_nonzero", "regen_aura_nonzero",
     "team_auras_nonzero", "talent_dodge_nonzero",
     "regen_strict_true", "regen_strict_false",
+    #: ---- 段 B 第二批 ----
+    "shield_nonzero",
 )
 
 MUT_ATK = "atk 加 1 ulp"
@@ -133,8 +139,9 @@ MUT_HEALS = "翻转 heals"
 MUT_AURA = "team_auras[0].atk_pct 加 1 ulp"
 MUT_REGEN = "regen_aura.hp_per_sec 加 1 ulp"
 MUT_DODGE = "talent_dodge_phys 加 1 ulp"
+MUT_SHIELD = "shield.max_layers 加 1"
 MUT_KEYS = (MUT_ATK, MUT_SPLASH, MUT_CELL, MUT_DROP,
-            MUT_HEALS, MUT_AURA, MUT_REGEN, MUT_DODGE)
+            MUT_HEALS, MUT_AURA, MUT_REGEN, MUT_DODGE, MUT_SHIELD)
 
 MIN_INTERVAL = 0.05
 ASPD_MIN = 20.0
@@ -285,6 +292,31 @@ class _Done(Exception):
     pass
 
 
+def ruler_shield_of(d):
+    """判据这一侧**自己写一遍** `_shield_of` 的表达式（第二把尺子的那一半）。
+
+    ★ 为什么不直接调 `specgo.spec._shield_of`：那是**权威本人**，而生产规格也是
+    它产出的——两边都问同一个人，比出来的永远相等（**零信息量**）。这里读的是
+    **下一层**（`tal.effects.shield_*`：`apply_text_rules` 的产物），与
+    `_shield_of` 的差别才可能露出「尺子写错了」。
+    """
+    for tal in getattr(d, "talents", None) or ():
+        eff = getattr(tal, "effects", None)
+        if eff is None:
+            continue
+        cap = max(int(eff.shield_max_layers), int(eff.shield_layers_on_deploy))
+        if cap <= 0:
+            continue
+        return {
+            "max_layers": cap,
+            "layers": int(eff.shield_layers_on_deploy),
+            "interval": float(eff.shield_interval),
+            "break_heal_ratio": float(eff.shield_break_heal_ratio),
+            "break_sp": float(eff.shield_break_sp),
+        }
+    return None
+
+
 def live_expect(op, d, prov) -> dict:
     """判据这一侧**自己写一遍**那 25 个键的表达式（第二把尺子）。
 
@@ -344,9 +376,10 @@ def live_expect(op, d, prov) -> dict:
     #: ★ 用**生产者本人**（`frontend/talent_finders` 的九个 finder），
     #: 不在这里另写一遍判据——那正是这条判据存在的意义。
     from ak_tactic.frontend import talent_finders as _tf
-    from ak_tactic.simgo.spec import (_shield_of, _talent_dodge,
-                                      _team_auras_of)
-    _ = _shield_of  #: `shield` 仍在 unported，不在这里比
+    from ak_tactic.simgo.spec import _talent_dodge, _team_auras_of
+    _sh = ruler_shield_of(d)
+    if _sh is not None:
+        out["shield"] = _sh
     if getattr(op, "heals", False):
         out["heals"] = True
     bless = _tf.find_blessing(getattr(d, "talents", None) or [])
@@ -418,6 +451,8 @@ def live_counters(op, d, prov, code_ok: bool, origin_added: bool) -> dict:
             or _tf.find_angel_blessing(tal) is not None
             or _tf.find_limit_dispatch(tal) is not None):
         c["team_auras_nonzero"] = 1
+    if ruler_shield_of(d) is not None:
+        c["shield_nonzero"] = 1
     return c
 
 
@@ -635,6 +670,15 @@ def main() -> int:
                         float(o["talent_dodge_phys"]), math.inf)
                     guard.put(MUT_DODGE, (f.name, i))
                     break
+        #: ⚠ `shield` 的候选面**比 dodge 大、比 heals 小**：24 份夹具里 11 份有它
+        #: （每份 1 人次），所以排在 dodge 之后、heals 之前。**顺序仍然是契约**：
+        #: 排到最后时那 11 份夹具早被前面几条占走，它会一次都注入不上。
+        if guard.want(MUT_SHIELD) and guard.free(f.name):
+            for i, o in enumerate(got):
+                if o.get("shield"):
+                    o["shield"]["max_layers"] = int(o["shield"]["max_layers"]) + 1
+                    guard.put(MUT_SHIELD, (f.name, i))
+                    break
         if guard.want(MUT_HEALS) and guard.free(f.name):
             for i, o in enumerate(got):
                 if o.get("heals"):
@@ -704,6 +748,8 @@ def main() -> int:
                            g_same or k != "regen_aura")
                 guard.note(MUT_DODGE, (f.name, i),
                            g_same or k != "talent_dodge_phys")
+                guard.note(MUT_SHIELD, (f.name, i),
+                           g_same or k != "shield")
                 if g_same:
                     continue
                 slot_bad = True
@@ -714,6 +760,13 @@ def main() -> int:
                         printed.append("      " + dd)
             if slot_bad:
                 bad_slots += 1
+                #: ★ **红要落进退出码**（2026-09-23 补）。原本这里只数 `bad_slots`，
+                #: 而它只出现在结论行的「N / M 人次逐位一致」里、**不进 rc**——
+                #: 实测：把 Go 的 `shield.max_layers` 写死成 99，11 人次印着
+                #: `Go=99 Python=3`、结论从 64/64 掉到 53/64，而 **rc 仍然是 0**。
+                #: 「判据红了但它不改退出码」＝假绿，正是本仓反复记过的那一类。
+                #: ⇒ 人次级的实现错与上面那些结构性错**同权**，一起驱动 rc。
+                bad += 1
         # ---- §4 covered：两侧各数一遍（**逐夹具**比，不是只比合计）
         go_cov = resp.get("covered") or {}
         if set(go_cov) != set(COVERED_KEYS):

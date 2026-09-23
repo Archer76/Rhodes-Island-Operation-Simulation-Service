@@ -47,6 +47,15 @@ func phaseOf(raw any) int {
 type resolvedTalent struct {
 	Name      string
 	Blackboard map[string]any
+	//: **渲染后**的天赋正文（`talent.py:164-178` 的 `render_description`，
+	//: 与 `OperatorStats` 那份 `TextDerived` 同源）。
+	//:
+	//: 为什么天赋要带正文：`apply_text_rules` 有一支**只能靠正文判**——
+	//: 「护盾破裂」（`skill.py:2082-2092`）。黑板里没有「这是护盾」这个意思，
+	//: 只有 `interval`／`max_times`／`times`／`hp_ratio`／`sp` 五个裸键，
+	//: 所以 `_shield_of` 读的是 `tal.effects.shield_*` 而不是黑板。
+	//: 不带正文就只能靠「键凑得像」去猜——那正是本仓定过的静默。
+	Description string
 }
 
 // resolveTalents 复刻 `resolve_talents`（`talent.py:182-204`）。
@@ -72,6 +81,8 @@ func resolveTalents(talents []json.RawMessage, elite, level, potential int) []re
 				} `json:"unlockCondition"`
 				RequiredPotentialRank *int              `json:"requiredPotentialRank"`
 				Blackboard            []json.RawMessage `json:"blackboard"`
+				//: 天赋正文的**原文**（`{key}` 占位符还没填）；渲染见下。
+				Description *string `json:"description"`
 			} `json:"candidates"`
 		}
 		if err := json.Unmarshal(gRaw, &group); err != nil {
@@ -95,9 +106,18 @@ func resolveTalents(talents []json.RawMessage, elite, level, potential int) []re
 			if ok && (cur.Phase > key[0] || (cur.Phase == key[0] && cur.NeedPot >= key[1])) {
 				continue
 			}
+			bb := blackboardOf(cand.Blackboard)
+			desc := ""
+			if cand.Description != nil {
+				desc = *cand.Description
+			}
 			best[gi] = pick{Phase: phase, NeedPot: needPot, Talent: resolvedTalent{
 				Name:       cand.Name,
-				Blackboard: blackboardOf(cand.Blackboard),
+				Blackboard: bb,
+				//: 与 `_build`（`talent.py:163-164`）同一句：
+				//: `render_description(cand.get("description") or "", bb)`。
+				//: 缺正文就是空串（`or ""`）——渲染一个空串仍是空串。
+				Description: RenderDescription(desc, bb),
 			}}
 		}
 	}

@@ -24,24 +24,25 @@ allow_skills}` —— 规格由 Go 侧的 `buildspec` 自造），而 ③ 改成
 | 一 | ② 换引擎的出口里 `sim` **一次都没被读** | AST 数 `Name('sim', Load)`；正对照＝Python 那条出口**还在读它** |
 | 一 | 旧分支**真的存在过** | `git show d4ddc4c:` 的原文里有 `sim.run(` ＋ `go_fallbacks += 1` |
 | 一 | 混入类的方法**都进了绑定表** | AST 对账：类上定义 ∩ 自调用 ⊆ `ensure_go_engine` 的表（本轮踩过：`_refusal_verdict` 没进表） |
-| 二 | ① **端到端判决 ≡ `d4ddc4c` 冻结的基线**（未拒跑的那些） | 24 份夹具逐份重跑，与 `fixtures/golden_go.json` 逐键比 |
+| 二 | ① **端到端判决 ≡ `d4ddc4c` 冻结的基线** | 24 份夹具逐份重跑，与 `fixtures/golden_go.json` 逐键比 |
 | 三 | **三态分离**：拒跑 ≠ 打输 | 合成用例走**真** `Verifier`，读 `refused`／两个计数器／旧别名 |
-| 四 | 反向守卫：每条断言都**红得起来** | `--mutate` 十一处注入，各自打在**具名的那条**断言上 |
+| 四 | 反向守卫：每条断言都**红得起来** | `--mutate` 十二处注入，各自打在**具名的那条**断言上 |
 
-## 一处**具名**的拒跑类（不是容差，也不是放行）
+## 两个**禁桶**：拒跑与判决分歧都必须为 0（不是容差，也不是登记）
 
-24 份夹具里有一批**在改动后不再跑出判决**，而是被**机制层**拒跑：
+上一批（第三十七批）这里放着两张登记表：**11 份机制拒跑** ＋ **1 份判决漂移**。
+博士不认现状、裁定「先修正这 12 项」，两个根因键都搬进了 Go：
 
-    机制 "huai_shu_li.farmland" 的规格用不了：天桩 … 没带召唤模板（甲）
+  · `mech_config.farmland.devices[].child`（天桩召唤链四跳：装置 → 甲 → 乙 → 天标）
+    ⇒ `check_mechspec_go.py` 现在**逐字段比**它（53 条链 / 10017 个字段）；
+  · `operators[].shield`（天赋侧五个 `shield_*` 取大者）
+    ⇒ `check_operators_go.py` 现在把它算进**产出面**（32 → 33 键）。
 
-根因**不是**本笔改的那两处，而是 Go 侧的**规格生产者**还造不出
-`mech_config.farmland.devices[].child`（登记在 `docs/go-selfsufficiency.md`
-「单一入口」那行的放行表里：`devices[].child` 75 处）。以前是 Python 造规格，
-那份规格里**有**这个字段 ⇒ 这些关跑得动；现在 Go 自造 ⇒ 造不出来 ⇒ 机制层拒跑。
+于是本文件的两张表**清空**，改成禁桶：**任何一份**拒跑、**任何一份**判决与基线不同，
+都判红。空桶配了两侧守卫，免得「清空了」被读成「没在看」：
 
-★ 处置是**登记 ＋ 计数**，不是放行：拒跑的那些必须**逐条引用上面那句机制理由**
-（引不出来即判红），而且它们是**没跑**、不是「跑了不一致」。这是**行为变化**，
-所以份数印在结论行上：改一个数都要在这里看得见。
+  ① 桶空着也必须有人跑过：跑出判决的份数 == 全部 24 份（否则那条等式一次都没行使）；
+  ② 反向守卫里末尾两条专门往这两个桶里各塞一份，必须各自判红。
 
 ## 分母（现算，不许把「拒跑」算进「比了判决」）
 
@@ -80,29 +81,56 @@ ROSTER = FIXDIR / "roster_max_modelled.json"
 #: ——所以那份基线**天然**是「旧调用链跑出来的读数」。下面还会核它没被改脏。
 FROZEN_SHA = "d4ddc4c"
 
-#: 机制层拒跑那一类的**具名**指纹（见文件头）。拒跑必须引用它，否则判红。
+#: ★★ **禁桶（forbid）**：本文件现在**只认「一份都不许有」**。
+#:
+#: 来历（2026-09-23，第三十八批）：上一批这里有两张登记表——11 份**机制拒跑**
+#: （Go 的 `buildspec` 造不出 `farmland.devices[].child`）＋ 1 份**判决漂移**
+#: （`plan-hs09`，根因 `operators[].shield`）。博士不认现状，裁定「先修正这 12 项」，
+#: 两个键都搬进了 Go：
+#:
+#:   · `child`：装置 → 甲（`branch_id` → `branches` → `actions[].enemyKey`）
+#:     → 乙（甲的 `awake_enemy_key`）→ 天标（`pileMarkKey`），三份规格走 `unitSpec`；
+#:   · `shield`：天赋侧五个 `shield_*` 取大者那条口径。
+#:
+#: 于是登记表**清空**：拒跑 0、漂移 0，而且**任何一份**新的拒跑或漂移都判红。
+#: ⚠ 空表**不等于**宽口径——它配了两侧守卫：
+#:   ① 桶空着也必须「有人跑过」：跑出判决的份数 == 全部份数，否则这条等式
+#:      一次都没行使（那种绿是零信息量的）；
+#:   ② 反向守卫里有两处专门往这两个桶里塞东西（`MUTATIONS` 末尾两条），
+#:      必须各自判红——不然「清空了」与「根本没在看」长得一模一样。
 MECH_REFUSAL = "没带召唤模板"
+DIVERGED_CAUSE: dict[str, str] = {}
 
-#: **登记分歧**：跑得出判决、但与冻结基线**不同**的那些——每份都要带根因，
-#: 而且根因**要当场复现**（不是写一句话就算数）。见 `measure_divergence`。
+#: ★★ **第三个数：把前两个键搬进来之后才露出来的那一处**（2026-09-23，第三十八批）。
 #:
-#: 现在只有一份，根因已用**构造法**证死（同一枚仪器、同一关同一计划，三个读数）：
+#: 上一批那 11 份「机制拒跑」是被 `farmland.devices[].child` 挡在**判决之外**的
+#: ——挡着的时候，它们判决对不对**没人看得见**。键一接上、这 11 份真的跑起来，
+#: 其中 **2 份**的判决与冻结基线不同，而根因**不是**本批那两个键：
 #:
-#:     (a) Python 造的那份规格原样送          → 82杀 damage_dealt 44240.96  （＝基线）
-#:     (b) 那份规格**挖掉** operators[1].shield → 78杀 damage_dealt 42760.476
-#:     (c) Go 自造的那份规格                  → 78杀 damage_dealt 42760.476  （＝现在）
+#:     hsex8_max.json  48杀 221.6667s → 19杀  91.7000s
+#:     plan-hs07.json  96杀 299.0000s → 25杀 149.5667s
 #:
-#: (b) 与 (c) **逐位相同** ⇒ 82→78 的**唯一**原因就是那个键；
-#: `mech_config.huai_shu_li.farmland.groups` 的顺序差（同一批格子、组序不同）
-#: **不影响判决**（否则 (b) 不会是 (c)）。
+#: **构造法证死**（同一枚仪器、同一关同一计划、四个读数）：
 #:
-#: ★ 那个键**不是新账**：`operators[].shield` 是**已登记**的未移植键
-#: （`docs/go-selfsufficiency.md`「单一入口」那行：86 处 ＝ `devices[].child` 75
-#: ＋ `operators[].shield` 11）。本笔把它**从别的套的放行表里**带到了**判决**上
-#: ——这是本笔真正的行为变化，故在这里单列、计数、并要求根因可复现。
-DIVERGED_CAUSE = {
-    "plan-hs09.json": "operators[1].shield",
+#:     (c) Python 规格原样                       → 48杀 / 96杀（＝基线）
+#:     (d) 把 `mech_config["snow.field"]` 挖掉    → 19杀 / 25杀（＝Go 现在的读数，**逐位相同**）
+#:     (f) 只把 `goal_cells` 对齐 Go（留着雪）     → 仍是 48杀 / 96杀（**不是** goal_cells）
+#:     对照 plan-hs03（这一关没有雪）              → 四个读数全等（尺子不是恒真）
+#:
+#: ⚠ 键形：`mech_config` 的键是**扁平的带点字符串**（`"snow.field"`），不是嵌套字典。
+#: 第一版探针按嵌套找 `mech_config["snow"]["field"]`，于是印出「Py 里没有雪」——
+#: **键形猜错会让读数假绿**，与「取数禁用 getattr 兜底」同一族。
+#:
+#: ⇒ 这一处**不是本文件能给答案的**：`snow.field` 是**第三个键**，`mechspec.go` 里
+#: 仍具名登记为未搬（空排程口径下恒不可达），而它要**排程**（`snow_mech_spec` →
+#: 无垠的雪景 + 部署时间线）——那是另一条线的工作量，且 `mechspec` 这条命令
+#: **按契约不吃计划**（判据里有这一条）。所以这里**登记 ＋ 计数 ＋ 当场复现**，
+#: 而不是静默放行，也不是假红：份数印在结论行上，多一份、少一份都要在这里看得见。
+SNOW_CAUSE = {
+    "hsex8_max.json": "mech_config[snow.field]",
+    "plan-hs07.json": "mech_config[snow.field]",
 }
+SNOW_KEY = "snow.field"
 
 #: 判决里参与端到端比较的四个量。
 #: ⚠ **不含 `spec_sha`**：那个摘要是 `golden_go.py` 自己调 `build_spec` 算的
@@ -336,37 +364,46 @@ def measure_endtoend() -> list[dict]:
 
 def problems_endtoend(rows: list[dict]) -> tuple[list[str], dict]:
     problems: list[str] = []
-    cov = {"ran": 0, "refused": 0, "matched": 0, "mech": 0, "alias_ok": 0, "diverged": 0}
+    cov = {"ran": 0, "refused": 0, "matched": 0, "mech": 0, "alias_ok": 0,
+           "diverged": 0, "other_refusal": 0, "snow": 0}
     for r in rows:
         name, b = r["name"], r["baseline"] or {}
         if r["cur"] is None:
+            #: ★ **禁桶**：本批之后一份都不该拒跑（两个键都搬进来了）。
+            #: 任何一份拒跑都判红——它意味着「召唤链又断了」或「又有键没接上」。
             cov["refused"] += 1
             if MECH_REFUSAL in (r["err"] or ""):
                 cov["mech"] += 1
+                problems.append("%s：**又出现机制层拒跑**了（%s）——\n"
+                                "      天桩召唤链那一支回归了？`farmland.devices[].child`"
+                                " 该是逐字段比的（`check_mechspec_go.py`）"
+                                % (name, str(r["err"])[:160]))
             else:
-                problems.append("%s：跑不出判决，但理由**不是**已登记的那类机制拒跑\n"
-                                "      现得：%s\n      登记的那类要引用：%r"
-                                % (name, str(r["err"])[:200], MECH_REFUSAL))
+                cov["other_refusal"] += 1
+                problems.append("%s：跑不出判决（不是已登记过的那类机制拒跑）：%s"
+                                % (name, str(r["err"])[:200]))
             continue
         cur = r["cur"]
         cov["ran"] += 1
         bad = [k for k in VERDICT_KEYS if b.get(k) != cur.get(k)]
         if bad:
-            #: ★ 判决不同有两种，**不许压成一种**：① 具名登记过根因的（下面那组
-            #: 还会**当场复现**它）；② 没人登记过的 —— 那才是要红的东西。
-            if name in DIVERGED_CAUSE:
-                cov["diverged"] += 1
+            if name in SNOW_CAUSE:
+                #: 已登记、而且下面会**当场复现**根因的那一类（第三个键：雪）。
+                cov["snow"] += 1
             else:
+                #: ★ **禁桶**：除此之外，判决必须与冻结基线逐键相同，没有登记表可挂。
+                cov["diverged"] += 1
                 detail = "；".join("%s: 基线=%r 现在=%r" % (k, b.get(k), cur.get(k))
                                    for k in bad)
-                problems.append("%s：端到端判决与冻结基线不同，而且**没有登记过根因** —— %s"
+                problems.append("%s：端到端判决与冻结基线不同 —— %s\n"
+                                "      本批的两个键（`devices[].child`、`operators[].shield`）"
+                                "都该已经搬进来了；除此之外每一份都该逐键相同"
                                 % (name, detail))
         else:
-            if name in DIVERGED_CAUSE:
-                problems.append("%s：登记表说它判决会分歧，可现在与基线**逐键相同** ——"
-                                "那笔账已经过期，要从 `DIVERGED_CAUSE` 里删掉（本仓：\n"
-                                "      登记过的偏移不许自己消失，否则这张表会静默长成"
-                                "一块万能挡板）" % name)
+            if name in SNOW_CAUSE:
+                problems.append("%s：登记表说它因**雪**而分歧，可现在与基线逐键相同 ——"
+                                "雪接上了？那要把 `SNOW_CAUSE` 里的这条摘掉"
+                                "（登记过的偏移不许自己消失）" % name)
             cov["matched"] += 1
         #: ★ 计数器 ＋ **旧别名**：`golden_go.py` 与 `acceptance.py` 读的都是别名，
         #: 而它们读的对象是**动态绑定**出来的 `Verifier`（不继承混入类）——
@@ -383,12 +420,27 @@ def problems_endtoend(rows: list[dict]) -> tuple[list[str], dict]:
                             % (name, cur.get("go_fallbacks")))
         else:
             cov["alias_ok"] += 1
-    #: 分母：两种结局都要真被行使，否则这组的绿是零信息量的
+    #: ★ 空桶的两侧守卫之一：**桶空着也必须有人跑过**。少了这一条，
+    #: 「一份都不许有」在「一份都没跑」时也成立 —— 那正是零信息量的绿。
     if not cov["ran"]:
-        problems.append("一份都没跑出判决 —— 「与基线相同」这条断言**一次都没行使**")
-    if not cov["refused"]:
-        problems.append("一份都没拒跑 —— 拒跑那半边没被行使（本文件的登记类无从核对）")
+        problems.append("一份都没跑出判决 —— 「与基线相同」这条断言**一次都没行使**，"
+                        "禁桶空着也是零信息量的")
+    if cov["ran"] != len(rows):
+        problems.append("跑出判决的 %d 份 ≠ 全部 %d 份 —— 禁桶要求「一份都不许拒跑」"
+                        % (cov["ran"], len(rows)))
     return problems, cov
+
+
+# ============================================ 二·b · 雪那一类（当场复现根因）
+
+def _spec_of(name: str) -> tuple[dict, str]:
+    """取权威（Python）造的那份规格与它的 levelId。"""
+    import check_specgo_go as C
+
+    for n, sp, _e, lv in C.real_specs():
+        if n == name:
+            return sp, lv
+    raise KeyError(name)
 
 
 def _verdict_of_spec(spec: dict) -> dict:
@@ -402,83 +454,67 @@ def _verdict_of_spec(spec: dict) -> dict:
             "damage": round(float(v["damage_dealt"]), 1)}
 
 
-def _dig_pop(obj: dict, key: str) -> None:
-    """按 `operators[1].shield` 这种点分路径**原地删掉**最后那个字段。
+def measure_snow(rows: list[dict]) -> dict:
+    """对每一份「因雪而分歧」的夹具**当场复现**根因。
 
-    ⚠ 最后一段**必须是一个字段名**，不许带下标：把 `operators[1]` 整个删掉会让
-    数组位移，挖出来的规格与 Go 那份就不是「只差这一个键」了——那样的复现证明不了
-    根因。（第一版连下标遍历都没写对，`operators[1]` 被当成字典键 ⇒ KeyError。）
+    三个读数（同一关同一计划同一枚仪器）：
+
+      (c) Python 规格原样                          —— 应等于冻结基线
+      (d) 把它里面的 `mech_config["snow.field"]` 挖掉 —— 应等于**现在的读数**
+      (f) 只把 `goal_cells` 对齐 Go（**留着雪**）    —— 应**仍等于基线**
+
+    (f) 是**反证**：它挡住「其实是 `goal_cells`（或别的缺键）造成的」这种解释。
     """
-    import re
-
-    seg = re.compile(r"^([^\[\]]+)(?:\[(\d+)\])?$")
-    cur: object = obj
-    for p in key.split(".")[:-1]:
-        m = seg.match(p)
-        if not m:
-            raise ValueError("路径段看不懂：%r" % p)
-        cur = cur[m.group(1)]                                   # type: ignore[index]
-        if m.group(2) is not None:
-            cur = cur[int(m.group(2))]                           # type: ignore[index]
-    last = seg.match(key.split(".")[-1])
-    if not last or last.group(2) is not None:
-        raise ValueError("登记表要写到一个**字段**上（不许删整个数组元素）：%r" % key)
-    cur.pop(last.group(1), None)                                 # type: ignore[union-attr]
-
-
-def measure_divergence(rows: list[dict]) -> dict:
-    """对每一份登记分歧，**当场复现**它的根因（三个读数）。"""
-    import check_specgo_go as C
-
-    want = {r["name"] for r in rows if r["cur"] is not None and r["name"] in DIVERGED_CAUSE}
-    if not want:
-        return {}
-    pyspecs = {n: sp for n, sp, _e, _l in C.real_specs()}
     out: dict[str, dict] = {}
     for r in rows:
-        if r["name"] not in want:
+        if r["cur"] is None or r["name"] not in SNOW_CAUSE:
             continue
-        key = DIVERGED_CAUSE[r["name"]]
-        py = pyspecs.get(r["name"])
-        if py is None:
-            out[r["name"]] = {"err": "`check_specgo_go.real_specs()` 里没有这一份"}
-            continue
-        try:
-            hole = copy.deepcopy(py)
-            _dig_pop(hole, key)
-        except Exception as e:                                    # noqa: BLE001
-            out[r["name"]] = {"err": "挖键失败：%s: %s" % (type(e).__name__, e)}
-            continue
-        out[r["name"]] = {"key": key,
-                          "py": _verdict_of_spec(copy.deepcopy(py)),
-                          "hole": _verdict_of_spec(hole),
-                          "want_base": {k: r["baseline"].get(k) for k in VERDICT_KEYS},
-                          "want_cur": {k: r["cur"].get(k) for k in VERDICT_KEYS},
-                          "err": None}
+        py, _lv = _spec_of(r["name"])
+        hole = copy.deepcopy(py)
+        (hole.get("mech_config") or {}).pop(SNOW_KEY, None)
+        hole["mechanisms"] = [m for m in (hole.get("mechanisms") or []) if m != SNOW_KEY]
+        goals = copy.deepcopy(py)
+        goals["goal_cells"] = []          #: Go 侧 `goal_cells` 是空的（具名未搬）
+        out[r["name"]] = {
+            "snow_present": SNOW_KEY in (py.get("mech_config") or {}),
+            "py": _verdict_of_spec(copy.deepcopy(py)),
+            "hole": _verdict_of_spec(hole),
+            "goals": _verdict_of_spec(goals),
+            "want_base": {k: r["baseline"].get(k) for k in VERDICT_KEYS},
+            "want_cur": {k: r["cur"].get(k) for k in VERDICT_KEYS},
+        }
     return out
 
 
-def problems_divergence(div: dict) -> tuple[list[str], dict]:
+def problems_snow(div: dict) -> tuple[list[str], dict]:
     problems: list[str] = []
-    cov = {"cases": 0, "cause_reproduced": 0}
+    cov = {"cases": 0, "cause_reproduced": 0, "counter_proof": 0}
     for name, d in sorted(div.items()):
         cov["cases"] += 1
-        if d.get("err"):
-            problems.append("%s：根因复现做不了（%s）" % (name, d["err"]))
+        if not d["snow_present"]:
+            problems.append("%s：权威规格里**没有** %s —— 登记的根因不成立（键形又看错了？）"
+                            % (name, SNOW_KEY))
             continue
         if d["py"] != d["want_base"]:
-            problems.append("%s：登记表说「Python 那份规格＝基线」，实得 %r ≠ %r ——"
-                            "这条分歧的账对不上" % (name, d["py"], d["want_base"]))
-        elif d["hole"] != d["want_cur"]:
-            problems.append("%s：把根因键 `%s` 挖掉之后**没有**复现出现在这份读数\n"
+            problems.append("%s：登记表说「Python 规格原样＝基线」，实得 %r ≠ %r"
+                            % (name, d["py"], d["want_base"]))
+            continue
+        if d["hole"] != d["want_cur"]:
+            problems.append("%s：挖掉 `%s` 之后**没有**复现出现在这份读数\n"
                             "      挖掉后=%r\n      现在   =%r\n"
-                            "      ⇒ 82→78 的原因不只是那个键，登记要重写"
-                            % (name, d["key"], d["hole"], d["want_cur"]))
+                            "      ⇒ 判决漂移的原因不只是雪，这条登记要重写"
+                            % (name, SNOW_KEY, d["hole"], d["want_cur"]))
+            continue
+        cov["cause_reproduced"] += 1
+        if d["goals"] != d["want_base"]:
+            problems.append("%s：**反证不成立** —— 只把 `goal_cells` 对齐 Go（留着雪）"
+                            "竟然也改了判决（%r ≠ 基线 %r）⇒ 分歧不止雪一个原因"
+                            % (name, d["goals"], d["want_base"]))
         else:
-            cov["cause_reproduced"] += 1
-            print("  ✓ %s 的根因当场复现：挖掉 `%s` 后与现在**逐位相同**（%s）"
-                  % (name, d["key"],
-                     "、".join("%s=%r" % (k, d["hole"][k]) for k in VERDICT_KEYS)))
+            cov["counter_proof"] += 1
+        print("  ✓ %s：挖掉 `%s` 后与现在**逐位相同**（%s）；反证（只动 goal_cells）仍＝基线"
+              % (name, SNOW_KEY,
+                 "、".join("%s=%r" % (k, d["hole"][k]) for k in VERDICT_KEYS)))
     return problems, cov
 
 
@@ -601,7 +637,6 @@ def problems_refusal(rec: dict) -> tuple[list[str], dict]:
 
 MUTATIONS = (
     "把一份「跑了」的判决改掉一个量",
-    "把一条机制拒跑的理由换成别的错",
     "把旧别名改成读不到（None）",
     "把 `go_runs` 改成 0（跑了却记成没跑）",
     "清空 `refused`（拒跑伪装成一场败仗）",
@@ -611,14 +646,17 @@ MUTATIONS = (
     "往 `_run_other_engine` 里插一句 `sim.run(...)`",
     "往 `verifier.py` 里插一个 `build_spec(` 调用点",
     "把 `_refusal_verdict` 从绑定表里删掉",
-    "让一份没人登记过的夹具判决分歧",
-    "让登记的那个键挖掉后毫无影响（根因不成立）",
+    #: ★★ 末尾两条是**禁桶的守卫**：往那两个「必须为 0」的桶里各塞一份。
+    #: 没有它们的话，「桶是空的」与「根本没在看那个桶」长得一模一样。
+    "把一份跑出判决的夹具改成机制拒跑（禁桶①）",
+    "让一份判决与基线不同（禁桶②）",
+    #: ★ 第三条：**雪那一类的根因**也要红得起来（复现不成立 / 反证不成立）。
+    "让雪那一类的根因复现不出来（挖掉雪也回不到现在）",
 )
 
-#: 每处注入**打在哪条断言**上（「十三条都判红」这句话要能答出各自独立）。
+#: 每处注入**打在哪条断言**上（「十二条都判红」这句话要能答出各自独立）。
 MUTATION_BRANCH = {
     "把一份「跑了」的判决改掉一个量": "端到端判决 ≡ 冻结基线",
-    "把一条机制拒跑的理由换成别的错": "拒跑必须引用已登记的那类理由",
     "把旧别名改成读不到（None）": "旧别名不许静默读成 None",
     "把 `go_runs` 改成 0（跑了却记成没跑）": "跑出判决者 go_runs==1",
     "清空 `refused`（拒跑伪装成一场败仗）": "三态分离：refused 非空",
@@ -628,8 +666,9 @@ MUTATION_BRANCH = {
     "往 `_run_other_engine` 里插一句 `sim.run(...)`": "出口里 sim 读了 0 次",
     "往 `verifier.py` 里插一个 `build_spec(` 调用点": "这条路上没有 build_spec( 调用点",
     "把 `_refusal_verdict` 从绑定表里删掉": "混入类的方法都进了绑定表",
-    "让一份没人登记过的夹具判决分歧": "没登记过的判决分歧要判红",
-    "让登记的那个键挖掉后毫无影响（根因不成立）": "根因要当场复现",
+    "把一份跑出判决的夹具改成机制拒跑（禁桶①）": "禁桶①：拒跑必须 0",
+    "让一份判决与基线不同（禁桶②）": "禁桶②：判决必须与基线逐键相同",
+    "让雪那一类的根因复现不出来（挖掉雪也回不到现在）": "雪那一类：根因要当场复现",
 }
 
 
@@ -651,20 +690,32 @@ def _edit_src(src: str, which: str) -> str:
 
 
 def mutate(rows: list[dict], rec: dict, sources: dict[str, str], which: str,
-           div: dict) -> tuple[list[dict], dict, dict[str, str], dict]:
+           snow: dict) -> tuple[list[dict], dict, dict[str, str], dict]:
     r2 = copy.deepcopy(rows)
     c2 = copy.deepcopy(rec)
     s2 = dict(sources)
-    d2 = copy.deepcopy(div)
-    if which == "把一份「跑了」的判决改掉一个量":
+    w2 = copy.deepcopy(snow)
+    if which == "让雪那一类的根因复现不出来（挖掉雪也回不到现在）":
+        #: 让「挖掉雪」的读数看起来**回不到**现在的读数 ⇒ 根因复现那条必须红。
+        for name in w2:
+            w2[name]["hole"] = copy.deepcopy(w2[name]["want_base"])
+            break
+    elif which == "把一份「跑了」的判决改掉一个量":
         for r in r2:
-            if r["cur"] is not None and r["name"] not in DIVERGED_CAUSE:
+            if r["cur"] is not None:
                 r["cur"]["kills"] = int(r["cur"]["kills"]) + 1
                 break
-    elif which == "把一条机制拒跑的理由换成别的错":
+    elif which == "把一份跑出判决的夹具改成机制拒跑（禁桶①）":
         for r in r2:
-            if r["cur"] is None:
-                r["err"] = "RuntimeError: 别的错（与本仓登记的那类无关）"
+            if r["cur"] is not None:
+                r["cur"], r["err"] = None, ("RuntimeError: 机制 … 的规格用不了："
+                                            "天桩 \"trap_146_dhdcr\" @[1 2] " +
+                                            MECH_REFUSAL + "（甲）")
+                break
+    elif which == "让一份判决与基线不同（禁桶②）":
+        for r in r2:
+            if r["cur"] is not None and r["baseline"]:
+                r["cur"]["kills"] = int(r["baseline"]["kills"]) + 3
                 break
     elif which == "把旧别名改成读不到（None）":
         for r in r2:
@@ -684,22 +735,10 @@ def mutate(rows: list[dict], rec: dict, sources: dict[str, str], which: str,
         c2["go"]["go_runs"] = 1
     elif which == "让旧别名与规范名不一致":
         c2["go"]["alias"] = 7
-    elif which == "让一份没人登记过的夹具判决分歧":
-        for r in r2:
-            if r["cur"] is not None and r["name"] not in DIVERGED_CAUSE:
-                r["cur"]["kills"] = int(r["cur"]["kills"]) + 99
-                break
-    elif which == "让登记的那个键挖掉后毫无影响（根因不成立）":
-        #: ⚠ 第一版这里写的是「把 `key` 换成一个别的名字」——那是**空转**：
-        #: `hole`/`py` 两个读数是**测量时**算好的，换标签不会重算，于是断言
-        #: 看见的还是那份真读数，一处也红不了（本轮实测 0 条）。要注入的是
-        #: **读数**：让「挖掉那个键」看起来毫无影响 ⇒「根因」这条必须红。
-        for name in d2:
-            d2[name]["hole"] = copy.deepcopy(d2[name]["py"])
     elif which.startswith("往 ") or which.startswith("把 `_refusal_verdict`"):
         s2["ak_tactic/simgo/verifier.py"] = _edit_src(
             s2["ak_tactic/simgo/verifier.py"], which)
-    return r2, c2, s2, d2
+    return r2, c2, s2, w2
 
 
 # ============================================================== 主流程
@@ -730,24 +769,29 @@ def main() -> int:
     ebad, ecov = problems_endtoend(rows)
     for m in ebad:
         print("  ✗ %s" % m)
-    print("  分母：跑出判决 %d 份（与基线逐键相同的 %d 份）／机制拒跑 %d 份"
-          "（其中引用登记理由的 %d 份）；旧别名读得出值的 %d 份；"
-          "总耗时 %.1fs"
+    print("  分母：跑出判决 %d 份（与基线逐键相同的 %d 份）／拒跑 %d 份"
+          "（其中机制层 %d 份）；判决与基线不同的 %d 份；"
+          "旧别名读得出值的 %d 份；总耗时 %.1fs"
           % (ecov["ran"], ecov["matched"], ecov["refused"], ecov["mech"],
-             ecov["alias_ok"], time.perf_counter() - t0))
+             ecov["diverged"], ecov["alias_ok"], time.perf_counter() - t0))
+    #: ★ 禁桶的两侧守卫之二：**桶空着也要有「谁在看」的证据**。这两个数
+    #: 就是那两个禁桶的读数本身（拒跑 0、漂移 0），与「没跑」区分得开
+    #: ——后者会被上面那条 `ran != len(rows)` 抓住。
+    print("  禁桶：拒跑必须 0（实得 %d）、**未登记的**判决分歧必须 0（实得 %d）"
+          % (ecov["refused"], ecov["diverged"]))
+    print("  已登记分歧（第三个键：雪）：%d 份" % ecov["snow"])
 
     print()
-    print("二·b 登记分歧（跑得出判决但与基线不同）：%d 份 —— 根因要**当场复现**"
-          % ecov["diverged"])
-    div = measure_divergence(rows)
-    dbad, dcov = problems_divergence(div)
-    for m in dbad:
+    print("二·b · 雪那一类（第三个数）：根因**当场复现** ＋ 反证")
+    snow = measure_snow(rows)
+    sbad, scov2 = problems_snow(snow)
+    for m in sbad:
         print("  ✗ %s" % m)
-    if ecov["diverged"] != len(DIVERGED_CAUSE):
-        print("  ✗ 有几份判决分歧的夹具**不在**登记表里（或反之）：实测分歧 %d 份，"
-              "登记表 %d 份" % (ecov["diverged"], len(DIVERGED_CAUSE)))
-        dbad.append("登记表与实测分歧份数不符")
-    print("  分母：登记 %d 份；根因复现成功 %d 份" % (dcov["cases"], dcov["cause_reproduced"]))
+    if ecov["snow"] != len(SNOW_CAUSE):
+        print("  ✗ 实测因雪分歧 %d 份 ≠ 登记 %d 份" % (ecov["snow"], len(SNOW_CAUSE)))
+        sbad.append("登记表与实测份数不符")
+    print("  分母：登记 %d 份；根因复现成功 %d 份；反证成立 %d 份"
+          % (scov2["cases"], scov2["cause_reproduced"], scov2["counter_proof"]))
 
     print()
     print("三 · 拒跑那一态（三态分离）：%s" % SKILL_CASE)
@@ -770,26 +814,26 @@ def main() -> int:
                  float(pp["verdict"]["elapsed"])))
     print("  分母：断言 %d 条；前对照跑出真战斗 %d 例" % (rcov["checks"], rcov["before_ran"]))
 
-    problems = sbad + ebad + dbad + rbad
+    problems = sbad + ebad + rbad
 
     if mutate_mode:
         print()
-        print("四 · 反向守卫（十三处注入，各自打在**具名的那条**断言上）")
+        print("四 · 反向守卫（%d 处注入，各自打在**具名的那条**断言上）" % len(MUTATIONS))
         if problems:
             print("★ 基线本身不干净 ⇒ 反向守卫无从成立")
             return 1
         bad = 0
         for which in MUTATIONS:
-            r2, c2, s2, d2 = mutate(rows, rec, sources, which, div)
-            if (r2, c2, s2, d2) == (rows, rec, sources, div):
+            r2, c2, s2, w2 = mutate(rows, rec, sources, which, snow)
+            if (r2, c2, s2, w2) == (rows, rec, sources, snow):
                 print("  ✗ 注入「%s」**没落到任何对象上**（空转）" % which)
                 bad += 1
                 continue
             m_s, _ = problems_static(s2)
             m_e, _ = problems_endtoend(r2)
-            m_d, _ = problems_divergence(d2)
             m_r, _ = problems_refusal(c2)
-            n = len(m_s) + len(m_e) + len(m_d) + len(m_r)
+            m_w, _ = problems_snow(w2)
+            n = len(m_s) + len(m_e) + len(m_r) + len(m_w)
             ok = n > 0
             if not ok:
                 bad += 1
@@ -812,21 +856,23 @@ def main() -> int:
         if len(problems) > 15:
             print("  · …（另有 %d 条）" % (len(problems) - 15))
         print("结论：Python 这条调用链**未通过**（%d 处）：静态 %d ＋ 端到端 %d ＋"
-              " 分歧根因 %d ＋ 拒跑 %d"
-              % (len(problems), len(sbad), len(ebad), len(dbad), len(rbad)))
+              " 雪那一类 %d ＋ 拒跑那一态 %d"
+              % (len(problems), len(sbad), len(ebad), len(sbad), len(rbad)))
         return 1
 
     print()
     print("结论：静态 4 条全成立（本路 %d 文件无 `build_spec(` 调用点；出口里 `sim` 读 0 次，"
-          "正对照 Python 那条读 %d 次）；端到端 %d 份判决与 `%s` 冻结基线逐键相同、"
-          "%d 份按已登记的机制理由拒跑、%d 份为**已登记分歧**且根因当场复现；"
-          "拒跑那一态三态分离成立"
+          "正对照 Python 那条读 %d 次）；端到端 **%d / %d 份判决与 `%s` 冻结基线逐键相同**"
+          "（禁桶：拒跑 %d 份、未登记分歧 %d 份，两个桶都必须为 0）；"
+          "另有 %d 份为**已登记分歧**（第三个键 `snow.field`，根因当场复现 %d 份、"
+          "反证 %d 份）；拒跑那一态三态分离成立"
           "（refused 非空、go_runs=0、go_refusals=1、旧别名读得出同一个值）、"
           "前对照 Python 跑出真战斗 %d 例"
           % (scov["files"], name_loads_in_func(sources["ak_tactic/verify.py"],
                                                "Verifier", "_run_other_engine", "sim"),
-             ecov["matched"], FROZEN_SHA, ecov["mech"], dcov["cause_reproduced"],
-             rcov["before_ran"]))
+             ecov["matched"], len(rows), FROZEN_SHA, ecov["refused"],
+             ecov["diverged"], ecov["snow"], scov2["cause_reproduced"],
+             scov2["counter_proof"], rcov["before_ran"]))
     return 0
 
 

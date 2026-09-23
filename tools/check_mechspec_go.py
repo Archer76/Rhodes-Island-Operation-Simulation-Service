@@ -61,7 +61,7 @@ FARMLAND_ID = "huai_shu_li.farmland"
 SNOW_ID = "snow.field"
 
 #: Go 报的**未搬**线（与 `rios-sim/mechspec.go::mechUnportedLines` 同源，双向守卫）。
-UNPORTED = ("farmland.devices[].child", "snow.field")
+UNPORTED = ("snow.field",)
 
 #: **本命令口径下**结构不可达的线：名字 ＋ 为什么。
 #: 判据第五节每次现算可达性——非 0 即红（那时说明口径变了，登记要重写）。
@@ -151,6 +151,41 @@ def canon_groups(groups: list) -> list:
     return sorted(groups, key=lambda g: [list(c) for c in g["cells"]])
 
 
+def diff_paths(a, b, p: str = "") -> list[tuple[str, object, object]]:
+    """逐**路径**比两份 JSON（不整块 `!=`）。
+
+    ⚠ 为什么不整块比：Go 送回来的是 `30`、权威那边是 `30.0`——在 Python 里
+    `30 == 30.0` 为真，而 `json.dumps` 的两份文本不同。本项目为此吃过一次亏
+    （2351 条「类型噪音」淹掉 1~2 处真差异），所以一律按路径比、按值判。
+    """
+    out: list[tuple[str, object, object]] = []
+    if isinstance(a, dict) and isinstance(b, dict):
+        for k in sorted(set(a) | set(b)):
+            if k not in a:
+                out.append((p + "." + k, "<缺>", b[k]))
+            elif k not in b:
+                out.append((p + "." + k, a[k], "<缺>"))
+            else:
+                out += diff_paths(a[k], b[k], p + "." + k)
+    elif isinstance(a, list) and isinstance(b, list):
+        if len(a) != len(b):
+            out.append((p + ".len", len(a), len(b)))
+        for i, (x, y) in enumerate(zip(a, b)):
+            out += diff_paths(x, y, "%s[%d]" % (p, i))
+    elif a != b:
+        out.append((p, a, b))
+    return out
+
+
+def count_leaves(obj) -> int:
+    """数一棵 JSON 里有几个叶子（「比到了多少字段」的分母）。"""
+    if isinstance(obj, dict):
+        return sum(count_leaves(v) for v in obj.values())
+    if isinstance(obj, list):
+        return sum(count_leaves(v) for v in obj)
+    return 1
+
+
 def diff_farmland(want: dict, got: dict) -> list[str]:
     """逐字段比一份田地规格；返回失配描述（空 = 一致）。"""
     bad: list[str] = []
@@ -182,8 +217,10 @@ def diff_farmland(want: dict, got: dict) -> list[str]:
                 bad.append("groups（按格集合排序后第 %d 组）：期望 %s，Go %s"
                            % (i, json.dumps(a, ensure_ascii=False),
                               json.dumps(b, ensure_ascii=False)))
-    #: devices：`child` 是**具名未搬**（天桩召唤链要 `_unit_spec` 之外的
-    #: `_pile_device_spec` 模板，见第六节），其余字段逐条比。
+    #: devices：**逐条逐字段比，`child` 也在里面**。
+    #: ⚠ 2026-09-23（第三十八批）之前 `child` 是**具名未搬**（那时它确实造不出来），
+    #: 本批把那条召唤链搬进 Go 之后，这里必须改成**真比** —— 留着一个放行口子的话，
+    #: 「链造对了」与「链根本没造」都会绿（那就是又一次静默）。
     wd, gd = want.get("devices") or [], got.get("devices") or []
     if len(wd) != len(gd):
         bad.append("devices 条数：期望 %d，Go %d" % (len(wd), len(gd)))
@@ -192,6 +229,18 @@ def diff_farmland(want: dict, got: dict) -> list[str]:
             for k in ("kind", "key", "cell", "direction"):
                 if a.get(k) != b.get(k):
                     bad.append("devices[%d].%s：期望 %r，Go %r" % (i, k, a.get(k), b.get(k)))
+            if "child" in a or "child" in b:
+                if "child" not in a:
+                    bad.append("devices[%d]：权威没有 child，Go 却造了一个" % i)
+                elif "child" not in b:
+                    bad.append("devices[%d]：**权威有 child、Go 没有** —— "
+                               "召唤链又断了（运行期会具名拒跑）" % i)
+                else:
+                    df = diff_paths(a["child"], b["child"], "child")
+                    for p, x, y in df[:6]:
+                        bad.append("devices[%d].%s：期望 %r，Go %r" % (i, p, x, y))
+                    if len(df) > 6:
+                        bad.append("devices[%d].child：另有 %d 处不同" % (i, len(df) - 6))
     return bad
 
 
@@ -200,7 +249,8 @@ def compare(levels: list[str], exp: dict, got: dict) -> tuple[list[str], dict]:
     problems: list[str] = []
     cov = {"关卡": 0, "有田地": 0, "无田地": 0, "多组": 0, "有 actual": 0,
            "有 severed": 0, "有 pump": 0, "有 pile": 0, "有 valve": 0,
-           "groups 顺序不同": 0, "child 缺失条数": 0, "比到的字段数": 0}
+           "groups 顺序不同": 0, "child 比过的条数": 0, "child 比到的字段数": 0,
+           "chain 走到乙的条数": 0, "chain 走到天标的条数": 0, "比到的字段数": 0}
     for lv in levels:
         w_mechs, w_cfg = exp[lv]           # ← 循环顶部、无条件算出
         g = got[lv]
@@ -239,11 +289,16 @@ def compare(levels: list[str], exp: dict, got: dict) -> tuple[list[str], dict]:
             wp = [d for d in (wf.get("devices") or []) if d.get("kind") == "pile"]
             gp = [d for d in (gf.get("devices") or []) if d.get("kind") == "pile"]
             for a, b in zip(wp, gp):
-                if "child" in a and "child" not in b:
-                    cov["child 缺失条数"] += 1
-                elif ("child" in a) != ("child" in b):
-                    problems.append("%s：pile 的 child 存在性不一致（期望 %s，Go %s）"
-                                    % (lv, "child" in a, "child" in b))
+                #: 行使证据：**真比过几条链、链里比到几个字段**。
+                #: 压成「缺失条数」那种单向计数的话，「链造对了」与「链全是空的」
+                #: 会给出同一个 0 —— 本批要的正是把这两件事分开。
+                if "child" in a:
+                    cov["child 比过的条数"] += 1
+                    cov["child 比到的字段数"] += count_leaves(a["child"])
+                if "summon" in (a.get("child") or {}):
+                    cov["chain 走到乙的条数"] += 1
+                if "mark" in ((a.get("child") or {}).get("summon") or {}):
+                    cov["chain 走到天标的条数"] += 1
         #: `unported` 是常量清单：两侧任一处改动都要在这里露出来。
         if sorted(g.get("unported") or []) != sorted(UNPORTED):
             problems.append("%s：unported 与判据的清单不一致\n      Go   =%s\n      判据 =%s"
@@ -265,6 +320,14 @@ def coverage_report(cov: dict) -> list[str]:
     need = ("关卡", "有田地", "无田地", "多组", "有 actual", "有 severed",
             "有 pump", "有 pile", "groups 顺序不同")
     bad = [("覆盖为零：%s" % k) for k in need if not cov.get(k)]
+    #: ★ 2026-09-23（第三十八批）：`farmland.devices[].child` 从「具名未搬」变成
+    #: **真产出**，于是它也必须**真被行使**才算数：比过 0 条链、或一条都没走到
+    #: 乙／天标 ⇒ 那条绿是零信息量的（本仓：零行使的键要么补夹具、要么登记）。
+    for k in ("child 比过的条数", "child 比到的字段数",
+              "chain 走到乙的条数", "chain 走到天标的条数"):
+        if not cov.get(k):
+            bad.append("召唤链零行使：%s=%r —— 那个键等于没被验过"
+                       % (k, cov.get(k)))
     if not cov.get("比到的字段数"):
         bad.append("一个字段都没比到 —— 判据瞎了（不是实现错）")
     return bad
@@ -444,8 +507,9 @@ def main() -> int:
 
     print("三 · 覆盖率（每条支都要真被走到）")
     for k in ("关卡", "有田地", "无田地", "多组", "有 actual", "有 severed",
-              "有 pump", "有 pile", "groups 顺序不同", "child 缺失条数"):
-        print("  %-16s %d" % (k, cov.get(k, 0)))
+              "有 pump", "有 pile", "groups 顺序不同", "child 比过的条数",
+              "child 比到的字段数", "chain 走到乙的条数", "chain 走到天标的条数"):
+        print("  %-22s %d" % (k, cov.get(k, 0)))
     cbad = coverage_report(cov)
     for m in cbad:
         print("  ✗ %s" % m)
@@ -509,9 +573,12 @@ def main() -> int:
         return 1
     print("结论：%d 关逐字段一致（有田地 %d 关 / 无田地 %d 关）；"
           "生产口径对账 24 份夹具：田地逐字段相同 %d 份、mechanisms 差恰为雪 %d 份；"
-          "未搬 %d 条（其中 pile 的 child 缺失 %d 条，已逐条计数）"
+          "未搬 %d 条；**天桩召唤链已逐字段比过 %d 条（%d 个字段，"
+          "其中走到乙 %d 条、走到天标 %d 条）**"
           % (len(levels), cov["有田地"], cov["无田地"], pcov["田地逐字段相同"],
-             pcov["mechanisms 差恰为雪"], len(UNPORTED), cov["child 缺失条数"]))
+             pcov["mechanisms 差恰为雪"], len(UNPORTED), cov["child 比过的条数"],
+             cov["child 比到的字段数"], cov["chain 走到乙的条数"],
+             cov["chain 走到天标的条数"]))
     return 0
 
 
