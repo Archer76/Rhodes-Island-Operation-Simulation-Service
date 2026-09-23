@@ -160,33 +160,52 @@ func rosterRows(obj map[string]json.RawMessage) ([]json.RawMessage, error) {
 
 // ReadRoster 直读一份名册文件。
 func ReadRoster(path string) (RosterRead, error) {
-	var out RosterRead
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return out, fmt.Errorf("名册读不出来：%v", err)
+		return RosterRead{}, fmt.Errorf("名册读不出来：%v", err)
 	}
 	//: 原版是 `encoding="utf-8-sig"`——BOM 不清掉，第一个字节就成了对象外的字符。
 	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+	return parseRosterBlob(data, path)
+}
 
+// ParseRoster 解一份**内联**名册（JSON 原样，不经文件）。
+//
+// 为什么要它：`sim` 的**查询形式**（Go 自己造规格）里，调用方手上是
+// **名册对象**而不是文件路径——`ak_tactic/plan.py` 的 `Roster.from_json(path)`
+// **不保留来源路径**，`Plan.load(path)` 同理。Python 侧要么写临时文件（搜索路径
+// 每场一次，不可接受），要么把对象原样送过来。这里走后者。
+//
+// ⚠ 与 `ReadRoster` **共用同一份解析**（`parseRosterBlob`）：两份实现必然有一天
+// 不一致，而「名册少读了一行」在下游只是「某个干员退回默认练度」。
+func ParseRoster(raw json.RawMessage) (RosterRead, error) {
+	data := bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
+	return parseRosterBlob(data, "（内联）")
+}
+
+// parseRosterBlob 是两种入参形式**共用的那一段**（`label` 只进错误消息）。
+func parseRosterBlob(data []byte, label string) (RosterRead, error) {
+	var out RosterRead
 	var rows []json.RawMessage
 	head := bytes.TrimLeft(data, " \t\r\n")
 	switch {
 	case len(head) == 0:
-		return out, fmt.Errorf("名册 %s 是空的", path)
+		return out, fmt.Errorf("名册 %s 是空的", label)
 	case head[0] == '[':
 		if err := json.Unmarshal(data, &rows); err != nil {
-			return out, fmt.Errorf("名册 %s 不是数组：%v", path, err)
+			return out, fmt.Errorf("名册 %s 不是数组：%v", label, err)
 		}
 	case head[0] == '{':
 		var obj map[string]json.RawMessage
 		if err := json.Unmarshal(data, &obj); err != nil {
-			return out, fmt.Errorf("名册 %s 不是对象：%v", path, err)
+			return out, fmt.Errorf("名册 %s 不是对象：%v", label, err)
 		}
+		var err error
 		if rows, err = rosterRows(obj); err != nil {
-			return out, fmt.Errorf("名册 %s：%v", path, err)
+			return out, fmt.Errorf("名册 %s：%v", label, err)
 		}
 	default:
-		return out, fmt.Errorf("名册 %s 的形状不认识：首字符 %q", path, head[0])
+		return out, fmt.Errorf("名册 %s 的形状不认识：首字符 %q", label, head[0])
 	}
 
 	//: 按 name 做键：值后写覆盖，位置留在第一次插入的地方——Python dict 的语义。

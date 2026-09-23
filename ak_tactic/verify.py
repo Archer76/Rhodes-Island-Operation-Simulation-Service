@@ -75,6 +75,11 @@ class Verdict:
     leak_events: list[tuple[float, str, int]] = field(default_factory=list)
     #: 归因：为什么是这个结果
     diagnosis: list[str] = field(default_factory=list)
+    #: ★ **第三态：具名拒跑**（没跑，不是打输）。非空即拒跑，内容是理由。
+    #: `unsupported` 非空时由 `simgo/verifier.py::_refusal_verdict` 填。
+    #: ⚠ **读判决的人要先看这一栏**：拒跑时数值栏全是 0，把它当「0 杀 N 漏」
+    #: 就会去查一场根本没打的仗。
+    refused: list[str] = field(default_factory=list)
     #: 装置（全场总攻击之类）的触发情况
     device: dict[str, Any] = field(default_factory=dict)
     result: Any = None
@@ -365,6 +370,12 @@ class Verifier:
         lib = self.library(stage)
         provider = self.range_provider(stage) if self.use_range_table else None
         roster = roster or Roster.empty()
+        #: ⚠ **换引擎那一侧要这份名册**（Go 自造规格要按名册折算练度）。
+        #: 为什么不走形参：`_run_other_engine` 是个**被覆写的钩子**
+        #: （`tools/golden_go.py::SpecCapture` 覆写了它，只转发固定的几个参数），
+        #: 给它加关键字会要求每个覆写点都跟着改——那是「一处口径多处维护」。
+        #: 存在实例上，两条路（裸 Verifier 与 GoVerifier）都读得到同一份。
+        self._roster_in_use = roster
 
         #: **难度轴接线**（2026-09-20）：调用方没显式给 `environment_difficulty`
         #: 时，用**关卡自己**那一档（索引里 `#f#` 记的是 `FOUR_STAR`）。
@@ -516,6 +527,44 @@ class Verifier:
         if cost_notes:
             v.diagnosis.extend(cost_notes)
         return v
+
+    @property
+    def go_fallbacks(self) -> int:
+        """**旧名字**（已废，保留只为不改动调用方）：同 `go_refusals`。
+
+        ⚠ 读的人比看上去多，**改名前先看这里**（2026-09-23 实测，`grep go_fallbacks`，
+        **用裸模式数**——用 `go_fallbacks|go_refusals` 这种交替模式数，实测会漏掉
+        `tools/acceptance.py` 那一整份的 17 处）：
+
+        * 读属性：`tools/acceptance.py:411`、`tools/golden_go.py:138`、
+          `tools/bisect_deepwater.py:157`、`tools/engine_identity_probe.py:95`、
+          `tools/probe_engine_closeout_dual.py:241`、`tools/parity_ledger.py:223`——
+          前五个走 `getattr(v, "go_fallbacks", None)`，**改名会让它们静默读成 `None`**
+          （`acceptance.py:420` 那句 `or row["go_fallbacks"]` 于是恒假，闸门永远通过）；
+          `tools/probe_gate_snow.py:59,87` 是直接属性访问，改名会当场 `AttributeError`。
+        * 写成键：`tools/golden_go.py:138` 把它写进 `fixtures/golden_go.json`，
+          **24 条记录**都带这个键 ⇒ 改名要连夹具一起重生成。
+
+        所以改名是**一件要整批做的事**（改名字 + 上面 8 处 + 重生成夹具）。
+        本轮只把**规范名**改成 `go_refusals`（语义写在 `simgo/verifier.py` 那头的
+        `__init__` 注释里），并留下这个只读别名。别名**没有 setter**：谁再往
+        `go_fallbacks` 上赋值都会当场 `AttributeError`，不会静默记到一个没人读的字段里。
+
+        ## 为什么住在 `Verifier` 上，而不是 `GoEngineMixin` 上（两处实测）
+
+        ① 别名的读者是**动态绑定**出来的对象：`ensure_go_engine` 把混入类的方法
+           一个个绑到 `Verifier` 实例上，而 `Verifier` **不继承** `GoEngineMixin`
+           ⇒ 写在混入类上的属性，这些实例**根本看不到**，`getattr(..., None)`
+           静默读成 `None`（＝还是那个静默）。写在 `Verifier` 上则**任何**实例
+           （裸的、动态绑的、`GoVerifier`）都从类上解析得到。
+        ② 也不能在 `ensure_go_engine` 里把它的 `fget` 绑成实例方法：实例字典里的
+           条目**不走描述符协议**，读出来是**方法对象**而不是值 ⇒
+           `or row["go_fallbacks"]` 恒真 ⇒ 闸门**永久假红**（本仓：永久假红等于没有判据）。
+
+        `engine="python"` 的实例没有 `go_refusals`，取这个别名会 `AttributeError`
+        ——与改名前的行为一致（`getattr(..., None)` 读成 `None`）。
+        """
+        return self.go_refusals
 
     def _run_other_engine(self, *, sim, plan, stage, deployed, title,
                           schedule=None, env=None):

@@ -149,10 +149,18 @@ class Simgo:
 
     # -------------------------------------------------- 调用
 
-    def _call(self, cmd: str, spec: Any = None, idx: int = 1) -> dict:
+    def _call(self, cmd: str, spec: Any = None, idx: int = 1,
+              extra: dict | None = None) -> dict:
+        """一次请求一行应答。
+
+        `extra` 是**同级的补充字段**（`sim` 的查询形式要用 `level`／`path` ——
+        它们与原版协议里 `spec` 平级，不在 `spec` 里面）。老调用方不传，行为不变。
+        """
         req: dict[str, Any] = {"id": idx, "cmd": cmd}
         if spec is not None:
             req["spec"] = spec
+        if extra:
+            req.update(extra)
         line = json.dumps(req, ensure_ascii=False, separators=(",", ":"))
         assert self._proc.stdin and self._proc.stdout
         self._proc.stdin.write(line + "\n")
@@ -199,6 +207,93 @@ class Simgo:
                 raise RuntimeError(f"第 {i} 场失败：{resp.get('error')}")
             out.append(resp["verdict"])
         return out
+
+    def sim_query(self, *, plan: dict, roster: Any, level: str = "", path: str = "",
+                  difficulty: str = "", allow_devices: bool,
+                  allow_skills: bool, max_time: float | None = None) -> dict:
+        """**查询形式**：Go 自己造规格再跑（`{level|path, plan, roster, …}`）。
+
+        ## 为什么 `plan` / `roster` 送**对象**而不是路径
+
+        Go 侧那两个入参**两种形态都收**（字符串＝路径／对象＝内联原样）。
+        Python 这边**没有路径可送**：`Plan.load(path)` 与 `Roster.from_json(path)`
+        都**不保留来源路径**，而 `verifier` 那条路上每场都要造一次规格
+        （搜索是几千场的量级）⇒ 写临时文件不可接受。所以这里送对象。
+
+        `roster` 收 `Roster` 对象或**已经是** Go 那套行形状的列表
+        （见 `roster_rows`）：这一层做的是**搬运**，不做练度解释——
+        解释只有一处（`Go` 侧的 `parseRosterBlob`）。
+
+        ## 为什么返回**原始应答**而不是判决（与 `sim()` 不一样）
+
+        查询形式下「拒跑 ＋ 理由」是一份**信息**：`unsupported` 非空 ⇒ 调用方要
+        **具名拒跑**（不再跑 Python 模拟器）。在这里 raise 会把 `unsupported`
+        丢掉一个字段——而「闸门静默失效」正是那么发生的（`go_fallbacks` 变 0）。
+        ⇒ 这里把整个应答交出去，由调用方按 `ok` / `unsupported` 分三态处理。
+
+        另外两个口径参数（`allow_devices` / `allow_skills`）是**必填**（没有默认值）：
+        它们是 PM 裁定④「走乙」的取值，兜一个默认值等于替调用方改了半个主线关的
+        可跑性（196 行 / 45.3%）。
+        """
+        if not level and not path:
+            raise ValueError("sim_query 少了关卡：给 level（关卡号或 levelId）或 path（合成关卡 JSON）")
+        if level and path:
+            raise ValueError("sim_query 的 level 与 path 只能给一个")
+        body: dict[str, Any] = {
+            "plan": plan,
+            "roster": _roster_rows(roster),
+            "allow_devices": bool(allow_devices),
+            "allow_skills": bool(allow_skills),
+        }
+        if difficulty:
+            body["difficulty"] = difficulty
+        if max_time is not None:
+            body["max_time"] = float(max_time)
+        extra = {"level": level} if level else {"path": path}
+        return self._call("sim", body, extra=extra)
+
+
+# ------------------------------------------------------------ 名册搬运
+
+#: Go 侧 `parseRosterBlob` 认的行键。**这一层只做搬运**，不解释练度。
+_ROSTER_ROW_KEYS = ("name", "charId", "id", "elite", "level", "potential",
+                    "module", "module_level", "own")
+
+
+def _roster_rows(roster: Any) -> list[dict]:
+    """把一份名册搬成 **Go 认的行形状**（顶层数组；键名用 `charId`）。
+
+    ⚠ 为什么要有这一层：`plan.Roster` 的条目用的是 `char_id`（下划线），而
+    Go 的解析器按 `charId`（驼峰）取——**键名不匹配不会被报错**，那一行会被
+    `continue` 掉 ⇒ **静默少一位干员**（表现为「某个干员退回默认练度」）。
+    所以这里显式改名，而不是指望两边拼法一样。
+
+    已经是行形状（list[dict]）时原样透传（并**只保留认得的键**），
+    这样调用方也可以直接给 Go 那套形状。
+    """
+    if roster is None:
+        return []
+    entries = getattr(roster, "entries", None)
+    if isinstance(entries, dict):
+        rows = []
+        for name, e in entries.items():
+            row = {"name": name, "charId": e.get("char_id") or ""}
+            for k in ("elite", "level", "potential", "module_level"):
+                if e.get(k) is not None:
+                    row[k] = e[k]
+            if e.get("module"):
+                row["module"] = e["module"]
+            rows.append(row)
+        return rows
+    if isinstance(roster, dict):
+        roster = list(roster.values())
+    if isinstance(roster, (list, tuple)):
+        out = []
+        for r in roster:
+            if isinstance(r, dict):
+                out.append({k: v for k, v in r.items() if k in _ROSTER_ROW_KEYS})
+        return out
+    raise ValueError(f"名册形状不认识：{type(roster).__name__}")
 
 
 # ------------------------------------------------------------ 对拍

@@ -51,6 +51,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"rios-sim/mech"
 )
@@ -60,14 +61,120 @@ import (
 // `plan` / `roster` 给了才造 `operators` / `deploys` / `skill_uses` 里**有内容**的那几份；
 // 键本身**永远在**（原版空排程给的是空列表，不是缺键）。
 type BuildSpecQuery struct {
-	Plan       string  `json:"plan,omitempty"`
-	Roster     string  `json:"roster,omitempty"`
-	Difficulty string  `json:"difficulty,omitempty"`
-	MaxTime    float64 `json:"max_time,omitempty"`
-	HealMode   string  `json:"heal_mode,omitempty"`
+	//: ⚠ `plan` / `roster` **两种形态都收**：**字符串**＝文件路径（CLI 与历史调用方）；
+	//: **对象**＝内联原样（`sim` 的查询形式要用它 —— Python 侧的 `Roster.from_json(path)`
+	//: 与 `Plan.load(path)` **都不保留来源路径**，而搜索那条路上每场都要造一次规格，
+	//: 写临时文件不可接受）。判别按 **JSON 类型**，不许猜：别的类型具名失败。
+	Plan       json.RawMessage `json:"plan,omitempty"`
+	Roster     json.RawMessage `json:"roster,omitempty"`
+	Difficulty string          `json:"difficulty,omitempty"`
+	MaxTime    float64         `json:"max_time,omitempty"`
+	HealMode   string          `json:"heal_mode,omitempty"`
 	//: 透传给闸门（`unsupported_reasons` 的两个口子）。对拍台用 `allow_devices=true`。
 	AllowDevices bool `json:"allow_devices,omitempty"`
 	AllowSkills  bool `json:"allow_skills,omitempty"`
+
+	//: 解析结果（`ParseSpecRequest` 填；调用方不直接设）。
+	//: 两个 `*Path` 与两个内联 `RawMessage` **互斥**，由解析器保证。
+	PlanPath   string `json:"-"`
+	RosterPath string `json:"-"`
+}
+
+// hasPlanInput 这次查询到底给没给计划输入（两种形态任一）。
+func (q BuildSpecQuery) hasPlanInput() bool {
+	return len(q.Plan) > 0 || q.PlanPath != ""
+}
+
+// loadPlanTwoForms / loadRosterTwoForms：`plan`／`roster` 的**两种形态收成一个出口**。
+//
+//	字符串 → 文件路径      （CLI 与历史调用方）
+//	对象/数组 → 内联原样    （`sim` 的查询形式；名册也允许顶层数组）
+//
+// ★ **只有这一份实现**：`BuildSpecQuery` 与 `GateQuery`（闸门也要读计划的
+// `retreats`／`skill`）都走它。两份实现必然有一天不一致，而「计划少读一条部署」
+// 在下游只表现为「某一手没下」。
+func loadPlanTwoForms(raw json.RawMessage, path string) (*PlayPlan, error) {
+	inline, p, err := splitPathOrInline(raw, "plan")
+	if err != nil {
+		return nil, err
+	}
+	if inline != nil {
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(inline, &obj); err != nil {
+			return nil, fmt.Errorf("内联 plan 不是对象：%v", err)
+		}
+		pl, err := ParsePlan(obj)
+		if err != nil {
+			return nil, err
+		}
+		return &pl, nil
+	}
+	if p == "" {
+		p = path
+	}
+	if p == "" {
+		return nil, nil
+	}
+	pl, err := ReadPlan(p)
+	if err != nil {
+		return nil, err
+	}
+	return &pl, nil
+}
+
+func loadRosterTwoForms(raw json.RawMessage, path string) (RosterRead, error) {
+	inline, p, err := splitPathOrInline(raw, "roster")
+	if err != nil {
+		return RosterRead{}, err
+	}
+	if inline != nil {
+		return ParseRoster(inline)
+	}
+	if p == "" {
+		p = path
+	}
+	if p == "" {
+		return RosterRead{}, nil
+	}
+	return ReadRoster(p)
+}
+
+// planLabel / rosterLabel 只用于**错误消息与回显**：内联时给一个人读得懂的标签。
+func (q BuildSpecQuery) planLabel() string {
+	if q.PlanPath != "" {
+		return q.PlanPath
+	}
+	if len(q.Plan) > 0 {
+		return "（内联）"
+	}
+	return ""
+}
+
+func (q BuildSpecQuery) rosterLabel() string {
+	if q.RosterPath != "" {
+		return q.RosterPath
+	}
+	if len(q.Roster) > 0 {
+		return "（内联）"
+	}
+	return ""
+}
+
+// loadPlanInput / loadRosterInput 把两种形态**收成一个出口**。
+//
+// ⚠ 两条路必须走**同一份解析**（`ParsePlan` / `ParseRoster`）：路径那条也只是
+// 「读文件 → 交给同一份解析」。两份实现必然有一天不一致，而「计划少读一条部署」
+// 在下游只表现为「某一手没下」。
+func (q BuildSpecQuery) loadPlanInput() (PlayPlan, error) {
+	p, err := loadPlanTwoForms(q.Plan, q.PlanPath)
+	if err != nil || p == nil {
+		return PlayPlan{}, err
+	}
+	return *p, nil
+}
+
+func (q BuildSpecQuery) loadRosterInput() (RosterRead, error) {
+	return loadRosterTwoForms(q.Roster, q.RosterPath)
 }
 
 // FullSpec 是 `build_spec` 的 19 个顶层键，**一个不多一个不少**。
@@ -160,13 +267,15 @@ func ParseSpecRequest(raw json.RawMessage) (BuildSpecQuery, error) {
 		}
 	}
 	if r, ok := m["plan"]; ok {
-		if err := json.Unmarshal(r, &q.Plan); err != nil {
-			return q, fmt.Errorf("plan 不是字符串：%v", err)
+		var err error
+		if q.Plan, q.PlanPath, err = splitPathOrInline(r, "plan"); err != nil {
+			return q, err
 		}
 	}
 	if r, ok := m["roster"]; ok {
-		if err := json.Unmarshal(r, &q.Roster); err != nil {
-			return q, fmt.Errorf("roster 不是字符串：%v", err)
+		var err error
+		if q.Roster, q.RosterPath, err = splitPathOrInline(r, "roster"); err != nil {
+			return q, err
 		}
 	}
 	if r, ok := m["difficulty"]; ok {
@@ -195,6 +304,40 @@ func ParseSpecRequest(raw json.RawMessage) (BuildSpecQuery, error) {
 		}
 	}
 	return q, nil
+}
+
+// splitPathOrInline 按 **JSON 类型**判别 `plan`／`roster` 的两种形态。
+//
+//	字符串    → `(nil, 该字符串)`       路径形态
+//	对象/数组 → `(原样 raw, "")`        内联形态
+//	其它      → 具名失败（数／布尔／null 都不是这两者）
+//
+// ⚠ **数组也要收**：名册有**两种正当外形**（MAA OperBox 是顶层数组，森空岛是
+// `{"opers": […]}`），`parseRosterBlob` 两条都认。只收对象会把顶层数组那种名册
+// 挡在门外——而它的症状是「说法没错、但送不进去」。
+// ⚠ **不许猜**：`null` 与「没给」在原版里同义（`data.get(...)` 取到 None），
+// 所以 `null` 当**没给**处理；而数字／布尔是**写错了**，必须报出来。
+func splitPathOrInline(raw json.RawMessage, key string) (json.RawMessage, string, error) {
+	head := strings.TrimLeft(string(raw), " \t\r\n")
+	if head == "" || head == "null" {
+		return nil, "", nil
+	}
+	switch head[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, "", fmt.Errorf("%s 不是合法字符串：%v", key, err)
+		}
+		return nil, s, nil
+	case '{', '[':
+		return append(json.RawMessage{}, raw...), "", nil
+	default:
+		return nil, "", fmt.Errorf(
+			"%s 既不是路径（字符串）也不是内联对象／数组：首字符 %q。★ 两种形态："+
+				"字符串＝文件路径；对象（名册也允许顶层数组）＝内联原样"+
+				"（`sim` 的查询形式用后者——Python 侧的 Roster/Plan 不保留来源路径）",
+			key, head[0])
+	}
 }
 
 // BuildSpecFull 是单一入口。
@@ -258,8 +401,33 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 	out.Spec.SpeedScale = env.SpeedScale
 
 	// ---- operators / deploys / skill_uses：有输入才有内容 ----
-	if q.Plan != "" {
-		bundle, err := BuildOperatorsFor(q.Plan, q.Roster, q.HealMode)
+	//: ⚠ 走**对象级的核心函数**（`BuildOperators` / `BuildDeploys`）而不是那两个
+	//: `*For(path…)` 包装：`plan`／`roster` 现在有**两种形态**（路径与内联），
+	//: 由 `loadPlanInput` / `loadRosterInput` 收成一个出口再喂进来——
+	//: 这样两条形态共用**同一份**解析与装配，不会长出第二套。
+	plan, err := q.loadPlanInput()
+	if err != nil {
+		return out, err
+	}
+	//: ★ **要了计划却解析出 0 条部署 ⇒ 当场失败**（原版 `Plan.validate` 也要求
+	//: 至少一条）。这一条是**补上去的**：实测踩过一次「路径形态没被读进来」——
+	//: 那份计划是空的，而**两边都 `ok=true`**，判决变成「一个干员都没下、漏 3 只」。
+	//: 静默到只有差分对拍才看得见，所以这里把「空计划」从**沉默**改成**大声**。
+	if q.hasPlanInput() && len(plan.Deploys) == 0 {
+		return out, fmt.Errorf(
+			"给计划了但解析出 **0 条部署**（来源 %q）：原版 `Plan.validate` 要求至少一条。"+
+				"★ 最可能的原因是**两种形态没接上**（路径形态的路径没被读进来、"+
+				"或内联对象没被认出）——空计划跑出来的是一场没有干员的战斗，而它**不报错**",
+			q.planLabel())
+	}
+	roster, err := q.loadRosterInput()
+	if err != nil {
+		return out, err
+	}
+	if q.hasPlanInput() {
+		bundle, err := BuildOperators(plan, roster, st, OperatorsParams{
+			Plan: q.planLabel(), Roster: q.rosterLabel(),
+			HealMode: q.HealMode})
 		if err != nil {
 			return out, err
 		}
@@ -270,16 +438,11 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 		}
 		out.Scanned["operators.n"] = bundle.Scanned
 
-		rows, err := BuildDeploysFor(q.Plan, q.Roster)
+		rows, err := BuildDeploys(plan, roster, st)
 		if err != nil {
 			return out, err
 		}
 		out.Spec.Deploys = rows
-
-		plan, err := ReadPlan(q.Plan)
-		if err != nil {
-			return out, err
-		}
 		out.Spec.SkillUses = BuildSkillUses(plan)
 		out.Scanned["deploys"] = len(rows)
 		out.Scanned["skill_uses"] = len(out.Spec.SkillUses)
@@ -314,7 +477,7 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 
 	// ---- unsupported ----
 	gate, err := UnsupportedGate(level, path, GateQuery{
-		Plan: q.Plan, Difficulty: difficulty,
+		Plan: q.Plan, PlanPath: q.PlanPath, Difficulty: difficulty,
 		AllowDevices: q.AllowDevices, AllowSkills: q.AllowSkills,
 	})
 	if err != nil {

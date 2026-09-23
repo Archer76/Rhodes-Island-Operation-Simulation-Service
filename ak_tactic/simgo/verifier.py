@@ -37,9 +37,8 @@ import time
 from typing import Any
 
 from ..verify import Verdict, Verifier, stars_of
-from . import build_spec, find_binary
+from . import find_binary
 from .client import Simgo
-from ak_tactic.frontend.inputs import SpecInputs
 
 __all__ = ["GoEngineMixin", "GoVerifier", "GATE_ALLOW_DEVICES", "GATE_ALLOW_SKILLS",
            "GATE_RULING_REF", "gate_declaration"]
@@ -119,7 +118,11 @@ class GoEngineMixin:
         #: 证据：目标那条「把 214 秒压下一个量级」要拿它们说话。
         self.go_runs = 0
         self.go_seconds = 0.0
-        self.go_fallbacks = 0
+        #: ⚠ **语义已变**（2026-09-23）：以前是「回退去跑原版 Python 模拟器」的次数，
+        #: 现在是「**具名拒跑**」的次数（`unsupported` 非空 ⇒ 不跑，把理由列全）。
+        #: 名字跟着改，是因为「叫回退、记的却是拒跑」正是本仓禁止的那种压缩
+        #: ——而且 `go_fallbacks == 0` 那句结论（「不算放行」）在新语义下同样成立。
+        self.go_refusals = 0
         #: 本次读数用的**闸门口径**（裁定④：「乙」）。产物靠它把「装置运行期已关」
         #: 这个前提印出来——见 `gate_declaration()` 与 `tools/golden_go.py` 的 `gate` 栏。
         self.gate = gate_declaration()
@@ -153,9 +156,26 @@ class GoEngineMixin:
                           schedule=None, env=None):
         """`Verifier.run` 在 `engine != "python"` 时调到这里。
 
-        ⚠ 规格必须在**跑之前**取：`build_spec` 读的是 `sim.life` / `sim.cost`
-        这些"此刻"的字段，跑完之后 `life` 已经是 0，Go 收到一份 life=0 的规格会
-        当场判负、一帧都不跑（这个坑实测撞过）。
+        ## 这一笔改了什么（2026-09-23，丙·第三十七批）
+
+        **Python 不再自造规格送给 Go**：改送**查询形式**
+        （`{level, plan, roster, difficulty, allow_devices, allow_skills}`），
+        由 Go 侧的 `buildspec` 自己造规格。于是：
+
+          · `unsupported` **从 Go 的应答里读**（规格在 Go 手里，Python 手上没有它）；
+          · `unsupported` 非空 ⇒ **具名拒跑**：把理由列全，**不再回退去跑 Python 模拟器**
+            （「只废弃模拟器那条运行路径」是博士 2026-09-23 的裁定；
+            `build_spec` 本身仍是**对拍权威**，24 套判据靠它算期望值——所以它留在这儿，
+            只是**不再走这条路**）。
+          · 三态必须分开：**跑了且一致** / **跑了但不一致** / **拒跑**（没跑）。
+            拒跑写在 `Verdict.refused` 里（非空即拒跑），**不许**压成「一场败仗」。
+
+        ## 仍然成立的旧约定
+
+        ⚠ **规格必须在跑之前取**。这一版是**结构上**保证的：规格由 Go 从
+        **关卡数据 ＋ 计划 ＋ 名册**造出来（根本不读模拟器的 `life`／`cost`），
+        而 Python 侧**一个规格字段都不碰**。旧的坑（跑完 `life=0` 的规格一帧不跑
+        就判负）在这条路上不可能发生——这正是换成查询形式顺带拿到的性质。
         """
         # ★★ 具名注释 · 指向 **PM 裁定④（2026-09-20，「走乙」）** ★★
         #
@@ -169,27 +189,73 @@ class GoEngineMixin:
         #
         # ⚠ 这两个值是从上面那两个常量读的，**不是字面量**——所以「改口径」只有一处，
         #   且产物侧的 `gate` 栏会自动跟着变（守卫会把不一致的基线判红）。
-        spec = build_spec(SpecInputs.from_sim(sim),
-                          allow_devices=GATE_ALLOW_DEVICES,
-                          allow_skills=GATE_ALLOW_SKILLS,
-                          schedule=schedule, env=env)
-        unsupported = list(spec.get("unsupported") or [])
-        if unsupported:
-            # 没移植的东西——**退回原版**，并且写清楚。
-            self.go_fallbacks += 1
-            res = sim.run(max_time=900.0)
-            v = self._verdict(plan, stage, sim, res, deployed, title=title)
-            v.diagnosis.append(
-                "⚠ 本判决来自**原版 Python**：Go 侧还没移植这些字段 —— "
-                + "、".join(unsupported)
-                + "（这不是「两边一致」，是「没走 Go」）")
-            return v
-
+        #
+        # ⚠⚠ 换成查询形式之后，这两个值**必须随查询送**（Go 侧缺了就具名失败、
+        #    绝不兜默认值）：它们是**口径**，兜一个默认值等于替调用方改掉半个主线关的
+        #    可跑性。Go 侧 `simquery.go::ParseSimQuery` 就是那条守卫。
+        difficulty = ""
+        if isinstance(env, dict):
+            difficulty = str(env.get("environment_difficulty") or "")
+        if not difficulty:
+            difficulty = str(getattr(stage, "difficulty", "") or "NORMAL")
         started = time.perf_counter()
-        got = self._go_client().sim(spec)
+        resp = self._go_client().sim_query(
+            #: ⚠ 关卡要给 **levelId**（`stage.level_id`），不是显示代号：
+            #: 四星档那一档（`act31side_ex08#f#`）**只住在 levelId 上**，
+            #: 送代号会被 Go 解析成普通档（难度轴静默丢掉）。
+            level=str(getattr(stage, "level_id", "") or ""),
+            plan=plan.to_dict(),
+            #: 名册在 `Verifier.run` 里已经解析过、存在实例上（见那里的注释）。
+            roster=getattr(self, "_roster_in_use", None),
+            difficulty=difficulty,
+            allow_devices=GATE_ALLOW_DEVICES,
+            allow_skills=GATE_ALLOW_SKILLS)
         self.go_seconds += time.perf_counter() - started
+
+        #: ★ **闸门理由从 Go 的应答里读**（不再自己造规格去读它）。
+        #: Go 在**成功与失败两条路**上都会带上它；缺字段 ⇒ 下面那条断言当场炸，
+        #: 而不是静默当成「没有理由」（那正是闸门静默失效的样子）。
+        if "unsupported" not in resp:
+            raise RuntimeError(
+                "Go 的 sim 应答里**没有** `unsupported` 字段——闸门无从判定。"
+                "★ 这一栏是「Go 自造规格」这条路上**唯一**的退回信号："
+                "缺了它，本该拒跑的关卡会被当成可跑（`go_fallbacks` 变 0）。"
+                f"应答键：{sorted(resp)}")
+        unsupported = list(resp.get("unsupported") or [])
+        if unsupported:
+            #: 没移植的东西 —— **具名拒跑**，**不再跑 Python 模拟器**。
+            self.go_refusals += 1
+            return self._refusal_verdict(plan, stage, deployed, title=title,
+                                         unsupported=unsupported)
+        if not resp.get("ok"):
+            #: 非闸门原因的失败（例如机制层拒跑天桩那一条）：与旧路径同口径——
+            #: **抛**，不吞（吞掉会变成一份残缺判决，比报错坏得多）。
+            raise RuntimeError(f"Go 拒绝了这一场：{resp.get('error')}")
+
         self.go_runs += 1
-        return self._verdict_from_go(plan, stage, got, deployed, title=title)
+        return self._verdict_from_go(plan, stage, resp["verdict"], deployed,
+                                     title=title)
+
+    def _refusal_verdict(self, plan, stage, deployed, *, title="",
+                         unsupported) -> Verdict:
+        """**具名拒跑**那一态：没跑，把理由列全。
+
+        ⚠ 与「一场败仗」必须分得开：这里 `refused` 非空。数值栏一律清零并**在
+        第一句就说清这不是打输**——把「没跑」显示成「0 杀 3 漏」，下一个人会去
+        查为什么打输了，而根本没打。
+        """
+        max_life = int(getattr(getattr(stage, "options", None),
+                               "max_life_point", 1) or 1)
+        v = Verdict(stars=0, won=False, life=0, max_life=max_life, kills=0,
+                    leaks=0, elapsed=0.0, damage=0.0, title=title)
+        v.refused = list(unsupported)
+        v.diagnosis.append(
+            "⛔ **具名拒跑**（没跑）：Go 侧还没移植这些字段 —— "
+            + "、".join(unsupported)
+            + "。★ 这不是「两边一致」，也不是「跑了不一致」，是**没跑**："
+            "Python 模拟器那条运行路径已废弃（博士 2026-09-23 裁定），"
+            "上面那些数值栏一律无意义。")
+        return v
 
     def _verdict_from_go(self, plan, stage, got: dict, deployed, *, title="") -> Verdict:
         """把 Go 的回执变成判决。
@@ -243,21 +309,40 @@ def ensure_go_engine(obj: Any) -> None:
     * `verify.py` **不能** import `simgo`（`simgo.verifier` 反过来 import 了
       `verify`），循环。绑实例是惰性的，绕开了这条边。
     * 只有真正要跑 Go 的实例才付这份代价；而且 `GoVerifier` 那条路**完全不受影响**
-      （它的类上本来就有这三个方法，绑上去的只是同名同实现）。
+      （它的类上本来就有这些方法，绑上去的只是同名同实现）。
 
-    绑的是混入类那三个方法 + 它 `__init__` 里那几个计数器。⚠ 漏掉任何一个，
+    绑的是混入类那几个方法 + 它 `__init__` 里那几个计数器。⚠ 漏掉任何一个，
     症状都是"跑到一半 AttributeError"，所以下面用一张表统一做，不手抄。
+    ⚠ 但这张表**不会自己长大**：加了新方法要手动加进来，而且光加不够——
+    要有一条判据**真的走到那个方法**（本轮 `_refusal_verdict` 就是漏在这里）。
     """
     import types
 
-    for name in ("_go_client", "_run_other_engine", "_verdict_from_go"):
+    #: ⚠⚠ **加了混入类的方法就必须加进这张表**（2026-09-23 实测踩到）：
+    #: 本轮新加的 `_refusal_verdict` 一开始**没进这张表**，于是「具名拒跑」那条路
+    #: 一走到就 `AttributeError: 'Verifier' object has no attribute '_refusal_verdict'`
+    #: ——而**所有既有闸门都是绿的**：24 份夹具的 `unsupported` 全空，
+    #: 拒跑那一态一次都没被行使（基线 24 条 `go_fallbacks: 0` 就是证据）。
+    #: ★ 教训不是「补一个名字」，是「新方法要有判据真的走到它」——见
+    #: `tools/check_sim_via_python_go.py` 的第三组（那把用例就是为此造的）。
+    #:
+    #: `close` 是**同一类病的既有实例**（不是本轮引入）：它一直在混入类上、
+    #: 一直没进这张表，动态绑定出来的对象 `v.close()` 会 AttributeError。
+    #: 顺手补上——今天没有调用方（`run_one` 从不 close），所以行为零变化；
+    #: 留着它只会让下一个想 close 的人踩同一个坑。
+    for name in ("_go_client", "_run_other_engine", "_verdict_from_go",
+                 "_refusal_verdict", "close"):
         setattr(obj, name, types.MethodType(getattr(GoEngineMixin, name), obj))
     if "_go" not in obj.__dict__:
         obj._go = None
-    #: 与 `GoEngineMixin.__init__` 逐项对齐：跑过的场次、累计耗时、退回原版的次数、
+    #: 旧名字 `go_fallbacks` 这里**不用绑**：它是 `verify.Verifier` 类上的只读属性
+    #: （`Verifier` 实例不继承混入类，所以别名必须住在**那一层**才能被看见——
+    #: 曾试着在这里把它的 fget 绑成实例方法，读出来是**方法对象**而不是值，
+    #: 于是 `or row["go_fallbacks"]` 恒真 ⇒ 闸门永久假红。记在这里免得再试一遍）。
+    #: 与 `GoEngineMixin.__init__` 逐项对齐：跑过的场次、累计耗时、**具名拒跑**的次数、
     #: 以及**闸门口径**（漏掉 `gate` 的症状是产物里那一栏变成 `null`，
     #: 而 `golden_go` 的守卫会当场判红——这正是要的：**缺字段必须响**）。
-    for attr, init in (("go_runs", 0), ("go_seconds", 0.0), ("go_fallbacks", 0),
+    for attr, init in (("go_runs", 0), ("go_seconds", 0.0), ("go_refusals", 0),
                        ("gate", gate_declaration())):
         if attr not in obj.__dict__:
             setattr(obj, attr, init)

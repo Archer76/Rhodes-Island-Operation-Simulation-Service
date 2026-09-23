@@ -105,6 +105,14 @@ SUITE = [
     #: 就等于把闸门静默关掉）。旧入参形式一个字没改，本行只覆盖新增的那一种。
     ("自造规格", "tools/check_sim_selfspec_go.py",
      "Go sim 自造规格 vs Python build_spec（差分：查询形式 ≡ 造好规格）", False),
+    #: 本轮加的：**Python 侧那条调用链**。`sim` 收下查询形式之后（上一行），
+    #: 这一行管的是**谁在用它**：`verifier._run_other_engine` 改送查询形式、
+    #: `unsupported` 非空时**具名拒跑**而不再回退去跑 Python 模拟器。
+    #: ★ 判据面与前一行**不重叠**：上一行量的是 Go 那两种入参形式会不会给出
+    #: 不同判决（差分），这一行量的是 Python 这条路还造不造规格、还跑不跑模拟器
+    #: （AST ＋ 端到端 ＋ 三态），用的是 `git show d4ddc4c:…` 的原文当「以前」。
+    ("调用链", "tools/check_sim_via_python_go.py",
+     "Python 侧不再造规格/不再跑模拟器（静态＋端到端＋三态分离）", False),
 ]
 
 

@@ -53,7 +53,12 @@ GO_DIR = ROOT / "rios-sim"
 DECLARED = {
     #: ⚠ **现数**：`len(SUITE)` 才是权威（本行与它必须相等，第 2 节会量）。
     #: 两条会话各 +1 时，「都改成 +1」必丢一次——所以这里是数出来的，不是算出来的。
-    "suites": 24,          # 一 · 「二十四套判据」「二十四套守卫」
+    "suites": 25,          # 一 · 「二十五套判据」「二十五套守卫」
+    #: ⚠ **不要把它跟 `suites` 当成同一个数**（2026-09-23）：两条命令各有两套判据
+    #: 之后，「命令数」与「套数」就不再相等了 —— `sim` 上有「自造规格」（Go 两种
+    #: 入参形式的差分）与「调用链」（Python 那条路还造不造规格）两套。
+    #: 现数＝`len(set(COMMAND_OF.values()))`，**不是**算出来的。
+    "commands": 24,        # 二 · 有判据的命令数（distinct 值）
     "gaps": 6,             # 三 · 缺口表的行数
     "resolve_callsites": 2,  # 出 loadout.go 之外调 ResolveLoadout 的地方
                              # （loadout 命令 ＋ specdeploys 的规格构造）
@@ -83,6 +88,11 @@ COMMAND_OF = {
     "寻路": "path", "闸门": "unsupported", "出怪规格": "spawns",
     "机制规格": "mechspec", "干员规格": "operators", "单一入口": "buildspec",
     "自造规格": "sim",
+    #: ★ 与上一行**同一条命令、不同的判据面**：上一行量 Go 那两种入参形式的差分，
+    #: 这一行量 Python 那条调用链（还造不造规格、还跑不跑模拟器）。`COMMAND_OF`
+    #: 允许多对一（这个字典是「套名 → 命令名」，不是单射），第 2 节查的是
+    #: 「有没有哪条命令**没有任何**判据」，不是「命令与套名一一对应」。
+    "调用链": "sim",
 }
 
 #: 有 Go 命令、但**有意**没有跨实现判据的（现在只剩一个）。
@@ -193,6 +203,10 @@ def main() -> int:
     declared = dict(DECLARED)
     if mutate:
         declared["suites"] = declared["suites"] + 1
+        #: ★ **两个声明数各改一个**，而且要**各自**红：只改一个的话，另一条等式
+        #: 「红得起来吗」就没人证过（本仓：没有反向守卫的绿是零信息量的绿）。
+        #: 下面收尾处会点验红的是哪几条。
+        declared["commands"] = declared["commands"] + 1
 
     cmds = go_commands()
     rows = suite_rows()
@@ -243,8 +257,19 @@ def main() -> int:
     one("判据套名都有命令映射", len(missing_cmd), 0)
     if missing_cmd:
         print("      没映射到的套：%s" % "、".join(missing_cmd))
-    one("命令面减去有意无判据的（%s）" % "、".join(NON_JUDGED), len(cmds) - len(NON_JUDGED) - len(EXTRA_JUDGED),
-        len(rows))
+    #: ⚠ 这一条**以前写的是「命令数 − ping − EXTRA_JUDGED == 判据套数」**，
+    #: 那条等式假定「一条命令 ↔ 一套判据」是**一一对应**。2026-09-23 加「调用链」
+    #: 那一套时它红了：新套判的是 `sim` 的**另一个面**（Python 那条调用链还造不造
+    #: 规格、还跑不跑模拟器），命令还是 `sim` —— 于是命令数不变而套数 +1，
+    #: 数出 24 ≠ 25。
+    #: ★ 处置照本文件自己立过的规矩（见 `NON_JUDGED` 上面那段）：**等式写错了就改
+    #: 等式，不去改登记**。现在拆成两条各自成立的等式：
+    #:   ① 每套都有一个**存在**的命令（上面那条 `missing_cmd == 0`）；
+    #:   ② 有判据的命令数（distinct 值）== 声明的命令数；
+    #:   ③ 还有一条兜底：**没有任何判据的命令**必须为零（下面那条 `stray`）——
+    #:      这条才是原来想抓的东西（加了新命令却没加判据）。
+    one("有判据的命令数（distinct 值）", len(set(COMMAND_OF.values())),
+        declared["commands"])
     stray = sorted(set(cmds) - set(COMMAND_OF.values()) - set(NON_JUDGED)
                    - set(EXTRA_JUDGED))
     one("既非判据命令也非 ping/sim 的余项", len(stray), 0)
@@ -270,10 +295,17 @@ def main() -> int:
     print()
 
     if mutate:
-        if bad:
-            print("反向守卫：改动台账声明的一处数 → 判红 —— 成立 ✓")
+        #: 点验：**两条等式各自都红得起来**（只改一个数就红，证明不了另一个也守得住）。
+        expect = ("判据套数", "有判据的命令数")
+        hit = [e for e in expect if any(p.startswith(e) for p in problems)]
+        print("      红起来的条目：%s" % " ／ ".join(
+            p.split("：")[0] for p in problems) or "（无）")
+        if bad and len(hit) == len(expect):
+            print("反向守卫：改动台账声明的数 → 判红 —— 成立 ✓（%s 两条各自都红）"
+                  % "、".join(expect))
             return 0
-        print("反向守卫：不成立 ✗")
+        print("反向守卫：不成立 ✗（%d 条预期要红的只红了 %d 条）"
+              % (len(expect), len(hit)))
         return 1
 
     if bad:

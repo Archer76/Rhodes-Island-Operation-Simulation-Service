@@ -179,7 +179,7 @@ func BuildSimSpecFromQuery(level, path string, raw json.RawMessage,
 		return nil, SelfSpecEcho{}, nil, err
 	}
 	echo := SelfSpecEcho{
-		Level: level, Path: path, Plan: q.Plan, Roster: q.Roster,
+		Level: level, Path: path, Plan: q.planLabel(), Roster: q.rosterLabel(),
 		AllowDevices: q.AllowDevices, AllowSkills: q.AllowSkills,
 		KeyCount:   len(specKeysAll) - len(out.MissingKeys),
 		Missing:    append([]string{}, out.MissingKeys...),

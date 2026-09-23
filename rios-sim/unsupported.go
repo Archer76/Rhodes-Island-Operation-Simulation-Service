@@ -49,6 +49,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -65,10 +66,37 @@ import (
 // 无分支可走——但字段**照样读**：它们会随 `Params` 原样回显，判据据此核对
 // 「这一趟是按哪个口径问的」。口径只活在散文里，下一个读的人不会去看它。
 type GateQuery struct {
-	Plan         string `json:"plan,omitempty"`
-	Difficulty   string `json:"difficulty,omitempty"`
-	AllowDevices bool   `json:"allow_devices,omitempty"`
-	AllowSkills  bool   `json:"allow_skills,omitempty"`
+	//: ⚠ 与 `BuildSpecQuery.Plan` **同一份两形态**（字符串＝路径／对象＝内联），
+	//: 判别与解析都走 `loadPlanTwoForms`（**只此一份实现**）。闸门要读计划里的
+	//: `retreats` 与每位干员的 `skill`，而 `sim` 的查询形式手上是**计划对象**、
+	//: 没有路径 —— 只收路径会让查询形式那条路在这里断掉。
+	Plan         json.RawMessage `json:"plan,omitempty"`
+	//: ⚠⚠ **路径形态必须一起带过来**（2026-09-23 实测踩到）：`BuildSpecQuery` 的
+	//: 解析器会把字符串形态的 `plan` 拆成 `(Plan=nil, PlanPath=路径)`，所以
+	//: `BuildSpecFull` 只把 `Plan` 递进来的话，闸门拿到的是**空 raw** ⇒
+	//: `loadPlanTwoForms(nil, "")` 返回 `nil, nil`（＝「没给计划」）⇒
+	//: 计划的 `retreats`／`skill` 一条都读不到。
+	//: 症状**不是**报错，而是 `unsupported` 少几条 —— `check_buildspec_go.py`
+	//: 的 C 口径（合成计划，走**路径**形态）正好盯着这一处，实测红 2 例。
+	//: 这也是本文件上面那句「计划少读一条部署在下游只表现为某一手没下」的又一例。
+	PlanPath     string          `json:"-"`
+	Difficulty   string          `json:"difficulty,omitempty"`
+	AllowDevices bool            `json:"allow_devices,omitempty"`
+	AllowSkills  bool            `json:"allow_skills,omitempty"`
+}
+
+// planEcho 回显这一趟的计划来源（路径原样；内联给一个读得懂的标签）。
+func (q GateQuery) planEcho() string {
+	if q.PlanPath != "" {
+		return q.PlanPath
+	}
+	if len(q.Plan) == 0 {
+		return ""
+	}
+	if _, path, err := splitPathOrInline(q.Plan, "plan"); err == nil && path != "" {
+		return path
+	}
+	return "（内联）"
 }
 
 // GateOut 是应答体。四个槽的用途见文件头。
@@ -107,7 +135,7 @@ func UnsupportedGate(level, path string, q GateQuery) (GateOut, error) {
 		Covered:  map[string]int{},
 		Scanned:  map[string]int{},
 		Params: map[string]any{
-			"level": level, "path": path, "plan": q.Plan,
+			"level": level, "path": path, "plan": q.planEcho(),
 			"allow_devices": q.AllowDevices, "allow_skills": q.AllowSkills,
 		},
 	}
@@ -115,13 +143,12 @@ func UnsupportedGate(level, path string, q GateQuery) (GateOut, error) {
 	if err != nil {
 		return out, err
 	}
-	var plan *PlayPlan
-	if q.Plan != "" {
-		p, err := ReadPlan(q.Plan)
-		if err != nil {
-			return out, err
-		}
-		plan = &p
+	//: 计划两种形态（路径／内联）共用一份解析，见 `loadPlanTwoForms`。
+	//: ⚠ **两个参数都要给**：只给 raw 会让路径形态（解析器已把路径拆进
+	//: `PlanPath`）静默变成「没给计划」。
+	plan, err := loadPlanTwoForms(q.Plan, q.PlanPath)
+	if err != nil {
+		return out, err
 	}
 
 	// ---- 排程侧（`spec.py:146-151`）----
