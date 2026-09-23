@@ -87,9 +87,52 @@ rc=3 时印一条**机读行**（纯 ASCII，便于机器消费）：
     这一条才是假绿，本条 rc=3 与上面那条 `SUITE_INPUT_UNUSABLE` 就是堵它的。
   ⇒ 纪律：**宁可假红，也不许静默变绿**；「没跑」不许长成「通过」。
 
+## 期望值从哪来（**两种模式**）——— ⚠ **本节尚未落地（施工中）**
+
+* 默认（`RIOS_GOLDEN` 未设）：现场跑 Python（`OperatorCalculator.stats` ＋
+  天赋/特性/攻速那几支 ＋ `talent_finders`），**现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：**目标**是只读 `fixtures/golden/干员.json`、
+  **不 import `ak_tactic`**。**现在还没接上线**——本文件在 check 档仍然
+  `从未绑定通道 ⇒ rc=6`（「未转」的具名信号，**不是**判据红）。
+
+★ 已经落在本文件里、**下一轮接线要用的**三件东西（现在都是**惰性**的、没人调）：
+
+  · `py_configs()`：三条路的配置生成 ＋ 各路读数（＝**查询集的生产者**）；
+  · `py_cfg_reading(cfg)`：一份配置的全部 Python 侧读数（值里 `aspd` 排
+    `sorted()` 第一位——控制组 P1 改坏的就是被判的那一格）；
+  · `cfg_id()` / `seg_identity()` / `roster_head_ok()` 等**数据侧**身份与形态函数
+    （冻结档不 import 也能判名册在不在、表头对不对）。
+
+★ 接线时要冻的三样（缺一样都会留洞）：
+
+  ① **查询集**：`("query", "configs")`。「问哪些配置」本身就是 Python 侧的产物
+     （`max_level` 现算、模组现取、名册现解析），**不冻它**就等于留了一个可以
+     被硬编码缩小的分母；
+  ② **逐配置的期望值**：`("opcfg", 配置内容 sha16)`；
+  ③ **两栏的身份与分母**：`("consts", "columns")`（深扫／名册／合成各自的分母
+     ＋ 两个身份）与 `("consts", "sweep")`（`SYNTH_SWEEP_DENOM` 那一行的每个数
+     ＋ `SYNTH_NO_CONFIG` 的逐位名单 ＋ `only_db`／`only_calc`）。
+
+## ★ 名册缺席时怎么判（**三态，不静默少比 211 位**）
+
+名册 `docs/roster-<uid>.md` 是**个人数据、刻意不入库**——所以干净检出上
+它**本来就不在**。冻结档必须与默认档**同一套三态**（见文件头「退出码三态」）：
+
+| 现在的名册 | 冻结档怎么做 | 退出码 |
+|---|---|---|
+| **不在** | 印 `SUITE_INPUT_MISSING`，**跳过账号名册那一栏**（其余两栏照跑照比照印） | **3** |
+| 在，但表头对不上 | 印 `SUITE_INPUT_UNUSABLE`，同上 | **3** |
+| 在、表头对、内容 sha16 ＝ 冻结的那一份 | 三栏全比 | 0／1 |
+| 在、表头对，但内容 sha16 **变了** | 印具名行「名册内容变了 ⇒ 该重录」，跳过该栏 | **6**（通道的错） |
+| 在，但冻结基线里**没有**名册那一栏 | 印具名行「冻结档没录过名册栏 ⇒ 该重录」 | **6** |
+
+★ 前两行**数据侧**就能判（文件在不在、表头对不对）⇒ 冻结档**不 import
+`ak_tactic` 也判得了**，这正是「缺输入就 rc=3 具名」能落到冻结档上的原因。
+
 用法:
     python tools\\check_operator_go.py
     python tools\\check_operator_go.py --mutate
+    python tools\\freeze_baseline.py --record 干员     # ← 接线完成之后才能跑
 """
 from __future__ import annotations
 
@@ -104,6 +147,8 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tools"))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -214,6 +259,296 @@ def norm(v):
     if isinstance(v, (int, float)):
         return float(v)
     return v
+
+
+# --------------------------------------------------------------- 期望值（可冻）
+#: 账号名册的表行正则与表头口径（**数据侧**：冻结档不 import 也能判形态）。
+ROW = re.compile(
+    r"^\|\s*([^|]+?)\s*\|\s*`(char_[^`]+)`\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*"
+    r"\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|")
+HEAD_WANT = ("charId", "精英", "等级", "潜能")
+
+_CALC = None
+_TBOOK = None
+_TABLE = None
+
+
+def _calc():
+    global _CALC
+    if _CALC is None:
+        from ak_tactic.operator import OperatorCalculator
+        _CALC = OperatorCalculator()
+    return _CALC
+
+
+def _tbook():
+    global _TBOOK
+    if _TBOOK is None:
+        from ak_tactic.operator import TalentBook
+        _TBOOK = TalentBook()
+    return _TBOOK
+
+
+def roster_doc_lines() -> list:
+    """名册正文（数据侧）。文件不在就抛 FileNotFoundError——与默认档同形。"""
+    return ROSTER_DOC.read_text(encoding="utf-8").splitlines()
+
+
+def roster_head_ok(lines: list) -> bool:
+    """表头对账（**数据侧**）：下面的正则按序取第 2/4/5/6 列，必须与表头一致。
+
+    ★ 列一错位（如 `等级` 与 `潜能` 互换），Go 与 Python 吃的是**同一份错
+    configs** ⇒ 逐字段比对照样全绿；这个错**只有输入身份这一层看得见**。
+    """
+    for ln in lines:
+        if ln.lstrip().startswith("|"):
+            cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+            return (len(cells) >= 6 and cells[1] == HEAD_WANT[0]
+                    and cells[3] == HEAD_WANT[1] and cells[4] == HEAD_WANT[2]
+                    and cells[5] == HEAD_WANT[3])
+    return False
+
+
+def cfg_id(cfg: dict) -> str:
+    """一份配置的**内容身份**（数据侧算）。"""
+    return GB.sh16(json.dumps(cfg, sort_keys=True, ensure_ascii=False,
+                              separators=(",", ":")).encode("utf-8"))
+
+
+def seg_identity(seg: list) -> str:
+    """`char_` 段的**内容身份**（数据侧：sqlite 是 stdlib，不 import `ak_tactic`）。"""
+    return GB.sh16(json.dumps([[c, n] for c, n in seg], sort_keys=True,
+                              ensure_ascii=False,
+                              separators=(",", ":")).encode("utf-8"))
+
+
+def py_configs() -> dict:
+    """三条路的**配置生成** ＋ 各路的读数（**离冻档专用**）。
+
+    ★ 它就是**查询集的生产者**（`max_level` 现算、模组现取、名册现解析），
+      所以整份结果走 `("query", "configs")` 冻住——只冻答案不冻问题，
+      等于留了一个可以被硬编码缩小的分母。
+    """
+    calc, tbook = _calc(), _tbook()
+    roster = json.loads(ROSTER.read_text(encoding="utf-8"))
+    configs: list = []
+    tags: list = []
+
+    def _add(cfg: dict, tag: str) -> None:
+        configs.append(cfg)
+        tags.append(tag)
+
+    # ---- 深扫：真实练度（在库的那 20 位）----
+    for e in roster:
+        cid, elite, level = e["id"], int(e["elite"]), int(e["level"])
+        cap = calc.max_level(cid, elite)
+        if not cap:
+            continue
+        lvls = sorted({1, int(cap), (1 + int(cap)) // 2})
+        for lv in lvls:
+            for tr in TRUSTS:
+                for pot in POTENTIALS:
+                    _add({"char_id": cid, "elite": elite, "level": lv,
+                          "trust": tr, "potential": pot,
+                          "module": "", "module_level": 0}, TAG_DEEP)
+    mod_cfg = 0
+    mod_ops: list = []
+    for e in roster:
+        cid = e["id"]
+        try:
+            mods = [m for m in calc.modules(cid) if m.get("has_stats")]
+        except Exception:                                        # noqa: BLE001
+            mods = []
+        if not mods:
+            continue
+        mid = mods[0]["id"]
+        try:
+            levels = sorted(calc.module_levels(mid))
+        except Exception:                                        # noqa: BLE001
+            continue
+        mod_ops.append("%s(%s:%s)" % (e["name"], mid, levels))
+        for mlv in levels:
+            for tr in (0.0, 100.0):
+                _add({"char_id": cid, "elite": int(e["elite"]),
+                      "level": int(e["level"]), "trust": tr,
+                      "potential": int(e["potential"]),
+                      "module": mid, "module_level": mlv}, TAG_DEEP)
+                mod_cfg += 1
+
+    # ---- 账号名册：真实练度（**不在库**的那 211 位）----
+    wide = 0
+    skipped: list = []
+    if ROSTER_DOC.is_file() and roster_head_ok(roster_doc_lines()):
+        for line in roster_doc_lines():
+            m = ROW.match(line)
+            if not m:
+                continue
+            cid = m.group(2)
+            if not calc.exists(cid):
+                skipped.append(cid)
+                continue
+            try:
+                elite = int(m.group(4).lstrip("Ee") or 0)
+                level = int(m.group(5) or 1)
+                pot = int(m.group(6) or 1)
+            except ValueError:
+                skipped.append(cid)
+                continue
+            if not (1 <= level <= int(calc.max_level(cid, elite) or 1)):
+                skipped.append("%s(E%d L%d 越界)" % (cid, elite, level))
+                continue
+            _add({"char_id": cid, "elite": elite, "level": level,
+                  "trust": 0.0, "potential": pot,
+                  "module": "", "module_level": 0}, TAG_ROSTER)
+            wide += 1
+
+    # ---- 全量宽扫：合成练度（`char_` 段的每一位）----
+    seg = char_segment()
+    seg_ids = [c for c, _ in seg]
+    calc_ids = list(calc.all_ids())
+    syn_cfg = 0
+    syn_ops: list = []
+    syn_elite = {"E0": 0, "E1": 0, "E2": 0}
+    syn_mod_ops: list = []
+    syn_nomod = 0
+    syn_moderr: list = []
+    syn_no: list = []
+    for cid, cname in seg:
+        if not calc.exists(cid):
+            syn_no.append("%s（%s）：计算器里没有这位干员的数据" % (cid, cname))
+            continue
+        mid, mlv, moderr = "", 0, ""
+        try:
+            mods = [m for m in calc.modules(cid) if m.get("has_stats")]
+        except Exception as ex:                                  # noqa: BLE001
+            mods, moderr = [], type(ex).__name__
+        if mods:
+            try:
+                _lvls = sorted(calc.module_levels(mods[0]["id"]))
+            except Exception as ex:                              # noqa: BLE001
+                _lvls, moderr = [], type(ex).__name__
+            if _lvls:
+                mid, mlv = mods[0]["id"], int(_lvls[-1])
+        if mid:
+            syn_mod_ops.append(cid)
+        else:
+            syn_nomod += 1
+            if moderr:
+                syn_moderr.append("%s(%s)" % (cid, moderr))
+        here = 0
+        for elite, ename in ((0, "E0"), (1, "E1"), (2, "E2")):
+            try:
+                cap = calc.max_level(cid, elite)
+            except Exception:                                    # noqa: BLE001
+                cap = None
+            if not cap:
+                continue
+            _add({"char_id": cid, "elite": elite, "level": int(cap),
+                  "trust": 100.0, "potential": 6,
+                  "module": mid, "module_level": mlv}, TAG_SYNTH)
+            syn_elite[ename] += 1
+            syn_cfg += 1
+            here += 1
+        if here:
+            syn_ops.append(cid)
+        else:
+            syn_no.append("%s（%s）：E0/E1/E2 三档 max_level 全部取不到"
+                          % (cid, cname))
+
+    return {
+        "configs": [[c, t] for c, t in zip(configs, tags)],
+        "wide": wide, "skipped": skipped, "mod_cfg": mod_cfg, "mod_ops": mod_ops,
+        "inputs": {
+            "deep_roster_sha16": GB.file_sha16(ROSTER),
+            "akdb_seg_sha16": seg_identity(seg),
+            "roster_doc_sha16": (GB.file_sha16(ROSTER_DOC)
+                                 if ROSTER_DOC.is_file() else None),
+        },
+        "columns": {
+            "deep":  sum(1 for t in tags if t == TAG_DEEP),
+            "roster": sum(1 for t in tags if t == TAG_ROSTER),
+            "synth": sum(1 for t in tags if t == TAG_SYNTH),
+            "has_roster_col": wide > 0,
+        },
+        "sweep": {
+            "chars": len(seg_ids), "calc_ids": len(calc_ids),
+            "only_db": sorted(set(seg_ids) - set(calc_ids)),
+            "only_calc": sorted(set(calc_ids) - set(seg_ids)),
+            "with_cfg": len(syn_ops), "no_cfg": len(syn_no), "cfgs": syn_cfg,
+            "e0": syn_elite["E0"], "e1": syn_elite["E1"], "e2": syn_elite["E2"],
+            "with_module": len(syn_mod_ops), "without_module": syn_nomod,
+            "syn_no": syn_no, "syn_moderr": syn_moderr,
+        },
+    }
+
+
+def py_cfg_reading(cfg: dict) -> dict:
+    """一份配置的**全部 Python 侧读数**（判据要比的那一格一格）。
+
+    ★ `ak_tactic` 的 import 在函数体里：冻结档下本函数不会被调到。
+    """
+    from ak_tactic.battle.traits import (read_combo_attack, read_trait_splash,
+                                         apply_splash_talent, read_hp_drain)
+    from ak_tactic.battle.talents import find_power_attack, find_glider_mobility
+    from ak_tactic.operator.attack_speed import attack_speed_bonus
+
+    calc, tbook = _calc(), _tbook()
+    cid = cfg["char_id"]
+    py = calc.stats(cid, elite=cfg["elite"], level=cfg["level"],
+                    trust=cfg["trust"], potential=cfg["potential"],
+                    module=cfg.get("module") or None,
+                    module_level=cfg.get("module_level") or 0)
+    aspd = attack_speed_bonus(calc, cid, elite=cfg["elite"], level=cfg["level"],
+                              potential=cfg["potential"],
+                              module=cfg.get("module") or None,
+                              module_level=cfg.get("module_level") or 0)
+    combo = read_combo_attack(calc.character(cid))
+    tal = tbook.for_operator(cid, elite=cfg["elite"], level=cfg["level"],
+                             potential=cfg["potential"])
+    pa = find_power_attack(tal)
+    ch = calc.character(cid)
+    sp = apply_splash_talent(read_trait_splash(ch), tal)
+    trait = ch.get("description") or ""
+    tal_text = " ".join((cand.get("description") or "")
+                        for t_ in (ch.get("talents") or [])
+                        for cand in (t_.get("candidates") or []))
+    gl = find_glider_mobility(tal)
+    return {
+        #: ★ `aspd` 必须排在 `sorted()` 第一位：控制组 P1 改坏的就是被判的那一格
+        #: （改坏 `aspd.flat` 得到「✗ …aspd_flat：Go=… Python=…」的干净判决红）。
+        "aspd": {"flat": norm(getattr(aspd, "flat", 0.0)),
+                 "when_free": norm(getattr(aspd, "when_free", 0.0)),
+                 "when_high_ground": norm(getattr(aspd, "when_high_ground", 0.0))},
+        "base": norm(getattr(py, "base", None) or {}),
+        "trust_bonus": norm(getattr(py, "trust_bonus", None) or {}),
+        "potential_bonus": norm(getattr(py, "potential_bonus", None) or {}),
+        "module_bonus": norm(getattr(py, "module_bonus", None) or {}),
+        "total": norm(getattr(py, "total", None) or {}),
+        "combo_is_none": combo is None,
+        "combo": {"hits": combo.hits if combo else 1,
+                  "hit_scale": combo.hit_scale if combo else 1.0,
+                  "damage_scale": combo.damage_scale if combo else 1.0},
+        "pa": {"power_attack_count": pa.count if pa else 0,
+               "power_attack_scale": pa.scale if pa else 1.0},
+        "tr": {"splash_radius": sp.radius if sp else 0.0,
+               "splash_scale": sp.scale if sp else 0.0,
+               "splash_damage_scale": sp.damage_scale if sp else 1.0,
+               "highland_splash_scale": sp.highland_scale if sp else 0.0,
+               "highland_splash_sluggish": sp.highland_sluggish if sp else 0.0,
+               "hp_drain_per_sec": read_hp_drain(ch)},
+        "tx": {"damage_type_text": "MAGIC" if "法术伤害" in trait else "PHYSICAL",
+               "heals": "恢复友方单位生命" in trait,
+               "weakness_damage": "弱点伤害" in tal_text},
+        "id": {"nation_id": ch.get("nationId") or "",
+               "profession": ch.get("profession") or ""},
+        "gl": {"mobility_atk_bonus": gl.atk_bonus if gl else 0.0,
+               "mobility_atk_duration": gl.atk_duration if gl else 0.0,
+               "mobility_leftover": gl.projectile if gl else "",
+               "mobility_deploy_range": gl.deploy_range if gl else "",
+               "mobility_melee_deploy": gl.ignore_build_type if gl else False,
+               "mobility_ignore_dir": gl.ignore_dir if gl else 0.0,
+               "no_respawn_cost_add": gl.no_respawn_cost_add if gl else False},
+    }
 
 
 def main() -> int:
