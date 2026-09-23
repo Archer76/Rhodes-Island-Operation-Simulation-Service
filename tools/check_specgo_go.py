@@ -21,9 +21,32 @@
 `highland_splash_scale` 才送。空的两张格表与「这一关没有」在原版里长得一样，
 所以这个差异必须写在明面上，不能靠「反正值是空的」糊过去。
 
+## 期望值从哪来（**两种模式**）
+
+* 默认（`RIOS_GOLDEN` 未设）：现场调 Python（`stage_env` / `_find_goals` /
+  `build_spec` 的三条路径），**现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/部分规格.json`，
+  **不 import `ak_tactic`**。
+
+★ 这一套有**三个来源不同**的部件，各自的身份不一样：
+
+  ① **逐关 12 个值键**（缓存可达的关卡）：键 `("specgo", 关卡 id, 缓存文件
+     内容 sha16)`，先 `G.coverage("specgo", …)` 对账；
+  ② **生产规格**（`real_specs()`，夹具 × 名册）：键
+     `("specgo_real", 夹具名, 夹具字节 sha16, 名册字节 sha16)`——它同时冻
+     `skill_uses` 与 `deploys` 两串；
+  ③ **合成 `skill_uses` 用例**（原版从夹具里挑「≥2 个部署」的前 6 例**成功**抄到
+     规格的）：问题（`raw3` 与关卡号）走 `("query", "specgo_syn_cases")` 冻住
+     —— **必须连 raw3 一起冻**，否则冻结档写不出喂给 Go 的那份文件。
+
+★ **键集账**（`build_spec_keys()` 用 `ast` 从 `simgo/spec.py` 的返回字面量里抽）
+**不进冻结**：它读的是**源文件正文**，不是 Python 运行期产物——抽出来冻住反而会
+让「源加了键」这件事不再响。它在冻结档照跑（只是读文件，不用 import）。
+
 用法:
     python tools\\check_specgo_go.py
     python tools\\check_specgo_go.py --mutate
+    python tools\\freeze_baseline.py --record 部分规格
 """
 from __future__ import annotations
 
@@ -40,6 +63,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -150,6 +174,154 @@ def _capture(raw: dict):
     return v.spec, v.spec_error
 
 
+# --------------------------------------------------- 期望值（可冻的三个部件）
+_BATCH_REAL = None
+_BATCH_SYN = None
+
+
+def py_specgo_level(lv: str) -> dict:
+    """逐关的 12 个值键。★ import 住函数体里：冻结档下本函数不会被调到。"""
+    from ak_tactic.frontend.stage_env import stage_env
+    from ak_tactic.gamedata.stage import load_stage
+    from ak_tactic.simgo.spec import _find_goals, _highland_cells
+    try:
+        st = load_stage(lv)
+    except Exception as exc:                                   # noqa: BLE001
+        return {"loaded": False, "why": "%s: %s" % (type(exc).__name__, exc),
+                "env": {}}
+    inp = types.SimpleNamespace(stage=st)
+    #: 期望值同样走原版那句兜底（`spec.py:1209-1212`），不是写死 NORMAL
+    #: ——写死会让四星档关卡两边一起错。
+    diff = str(getattr(st, "difficulty", "") or "NORMAL")
+    want = dict(stage_env(st, environment_difficulty=diff))
+    want["stage"] = str(getattr(st, "code", "") or "")
+    want["max_time"] = DEFAULT_MAX_TIME
+    want["goal_cells"] = [[int(x), int(y)] for x, y in sorted(_find_goals(inp))]
+    want["highland_cells"] = [[int(x), int(y)] for x, y in _highland_cells(inp)]
+    #: ⚠ 这一格叫 `env` 不是 `want`：控制组 P1 会把值里的**第一个键**改坏，而
+    #: 改到 `loaded` 上会让整关被跳过（等于没进判决路径 ⇒ 报出一条假的「没红」）。
+    #: `env` 排在 `loaded` 前面，改坏它就落在被比的 12 个值上。
+    return {"loaded": True, "why": "", "env": want}
+
+
+def scan_plan_fixtures() -> list[list]:
+    """夹具批次的**输入身份**：文件名 ＋ 文件字节 sha16（数据侧，不 import）。"""
+    out: list[list] = []
+    for f in sorted(FIXDIR.glob("*.json")):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8-sig"))
+        except Exception:                                      # noqa: BLE001
+            continue
+        if isinstance(d, dict) and ("deploys" in d or "deploy" in d):
+            out.append([f.name, GB.file_sha16(f)])
+    return out
+
+
+def _proj_su(spec) -> list:
+    """`skill_uses` 投影：`[{"time", "cell"}]`（判据侧再拼成 `[time]+cell`）。"""
+    return [{"time": w.get("time"),
+             "cell": [int(v) for v in (w.get("cell") or [])]}
+            for w in ((spec or {}).get("skill_uses") or [])]
+
+
+def _proj_dep(spec) -> list:
+    """`deploys` 投影：逐条五个字段（判据侧按字段逐个比）。"""
+    return [{"time": w.get("time"), "index": w.get("index"),
+             "char_id": w.get("char_id"), "cost": w.get("cost"),
+             "auto_skill": w.get("auto_skill")}
+            for w in ((spec or {}).get("deploys") or [])]
+
+
+def py_specgo_real() -> list[list]:
+    """生产规格那批（**离冻档专用**）：`[夹具名, 夹具 sha16, 名册 sha16, 期望值]`。
+
+    ★ `ak_tactic` 的 import 全在 `real_specs()` 里：冻结档下本函数不会被调到。
+    """
+    rsha = GB.file_sha16(ROSTER_FIX)
+    out: list[list] = []
+    for name, spec, err, lv_id in real_specs():
+        ident = GB.file_sha16(FIXDIR / name)
+        if spec is None:
+            out.append([name, ident, rsha,
+                        {"spec_ok": False, "why": err or "", "lv_id": lv_id}])
+            continue
+        out.append([name, ident, rsha, {
+            "spec_ok": True, "why": "", "lv_id": lv_id,
+            "level": lv_id or str(spec.get("stage") or ""),
+            "real": {k: spec[k] for k in REAL_KEYS if k in spec},
+            "skill_uses": _proj_su(spec), "deploys": _proj_dep(spec)}])
+    return out
+
+
+def _compute_syn() -> list[dict]:
+    """合成用例的扫描（与原版同序、同口径）。
+
+    ⚠ 一处**口径差**要写明：原版按「抄到规格 **且** 比对一致（`okk`）」计数到 6，
+    这里按「抄到规格」计数——两种计数在**绿局**下必然相等（绿 ⇒ 无反例 ⇒
+    `okk` 恒真）；红局下扫描面可能不同（而红局本来就是红的）。
+    ★ `_capture` 用 Python：冻结档下本函数不会被调到。
+    """
+    out: list[dict] = []
+    cases = 0
+    for f in sorted(FIXDIR.glob("*.json")):
+        if cases >= 6:
+            break
+        try:
+            raw = json.loads(f.read_text(encoding="utf-8-sig"))
+        except Exception:                                      # noqa: BLE001
+            continue
+        if not isinstance(raw, dict) or "deploys" not in raw:
+            continue
+        if len(raw.get("deploys") or []) < 2:
+            continue
+        ops = [d.get("operator") or d.get("name") for d in raw["deploys"]]
+        raw3 = dict(raw, skills=[
+            {"operator": ops[0], "time": 5.0, "slot": 1},
+            {"operator": ops[1], "time": 2.0, "slot": 2},
+            {"operator": ops[0], "time": 1.0, "slot": 3},
+        ])
+        spec3, err3 = _capture(raw3)
+        out.append({
+            "name": f.name, "raw3": raw3,
+            "level3": str(raw3.get("stage") or ""),
+            "sha": GB.sh16(json.dumps(raw3, sort_keys=True, ensure_ascii=False,
+                                      separators=(",", ":")).encode("utf-8")),
+            "spec_ok": spec3 is not None, "why": err3 or "",
+            "skill_uses": _proj_su(spec3)})
+        if spec3 is not None:
+            cases += 1
+    return out
+
+
+def _real_batch() -> list[list]:
+    global _BATCH_REAL
+    if _BATCH_REAL is None:
+        _BATCH_REAL = py_specgo_real()
+    return _BATCH_REAL
+
+
+def _real_expect(name: str) -> dict:
+    for b in _real_batch():
+        if b[0] == name:
+            return b[3]
+    raise SystemExit("★ 生产规格那一批里没有这份夹具：%s" % name)
+
+
+def _syn_batch() -> list[dict]:
+    global _BATCH_SYN
+    if _BATCH_SYN is None:
+        _BATCH_SYN = _compute_syn()
+    return _BATCH_SYN
+
+
+def _syn_expect(name: str) -> dict:
+    for b in _syn_batch():
+        if b["name"] == name:
+            return {"spec_ok": b["spec_ok"], "why": b["why"],
+                    "skill_uses": b["skill_uses"]}
+    raise SystemExit("★ 合成用例那一批里没有这份夹具：%s" % name)
+
+
 def go_specgo(level: str, difficulty: str = "", plan: str = "",
               roster: str = "") -> tuple[bool, object]:
     env = dict(os.environ)
@@ -179,14 +351,13 @@ def go_specgo(level: str, difficulty: str = "", plan: str = "",
 
 
 def main() -> int:
+    G = GB.bind("部分规格", __file__)
+
     try:
         from check_go_all import cached_levels
         levels = cached_levels()
     except Exception:                                       # noqa: BLE001
         levels = []
-    from ak_tactic.frontend.stage_env import stage_env
-    from ak_tactic.gamedata.stage import load_stage
-    from ak_tactic.simgo.spec import _find_goals, _highland_cells
 
     all_keys = build_spec_keys()
     print("Go 侧仪器：%s" % GO_BIN)
@@ -199,10 +370,21 @@ def main() -> int:
     compared = 0
     seen: dict[str, int] = {}
 
-    for lv in levels:
-        try:
-            st = load_stage(lv)
-        except Exception:                                   # noqa: BLE001
+    #: ---- ① 逐关 12 个值键（对象集是活的：清单按缓存现算）----
+    batch = GB.level_inputs(DATA, levels)
+    if G.mode == GB.RECORD:
+        G.expect(("query", "level_batch"), lambda: batch)
+    cov_lv = G.coverage("specgo", [[r["level"], r["sha16"]] for r in batch])
+    to_cmp = batch
+    if G.mode == GB.CHECK and not cov_lv.ok:
+        covered_lv = {tuple(x) for x in cov_lv.covered}
+        to_cmp = [r for r in batch if (r["level"], r["sha16"]) in covered_lv]
+    for rec in to_cmp:
+        lv = rec["level"]
+        #: ★ 键自带输入身份：缓存内容变了 ⇒ 键配不上 ⇒ 由对账如实报出。
+        E = G.expect(("specgo", lv, rec["sha16"]),
+                     lambda lv=lv: py_specgo_level(lv))
+        if not E["loaded"]:
             continue
         ok, got = go_specgo(lv)
         if not ok:
@@ -210,15 +392,7 @@ def main() -> int:
             print("✗ %s —— Go 拒了：%s" % (lv, got))
             continue
         compared += 1
-        inp = types.SimpleNamespace(stage=st)
-        #: 期望值同样走原版那句兜底（`spec.py:1209-1212`），不是写死 NORMAL
-        #: ——写死会让四星档关卡两边一起错。
-        diff = str(getattr(st, "difficulty", "") or "NORMAL")
-        want = dict(stage_env(st, environment_difficulty=diff))
-        want["stage"] = str(getattr(st, "code", "") or "")
-        want["max_time"] = DEFAULT_MAX_TIME
-        want["goal_cells"] = [[x, y] for x, y in sorted(_find_goals(inp))]
-        want["highland_cells"] = _highland_cells(inp)
+        want = E["env"]
         if mutate and compared == 1:
             got = json.loads(json.dumps(got))
             got["life"] = got["life"] + 1
@@ -266,12 +440,22 @@ def main() -> int:
     real_bad_before = bad
     real_cmp = 0
     real_err = 0
-    for name, spec, err, lv_id in real_specs():
-        if spec is None:
+    rsha = GB.file_sha16(ROSTER_FIX)
+    real_live = [[n, sha, rsha] for n, sha in scan_plan_fixtures()]
+    cov_real = G.coverage("specgo_real", real_live)
+    real_rows = real_live
+    if G.mode == GB.CHECK and not cov_real.ok:
+        covered_real = {tuple(x) for x in cov_real.covered}
+        real_rows = [x for x in real_live if tuple(x) in covered_real]
+    for name, ident, _rs in real_rows:
+        #: ★ 键自带输入身份：夹具或名册变了 ⇒ 键配不上 ⇒ 由对账如实报出。
+        E = G.expect(("specgo_real", name, ident, rsha),
+                     lambda name=name: _real_expect(name))
+        if not E["spec_ok"]:
             real_err += 1
-            print("· 夹具 %s —— 生产路径没抄到规格：%s" % (name, err))
+            print("· 夹具 %s —— 生产路径没抄到规格：%s" % (name, E["why"]))
             continue
-        level = lv_id or str(spec.get("stage") or "")
+        level = E["level"]
         ok, got = go_specgo(level)
         if not ok:
             bad += 1
@@ -279,9 +463,9 @@ def main() -> int:
             continue
         real_cmp += 1
         for k in REAL_KEYS:
-            if k not in spec:
+            if k not in E["real"]:
                 continue
-            a, b = got[k], spec[k]
+            a, b = got[k], E["real"][k]
             if k == "stage":
                 same = (a == b)
             elif k in ("fps", "life"):
@@ -312,7 +496,7 @@ def main() -> int:
             bad += 1
             print("✗ 夹具 %s —— 传了计划却仍把 skill_uses 报成缺项" % name)
         #: ---- `skill_uses`：按**计划顺序**，`cell` 取该干员的落点 ----
-        wsu = spec.get("skill_uses") or []
+        wsu = E["skill_uses"]
         gsu = got2.get("skill_uses") or []
         if len(gsu) != len(wsu):
             bad += 1
@@ -329,7 +513,7 @@ def main() -> int:
                     bad += 1
                     print("✗ 夹具 %s skill_uses[%d]：Go=%r 生产规格=%r"
                           % (name, k, gm, wm))
-        wd = spec.get("deploys") or []
+        wd = E["deploys"]
         gd = got2.get("deploys") or []
         if len(gd) != len(wd):
             bad += 1
@@ -358,41 +542,29 @@ def main() -> int:
     import tempfile
     skill_cases = 0
     with tempfile.TemporaryDirectory() as td:
-        for f in sorted(FIXDIR.glob("*.json")):
-            if skill_cases >= 6:
-                break
-            try:
-                raw = json.loads(f.read_text(encoding="utf-8-sig"))
-            except Exception:                               # noqa: BLE001
-                continue
-            if not isinstance(raw, dict) or "deploys" not in raw:
-                continue
-            if len(raw.get("deploys") or []) < 2:
-                continue
-            ops = [d.get("operator") or d.get("name")
-                   for d in raw["deploys"]]
-            raw3 = dict(raw, skills=[
-                {"operator": ops[0], "time": 5.0, "slot": 1},
-                {"operator": ops[1], "time": 2.0, "slot": 2},
-                {"operator": ops[0], "time": 1.0, "slot": 3},
-            ])
-            spec3, err3 = _capture(raw3)
-            if spec3 is None:
-                print("· 合成 %s 没抄到规格：%s" % (f.name, err3))
-                continue
-            p3 = Path(td) / f.name
+        #: ★ 这一批的**问题**（含 raw3 与关卡号）从通道来：冻结档也要写得出
+        #: 喂给 Go 的那份文件，所以 raw3 必须一起冻。
+        cases = G.expect(("query", "specgo_syn_cases"),
+                         lambda: [[b["name"], b["raw3"], b["level3"], b["sha"]]
+                                  for b in _syn_batch()])
+        for name, raw3, level3, sha in cases:
+            p3 = Path(td) / name
             p3.write_text(json.dumps(raw3, ensure_ascii=False), encoding="utf-8")
-            level3 = str(raw3.get("stage") or "")
             ok3, got3 = go_specgo(level3, "", str(p3), str(ROSTER_FIX))
             if not ok3:
                 bad += 1
-                print("✗ 合成 %s —— Go 拒了：%s" % (f.name, got3))
+                print("✗ 合成 %s —— Go 拒了：%s" % (name, got3))
                 continue
-            gsu, wsu = got3.get("skill_uses") or [], spec3.get("skill_uses") or []
+            E = G.expect(("specgo_syn", name, sha),
+                         lambda name=name: _syn_expect(name))
+            if not E["spec_ok"]:
+                print("· 合成 %s 没抄到规格：%s" % (name, E["why"]))
+                continue
+            gsu, wsu = got3.get("skill_uses") or [], E["skill_uses"]
             if len(gsu) != len(wsu):
                 bad += 1
                 print("✗ 合成 %s skill_uses 条数：Go=%d 生产规格=%d"
-                      % (f.name, len(gsu), len(wsu)))
+                      % (name, len(gsu), len(wsu)))
                 continue
             okk = True
             for k, (g, w) in enumerate(zip(gsu, wsu)):
@@ -402,13 +574,19 @@ def main() -> int:
                     okk = False
                     bad += 1
                     print("✗ 合成 %s skill_uses[%d]：Go=%r 生产规格=%r"
-                          % (f.name, k, gm, wm))
+                          % (name, k, gm, wm))
             if okk:
                 seen["合成 skill_uses 逐条"] = \
                     seen.get("合成 skill_uses 逐条", 0) + len(gsu)
                 skill_cases += 1
     seen["合成 fixture 数"] = skill_cases
 
+    if G.mode == GB.CHECK:
+        for _tag, _cov, _n in (("specgo", cov_lv, len(batch)),
+                               ("specgo_real", cov_real, len(real_live))):
+            if not _cov.ok:
+                print()
+                print(_cov.report(_tag, _n))
     print()
     print("已比：部分规格骨架；%d 关（缓存可达）× %d 个值键 ＋ 键集账"
           % (compared, len(VALUE_KEYS)))
@@ -420,6 +598,9 @@ def main() -> int:
     print("    键集账                 %d（每个值键都各查一次，共 %d 次断言）"
           % (1, len(VALUE_KEYS) + 3))
     print()
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
     if mutate:
         if bad:
             print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")
@@ -433,7 +614,13 @@ def main() -> int:
         return 1
     print("结论：%d 关的 %d 个值键逐项一致，键集账 %d 个键对得上"
           % (compared, len(VALUE_KEYS), len(all_keys)))
-    return 1 if bad else 0
+    if bad:
+        #: 比过的部分**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+        return 1
+    if G.mode == GB.CHECK and not (cov_lv.ok and cov_real.ok):
+        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        return GB.RC_CHANNEL
+    return 0
 
 
 if __name__ == "__main__":

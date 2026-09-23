@@ -74,9 +74,31 @@ Go 走它自己的 `_level_index.json` ＋ `load` 入口，Python 走 `parse_sta
 | 路线段数 | 第一条路线的 `legs` 砍掉最后一段 | 段数比较是活的（不是只比前几段） |
 | 路线段长度 | 第一条路线的首个 walk 段 `length` **加 1 ulp** | 计划表里的段是**另一条命令**答的，独立于「分段长度」 |
 
+## 期望值从哪来（**两种模式**）
+
+* 默认（`RIOS_GOLDEN` 未设）：现场调 Python（`load_stage` / `ground_path` /
+  `Route.legs` / `route_plans` / `leading_wait`），**现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/寻路.json`，
+  **不 import `ak_tactic`**。
+
+★ 这一套的期望值**不是几个数，是一份投影**：一关一条键，值里带这一关
+Python 侧的全部产物——寻路问题（`qs`，含 `diagonal`）与点列、分类（只用于计数，
+但读数要复现）、分段（`kind/points/length/seconds`）、路线计划表
+（`points/wait/legs`）、以及**尺子那一份行使计数** `py_cov`
+（它与 Go 自报的 `covered` 是两个来源，比对是判据的一部分）。
+
+★ **输入身份**：键 `("stagepath", 关卡 id, 该关缓存文件内容 sha16)`
+＋ 每次跑先 `G.coverage("stagepath", …)` 对账（关卡清单是按缓存现算的、会长大）。
+合成夹具那条走 `("stagepath_syn", 合成关卡内容 sha16)`——合成关卡是本文件的
+纯函数（不 import `ak_tactic`），所以冻结档也算得出它的身份。
+
+★ **结构不可达的两条与 `STRUCTURAL_ZERO` 守卫照旧每跑一次重算**：它们量的是
+「这一批输入下可达性仍为零」（`py_cov` 与 Go 自报两侧同口径），不是写死一句话。
+
 用法:
     python tools\\check_stagepath_go.py
     python tools\\check_stagepath_go.py --mutate
+    python tools\\freeze_baseline.py --record 寻路
 """
 from __future__ import annotations
 
@@ -93,6 +115,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -138,6 +161,80 @@ def go_call(cmd: str, level: str, spec, data_root: str | None = None) -> dict:
     if not resp.get("ok"):
         raise SystemExit("Go 回 error：%s" % resp.get("error"))
     return resp
+
+
+# --------------------------------------------------------------- 期望值（可冻）
+def _proj_legs(legs) -> list:
+    """`Route.legs()` 的投影：四栏全给（`length` / `seconds` 逐位，不是近似）。"""
+    return [{"kind": l.kind, "points": [list(p) for p in l.points],
+             "length": l.length, "seconds": l.seconds} for l in legs]
+
+
+def _proj_plan(p) -> dict:
+    """`eta.route_plans` 一条路线的投影。"""
+    return {"points": [[float(x), float(y)] for x, y in p.points],
+            "wait": float(p.wait), "legs": _proj_legs(p.legs)}
+
+
+def _proj_route_meta(routes) -> list:
+    """每条路线的**计数**元数据（`compare_legs` 里那几处 `seen` 用）。"""
+    return [{"mode": (r.mode or "WALK").upper(),
+             "n_wait": sum(1 for c in r.checkpoints if c.is_wait),
+             "n_disappear": sum(1 for c in r.checkpoints
+                                if c.type == "DISAPPEAR"),
+             "join": join_points(r)} for r in routes]
+
+
+def py_expect_level(lv: str) -> dict:
+    """一关的期望值（**一份投影，不是几个数**）。
+
+    ★ `ak_tactic` 的 import 写在函数体里：冻结档下本函数不会被调到。
+    """
+    from ak_tactic.gamedata.stage import load_stage
+    from ak_tactic.eta import route_plans
+    try:
+        st = load_stage(lv)
+    except Exception as exc:                                   # noqa: BLE001
+        return {"loaded": False, "why": "%s: %s" % (type(exc).__name__, exc)}
+    qs, paths, kinds = [], [], []
+    for r in st.routes:
+        for diag in (True, False):
+            s, e = tuple(r.start), tuple(r.end)
+            qs.append({"start": [int(s[0]), int(s[1])],
+                       "end": [int(e[0]), int(e[1])], "diagonal": diag})
+            #: ★ 期望值**无条件**算好（不放进任何分支）。
+            paths.append([[int(x), int(y)] for x, y in
+                          st.map.ground_path(s, e, diagonal=diag)])
+            #: 分类只用于计数（照原样冻住，让行使计数的口径可复现）。
+            if s == e:
+                kinds.append("同格")
+            elif not st.map.walkable(*s) or not st.map.walkable(*e):
+                kinds.append("端点不可走")
+            else:
+                kinds.append("正常寻路")
+    return {"loaded": True, "why": "", "qs": qs, "paths": paths, "kinds": kinds,
+            "idxs": [r.index for r in st.routes],
+            "route_meta": _proj_route_meta(st.routes),
+            "legs": [_proj_legs(r.legs(walk_map=st.map)) for r in st.routes],
+            "rp": {str(k): _proj_plan(v) for k, v in route_plans(st).items()},
+            "py_cov": py_route_plan_coverage(st)}
+
+
+def py_expect_syn() -> dict:
+    """合成夹具的期望值（本文件的 `synthetic_stage()` 是纯函数，冻结档也能算身份）。"""
+    from ak_tactic.gamedata.stage import parse_stage
+    st_syn = parse_stage(synthetic_stage(), level_id=SYN_LEVEL_ID)
+    return {"idxs": [r.index for r in st_syn.routes],
+            "route_meta": _proj_route_meta(st_syn.routes),
+            "legs": [_proj_legs(r.legs(walk_map=st_syn.map))
+                     for r in st_syn.routes]}
+
+
+def syn_id() -> str:
+    """合成关卡的**内容身份**（不 import `ak_tactic`，冻结档也算得出）。"""
+    return GB.sh16(json.dumps(synthetic_stage(), sort_keys=True,
+                              ensure_ascii=False,
+                              separators=(",", ":")).encode("utf-8"))
 
 
 # --------------------------------------------------------------- 计数与守卫
@@ -272,23 +369,23 @@ def write_synthetic(root: Path) -> None:
 
 # --------------------------------------------------------------- 比较
 
-def compare_legs(tag: str, routes, want_legs, got_legs, seen: dict,
+def compare_legs(tag: str, meta: list, want_legs, got_legs, seen: dict,
                  guard: Guard, printed: list) -> int:
     """逐路线、逐段比 `kind` / `points` / `length` / `seconds`（四栏全精确）。
 
-    调用方已先对过条数（不等就不进这里）。
+    调用方已先对过条数（不等就不进这里）。`meta` 是 `_proj_route_meta()` 的投影
+    （只用于那几处计数）——**两种模式走同一份形状**。
     """
     bad = 0
     for ri, (wlegs, glegs) in enumerate(zip(want_legs, got_legs)):
         seen["路线"] += 1
-        r = routes[ri]
-        if (r.mode or "WALK").upper() == "FLY":
+        m = meta[ri]
+        if m["mode"] == "FLY":
             seen["FLY 路线"] += 1
-        seen["WAIT 源"] += sum(1 for c in r.checkpoints if c.is_wait)
-        seen["DISAPPEAR 源"] += sum(
-            1 for c in r.checkpoints if c.type == "DISAPPEAR")
-        seen["接续去重（pop）"] += join_points(r)
-        seen["跨格步段"] += sum(1 for wl in wlegs if has_long_step(wl.points))
+        seen["WAIT 源"] += m["n_wait"]
+        seen["DISAPPEAR 源"] += m["n_disappear"]
+        seen["接续去重（pop）"] += m["join"]
+        seen["跨格步段"] += sum(1 for wl in wlegs if has_long_step(wl["points"]))
         if len(glegs) != len(wlegs):
             bad += 1
             printed.append("✗ %s 路线 %d 段数：Go=%d Python=%d"
@@ -297,12 +394,12 @@ def compare_legs(tag: str, routes, want_legs, got_legs, seen: dict,
         for li, (wl, gl) in enumerate(zip(wlegs, glegs)):
             where = (tag, ri, li)
             seen["段"] += 1
-            seen["%s 段" % wl.kind] = seen.get("%s 段" % wl.kind, 0) + 1
+            seen["%s 段" % wl["kind"]] = seen.get("%s 段" % wl["kind"], 0) + 1
             #: ★ 期望值先无条件算好，再谈变异与比较（分类只用来计数）。
-            w_kind = wl.kind
-            w_pts = [list(p) for p in wl.points]
-            w_len = wl.length
-            w_sec = wl.seconds
+            w_kind = wl["kind"]
+            w_pts = [list(p) for p in wl["points"]]
+            w_len = wl["length"]
+            w_sec = wl["seconds"]
             missing = [k for k in ("kind", "points", "length", "seconds")
                        if k not in gl]
             if missing:
@@ -410,7 +507,7 @@ def compare_route_plans(tag: str, want: dict, rows: dict, seen: dict,
         before = bad
         p = want[idx]
         seen["路线计划"] += 1
-        if p.wait:
+        if p["wait"]:
             seen["计划 wait>0"] += 1
         where = (tag, idx)
         g = rows[idx]
@@ -421,8 +518,8 @@ def compare_route_plans(tag: str, want: dict, rows: dict, seen: dict,
                            % (tag, idx, "、".join(missing)))
             continue
         #: ---- 期望值（无条件算好）
-        w_pts = [[float(x), float(y)] for x, y in p.points]
-        w_wait = float(p.wait)
+        w_pts = [[float(x), float(y)] for x, y in p["points"]]
+        w_wait = float(p["wait"])
         #: ---- 变异（每处只注入一次，落在最先走到的那条路线上）
         if guard.want(MUT_RP_PTS) and g["points"]:
             g["points"][0][0] += 1
@@ -450,7 +547,7 @@ def compare_route_plans(tag: str, want: dict, rows: dict, seen: dict,
                 printed.append("✗ %s 路线 %d wait：Go=%r Python=%r"
                                % (tag, idx, g["wait"], w_wait))
         #: ---- 分段（与「分段」那一节同一套字段，但**另一条 Go 命令**答的）
-        wlegs, glegs = list(p.legs), g["legs"]
+        wlegs, glegs = p["legs"], g["legs"]
         if len(glegs) != len(wlegs):
             bad += 1
             guard.note(MUT_RP_LEGS, where, False)
@@ -461,10 +558,10 @@ def compare_route_plans(tag: str, want: dict, rows: dict, seen: dict,
         for li, (wl, gl) in enumerate(zip(wlegs, glegs)):
             lwhere = (tag, idx, li)
             seen["计划段"] += 1
-            w_kind = wl.kind
-            w_lpts = [list(q) for q in wl.points]
-            w_len = wl.length
-            w_sec = wl.seconds
+            w_kind = wl["kind"]
+            w_lpts = [list(q) for q in wl["points"]]
+            w_len = wl["length"]
+            w_sec = wl["seconds"]
             lmiss = [k for k in ("kind", "points", "length", "seconds")
                      if k not in gl]
             if lmiss:
@@ -503,13 +600,13 @@ def blank_seen() -> dict:
 
 
 def main() -> int:
+    G = GB.bind("寻路", __file__)
+
     try:
         from check_go_all import cached_levels
         levels = cached_levels()
     except Exception:                                       # noqa: BLE001
         levels = []
-    from ak_tactic.gamedata.stage import load_stage, parse_stage
-    from ak_tactic.eta import route_plans
 
     print("Go 侧仪器：%s" % GO_BIN)
     print("Python 侧权威：gamedata/stage.py 的 StageMap.ground_path ＋ Route.legs"
@@ -526,30 +623,27 @@ def main() -> int:
     py_cov: dict = {}
     struct_zero: dict = {k: 0 for k in STRUCTURAL_ZERO}
     cov_mismatch: list[str] = []
-    for lv in levels:
-        try:
-            st = load_stage(lv)
-        except Exception:                                   # noqa: BLE001
+
+    #: ★ 这一批关卡的**输入身份**（公式只有一份：`freeze_baseline.level_inputs()`）。
+    batch = GB.level_inputs(DATA, levels)
+    if G.mode == GB.RECORD:
+        G.expect(("query", "level_batch"), lambda: batch)
+    cov = G.coverage("stagepath", [[r["level"], r["sha16"]] for r in batch])
+    to_cmp = batch
+    if G.mode == GB.CHECK and not cov.ok:
+        covered = {tuple(x) for x in cov.covered}
+        to_cmp = [r for r in batch if (r["level"], r["sha16"]) in covered]
+
+    for rec in to_cmp:
+        lv = rec["level"]
+        #: ★ 键自带输入身份：缓存内容变了 ⇒ 键配不上 ⇒ 由对账如实报出。
+        E = G.expect(("stagepath", lv, rec["sha16"]),
+                     lambda lv=lv: py_expect_level(lv))
+        if not E["loaded"]:
             continue
 
         # ---------------------------------------------------------- 寻路
-        qs, wants, kinds = [], [], []
-        for r in st.routes:
-            for diag in (True, False):
-                s, e = tuple(r.start), tuple(r.end)
-                qs.append({"start": [int(s[0]), int(s[1])],
-                           "end": [int(e[0]), int(e[1])],
-                           "diagonal": diag})
-                #: ★ 期望值**无条件**算好（不放进任何分支）。
-                wants.append([[int(x), int(y)] for x, y in
-                              st.map.ground_path(s, e, diagonal=diag)])
-                #: 分类只用于计数。
-                if s == e:
-                    kinds.append("同格")
-                elif not st.map.walkable(*s) or not st.map.walkable(*e):
-                    kinds.append("端点不可走")
-                else:
-                    kinds.append("正常寻路")
+        qs, wants, kinds = E["qs"], E["paths"], E["kinds"]
         if qs:
             got = go_call("path", lv, qs)["paths"]
             if len(got) != len(wants):
@@ -587,11 +681,11 @@ def main() -> int:
                                         break
 
         # ---------------------------------------------------------- 分段（真夹具）
-        idxs = [r.index for r in st.routes]
+        idxs = E["idxs"]
         if not idxs:
             continue
-        #: ★ 期望值**无条件**算好：`Route.legs` 就是权威本身。
-        want_legs = [r.legs(walk_map=st.map) for r in st.routes]
+        #: ★ 期望值就是权威本身，只是从通道（冻结的那份）拿。
+        want_legs = E["legs"]
         got_legs = go_call("legs", lv, idxs)["legs"]
         if len(got_legs) != len(want_legs):
             bad += 1
@@ -599,18 +693,19 @@ def main() -> int:
                            % (lv, len(got_legs), len(want_legs)))
             continue
         seen["分段关卡"] += 1
-        bad += compare_legs(lv, st.routes, want_legs, got_legs, seen, guard, printed)
+        bad += compare_legs(lv, E["route_meta"], want_legs, got_legs,
+                            seen, guard, printed)
 
         # ---------------------------------------------------------- 路线计划表
-        #: ★ 期望值**无条件**算好：`eta.route_plans` 就是权威本身。
-        want_rp = route_plans(st)
+        #: ★ 键还原成**整数**：JSON 只认字符串键，不还原的话 `sorted()` 会按
+        #: 字典序排（"10" < "2"），变异落点与打印顺序都会变。
+        want_rp = {int(k): v for k, v in E["rp"].items()}
         got_rp = go_call("routeplans", lv, {})["route_plans"]
         for k, v in (got_rp.get("covered") or {}).items():
             go_seen[k] = go_seen.get(k, 0) + v
         for k in STRUCTURAL_ZERO:
             struct_zero[k] += int((got_rp.get("covered") or {}).get(k, 0))
-        cov = py_route_plan_coverage(st)
-        for k, v in cov.items():
+        for k, v in E["py_cov"].items():
             py_cov[k] = py_cov.get(k, 0) + v
         rows = {}
         for r in got_rp["routes"]:
@@ -631,10 +726,11 @@ def main() -> int:
     syn_seen = blank_seen()
     with tempfile.TemporaryDirectory(prefix="rios-syn-legs-") as td:
         write_synthetic(Path(td))
-        raw = synthetic_stage()
-        st_syn = parse_stage(raw, level_id=SYN_LEVEL_ID)
-        syn_ids = [r.index for r in st_syn.routes]
-        want_syn = [r.legs(walk_map=st_syn.map) for r in st_syn.routes]
+        #: ★ 合成关卡的期望值也走通道：它的身份是**本文件那个纯函数**的内容 sha16
+        #: （不 import `ak_tactic`，所以冻结档照样算得出）。
+        syn = G.expect(("stagepath_syn", syn_id()), py_expect_syn)
+        syn_ids = syn["idxs"]
+        want_syn = syn["legs"]
         got_syn = go_call("legs", SYN_LEVEL_ID, syn_ids, data_root=td)["legs"]
         if len(got_syn) != len(want_syn):
             bad += 1
@@ -642,7 +738,7 @@ def main() -> int:
                            % (len(got_syn), len(want_syn)))
         else:
             syn_seen["分段关卡"] = 1
-            bad += compare_legs("合成", st_syn.routes, want_syn, got_syn,
+            bad += compare_legs("合成", syn["route_meta"], want_syn, got_syn,
                                 syn_seen, guard, printed)
     for line in printed:
         print(line)
@@ -673,6 +769,11 @@ def main() -> int:
     print("★ 行使计数（合成夹具）：%s"
           % ", ".join("%s=%d" % (k, v) for k, v in sorted(syn_seen.items())))
     print()
+    if G.mode == GB.CHECK and not cov.ok:
+        print(cov.report("stagepath", len(batch)))
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
     if cov_mismatch:
         print("结论：Go 自报的分支行使计数与尺子独立数出的不一致 —— 判红")
         return 1
@@ -722,7 +823,13 @@ def main() -> int:
           "%d 段逐字段一致（points / wait / length / seconds 全精确）"
           % (seen["路径一致"], seen["段逐字段一致"], syn_seen["段逐字段一致"],
              seen["计划表逐字段一致"], seen["计划段逐字段一致"]))
-    return 1 if bad else 0
+    if bad:
+        #: 比过的部分**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+        return 1
+    if G.mode == GB.CHECK and not cov.ok:
+        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        return GB.RC_CHANNEL
+    return 0
 
 
 if __name__ == "__main__":

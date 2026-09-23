@@ -19,9 +19,25 @@
 Go 那边 `parseMap` 强制 `len(Tiles)==Height` 且每行宽 `==Width`，不一致就报错
 ——所以形状这个坑不存在，但**顺序仍然要各自照原样**。
 
+## 期望值从哪来（**两种模式**）
+
+* 默认（`RIOS_GOLDEN` 未设）：现场调 Python 的 `_find_goals` / `_highland_cells`，
+  **现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/格表.json`，**不 import `ak_tactic`**。
+
+★ 冻的**两半 ＋ 输入身份**：查询集是调用方按**缓存**现算的关卡清单（会随别的
+会话逐章取数而长大），所以键是 `("cells", 关卡 id, 该关缓存文件内容 sha16)`，
+并先做 `G.coverage("cells", …)` 对账；一关一条键（原版对 `load_stage` 抛错的关
+是**整关跳过**的，按两表拆键会让冻结档问到没有期望值的问题）。另记一条可读的
+批次记录 `("query", "level_batch")`——它**不参与判定**，但 `--check` 的「改值」栏
+会量到它：缓存一变，这里第一个显形。
+
+⚠ `highland_cells` 的比较是**逐位、按原样**（它是行序、`goal_cells` 是字典序）。
+
 用法:
     python tools\\check_cells_go.py
     python tools\\check_cells_go.py --mutate
+    python tools\\freeze_baseline.py --record 格表
 """
 from __future__ import annotations
 
@@ -37,6 +53,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -61,14 +78,33 @@ def go_cells(level: str) -> tuple[bool, object]:
     return True, resp["cells"]
 
 
+def py_cells_level(lv: str) -> dict:
+    """一关的期望值：两张格表。
+
+    ★ `ak_tactic` 的 import 住在函数体里：冻结档下本函数不会被调到。
+    ★ 一条键带两表：原版对 `load_stage` 抛错的关是**整关跳过**的。
+    """
+    from ak_tactic.gamedata.stage import load_stage
+    from ak_tactic.simgo.spec import _find_goals, _highland_cells
+    try:
+        st = load_stage(lv)
+    except Exception as exc:                                   # noqa: BLE001
+        return {"loaded": False, "why": "%s: %s" % (type(exc).__name__, exc),
+                "goal": [], "high": []}
+    inp = types.SimpleNamespace(stage=st)
+    return {"loaded": True, "why": "",
+            "goal": [[int(x), int(y)] for x, y in sorted(_find_goals(inp))],
+            "high": [[int(x), int(y)] for x, y in _highland_cells(inp)]}
+
+
 def main() -> int:
+    G = GB.bind("格表", __file__)
+
     try:
         from check_go_all import cached_levels
         levels = cached_levels()
     except Exception:                                       # noqa: BLE001
         levels = []
-    from ak_tactic.gamedata.stage import load_stage
-    from ak_tactic.simgo.spec import _find_goals, _highland_cells
 
     print("Go 侧仪器：%s" % GO_BIN)
     print("Python 侧权威：simgo/spec.py 的 _find_goals / _highland_cells")
@@ -79,20 +115,31 @@ def main() -> int:
     compared = 0
     both_refused = 0
     seen: dict[str, int] = {}
-    for lv in levels:
-        try:
-            st = load_stage(lv)
-        except Exception:                                   # noqa: BLE001
+
+    #: ★ 这一批关卡的**输入身份**（公式只有一份：`freeze_baseline.level_inputs()`）。
+    batch = GB.level_inputs(DATA, levels)
+    if G.mode == GB.RECORD:
+        G.expect(("query", "level_batch"), lambda: batch)
+    cov = G.coverage("cells", [[r["level"], r["sha16"]] for r in batch])
+    to_cmp = batch
+    if G.mode == GB.CHECK and not cov.ok:
+        covered = {tuple(x) for x in cov.covered}
+        to_cmp = [r for r in batch if (r["level"], r["sha16"]) in covered]
+
+    for rec in to_cmp:
+        lv = rec["level"]
+        #: ★ 键自带输入身份：缓存内容变了 ⇒ 键配不上 ⇒ 由对账如实报出。
+        E = G.expect(("cells", lv, rec["sha16"]), lambda lv=lv: py_cells_level(lv))
+        if not E["loaded"]:
             continue
-        inp = types.SimpleNamespace(stage=st)
         ok, got = go_cells(lv)
         if not ok:
             bad += 1
             print("✗ %s —— Go 拒了：%s" % (lv, got))
             continue
         compared += 1
-        want_goal = [[x, y] for x, y in sorted(_find_goals(inp))]
-        want_high = _highland_cells(inp)
+        want_goal = E["goal"]
+        want_high = E["high"]
         seen["有防守点格" if want_goal else "无防守点格"] = \
             seen.get("有防守点格" if want_goal else "无防守点格", 0) + 1
         seen["有高台格" if want_high else "无高台格"] = \
@@ -113,12 +160,18 @@ def main() -> int:
             else:
                 seen["%s 逐格一致" % key] = seen.get("%s 逐格一致" % key, 0) + 1
 
+    if G.mode == GB.CHECK and not cov.ok:
+        print()
+        print(cov.report("cells", len(batch)))
     print()
     print("已比：两张格表；%d 关（缓存可达）" % compared)
     print("★ 行使计数：")
     for k, n in sorted(seen.items(), key=lambda kv: kv[0]):
         print("    %-22s %d" % (k, n))
     print()
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
     if mutate:
         if bad:
             print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")
@@ -133,7 +186,13 @@ def main() -> int:
               % "、".join(unchecked))
         return 1
     print("结论：%d 关逐格一致（另 %d 例两边都拒）" % (compared, both_refused))
-    return 1 if bad else 0
+    if bad:
+        #: 比过的部分**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+        return 1
+    if G.mode == GB.CHECK and not cov.ok:
+        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        return GB.RC_CHANNEL
+    return 0
 
 
 if __name__ == "__main__":

@@ -29,9 +29,35 @@
 → 1。改成 `is None` 会在这些取值上分叉，而现有计划覆盖不到。
 本判据用**合成关卡**把这几条钉住（见 `SYNTH`）。
 
+## 期望值从哪来（**两种模式**）
+
+* 默认（`RIOS_GOLDEN` 未设）：现场调 Python 的 `stage_env`，**现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/关卡静态.json`，
+  **不 import `ak_tactic`**。
+
+★ 这套冻的**两半 ＋ 一份取证面读数**：
+
+  · **查询集**：关卡清单（与总入口同源、现算）＋ 两档难度 —— 清单是调用方
+    按**缓存**现算的，会随别的会话逐章取数而长大（实测 72 → 320）；
+  · **期望值**：一关一条键，值里带**两档难度各自的**结果
+    （`py_ok` / 8 项 / 拒收理由）——一关一条是**必需**的：原版对
+    `load_stage` 抛错的那些关是**整关跳过**的，若按难度拆键，冻结档就会去问
+    那些本来没有期望值的问题（缺键 ⇒ rc=6 假红）；
+  · **输入身份**：键 `("stageenv", 关卡 id, 该关缓存文件内容 sha16)`
+    ＋ 每次跑先 `G.coverage("stageenv", …)` 对账（对象集是活的）；
+  · **取证面读数**（`scan_rune_coverage` 的六个计数）**不参与判定**，
+    走 `("stageenv_scope", "rune_coverage")` 冻住——它由 `mask_applies` 现算，
+    不冻住冻结档连这几个数都印不出来。⚠ 它**不随批次重算**：缓存长大那一刻
+    由 `coverage` 先响（rc=6），不会让旧读数冒充新读数。
+  · 两个 tag（`stageenv_scope` / 合成用例键的 `"%d/%s"` 第二段）的**形状是
+    给控制组挑的**：P3 会删「按前两段分组后最大的一组」并要求报成「对象变了」，
+    所以每一族都必须**每组只有一条键**、且非关卡族的组排在关卡族之后。
+    改这两个 tag 的写法会让 P3 从「对账」退化成「缺键」，探针失效。
+
 用法:
     python tools\\check_stageenv_go.py
     python tools\\check_stageenv_go.py --mutate
+    python tools\\freeze_baseline.py --record 关卡静态
 """
 from __future__ import annotations
 
@@ -47,6 +73,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -80,6 +107,54 @@ def py_env(stage, difficulty: str) -> dict:
     from ak_tactic.frontend.stage_env import stage_env
 
     return stage_env(stage, environment_difficulty=difficulty)
+
+
+def _norm(env: dict) -> dict:
+    """8 项**先规范化成 JSON 形状**（两种模式共用这一个口）。"""
+    return {f: (int(env[f]) if f in ("fps", "life") else float(env[f]))
+            for f in FIELDS}
+
+
+def py_env_level(lv: str) -> dict:
+    """一关的期望值：**两档难度各自的结果**一次收齐。
+
+    ★ 一关一条键（而不是「一关 × 一档」一条）：原版对 `load_stage` 抛错的关是
+      **整关跳过**的，按难度拆键会让冻结档去问那些本来没有期望值的问题。
+    ★ `ak_tactic` 的 import 住在函数体里：冻结档下本函数不会被调到。
+    """
+    from ak_tactic.gamedata.stage import load_stage
+    try:
+        st = load_stage(lv)
+    except Exception as exc:                                   # noqa: BLE001
+        return {"loaded": False, "why": "%s: %s" % (type(exc).__name__, exc),
+                "env": {}}
+    out: dict = {"loaded": True, "why": "", "env": {}}
+    for d in DIFFS:
+        try:
+            out["env"][d] = {"py_ok": True, "why": "", "env": _norm(py_env(st, d))}
+        except Exception as exc:                               # noqa: BLE001
+            out["env"][d] = {"py_ok": False, "why": "%s: %s"
+                             % (type(exc).__name__, exc), "env": None}
+    return out
+
+
+def py_rune_coverage(levels) -> dict:
+    """取证面读数（**不是判据**）：这批关卡的 rune 里几条口径各命中几关。
+
+    ★ 它由 `mask_applies` 现算 ⇒ 冻结档必须走 `G.expect` 才印得出来。
+    """
+    return scan_rune_coverage(levels)
+
+
+def py_synth_env(blob: dict, difficulty: str) -> dict:
+    """合成关卡的期望值（同样规范化成 JSON 形状）。"""
+    return _norm(synth_env(blob, difficulty))
+
+
+def blob_id(blob: dict) -> str:
+    """合成用例的**输入身份**：内容 sha16（数据侧算，不 import `ak_tactic`）。"""
+    return GB.sh16(json.dumps(blob, sort_keys=True, ensure_ascii=False,
+                              separators=(",", ":")).encode("utf-8"))
 
 
 def scan_rune_coverage(levels) -> dict[str, int]:
@@ -187,7 +262,7 @@ def synth_env(blob: dict, difficulty: str) -> dict:
 
 
 def main() -> int:
-    from ak_tactic.gamedata.stage import load_stage
+    G = GB.bind("关卡静态", __file__)
 
     try:
         from check_go_all import cached_levels
@@ -205,19 +280,33 @@ def main() -> int:
     both_refused = 0
     seen: dict[str, int] = {}
 
-    for lv in levels:
-        try:
-            st = load_stage(lv)
-        except Exception:                                   # noqa: BLE001
+    #: ★ 这一批关卡的**输入身份**：关卡 id ＋ 缓存文件内容 sha16（公式只有一份，
+    #: 在 `freeze_baseline.level_inputs()` 里——关卡/敌人两套用的是同一份）。
+    batch = GB.level_inputs(DATA, levels)
+    if G.mode == GB.RECORD:
+        G.expect(("query", "level_batch"), lambda: batch)
+    cov = G.coverage("stageenv", [[r["level"], r["sha16"]] for r in batch])
+    to_cmp = batch
+    if G.mode == GB.CHECK and not cov.ok:
+        #: 只比两边都有的。**未覆盖的不猜**——猜就是自己写一份期望值。
+        covered = {tuple(x) for x in cov.covered}
+        to_cmp = [r for r in batch if (r["level"], r["sha16"]) in covered]
+
+    for rec in to_cmp:
+        lv = rec["level"]
+        #: ★ 键自带输入身份：缓存内容变了 ⇒ 键配不上 ⇒ 由对账如实报出，
+        #: 而不是拿一份旧内容的期望值去比新内容（那会造出一条假红）。
+        E = G.expect(("stageenv", lv, rec["sha16"]),
+                     lambda lv=lv: py_env_level(lv))
+        if not E["loaded"]:
             continue
         for d in DIFFS:
+            rd = E["env"].get(d) or {"py_ok": False,
+                                     "why": "（基线里没有这一档）", "env": None}
             ok, got = go_env(lv, d)
-            try:
-                want = py_env(st, d)
-                py_ok = True
-            except Exception as exc:                        # noqa: BLE001
-                want, py_ok = None, False
-                py_err = "%s: %s" % (type(exc).__name__, exc)
+            py_ok = rd["py_ok"]
+            want = rd["env"]
+            py_err = rd["why"]
             if not ok or not py_ok:
                 if not ok and not py_ok:
                     both_refused += 1
@@ -242,8 +331,18 @@ def main() -> int:
                     bad += 1
                     print("✗ %s/%s %s：Go=%r Python=%r" % (lv, d, f, a, b))
 
-    cov = scan_rune_coverage(levels)
-    for k, n in cov.items():
+    if G.mode == GB.CHECK and not cov.ok:
+        print()
+        print(cov.report("stageenv", len(batch)))
+
+    #: 取证面读数（不是判据）：不冻住的话冻结档印不出这几个数。
+    #: ⚠ 这条键的**名字选过**：控制组的 P3 会把「每对象一组」的键按前两段分组、
+    #: 挑**最大**的一组删掉，删完要求冻结档报成「对象变了」（rc=6 ＋ 印对账）。
+    #: 所以（a）它不能与前缀更小的组同名到成为「第一个最大组」——用
+    #: `stageenv_scope` 让它排在 `stageenv` 关卡键**之后**；（b）每组只能有 1 条键。
+    cov_rune = G.expect(("stageenv_scope", "rune_coverage"),
+                        lambda: py_rune_coverage(levels))
+    for k, n in cov_rune.items():
         seen[k] = n
 
     #: ---- 合成用例 ----
@@ -251,6 +350,7 @@ def main() -> int:
         for i, (label, blob) in enumerate(SYNTH):
             path = Path(td) / ("s%d.json" % i)
             path.write_text(json.dumps(blob, ensure_ascii=False), encoding="utf-8")
+            bid = blob_id(blob)
             for d in DIFFS:
                 ok, got = go_env(str(path), d, path=True)
                 if not ok:
@@ -261,7 +361,13 @@ def main() -> int:
                 if mutate and compared == 1:
                     got = dict(got)
                     got["life"] = got["life"] + 1
-                want = synth_env(blob, d)
+                #: ★ 期望值只能从这里来：默认档现调 Python，冻结档读冻的那份。
+                #: 键里带**这一例的内容身份**（改用例表 ⇒ 键配不上，不是静默复用）。
+                #: ⚠ 键的**第二段**把例号与难度合成一个元素：分成两段会让这一族
+                #: 出现「每对象 2 条键」的组，而控制组的 P3 专挑**最大的**那组删
+                #: ——它就会挑到合成用例，删完由缺键（而非对账）报 rc=6，探针失效。
+                want = G.expect(("stageenv_synth", "%d/%s" % (i, d), bid),
+                                lambda blob=blob, d=d: py_synth_env(blob, d))
                 for f in FIELDS:
                     a, b = got[f], want[f]
                     same = (int(a) == int(b) if f in ("fps", "life")
@@ -280,6 +386,9 @@ def main() -> int:
     for k, n in sorted(seen.items(), key=lambda kv: kv[0]):
         print("    %-28s %d" % (k, n))
     print()
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
     if mutate:
         if bad:
             print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")
@@ -296,7 +405,13 @@ def main() -> int:
         return 1
     print("结论：%d 例逐字段一致（另 %d 例两边都拒、%d 处失配）"
           % (compared, both_refused, bad))
-    return 1 if bad else 0
+    if bad:
+        #: 比过的部分**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+        return 1
+    if G.mode == GB.CHECK and not cov.ok:
+        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        return GB.RC_CHANNEL
+    return 0
 
 
 if __name__ == "__main__":

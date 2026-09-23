@@ -44,9 +44,34 @@ Go 这一版没搬完（干员侧那一圈要的 `operator_view` 与 `SkillEffec
 * `被击倒给可部署装置` 的第三个合取项 `inp.device_deployments` 在两个生产路径上恒空
   ——它仍在 `UNPORTED` 里（Go 确实没有这条渠道），由证人 W3 证明它在给定输入下真会报。
 
+## 期望值从哪来（**两种模式**）
+
+* 默认（`RIOS_GOLDEN` 未设）：现场跑 Python（`real_specs` / `SpecCapture` 钩子 /
+  `SpecInputs.from_stage` / `unsupported_reasons`），**现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/闸门.json`，
+  **不 import `ak_tactic`**。
+
+★ 三类读数 ＋ 证人，各自的身份：
+
+  · **A** 24 份真夹具：键 `("unsup_a", 夹具名, 夹具字节 sha16, 名册字节 sha16)`
+    ＋ `G.coverage("unsup_a", …)` 对账（夹具集是活的）；
+  · **B** 计划侧合成（只换 dict、同一条生产路径）：键 `("unsup_b", 标签, 计划 sha16)`；
+  · **C** 敌人侧合成：键 `("unsup_c", 标签, 合成关卡 sha16)`；
+  · **证人**：键 `("unsup_w", 证人名)`——每条未搬线都要有证人，所以证人的
+    **证据**（Python 真报出来的那几条理由）也冻住，「证不出来」照旧判红；
+    W2/W5 那两条只看**源文件正文**（不 import、不运行 Python），照旧每跑一次现算
+    ——登记会过期，所以它必须能拿源文件重算。
+
+★ **顺序语义原样保住**：期望值一条一条入冻，**不排序**（原版按 `timeline()` 排，
+「顺序对调」是 `--mutate` 的一个注入）。⚠ 冻的是**换行拼起来的一整串**而不是列表：
+控制组 P1 会把值里改坏一处，值是列表时哨兵元素会让尺子的正则撞上非字符串而**崩**
+（那是 rc=1，形态是崩溃不是判决）；拼成字符串后 P1 得到一条**干净的判据红**
+（多出一条切不出线的理由）。
+
 用法:
     python tools\\check_unsupported_go.py
     python tools\\check_unsupported_go.py --mutate
+    python tools\\freeze_baseline.py --record 闸门
 """
 from __future__ import annotations
 
@@ -64,6 +89,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -272,6 +298,129 @@ def capture_inp(raw: dict):
     return getattr(v, "inp", None), None
 
 
+# ---------------------------------------------------------------- 期望值（可冻）
+_A_BATCH = None
+
+
+def join_lines(rows) -> str:
+    """理由清单 → 一串（**顺序原样**）。带换行的理由当场响（拼串会静默吞结构）。"""
+    out = []
+    for x in rows:
+        if not isinstance(x, str) or "\n" in x:
+            raise SystemExit("★ 闸门的理由不是单行字符串：%r" % (x,))
+        out.append(x)
+    return "\n".join(out)
+
+
+def split_lines(text) -> list:
+    """一串 → 理由清单（`join_lines` 的逆运算，**两种模式共用这一个口**）。"""
+    return [x for x in (text or "").split("\n") if x]
+
+
+def blob_id(blob: dict) -> str:
+    """合成用例的**内容身份**（数据侧算，不 import `ak_tactic`）。"""
+    return GB.sh16(json.dumps(blob, sort_keys=True, ensure_ascii=False,
+                              separators=(",", ":")).encode("utf-8"))
+
+
+def scan_plan_fixtures() -> list[list]:
+    """夹具批次的输入身份（数据侧；`utf-8-sig` 与 `real_specs()` 同源）。"""
+    out: list[list] = []
+    for f in sorted(FIXDIR.glob("*.json")):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8-sig"))
+        except Exception:                                      # noqa: BLE001
+            continue
+        if isinstance(d, dict) and ("deploys" in d or "deploy" in d):
+            out.append([f.name, GB.file_sha16(f)])
+    return out
+
+
+def stage_of(name: str) -> str:
+    """夹具里的关卡 id（**数据侧**）：A 段调 Go 用的就是它（`real_specs()` 同源）。"""
+    d = json.loads((FIXDIR / name).read_text(encoding="utf-8-sig"))
+    return str(d.get("stage") or "")
+
+
+def py_unsup_a() -> list[list]:
+    """A：24 份真夹具的期望值（**离冻档专用**；import 全在 `real_specs` 里）。"""
+    import check_specgo_go as C
+    rsha = GB.file_sha16(ROSTER_FIX)
+    out: list[list] = []
+    for name, spec, err, _lv in C.real_specs():
+        if spec is None:
+            raise SystemExit("生产规格抄不到（%s）：%s" % (name, err))
+        out.append([name, GB.file_sha16(FIXDIR / name), rsha,
+                    join_lines(list(spec.get("unsupported") or []))])
+    return out
+
+
+def _a_batch() -> list[list]:
+    global _A_BATCH
+    if _A_BATCH is None:
+        _A_BATCH = py_unsup_a()
+    return _A_BATCH
+
+
+def _a_expect(name: str) -> str:
+    for b in _a_batch():
+        if b[0] == name:
+            return b[3]
+    raise SystemExit("★ 生产规格那一批里没有这份夹具：%s" % name)
+
+
+def py_unsup_plan(raw: dict) -> str:
+    """B：换计划 dict、走**同一条生产路径**。"""
+    import check_specgo_go as C
+    spec, err = C._capture(raw)
+    if spec is None:
+        raise SystemExit("合成计划抄不到（%s）：%s" % (raw.get("title"), err))
+    return join_lines(list(spec.get("unsupported") or []))
+
+
+def py_unsup_level(path) -> str:
+    """C：合成关卡的期望值（`from_stage` ＋ 权威函数）。"""
+    return join_lines(py_from_stage(path))
+
+
+def py_w1() -> str:
+    """W1 的证据：`allow_devices=False` 时 Python 真报出来的那几条。"""
+    from ak_tactic.simgo import spec as S
+    fx = json.loads((FIXDIR / "hsex8.json").read_text(encoding="utf-8-sig"))
+    inp, err = capture_inp(fx)
+    if inp is None:
+        raise SystemExit("W1 抄不到 hsex8 的输入：%s" % err)
+    return join_lines(S.unsupported_reasons(inp, allow_devices=False))
+
+
+def py_w2() -> str:
+    """W2 的证据：计划的 `skill` 写成对象时 Python 报出来的那几条。"""
+    from ak_tactic.simgo import spec as S
+    obj = {"stage": BASE_PLAN["stage"], "title": "w",
+           "deploys": [base_deploy({"id": "skchr_mudrok_2", "level": 7})]}
+    inp2, err2 = capture_inp(obj)
+    if inp2 is None:
+        raise SystemExit("W2 抄不到对象技能的计划：%s" % err2)
+    return join_lines(S.unsupported_reasons(inp2, allow_devices=True))
+
+
+def py_w3(path) -> str:
+    """W3 的证据：给排程塞一条装置部署时 Python 报出来的那几条。"""
+    from ak_tactic.simgo import spec as S
+    return join_lines(S.unsupported_reasons(
+        build_inp_from_stage(path, device_deploys=1), allow_devices=True))
+
+
+def py_w4() -> dict:
+    """W4 的证据：`ALLOW_SNOW` 的现读 ＋ `hsex8_max` 的 snow_spec 片数。"""
+    from ak_tactic.simgo import spec as S
+    maxplan = json.loads((FIXDIR / "hsex8_max.json").read_text(encoding="utf-8-sig"))
+    inp4, err4 = capture_inp(maxplan)
+    return {"allow_snow": getattr(S, "ALLOW_SNOW", None) is True,
+            "n_fields": len(S.snow_spec(inp4)) if inp4 is not None else -1,
+            "why": err4 or ""}
+
+
 # ---------------------------------------------------------------- 合成夹具
 
 def synth_level(*, awake_at: float | None = None, modes_at: float | None = None,
@@ -366,35 +515,37 @@ def level_variants() -> list[tuple[str, dict]]:
 # ---------------------------------------------------------------- 读数（各跑一次）
 
 class Reading:
-    def __init__(self, name: str, expected: list[str], go: dict, note: str = ""):
+    def __init__(self, name: str, expected, go: dict, note: str = ""):
         self.name = name
-        self.expected = expected
+        #: 期望值是**一串**（见文件头：拼串是为了让 P1 得到干净的判据红），
+        #: 这里拆回逐条；传列表也接受（`mutate` 走的就是那条）。
+        self.expected = (split_lines(expected) if isinstance(expected, str)
+                         else list(expected))
         self.go = go
         self.note = note
 
 
-def build_readings(tmp: Path) -> list[Reading]:
+def build_readings(tmp: Path, G, rows_a: list[list]) -> list[Reading]:
     """把两侧读数**各跑一次**收齐。后面所有比较（含 --mutate）都在内存里做。"""
-    import check_specgo_go as C
-
     out: list[Reading] = []
+    rsha = GB.file_sha16(ROSTER_FIX)
     # ---- A. 24 份真夹具：生产路径（`real_specs` 与对拍台同一口径）----
-    for name, spec, err, lv in C.real_specs():
-        if spec is None:
-            raise SystemExit("生产规格抄不到（%s）：%s" % (name, err))
+    for name, ident, _rs in rows_a:
+        #: ★ 键自带输入身份：夹具或名册变了 ⇒ 键配不上 ⇒ 由对账如实报出。
+        exp = G.expect(("unsup_a", name, ident, rsha),
+                       lambda name=name: _a_expect(name))
         out.append(Reading(
-            "真夹具 %s" % name, list(spec.get("unsupported") or []),
-            go_unsupported(level=lv, plan=str(FIXDIR / name)),
+            "真夹具 %s" % name, exp,
+            go_unsupported(level=stage_of(name), plan=str(FIXDIR / name)),
             note="生产路径 allow_devices=True"))
 
     # ---- B. 计划侧合成：换 dict、不换关卡，走同一套生产路径 ----
     for label, raw in plan_variants():
-        spec, err = C._capture(raw)
-        if spec is None:
-            raise SystemExit("合成计划抄不到（%s）：%s" % (label, err))
+        exp = G.expect(("unsup_b", label, blob_id(raw)),
+                       lambda raw=raw: py_unsup_plan(raw))
         p = tmp / ("plan_%d.json" % len(out))
         p.write_text(json.dumps(raw, ensure_ascii=False, indent=1), encoding="utf-8")
-        out.append(Reading(label, list(spec.get("unsupported") or []),
+        out.append(Reading(label, exp,
                            go_unsupported(level=str(raw["stage"]), plan=str(p)),
                            note="生产路径（SpecCapture 钩子）"))
 
@@ -402,7 +553,9 @@ def build_readings(tmp: Path) -> list[Reading]:
     for label, blob in level_variants():
         p = tmp / ("level_%d.json" % len(out))
         p.write_text(json.dumps(blob, ensure_ascii=False, indent=1), encoding="utf-8")
-        out.append(Reading(label, py_from_stage(p), go_unsupported(path=str(p)),
+        exp = G.expect(("unsup_c", label, blob_id(blob)),
+                       lambda p=p: py_unsup_level(p))
+        out.append(Reading(label, exp, go_unsupported(path=str(p)),
                            note="合成关卡（from_stage）"))
     return out
 
@@ -493,40 +646,30 @@ def structural_guards() -> list[str]:
     return problems
 
 
-def witnesses(tmp: Path) -> list[str]:
+def witnesses(tmp: Path, G) -> list[str]:
     """每条 `UNPORTED` 都要有证人：证明它在 Python 侧**真会报**（或真被开关关着）。
 
     ⚠ 证不出来 ⇒ 判红。防「登记了一个其实不存在的线」——那种条目会让 `unported`
     变成一个永远为真的清单，而永远为真的判据是零信息量的。
+    ★ 证人的**证据**（Python 报出来的那几条理由）走 `G.expect` 冻住；W2/W5 那两条
+    只看源文件正文（不 import），照旧现算。
     """
     problems: list[str] = []
-    from ak_tactic.simgo import spec as S
 
     # ---- W1 `devices`：allow_devices=False 时必须报 ----
-    fx = json.loads((FIXDIR / "hsex8.json").read_text(encoding="utf-8-sig"))
-    inp, err = capture_inp(fx)
-    if inp is None:
-        problems.append("W1 抄不到 hsex8 的输入：%s" % err)
+    w1 = split_lines(G.expect(("unsup_w", "W1_devices"), py_w1))
+    hit1 = [x for x in w1 if line_of(x) == "devices"]
+    if not hit1:
+        problems.append("W1（devices）证不出来：allow_devices=False 也没报，实测 %s" % w1)
     else:
-        w1 = S.unsupported_reasons(inp, allow_devices=False)
-        hit1 = [x for x in w1 if line_of(x) == "devices"]
-        if not hit1:
-            problems.append("W1（devices）证不出来：allow_devices=False 也没报，实测 %s" % w1)
-        else:
-            print("  W1 devices       证人成立：%s" % hit1[0])
+        print("  W1 devices       证人成立：%s" % hit1[0])
 
     # ---- W2 `skill_name`：计划的 skill 写成对象时报 ----
-    obj = {"stage": BASE_PLAN["stage"], "title": "w",
-           "deploys": [base_deploy({"id": "skchr_mudrok_2", "level": 7})]}
-    inp2, err2 = capture_inp(obj)
-    if inp2 is None:
-        problems.append("W2 抄不到对象技能的计划：%s" % err2)
+    w2 = split_lines(G.expect(("unsup_w", "W2_skill_name"), py_w2))
+    if not any(line_of(x) == "skill_name" for x in w2):
+        problems.append("W2（skill_name）证不出来，实测 %s" % w2)
     else:
-        w2 = S.unsupported_reasons(inp2, allow_devices=True)
-        if not any(line_of(x) == "skill_name" for x in w2):
-            problems.append("W2（skill_name）证不出来，实测 %s" % w2)
-        else:
-            print("  W2 skill_name    证人成立：%s" % w2)
+        print("  W2 skill_name    证人成立：%s" % w2)
     #: ⚠ 顺带钉住 Go 为什么搬不了它：Go 的计划读取器**故意**拒收对象形态
     #: （`tools/check_plan_go.py` 把这条登记为「Go 拒 ∧ 原版收」的分歧）。
     plan_go = (ROOT / "rios-sim" / "plan.go").read_text(encoding="utf-8")
@@ -538,8 +681,8 @@ def witnesses(tmp: Path) -> list[str]:
     lv = tmp / "w3_level.json"
     lv.write_text(json.dumps(synth_level(token_at=3.0), ensure_ascii=False),
                   encoding="utf-8")
-    w3 = S.unsupported_reasons(build_inp_from_stage(lv, device_deploys=1),
-                               allow_devices=True)
+    w3 = split_lines(G.expect(("unsup_w", "W3_devices"),
+                              lambda: py_w3(lv)))
     got3 = {line_of(x) for x in w3}
     for need in ("device_deploy", "death_token"):
         if need not in got3:
@@ -548,19 +691,16 @@ def witnesses(tmp: Path) -> list[str]:
             print("  W3 %-14s 证人成立" % need)
 
     # ---- W4 `snow_talent`：开关关着 ⇒ 闸门不报，但必须证出「本来会报」 ----
-    if getattr(S, "ALLOW_SNOW", None) is not True:
+    e4 = G.expect(("unsup_w", "W4_snow_talent"), py_w4)
+    if not e4["allow_snow"]:
         problems.append("W4：`spec.ALLOW_SNOW` 不是 True（现读 %r）—— 积雪线已启用，"
-                        "Go 侧得能算 snow_spec 才算搬完" % getattr(S, "ALLOW_SNOW", None))
+                        "Go 侧得能算 snow_spec 才算搬完" % e4["allow_snow"])
+    elif e4["n_fields"] <= 0:
+        problems.append("W4（snow_talent）证不出来：hsex8_max 的 snow_spec 是空的"
+                        "（抄不到：%s）——那条登记的依据没了" % e4["why"])
     else:
-        maxplan = json.loads((FIXDIR / "hsex8_max.json").read_text(encoding="utf-8-sig"))
-        inp4, err4 = capture_inp(maxplan)
-        fields = S.snow_spec(inp4) if inp4 is not None else []
-        if not fields:
-            problems.append("W4（snow_talent）证不出来：hsex8_max 的 snow_spec 是空的"
-                            "（抄不到：%s）——那条登记的依据没了" % err4)
-        else:
-            print("  W4 snow_talent   证人成立：snow_spec 报 %d 片（ALLOW_SNOW=True 故闸门不报）"
-                  % len(fields))
+        print("  W4 snow_talent   证人成立：snow_spec 报 %d 片（ALLOW_SNOW=True 故闸门不报）"
+              % e4["n_fields"])
 
     # ---- W5 `total_attack` / `operator_side`：源码守卫（没有可跑的证人）----
     src = (ROOT / "ak_tactic" / "simgo" / "spec.py").read_text(encoding="utf-8")
@@ -579,7 +719,7 @@ def witnesses(tmp: Path) -> list[str]:
     return problems
 
 
-def divergences(tmp: Path) -> list[str]:
+def divergences(tmp: Path, G) -> list[str]:
     """**已登记的分歧**：Go 在这里**故意**不跟原版走，且必须是「Go 大声失败」那一侧。
 
     照 `tools/check_plan_go.py` 的 `go-refuse-only` 那一类办：分歧要具名登记、
@@ -601,7 +741,9 @@ def divergences(tmp: Path) -> list[str]:
     p.write_text(json.dumps(blob, ensure_ascii=False), encoding="utf-8")
 
     #: 原版那一侧：**静默跳过** ⇒ 只剩觉醒那一条，绝不报「取不到」。
-    py_side = py_from_stage(p)
+    #: ★ 它也是期望值（Python 才产得出来）⇒ 走通道冻结。
+    py_side = split_lines(G.expect(("unsup_d", "nope", blob_id(blob)),
+                                   lambda: py_unsup_level(p)))
     if [x for x in py_side if line_of(x) == "awake"] == []:
         problems.append("分歧控制组：原版那一侧没报觉醒，夹具不对（%s）" % py_side)
     if any("取不到" in x for x in py_side):
@@ -655,6 +797,8 @@ def mutate(readings: list[Reading], which: str) -> list[Reading]:
 
 
 def main() -> int:
+    G = GB.bind("闸门", __file__)
+
     mutate_mode = "--mutate" in sys.argv
     print("Go 侧仪器：%s" % GO_BIN)
     print("Python 侧权威：`simgo/spec.py::unsupported_reasons`"
@@ -671,12 +815,22 @@ def main() -> int:
 
     tmp = Path(tempfile.mkdtemp(prefix="unsup_"))
     print("一 · 证人（每条未搬线都要证出「它在 Python 侧真会报」）")
-    wbad = witnesses(tmp)
+    wbad = witnesses(tmp, G)
     for m in wbad:
         print("  ✗ %s" % m)
     print()
 
-    readings = build_readings(tmp)
+    #: ★ 夹具批是**活的**（别的会话会往里加夹具）⇒ 键带输入身份 ＋ 先对账。
+    rsha = GB.file_sha16(ROSTER_FIX)
+    live_a = [[n, sha, rsha] for n, sha in scan_plan_fixtures()]
+    cov = G.coverage("unsup_a", live_a)
+    rows_a = live_a
+    if G.mode == GB.CHECK and not cov.ok:
+        #: 只比两边都有的。**未覆盖的不猜**。
+        covered = {tuple(x) for x in cov.covered}
+        rows_a = [x for x in rows_a if tuple(x) in covered]
+
+    readings = build_readings(tmp, G, rows_a)
     print("二 · 逐例对拍（%d 例；合成夹具落点 %s）" % (len(readings), tmp))
     problems, fired = compare(readings)
     for r in readings:
@@ -706,10 +860,17 @@ def main() -> int:
         print("  ✗ %s" % m)
     if not gbad:
         print("  ✓ STRUCTURAL_ZERO 的 4 条重算守卫全过")
-    dbad = divergences(tmp)
+    dbad = divergences(tmp, G)
     for m in dbad:
         print("  ✗ %s" % m)
     problems = problems + wbad + cbad + gbad + dbad
+
+    if G.mode == GB.CHECK and not cov.ok:
+        print()
+        print(cov.report("unsup_a", len(live_a)))
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
 
     if mutate_mode:
         print()
@@ -749,6 +910,9 @@ def main() -> int:
           % (len(readings), nonzero, total, len(PORTED),
              sum(1 for ln in PORTED if fired.get(ln)), len(STRUCTURAL_ZERO),
              len(BOTH_SIDE_ZERO), len(UNPORTED)))
+    if G.mode == GB.CHECK and not cov.ok:
+        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        return GB.RC_CHANNEL
     return 0
 
 
