@@ -83,6 +83,12 @@ SUITE = [
     #: 复刻不了（Python 从 set 里 pop），判据按格集合口径比并把顺序差印成读数。
     ("机制规格", "tools/check_mechspec_go.py",
      "Go mechanisms/mech_config vs build_spec（空排程口径）", False),
+    #: 本轮加的：**单一入口**（`buildspec`）——一次造齐 19 个顶层键。★ 三个口径：
+    #: A 计划（24 份夹具的生产规格）、B 空计划（缓存 55 关）、C 计划侧合成
+    #: （把真夹具零行使的 `unsupported`／`skill_uses` 两支走到）。逐**路径**比
+    #: （不是整块 `!=`：那样会把一处真差异埋进 int/float 的类型噪声里）。
+    ("单一入口", "tools/check_buildspec_go.py",
+     "Go buildspec 一次造齐的 19 键 vs build_spec（三口径逐路径）", False),
     #: 本轮加的：**干员规格**（`operators`）。★ 顺序与 `deploys` **同一份口径**
     #: （原版这两个键是同一个循环里的两次 append），所以两者共用 `BuildDeployRows`。
     #: 期望值取 24 份夹具的**生产规格**（64 人次）；另有一条「地基」量测：

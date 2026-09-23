@@ -53,7 +53,7 @@ GO_DIR = ROOT / "rios-sim"
 DECLARED = {
     #: ⚠ **现数**：`len(SUITE)` 才是权威（本行与它必须相等，第 2 节会量）。
     #: 两条会话各 +1 时，「都改成 +1」必丢一次——所以这里是数出来的，不是算出来的。
-    "suites": 22,          # 一 · 「二十二套判据」「二十二套守卫」
+    "suites": 23,          # 一 · 「二十三套判据」「二十三套守卫」
     "gaps": 6,             # 三 · 缺口表的行数
     "resolve_callsites": 2,  # 出 loadout.go 之外调 ResolveLoadout 的地方
                              # （loadout 命令 ＋ specdeploys 的规格构造）
@@ -61,7 +61,12 @@ DECLARED = {
     #: 多命中一条。它是**真的**又一个造规格的入口（造 `mechanisms` ＋ `mech_config`
     #: 两个键），所以改的是**声明**——不把函数改名去躲开这个计数（那正是「让守卫
     #: 迁就措辞」）。数的是入口个数，不是「造齐 19 键的入口个数」。
-    "spec_builders": 2,    # 四 · Go 侧「造规格」的入口：BuildSpecPart ＋ MechSpecBuild
+    #: ⚠ 再从 2 改成 3（同日）：`buildspec.go:BuildSpecFull` 是**第三个**真入口
+    #: （造齐 19 键）。★ 同一批里那条请求解析器**改了名**（`ParseBuildSpecQuery`
+    #: → `ParseSpecRequest`）：它不含任何「造规格」的语义，只是因为名字里有
+    #: `BuildSpec` 才被这个**具名代理**误命中——那是**代理的假阳性**，
+    #: 按本仓纪律改自己的措辞（不是放宽代理）。
+    "spec_builders": 3,    # 四 · Go 侧「造规格」的入口：BuildSpecFull ＋ MechSpecBuild ＋ BuildSpecPart
 }
 
 #: 判据套名 → Go 命令名。SUITE 的行里没有命令名，这一步只能显式登记。
@@ -72,7 +77,7 @@ COMMAND_OF = {
     "计划": "plan", "练度": "loadout", "关卡静态": "stageenv", "格表": "cells",
     "部分规格": "specgo", "费用天赋": "costbonus", "部署费用": "costof",
     "寻路": "path", "闸门": "unsupported", "出怪规格": "spawns",
-    "机制规格": "mechspec", "干员规格": "operators",
+    "机制规格": "mechspec", "干员规格": "operators", "单一入口": "buildspec",
 }
 
 #: 有 Go 命令、但**有意**没有跨实现判据的两个。
@@ -277,7 +282,12 @@ def main() -> int:
     print("  未接（具名，见台账第三节）：%d 件" % declared["gaps"])
     print("  ★ 规格仍由 Python 送：Go 侧**有** %d 个造规格的入口（%s），"
           % (len(spec_builders), "、".join(spec_builders) or "无"))
-    print("    但它只造 19 个顶层键里的 12 个，且**不读计划／名册**；")
+    #: ⚠ 这一句**改过**（2026-09-23，丙·第三十五批）：原文是「但它只造 19 个顶层键里的
+    #: 12 个，且**不读计划／名册**」——那是 `specgo.go` 骨架的旧口径，`buildspec`
+    #: （单一入口）落地后**已过期**。旧读数留着会让读者以为目标还差得远，
+    #: 而真实状态是「入口有了、规格仍从 req.Spec 收」。
+    print("    其中 `buildspec`（单一入口）能**造齐 19 个键**、输入是「关卡＋名册＋计划」；")
+    print("    另两个（`specgo` 骨架 12 键、`mechspec` 2 键）各造一部分。")
     print("    `ResolveLoadout` 被 %d 处调用（loadout 命令 ＋ specdeploys 的规格构造）。"
           % n_resolve)
     print("    规格是从 req.Spec 收进来的（该字段在 main.go 出现 %d 次）。"
@@ -285,10 +295,10 @@ def main() -> int:
     print()
     print("  收口条件（三条全中才算达成，缺一不算）：")
     print("    ① Go 侧出现能造**齐 19 个键**、且输入是「关卡＋名册＋计划」的入口"
-          "（现在是 12/19，且不吃计划／名册）；")
-    print("    ② 该入口有跨实现对拍判据，且登记进 SUITE（本脚本的第 2 节会跟着变）；")
+          "（**已有**：buildspec，判据「单一入口」）;")
+    print("    ② 该入口有跨实现对拍判据，且登记进 SUITE（**已有**，见本脚本第 2 节）；")
     print("    ③ 台账第三节里「规格构造与闸门」那一行被移出，"
-          "DECLARED['gaps'] 同批减一。")
+          "DECLARED['gaps'] 同批减一。★ 这一条**仍未做**：故上面的「未达成」照旧。")
     return 0
 
 

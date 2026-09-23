@@ -136,7 +136,11 @@ type response struct {
 	ViewFields []string `json:"view_fields,omitempty"`
 	//: 同一个函数读 `d` 的 3 个属性名（`position` / `direction` / `talents`）。
 	DeployFields []string `json:"deploy_fields,omitempty"`
-	Error        string   `json:"error,omitempty"`
+	//: `buildspec` 的应答：**一次造齐的 19 个顶层键**（见 `buildspec.go`）。
+	//: 形状与上面几个不同：这里 `spec` 是那 19 个键**本身**，另四槽是账
+	//: （未搬清单／行使计数／真缺哪几个键／哪个门没接）。
+	BuildSpec json.RawMessage `json:"build_spec,omitempty"`
+	Error     string          `json:"error,omitempty"`
 }
 
 type pong struct {
@@ -834,6 +838,23 @@ func handle(req *request, started string) response {
 			Operators: oraw, Unported: bundle.Unported, Covered: bundle.Covered,
 			Scanned: &bundle.Scanned, Params: praw,
 			ViewFields: bundle.ViewFields, DeployFields: bundle.DeployFields}
+	case "buildspec":
+		// 丙阶段四·第三十五批：**单一入口** —— 一次造齐 `build_spec` 的 19 个顶层键
+		// （见 `buildspec.go`）。它只接线、不重算：每个键调各自那批已过对拍的函数。
+		bq, err := ParseSpecRequest(req.Spec)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		bout, err := BuildSpecFull(req.Level, req.Path, bq)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(bout)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, BuildSpec: raw}
 	case "classify":
 		// 丙阶段四·第五批：黑板键的归类（**只查表 ＋ 拆变体**，
 		// `_classify` 的降级序列本轮未接，见 `classify.go` 文件头）。

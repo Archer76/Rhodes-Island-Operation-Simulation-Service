@@ -64,8 +64,8 @@
 python tools\check_go_all.py --selfcheck
 ```
 
-* 前半：**二十一套判据现在不报红**；
-* 后半：**二十一套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
+* 前半：**二十三套判据现在不报红**；
+* 后半：**二十三套的反向守卫都成立**（每套人为注入一处不一致，它真会红）。
 
 ★ 两个结论缺一不可：「全绿」只证明现在不报红；**没有反向守卫的绿是零信息量的绿**。
 
@@ -111,6 +111,25 @@ python tools\closeout_selfsufficiency.py
 | 出怪规格 `check_spawns_go.py` | 24 份夹具的**生产规格**（`spec["spawns"]`）＋ 3 份合成关卡（悬空路线号 / 关卡本地定义 / 未实现修饰层拒跑） | 1154 / 1154 条逐字段一致（65 个键全比）＋ 合成 6 条 ＋ 拒跑 1 例；两侧**逐夹具**比过 264 项次行使计数 |
 | 机制规格 `check_mechspec_go.py` | 缓存可达的 55 关（**空排程口径**）＋ 24 份夹具的**生产口径**对账 | 55 / 55 关逐字段一致（有田地 29 / 无田地 26；每关 23 个标量 ＋ 四张表）＋ 生产口径 24 份：田地逐字段相同、`mechanisms` 差恰为雪 |
 | 干员规格 `check_operators_go.py` | 24 份夹具的**生产规格**（`spec["operators"]`）＝ **64 人次**；另有一把**量尺子**的对照（同一批键从活对象现取一遍） | 64 / 64 人次逐位一致（段 A 的 25 个键，**含条件键的存在性**）；`covered` 十项行使计数逐夹具两侧相符；段 B 的 10 个键具名 `unported`（其中 `heals` 并列量测：`opstats.heals` 64 次比过、0 处不一致）；两条现算结构零 0/64 |
+| 单一入口 `check_buildspec_go.py` | **三个口径**：A 计划（24 份夹具的生产规格）＋ B 空计划（缓存 55 关）＋ C 计划侧合成 3 例（把真夹具零行使的 `unsupported`／`skill_uses` 走到） | 80 / 80 例逐**路径**一致（19 键全比）；带雪 2 例走具名三项差；已登记缺键 86 处（`devices[].child` 75 ＋ `operators[].shield` 11，逐路径放行）；`missing_keys`／`gated_keys` 各 0/80；B 另有 2 关**具名拒跑**（未实现的敌人修饰层，不计入可比分母） |
+
+★ **单一入口的价值当场证明了一次**：它抓到一处**分片判据结构上看不见**的字段级漏送
+——`operators[].shield`。`check_operators_go.py` 只比它登记的那批键（段 A 25 个 ＋
+段 B 10 个具名 `unported`），所以「Go 没送 `shield`」在那一套里**沉默**；而单一入口比的是
+**整份规格**，于是露出来。处置：**不改** `operators.go`（那是另一条链的产出，且它已把
+`shield` 具名登记为 unported），只在判据里按**路径**放行并计数（11 处），
+并给这张放行表配了两侧守卫——**没登记的缺键必须判红**（控制组：删
+`operators[0].max_hp`）、**登记过的不许判红**（删 `operators[0].shield`）。白名单必须有边界，
+否则它会静默长成一块万能挡板。
+
+★ **一处 Python 侧的静默默认值（不是 Go 的错，故未改）**：`SpecInputs.from_stage` 里写的是
+`getattr(env, "fps", 30)` / `getattr(env, "speed_scale", 1.0)` …，而 `frontend/stage_env.py`
+返回的是 **dict** ⇒ 这四项**静默落默认**，而且**连传都传不进去**
+（`from_stage(..., speed_scale=…)` 会 `got multiple values for keyword argument`）。
+实测影响面：B 口径 **53 / 55 关**（差异全落在 `speed_scale`；样例 `act31side_01`，
+`stage_env` 给 0.5、`from_stage` 给 1.0）。判据的取法是**就地补回真实值**并在第二节把这条
+规模与样例**印成读数**——不印的话，下一个人会以为 B 口径测的就是生产路径。
+`ak_tactic/` 是冻结只读的，本批**没有动它**；这个桥由谁来收口待裁定。
 
 ---
 
@@ -147,6 +166,7 @@ python tools\closeout_selfsufficiency.py
 | 规格·机制 | `rios-sim/mechspec.go` | `mechanisms` ＋ `mech_config`：环境 rune（`env_system_new` 的两道门）／田地格与四邻连片／播种（逐格那处歧义照搬）／断田／19 键田地规格／装置（pump 全字段、pile 顶层字段）；口径是**关卡＋难度，不吃计划**，多传一个键就具名失败 | `check_mechspec_go.py` |
 | 规格·难度乘数 | `rios-sim/stagemul.go` | `stage_mul.py` 的 `enemy_attribute_mul`（属性乘数，可点名敌人）。另两类黑板乘数**具名拒跑**（见下） | 同上（并进出怪规格那一套） |
 | 规格·干员 | `rios-sim/operators.go` | `_operator_spec`：按部署人次一位干员规格，段 A 的 25 个键（面板 `/` 条件键的存在性 `/` 整张攻击范围）。顺序与 `deploys` **共用** `specdeploys.go::BuildDeployRows`（同一个循环的两次 append，次序只能有一份口径）。段 B 的 10 个键具名 `unported`（每条写清为什么是它；`heals` 那条注明「其实已可搬」并配量测） | `check_operators_go.py` |
+| 规格·单一入口 | `rios-sim/buildspec.go` | `build_spec` 的 **19 个顶层键一次造齐**（`BuildSpecFull`）：**只接线不重算**，每个键调各自那批已过对拍的函数；两道门（`highland_cells` 看干员有没有高台溅射、`goal_cells` 看 `mechanisms` 含不含雪）**这一版接上了**；`missing_keys` 由**真序列化出来的键集**算，不是照表抄 | `check_buildspec_go.py` |
 
 ---
 
