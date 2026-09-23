@@ -124,6 +124,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -317,6 +318,17 @@ class Channel:
         self.n_hit = 0
         self.n_miss = 0
         self.coverage_used = False                   # 用过 input 批次对账就置起
+        self.batch_used = False                      # 批次记录**真的进了判定**就置起
+
+    def batch_consumed(self) -> None:
+        """声明：本套**用**冻的批次记录做判定（不只是记着）。
+
+        ★ 为什么要声明而不是让工具去猜：`--control` 的 **P4**（同一对象集、内容变了）
+        只对**红得起来**的套有意义。判据是「记录被消费」——不声明的话，工具要么
+        猜错、要么给一套红不起来的探针，而**一条永远不响的探针比没有更坏**
+        （它看起来像有守卫）。
+        """
+        self.batch_used = True
 
     # ---- 输入批次（乙类：对象集是活的）------------------------------------
 
@@ -407,6 +419,9 @@ class Channel:
             #: ★ 这一套的**对象集是活的**（键里自带输入身份，见 `coverage()`）。
             #: 记下来给 `--control` 用：它据此决定要不要做「对象集变小」那个探针。
             "input_identity": bool(self.coverage_used),
+            #: ★ 记下来给 `--control` 的 **P4** 用（同一对象集、内容变了）：
+            #: 只有**记录真的进了判定**的套才红得起来那个形状，见 `batch_consumed()`。
+            "batch_consumed": bool(self.batch_used),
             "n_values": len(self.values),
             "values": self.values,
             "keys_readable": self.readable,
@@ -833,6 +848,70 @@ def _tamper(v, sentinel: int = 999999):
 _NON_EXPECT_PREFIX = ('["query"', '["consts"')
 
 
+_HEX16 = re.compile(r"^[0-9a-f]{16}$")
+
+
+def _p4_target(values: dict):
+    """找一个**可改的内容 sha**：`("query", …)` 那张记录表里某个 16 位字段。
+
+    返回 `(键, 记录序号, 字段名, 旧值)`；找不到返回 `None`（该套 P4 不适用）。
+
+    ★ 为什么判据是「**批次记录**里带内容 sha」而不是「键里带 sha」：
+    * 改**批次记录**里那一项 ⇒ 对象集不变、**内容**变了（P4 要的那个形状）；
+    * 改**键里**那一项 ⇒ 那个键配不上 ⇒ 走的是「**对象集**变了」的形状（P3 的形状）。
+      两者都 rc=6，但**印出来的诊断不同**——混起来等于把两种因压成一个。
+    """
+    for k in sorted(values):
+        if not k.startswith('["query"'):
+            continue
+        v = values[k]
+        if not isinstance(v, list):
+            continue
+        for i, rec in enumerate(v):
+            if not isinstance(rec, dict):
+                continue
+            for f in sorted(rec):
+                x = rec[f]
+                if isinstance(x, str) and _HEX16.match(x):
+                    return (k, i, f, x)
+    return None
+
+
+def _p4_why(values: dict) -> str:
+    """P4 不适用的**具名**理由（不许写「不适用」三个字了事）。
+
+    ⚠ 这个函数**只在 `_p4_target()` 返回 `None` 之后才成立**：它说的
+    「记录里没有 16 位字段」是**结论**，不是它自己查出来的。
+    （第一版把这一句接在「记录不被消费」那条分支后面，于是印出一句
+    **与事实相反**的话——字段表里明明有 `sha16`。输出的每一句都要是真的。）
+    """
+    qkeys = [k for k in sorted(values) if k.startswith('["query"')]
+    if not qkeys:
+        return "本套没有冻结的批次记录（`(\"query\", …)`）——它的对象集写死在脚本里"
+    v = values[qkeys[0]]
+    if not isinstance(v, list):
+        return "批次记录不是列表（%s）——没有可改的项" % type(v).__name__
+    if not v or not isinstance(v[0], dict):
+        return ("批次记录是**扁平值表**（%s）——没有可改的字段，内容身份若住在别处，"
+                "改它走的是别的形状" % type(v[0]).__name__)
+    return "批次记录的记录里**确实没有** 16 位十六进制字段（字段表：%s）" % sorted(v[0])
+
+
+def _keys_carry_sha(values: dict) -> bool:
+    """期望值的**键**里有没有 16 位内容 sha（内容身份住在键里的一种形状）。"""
+    for k in values:
+        if k.startswith(('["query"', '["consts"')):
+            continue
+        try:
+            parts = json.loads(k)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(parts, list) and any(
+                isinstance(x, str) and _HEX16.match(x) for x in parts[1:4]):
+            return True
+    return False
+
+
 def _diff_keys(oldv: dict, nowv: dict) -> tuple[list, list, list]:
     """现读与冻结的逐键差：新增 / 消失 / 同键改值。**只此一份**。
 
@@ -1045,12 +1124,54 @@ def cmd_control(names: list[str], timeout: float) -> int:
                     print("    ✗ **没有**被判成分母缩水（rc=%d，具名消息=%s）"
                           % (r4["rc"], named4))
                     bad += 1
+
+        #: ---- P4：同一对象集、**内容**变了（与 P3 是**两个不同的诊断**）--------
+        #: P3 改的是**对象集**（多/少一个对象）；P4 改的是对象的**内容**。
+        #: 两者都 rc=6，但印出来的话不一样，而下一个人要靠那句话决定
+        #: 「重录」还是「查对象集」。
+        #: ★ **只对红得起来的套加**：判据是**批次记录被消费**（套自己声明）＋
+        #: 记录里真有 16 位内容 sha。硬加到红不起来的套上，只会造出一条
+        #: **永远不响的探针**——那比没有探针更坏（它看起来像有守卫）。
+        if not blob.get("batch_consumed"):
+            print("  ⊘ P4 不适用：本套的批次记录**不参与判定**（套没声明消费它）")
+            print("     具体：%s"
+                  % ("内容身份住在**键**里 ⇒ 改它得到的是「键配不上」＝"
+                     "**对象集变了**那个形状（那是 P3 的形状，不是 P4）"
+                     if _keys_carry_sha(values) else _p4_why(values)))
+        else:
+            tgt = _p4_target(values)
+            if tgt is None:
+                print("  ⊘ P4 不适用：记录被消费了，但%s" % _p4_why(values))
+            else:
+                qkey, idx, field, old = tgt
+                new = ("deadbeef" + old[8:]) if not old.startswith("deadbeef") \
+                    else ("cafebabe" + old[8:])
+                #: ★ **自证改到了东西**：不印这一行的话，「改了没红」与「根本没改」
+                #: 在输出上长得一样（本仓记过的那类假信号）。
+                assert new != old
+                print("  · P4 **我改的是这一项**：批次记录第 %d 项的 %s：%s → %s"
+                      % (idx, field, old, new))
+                b5 = copy.deepcopy(blob)
+                b5["values"][qkey][idx][field] = new
+                with tempfile.TemporaryDirectory() as td:
+                    d = Path(td)
+                    (d / ("%s.json" % name)).write_text(_dump(b5), encoding="utf-8")
+                    r5 = _run_with_dir(script, CHECK, d, timeout, extra)
+                blob5 = r5["out"] + "\n" + r5["err"]
+                named5 = "输入批次对账" in blob5
+                if r5["rc"] == RC_CHANNEL and named5:
+                    print("    ✓ 被判成**内容变了**（rc=6 且印出「输入批次对账」）")
+                else:
+                    print("    ✗ **没有**被判成内容变了（rc=%d，具名消息=%s）"
+                          % (r5["rc"], named5))
+                    bad += 1
     print("-" * 92)
     if bad:
-        print("★ %d 处控制组不成立 —— **这一批的绿全部作废**（本仓规矩：控制组没红就是没有判据）" % bad)
+        print("★ %d 处控制组不成立 —— **这一批的绿全部作废**"
+              "（本仓规矩：控制组没红就是没有判据）" % bad)
         return 1
     print("✓ 全部控制组成立（P1 都红；P2b 都看得见分母被改小；"
-          "P3 都把对象集变小判成「对象变了」）")
+          "P3 都把对象集变小判成「对象变了」；P4 在适用的套上都判成「内容变了」）")
     return 0
 
 

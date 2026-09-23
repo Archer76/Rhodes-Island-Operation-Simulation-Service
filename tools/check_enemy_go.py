@@ -233,6 +233,10 @@ def main() -> int:
     batch = GB.level_inputs(DATA, levels)
     #: `record` 档返回这一批、`check` 档返回冻的那一批 —— 同一行代码，两种语义。
     batch_ref = G.expect(("query", "level_batch"), lambda: batch)
+    #: ★ 声明：这份记录**真的进了判定**（下面的 `lv_same` 由它决定 ⇒ 内容变了会被
+    #: 判成「输入改动」，而不是被读成「对象集变了」）。`--control` 的 P4 据此才敢开
+    #: ——对**红不起来**的套开探针，等于造一条永远不响的守卫。
+    G.batch_consumed()
 
     now_by_lv = {r["level"]: r["sha16"] for r in batch}
     ref_by_lv = {r["level"]: r["sha16"] for r in batch_ref}

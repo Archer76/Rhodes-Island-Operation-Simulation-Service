@@ -232,6 +232,22 @@ def main() -> int:
     print()
     if G.mode == GB.CHECK and not cov.ok:
         print(cov.report("stage", len(batch)))
+        #: ★ 把两种因**分开列**：不分开的话，「同一关卡换了内容」与「多/少了几关」
+        #: 长得一模一样（都是 extra/missing 两栏），而下一个人要靠那句话决定
+        #: 「重录」还是「查对象集」。判法：按**关卡名**求交/求差。
+        ex_ids = {g[0] for g in cov.extra}
+        ms_ids = {g[0] for g in cov.missing}
+        chg = sorted(ex_ids & ms_ids)          # 同一个关卡、内容 sha 变了
+        add = sorted(ex_ids - ms_ids)          # 只在这一批里有
+        gone = sorted(ms_ids - ex_ids)         # 只在冻的那批里有
+        if chg:
+            print("  · ★ **内容变了**（同一关卡、缓存文件内容 sha 变了，%d 关）：%s"
+                  % (len(chg), "、".join(chg[:8])))
+        if add:
+            print("  · **对象集变了**（新增，%d 关）：%s" % (len(add), "、".join(add[:8])))
+        if gone:
+            print("  · **对象集变了**（这次没问、但冻着，%d 关）：%s"
+                  % (len(gone), "、".join(gone[:8])))
         print()
     print("已比：%d 关（传入 %d 关%s）"
           % (len(to_cmp), len(batch),
