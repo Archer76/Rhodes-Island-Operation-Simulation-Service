@@ -59,7 +59,7 @@ DECLARED = {
     #: 入参形式的差分）与「调用链」（Python 那条路还造不造规格）两套。
     #: 现数＝`len(set(COMMAND_OF.values()))`，**不是**算出来的。
     "commands": 24,        # 二 · 有判据的命令数（distinct 值）
-    "gaps": 6,             # 三 · 缺口表的行数
+    "gaps": 5,             # 三 · 缺口表的行数
     "resolve_callsites": 2,  # 出 loadout.go 之外调 ResolveLoadout 的地方
                              # （loadout 命令 ＋ specdeploys 的规格构造）
     #: ⚠ 从 1 改成 2（2026-09-23）：`mechspec.go:MechSpecBuild` 让这个具名代理
@@ -198,6 +198,49 @@ def spec_entry_points() -> list[str]:
     return out
 
 
+#: 收口条件③的宾语：这一行还留在缺口表里，就说明「规格构造」这件事没结清。
+#: ★ 写成常量而不是把结论写死在打印里：写死的话，这一行哪天被人加回来，
+#: 「达成」那句话照旧会印——那正是本仓最忌讳的「判据自己会撒谎」。
+GAP_ROW_SPEC = "规格构造与闸门"
+
+
+def spec_gap_row(gap_rows: list[str]) -> str | None:
+    """缺口表里还有没有「规格构造与闸门」那一行（**现算**，不写死）。"""
+    for row in gap_rows:
+        if GAP_ROW_SPEC in row:
+            return row
+    return None
+
+
+def closeout_conditions(spec_builders: list[str],
+                        rows: list[tuple[str, str]],
+                        gap_rows: list[str]) -> list[tuple[str, bool, str]]:
+    """三条收口条件，**每条都现算**，一条写死的都没有。
+
+    来历（2026-09-24）：这三条原先在收尾处是**写死的一句话**（①「已有」、
+    ②「已有」、③「仍未做」）。前两条当时确实成立，但它们是**断言**不是**量测**
+    ——「判据全绿≠实现对」这条本仓记过不止一次。现在三条都从盘上的东西现算：
+    入口从 `rios-sim/*.go` 的函数名扫、判据从 `check_go_all.py` 的 SUITE 表扫、
+    缺口行从台账第三节扫。
+    """
+    builders = [s for s in spec_builders if s == "buildspec.go:BuildSpecFull"]
+    judged = ["%s（%s）" % (n, s.replace("tools/", ""))
+              for n, s in rows if "check_buildspec_go.py" in s]
+    gap = spec_gap_row(gap_rows)
+    return [
+        ("①", bool(builders),
+         "Go 侧有能造齐 19 键、输入是「关卡＋名册＋计划」的入口：%s"
+         % ("、".join(builders) if builders else "**没有**")),
+        ("②", bool(judged),
+         "该入口有跨实现对拍判据且登记进 SUITE：%s"
+         % ("、".join(judged) if judged else "**没有**")),
+        ("③", gap is None,
+         "台账第三节里「%s」那一行已移出、DECLARED['gaps'] 同批减一：%s"
+         % (GAP_ROW_SPEC,
+            "已移出" if gap is None else "**仍在**：%s" % gap[:48])),
+    ]
+
+
 def main() -> int:
     mutate = "--mutate" in sys.argv
     declared = dict(DECLARED)
@@ -300,6 +343,21 @@ def main() -> int:
         hit = [e for e in expect if any(p.startswith(e) for p in problems)]
         print("      红起来的条目：%s" % " ／ ".join(
             p.split("：")[0] for p in problems) or "（无）")
+        #: ★ 收口条件也要各自红得起来（2026-09-24 加）：三条**现算**的条件如果不做
+        #: 注入试验，「三条全绿」就只证明它们现在没红，证明不了它们会红。
+        #: 两处注入：把「规格构造与闸门」那一行**塞回**缺口表 ⇒ ③ 必须翻假；
+        #: 把入口表清空 ⇒ ① 必须翻假。两条都只改**喂进去的输入**，不碰台账文件。
+        inj = [
+            ("③ 把缺口行塞回去", closeout_conditions(
+                spec_builders, rows, counts["gaps"] + ["| %s | 塞回去试的 |" % GAP_ROW_SPEC])),
+            ("① 把入口表清空", closeout_conditions([], rows, counts["gaps"])),
+        ]
+        for label, conds2 in inj:
+            flipped = [t for t, ok, _ in conds2 if not ok]
+            print("      注入「%s」⇒ 判假的是 %s" % (label, "、".join(flipped) or "（无）"))
+            if not flipped:
+                bad += 1
+                problems.append("收口条件注入「%s」：三条仍全绿 —— 该条没有分辨力" % label)
         if bad and len(hit) == len(expect):
             print("反向守卫：改动台账声明的数 → 判红 —— 成立 ✓（%s 两条各自都红）"
                   % "、".join(expect))
@@ -318,28 +376,33 @@ def main() -> int:
 
     print("量测一致：命令面、判据面、台账三处的数对得上。")
     print()
-    print("★ 目标状态：**未达成**")
+    conds = closeout_conditions(spec_builders, rows, counts["gaps"])
+    achieved = all(ok for _, ok, _ in conds)
+    print("★ 目标状态：**%s**" % ("达成" if achieved else "未达成"))
     print("  已自足（每一层都有跨实现对拍判据）：%d 套" % declared["suites"])
     print("  未接（具名，见台账第三节）：%d 件" % declared["gaps"])
-    print("  ★ 规格仍由 Python 送：Go 侧**有** %d 个造规格的入口（%s），"
-          % (len(spec_builders), "、".join(spec_builders) or "无"))
-    #: ⚠ 这一句**改过**（2026-09-23，丙·第三十五批）：原文是「但它只造 19 个顶层键里的
+    if not achieved:
+        print("  ★ 规格仍由 Python 送：Go 侧**有** %d 个造规格的入口（%s），"
+              % (len(spec_builders), "、".join(spec_builders) or "无"))
+    #: ⚠ 这一段**改过**（2026-09-23，丙·第三十五批）：原文是「但它只造 19 个顶层键里的
     #: 12 个，且**不读计划／名册**」——那是 `specgo.go` 骨架的旧口径，`buildspec`
-    #: （单一入口）落地后**已过期**。旧读数留着会让读者以为目标还差得远，
-    #: 而真实状态是「入口有了、规格仍从 req.Spec 收」。
-    print("    其中 `buildspec`（单一入口）能**造齐 19 个键**、输入是「关卡＋名册＋计划」；")
-    print("    另两个（`specgo` 骨架 12 键、`mechspec` 2 键）各造一部分。")
+    #: （单一入口）落地后**已过期**。旧读数留着会让读者以为目标还差得远。
+    #: ⚠ 又改一次（2026-09-24，第三十九批）：三条条件从**写死的断言**改成**现算**，
+    #: 且达成与否由它们决定（`achieved`），不再由一句散文决定。
+    if achieved:
+        print("  规格入口：`buildspec`（单一入口）造齐 19 个键，"
+              "输入是「关卡＋名册＋计划」；`req.Spec` 只收不造。")
+    else:
+        print("    其中 `buildspec`（单一入口）能**造齐 19 个键**、输入是「关卡＋名册＋计划」；")
+        print("    另两个（`specgo` 骨架 12 键、`mechspec` 2 键）各造一部分。")
     print("    `ResolveLoadout` 被 %d 处调用（loadout 命令 ＋ specdeploys 的规格构造）。"
           % n_resolve)
     print("    规格是从 req.Spec 收进来的（该字段在 main.go 出现 %d 次）。"
           % n_spec_in)
     print()
-    print("  收口条件（三条全中才算达成，缺一不算）：")
-    print("    ① Go 侧出现能造**齐 19 个键**、且输入是「关卡＋名册＋计划」的入口"
-          "（**已有**：buildspec，判据「单一入口」）;")
-    print("    ② 该入口有跨实现对拍判据，且登记进 SUITE（**已有**，见本脚本第 2 节）；")
-    print("    ③ 台账第三节里「规格构造与闸门」那一行被移出，"
-          "DECLARED['gaps'] 同批减一。★ 这一条**仍未做**：故上面的「未达成」照旧。")
+    print("  收口条件（三条全中才算达成，缺一不算）——**逐条现算**：")
+    for tag, ok, why in conds:
+        print("    %s %s %s" % ("✓" if ok else "✗", tag, why))
     return 0
 
 

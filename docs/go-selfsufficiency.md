@@ -7,29 +7,34 @@
 
 ---
 
-## 〇·零 · 停在哪、为什么停、从哪接（2026-09-23 更新）
+## 〇·零 · 停在哪、为什么停、从哪接（2026-09-24 更新）
 
-**停在哪**：目标「把 `simgo/spec.py` 的规格构造整层搬进 Go」——**19 个顶层键
-现在全部有 Go 生产者**（骨架 12 ＋ `deploys`／`skill_uses` ＋ `spawns` ＋
-`unsupported` ＋ `operators` ＋ `mechanisms`／`mech_config`），22 套判据全绿、
-22 套守卫成立，仪器 `sha256(16)=599f8e25f18fd8a4`（本次现跑）。
+**目标已达成**：「把 `simgo/spec.py` 的规格构造整层搬进 Go」——**19 个顶层键
+全部由 Go 自己从「关卡 ＋ 名册 ＋ 计划」造出**，Python 侧**不再经 `req.Spec`
+送规格**。25 套判据全绿、25 套守卫成立。
 
-但目标最后那半句**仍未达成**，两条都要跨过去才算：
+三条收口条件**逐条现算**（`tools/closeout_selfsufficiency.py` 的
+`closeout_conditions`，不再是写死的断言）：
 
-1. **规格还是由 Python 经 `req.Spec` 送进 Go**（该字段在 `main.go` 出现 43 次）。
-2. **没有一个单一入口把 19 个键从「关卡＋名册＋计划」一次造齐**——现在是一条命令
-   造一段。`closeout_selfsufficiency.py` 的收口条件①要的正是这个入口（该脚本里
-   「现在是 12/19」那句是 `specgo.go` 骨架的旧口径，**已过期**，别再照它读）。
+| 条件 | 宾语 | 由什么现算 |
+|---|---|---|
+| ① | 有能造齐 19 键、输入是「关卡＋名册＋计划」的入口 | 扫 `rios-sim/*.go` 的函数名，命中 `buildspec.go:BuildSpecFull` |
+| ② | 该入口有跨实现对拍判据且登记进 SUITE | 扫 `tools/check_go_all.py` 的 SUITE 表，命中 `tools/check_buildspec_go.py` |
+| ③ | 台账第三节里「规格构造与闸门」那一行已移出、`DECLARED['gaps']` 同批减一 | 扫本节第三节那张表；行还在就判「未达成」 |
 
-**三处阻点现在都落了**：
+**入口长什么样**：`buildspec` 命令一次造齐 19 个键；`plan`／`roster` **两种形态都收**
+（字符串＝文件路径、对象＝内联原样）。`sim` 也支持自造规格
+（`simquery.go:BuildSimSpecFromQuery`）——Python 侧 `simgo/verifier.py` 走的就是它。
 
-| 阻点 | 状态 |
-|---|---|
-| **路线生产侧** | 三层全落：`ground_path`（2594 例）、`Route.legs`（2157 段，`length` **逐位**）、`eta.route_plans`（1297 条路线逐字段一致） |
-| **出怪规格** `spawns` | 已落：1154／1154 条逐字段一致（65 个键全比）；两个真夹具零行使的分支由合成夹具补，夹具**自证行使** |
-| **机制规格** `mechanisms`／`mech_config` | 已落：55 关逐字段一致（有田地 29／无田地 26）；生产口径对账 24／24 |
-| **干员规格** `operators` | 段 A 的 **25 键已落**（64／64 人次逐位一致）；**段 B 的 10 个键具名 `unported`**，其中 `heals` **已可搬** |
-| **技能效果层** | **仍未搬**——它是 `operators` 段 B 与那 11 个白名单外字段的共同前置 |
+**还剩五件（第三节，全部具名）**。其中**技能效果层**是最大的一件，也是
+`operators` 段 B 的 `skill`／`active` 的前置（`tools/check_operators_go.py:105`
+的 `UNPORTED`）；其余四件见那一节。
+
+**沿途落下的（供查证时定位）**：路线生产侧三层（`ground_path` 2594 例、
+`Route.legs` 2157 段 `length` **逐位**、`eta.route_plans` 1297 条）；出怪规格
+（1154／1154 条，65 个键全比）；机制规格（55 关逐字段，有田地 29／无 26）加上
+**积雪**（第三十九批，`mech_config[snow.field]` 的八个场 ＋ `ground` ＋
+`neighbours` ＋ `goal_cells`）；干员规格段 A 的 **33 个键**（64／64 人次逐位一致）。
 
 ★ **两处当晚修掉的仪器缺陷**（都会造成假绿，接手前必读）：
 
@@ -41,6 +46,11 @@
 2. `rios-sim/stage.go` 的 `Runes` 字段**带着 json 键名**，而加载器与 `load` 应答
    共用同一个结构 ⇒ 内部字段漏进对外应答（Python 侧 `runes` 住在 `st.raw`）。
    已改成短横标签；`load` 应答随之与判据的参照键集一致。
+
+★ **第三处（2026-09-24 记，性质不同）**：总闸会印「取证范围：缓存可达的关卡 N 个」，
+却**不因 N 变小而红**。当晚一次数据事故把 N 从 55 打到 2，**25 套判据照样全绿**——
+因为缩小后的分母仍然自洽。⇒ 范围下限必须是一条**独立判据**，见
+`tools/check_data_ready.py`（前置拒跑，不是第 26 套）。
 
 **从哪接**：见「二·补」节。
 
@@ -617,9 +627,8 @@ max·sqrt((dx/max)² + (dy/max)²)    与 math.dist   2062 处不符（各 1 ulp
 | **两套数值 profile** | **折算本身已全部落地**（`profile.go` 两行 ＋ `panelfold.go` 七处读数，合计 14548 个网格点/叉乘行）：核对下来原版那七个方法**只读实例属性**，替身对象即可当 oracle——原先以为非搭不可的 harness 省掉了。仍缺的是**喂它们的实时输入**（光环、翔虫机动、替身计时、击杀叠层、出手次数、阻挡、高台邻居、偷取攻速这些运行态），以及 `_profile` 自己「临时把开技能字段摆成开启态、读完立刻还原」的那段装配。 |
 | **练度 → 面板的接线** | 练度**已经解析出来了**（`rios-sim/loadout.go`，与 `Verifier._entry` 逐字段一致），但它**还没被送去算面板**：`opstats` 目前仍由调用方逐个送练度，没人把 `loadout` 的输出接进去。 |
 | **`skill` 的对象形态** | `Plan` 那一条指令的 `skill` 除整数外还可以是对象（丙方案），要 `_skill_from_json` 查技能书、按槽位/等级解成技能 id。本轮**未接**：Go 碰到对象就**具名拒收**，不假装读懂。好消息是 `fixtures/` 下 24 份打法的 `skill` 全是整数，走的是与改动前同一条路。 |
-| **规格构造与闸门** | `simgo/spec.py`（76 KB）＋ `simgo/skills.py` 的白名单。Go 现在仍收 Python 送来的 spec。★ **已落地 15 个键**：不依赖 sim／干员／机制的**关卡静态 8 项**（`stageenv.go`）、**两张格表**（`cells.go`）、**传了计划才有的 `deploys` 与 `skill_uses`**（`specdeploys.go`），以及**出怪表**（`spawns.go`，不吃计划）。剩下 4 个键：`operators`（要 `_operator_spec` 与两套数值快照）与 `mechanisms`／`mech_config`／`unsupported`（机制层）。 |
 | **干员侧的其余天赋** | `advisor` 表里除已接的那几支之外的部分（`is_*` finder 一族里尚未逐条搬完的）。 |
-| **干员技能的性质** | 比如「技能改写攻击范围」的消费点。 |
+| **干员技能的性质** | 比如「技能改写攻击范围」的消费点，以及 `operators` 段 B 的 `skill`／`active`（技能效果层，见 `tools/check_operators_go.py:105` 的 `UNPORTED`）。 |
 
 ---
 
