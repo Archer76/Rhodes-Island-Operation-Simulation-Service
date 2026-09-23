@@ -98,6 +98,13 @@ SUITE = [
     #: 真正的数由判据每次**现算**（`check_operators_go.py` §7）。
     ("干员规格", "tools/check_operators_go.py",
      "Go operators vs simgo/spec.py 的 _operator_spec（产出 32 键逐位）", False),
+    #: 本轮加的：**自造规格的 `sim`**——`sim` 的第二种入参形式（关卡＋名册＋计划），
+    #: Go 内部调 `buildspec` 造规格再跑。★ 判据是**差分**，不是对拍 Python：
+    #: 同一关同一计划下「查询形式」的判决必须与「先 buildspec 再送规格」逐路径相同，
+    #: 且**两次的 `unsupported` 必须逐位相同**（Python 靠它决定退回原版；不带回
+    #: 就等于把闸门静默关掉）。旧入参形式一个字没改，本行只覆盖新增的那一种。
+    ("自造规格", "tools/check_sim_selfspec_go.py",
+     "Go sim 自造规格 vs Python build_spec（差分：查询形式 ≡ 造好规格）", False),
 ]
 
 

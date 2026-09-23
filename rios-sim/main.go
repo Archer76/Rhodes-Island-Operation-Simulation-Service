@@ -112,7 +112,14 @@ type response struct {
 	TalentBonus json.RawMessage `json:"talent_bonus,omitempty"`
 	//: `specdeploys` 的应答：规格里的 `deploys` 那一串（见 `specdeploys.go`）。
 	SpecDeploys json.RawMessage `json:"spec_deploys,omitempty"`
-	//: `unsupported` 的应答：规格闸门的理由（见 `unsupported.go`）。
+	//: ⚠ 这个键**两种形状，按命令区分**：
+	//:   · `unsupported` 命令 → 一个**对象**（`GateOut`：reasons／unported／covered…）；
+	//:   · `sim` 的**查询形式** → 一个**数组**（理由列表，与规格里的 `unsupported` 同形）。
+	//: 为什么不给 `sim` 另起一个键：Python 侧要读的就是 `unsupported` 这个名字——
+	//: 它现在读的是**规格里的同名字段**，而查询形式下规格在 Go 手里，
+	//: 只能由响应带回来（见 `simquery.go` 文件头第 2 条）。
+	//: ★ 这里**只能共用这一个字段**：一个 struct 里两个同 tag 的字段会被
+	//: `encoding/json` **双双丢弃**（静默，两边都读不到），比冲突还难查。
 	Unsupported json.RawMessage `json:"unsupported,omitempty"`
 	//: `mechspec` 的应答：`mechanisms` 与 `mech_config` 两个顶层键（见 `mechspec.go`）。
 	MechSpec json.RawMessage `json:"mech_spec,omitempty"`
@@ -140,7 +147,41 @@ type response struct {
 	//: 形状与上面几个不同：这里 `spec` 是那 19 个键**本身**，另四槽是账
 	//: （未搬清单／行使计数／真缺哪几个键／哪个门没接）。
 	BuildSpec json.RawMessage `json:"build_spec,omitempty"`
-	Error     string          `json:"error,omitempty"`
+	//: `sim` 走**查询形式**（Go 自造规格）时的**规格身份**（造了几键、缺不缺、
+	//: 挂了哪些机制）。理由那一栏共用上面的 `Unsupported`（见那里的说明）。
+	SelfSpec json.RawMessage `json:"self_spec,omitempty"`
+	Error    string          `json:"error,omitempty"`
+}
+
+// unsupportedReasons 把一份理由装成**响应里那一栏**（`sim` 查询形式用）。
+//
+// ★ 三态，不许压成一个值：
+//
+//	nil（造都造不出来）→ 返回 nil ⇒ 字段**不出现**（「闸门没跑」）
+//	空表（跑过、没有理由）→ 返回 `[]`（「查过了，放行」）
+//	非空 → 理由数组
+//
+// ⚠ 不能直接 `json.Marshal(nil slice)`：那给的是 `null`，与 `[]` 又不是一回事。
+func unsupportedReasons(list []string) json.RawMessage {
+	if list == nil {
+		return nil
+	}
+	raw, err := json.Marshal(append([]string{}, list...))
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+func marshalOrNil(v any) json.RawMessage {
+	if v == nil {
+		return nil
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return raw
 }
 
 type pong struct {
@@ -209,27 +250,59 @@ func handle(req *request, started string) response {
 			SpecDone: true, Mechanisms: names,
 		}}
 	case "sim":
+		// 两种入参形式（见 `simquery.go`）：**造好的规格**（旧路径，一个字没改）
+		// 与**查询形式**（增量：Go 自己调 buildspec 造规格再跑）。
+		// 判别**不许猜**：两种都像／都不像都具名失败。
 		if len(req.Spec) == 0 {
 			return response{ID: req.ID, OK: false,
-				Error: "sim 少了 spec"}
+				Error: "sim 少了 spec。两种形式都要它：旧形式＝一份造好的规格（含 stage），" +
+					"查询形式＝{plan 或 roster, allow_devices, allow_skills}（关卡走 level 或 path）"}
+		}
+		form, sm, err := ClassifySimSpec(req.Spec)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
 		}
 		var spec Spec
-		if err := json.Unmarshal(req.Spec, &spec); err != nil {
-			return response{ID: req.ID, OK: false,
-				Error: fmt.Sprintf("spec 解析失败：%v", err)}
+		//: ⚠ 走查询形式时这两样**必须带到失败路径上**：Python 侧靠 `unsupported`
+		//: 决定退回原版，靠它自己的清单对账。见 `simquery.go` 文件头第 2 条。
+		var selfUnsupported []string
+		var selfEcho *SelfSpecEcho
+		if form == simFormQuery {
+			s, echo, unsup, err := BuildSimSpecFromQuery(req.Level, req.Path, req.Spec, sm)
+			if err != nil {
+				//: 失败也要把**已知的理由**带回去（造不出来时 unsup 可能是 nil）。
+				return response{ID: req.ID, OK: false, Error: err.Error(),
+					Unsupported: unsupportedReasons(unsup)}
+			}
+			spec, selfUnsupported, selfEcho = *s, unsup, &echo
+		} else {
+			if err := json.Unmarshal(req.Spec, &spec); err != nil {
+				return response{ID: req.ID, OK: false,
+					Error: fmt.Sprintf("spec 解析失败（按造好的规格解）：%v", err)}
+			}
 		}
 		verdict, err := runSim(&spec)
 		if err != nil {
 			// **宁可什么都不回，也不回一个残缺的判决**：对拍台把「这一局不支持」
 			// 当成失败，把「缺了机制的结果」当成通过，后者才是真危险。
-			return response{ID: req.ID, OK: false, Error: err.Error()}
+			resp := response{ID: req.ID, OK: false, Error: err.Error()}
+			if form == simFormQuery {
+				resp.Unsupported = unsupportedReasons(selfUnsupported)
+				resp.SelfSpec = marshalOrNil(selfEcho)
+			}
+			return resp
 		}
 		raw, err := json.Marshal(verdict)
 		if err != nil {
 			return response{ID: req.ID, OK: false,
 				Error: fmt.Sprintf("判决序列化失败：%v", err)}
 		}
-		return response{ID: req.ID, OK: true, Verdict: raw}
+		resp := response{ID: req.ID, OK: true, Verdict: raw}
+		if form == simFormQuery {
+			resp.Unsupported = unsupportedReasons(selfUnsupported)
+			resp.SelfSpec = marshalOrNil(selfEcho)
+		}
+		return resp
 	case "load":
 		// 丙阶段一：**Go 自己读关卡数据**，不经 Python 的规格。
 		// 这是把取数链搬进 Go 的第一块，见 `stage.go` 的文件头。

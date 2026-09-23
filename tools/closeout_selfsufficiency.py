@@ -53,7 +53,7 @@ GO_DIR = ROOT / "rios-sim"
 DECLARED = {
     #: ⚠ **现数**：`len(SUITE)` 才是权威（本行与它必须相等，第 2 节会量）。
     #: 两条会话各 +1 时，「都改成 +1」必丢一次——所以这里是数出来的，不是算出来的。
-    "suites": 23,          # 一 · 「二十三套判据」「二十三套守卫」
+    "suites": 24,          # 一 · 「二十四套判据」「二十四套守卫」
     "gaps": 6,             # 三 · 缺口表的行数
     "resolve_callsites": 2,  # 出 loadout.go 之外调 ResolveLoadout 的地方
                              # （loadout 命令 ＋ specdeploys 的规格构造）
@@ -66,7 +66,11 @@ DECLARED = {
     #: → `ParseSpecRequest`）：它不含任何「造规格」的语义，只是因为名字里有
     #: `BuildSpec` 才被这个**具名代理**误命中——那是**代理的假阳性**，
     #: 按本仓纪律改自己的措辞（不是放宽代理）。
-    "spec_builders": 3,    # 四 · Go 侧「造规格」的入口：BuildSpecFull ＋ MechSpecBuild ＋ BuildSpecPart
+#: ⚠ 再从 3 改成 4（2026-09-23 同日，`sim` 自造规格那一批）：`simquery.go:BuildSimSpecFromQuery`
+#: 是**第四个**真入口——它把「关卡＋名册＋计划」的查询形式造出一份 `Spec`（再交 `runSim`）。
+#: ★ 同批里另一个含 `Spec` 的名字 `ClassifySimSpec` **没有**被数到，因为它不含
+#: Build/From/Make/New——代理在那一处是准的，不需要改名。
+    "spec_builders": 4,    # 四 · Go 侧「造规格」的入口：BuildSpecFull ＋ BuildSimSpecFromQuery ＋ MechSpecBuild ＋ BuildSpecPart
 }
 
 #: 判据套名 → Go 命令名。SUITE 的行里没有命令名，这一步只能显式登记。
@@ -78,12 +82,16 @@ COMMAND_OF = {
     "部分规格": "specgo", "费用天赋": "costbonus", "部署费用": "costof",
     "寻路": "path", "闸门": "unsupported", "出怪规格": "spawns",
     "机制规格": "mechspec", "干员规格": "operators", "单一入口": "buildspec",
+    "自造规格": "sim",
 }
 
-#: 有 Go 命令、但**有意**没有跨实现判据的两个。
+#: 有 Go 命令、但**有意**没有跨实现判据的（现在只剩一个）。
 #: ⚠ 第一版把「Go 命令数」直接等于「判据套数」，于是这两个被当成漏登记，
 #: 数出 14 ≠ 12 的假红。等式本身写错了，不是登记漏了。
-NON_JUDGED = ("ping", "sim")
+#: ⚠ `sim` 从这一对里**移出**（2026-09-23）：它现在有判据了——「自造规格」那一套
+#: 用**差分**判它（查询形式 ≡ 先 buildspec 再送规格），不需要另一个引擎来当权威。
+#: ⇒ 下面第 2/3 节的「命令面减去有意无判据的」随之从 2 变成 1，本行必须同批改。
+NON_JUDGED = ("ping",)
 
 #: 有判据、但**并进别的套里**判的命令（不单列一行）。
 #: `talentbonus` 是 `费用天赋` 那一套的第二部分：同一个函数、同一份权威，
@@ -166,9 +174,10 @@ def spec_entry_points() -> list[str]:
     （那种形状才是「从别的输入造一份规格出来」）。
     代理会说谎的方式是有人换个名字写，所以这里把命中的行也印出来，不只看个数。
 
-    ⚠ 它数的是**入口个数**，不是「造齐了 19 个键的入口个数」——那一条由
-    `main()` 里印的那句「只造 19 个顶层键里的 N 个」负责。所以 2 不代表目标更近：
-    现在这两个入口一共覆盖 14 / 19 个键，且**没有一个是「关卡＋名册＋计划」全吃**的。
+    ⚠ 它数的是**入口个数**，不是「造齐了 19 个键的入口个数」。这一栏**不表示目标的远近**：
+    `specgo` 骨架覆盖 12 / 19 且不吃计划／名册；而 `buildspec`（单一入口）**造齐 19 键、
+    输入就是「关卡＋名册＋计划」**，`BuildSimSpecFromQuery` 造的是同一种「全吃」的规格，
+    只是入口从 `sim` 进来。要读远近请看 `main()` 印的那句与台账第二节。
     """
     pat = re.compile(r"^func\s+(?:\([^)]*\)\s*)?(\w*Spec\w*)\(", re.M)
     out = []
@@ -234,7 +243,7 @@ def main() -> int:
     one("判据套名都有命令映射", len(missing_cmd), 0)
     if missing_cmd:
         print("      没映射到的套：%s" % "、".join(missing_cmd))
-    one("命令面减去有意无判据的两个", len(cmds) - len(NON_JUDGED) - len(EXTRA_JUDGED),
+    one("命令面减去有意无判据的（%s）" % "、".join(NON_JUDGED), len(cmds) - len(NON_JUDGED) - len(EXTRA_JUDGED),
         len(rows))
     stray = sorted(set(cmds) - set(COMMAND_OF.values()) - set(NON_JUDGED)
                    - set(EXTRA_JUDGED))
