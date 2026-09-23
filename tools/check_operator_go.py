@@ -525,9 +525,12 @@ def py_cfg_reading(cfg: dict) -> dict:
         "module_bonus": norm(getattr(py, "module_bonus", None) or {}),
         "total": norm(getattr(py, "total", None) or {}),
         "combo_is_none": combo is None,
-        "combo": {"hits": combo.hits if combo else 1,
-                  "hit_scale": combo.hit_scale if combo else 1.0,
-                  "damage_scale": combo.damage_scale if combo else 1.0},
+        #: ⚠ 这一格的键名必须与判据那三个计数器**同名**（`combo_hits` /
+        #: `combo_hit_scale` / `combo_damage_scale`）：判据是 `for k, b in py_combo.items()`
+        #: 再去 `combo_hits[k] += 1`，键名对不上会当场 KeyError（拼错一次过）。
+        "combo": {"combo_hits": combo.hits if combo else 1,
+                  "combo_hit_scale": combo.hit_scale if combo else 1.0,
+                  "combo_damage_scale": combo.damage_scale if combo else 1.0},
         "pa": {"power_attack_count": pa.count if pa else 0,
                "power_attack_scale": pa.scale if pa else 1.0},
         "tr": {"splash_radius": sp.radius if sp else 0.0,
@@ -551,245 +554,143 @@ def py_cfg_reading(cfg: dict) -> dict:
     }
 
 
-def main() -> int:
-    from ak_tactic.operator import OperatorCalculator, TalentBook
-    from ak_tactic.operator.attack_speed import attack_speed_bonus
-    from ak_tactic.battle.traits import (read_combo_attack, read_trait_splash,
-                                         apply_splash_talent, read_hp_drain)
-    from ak_tactic.battle.talents import find_power_attack, find_glider_mobility
-    calc = OperatorCalculator()
-    tbook = TalentBook()
-    roster = json.loads(ROSTER.read_text(encoding="utf-8"))
+def _roster_state(inputs: dict, wide: int) -> tuple:
+    """账号名册那一栏的**五态**判定（**只用数据侧的东西**）。
 
-    configs: list[dict] = []
-    #: 与 `configs` 一一对应的标签（见文件头「三条路、两类口径」）。
-    tags: list[str] = []
-
-    def _add(cfg: dict, tag: str) -> None:
-        configs.append(cfg)
-        tags.append(tag)
-
-    for e in roster:
-        cid, elite, level = e["id"], int(e["elite"]), int(e["level"])
-        #: 等级的底/顶/中间三档：分别走夹取、夹取、插值（多帧阶段还会走中间帧）
-        cap = calc.max_level(cid, elite)
-        if not cap:
-            continue
-        lvls = sorted({1, int(cap), (1 + int(cap)) // 2})
-        for lv in lvls:
-            for tr in TRUSTS:
-                for pot in POTENTIALS:
-                    _add({
-                        "char_id": cid, "elite": elite, "level": lv,
-                        "trust": tr, "potential": pot,
-                        "module": "", "module_level": 0,
-                    }, TAG_DEEP)
-    #: 模组一支：每位带数值模组的干员、每个等级都扫一遍。
-    #: ★ 不扫模组＝那 18/20 位干员的面板**根本没被这条判据覆盖**。
-    mod_cfg = 0
-    mod_ops: list[str] = []
-    for e in roster:
-        cid = e["id"]
-        try:
-            mods = [m for m in calc.modules(cid) if m.get("has_stats")]
-        except Exception:                                        # noqa: BLE001
-            mods = []
-        if not mods:
-            continue
-        mid = mods[0]["id"]
-        try:
-            levels = sorted(calc.module_levels(mid))
-        except Exception:                                        # noqa: BLE001
-            continue
-        mod_ops.append("%s(%s:%s)" % (e["name"], mid, levels))
-        for mlv in levels:
-            for tr in (0.0, 100.0):
-                _add({
-                    "char_id": cid, "elite": int(e["elite"]),
-                    "level": int(e["level"]), "trust": tr,
-                    "potential": int(e["potential"]),
-                    "module": mid, "module_level": mlv,
-                }, TAG_DEEP)
-                mod_cfg += 1
-
-    #: ---- 覆盖面拉宽：账号名册全量 ----
-    #: ★ 现有的深扫只覆盖 fixtures 那 20 位；而账号名册有 211 位。
-    #: 「取证范围不许窄于结论范围」——只测 20 位就宣布面板层没问题，是不成立的。
-    #: 这里每位只取**它自己的**精英/等级/潜能、信赖取 0：
-    #: 信赖的标度（显示% ÷ 2）在两种名册里口径不同，**不猜**，留给上面的深扫。
-    #:
-    #: ⚠⚠ 这一段的输入**不在库里**（`.gitignore:32`：名册含 uid／昵称／完整练度）。
-    #: 所以它必须**自己证明输入在、且真的解析出了行**——两条都印机读行并给独立退出码。
-    #: 实测教训（2026-09-23）：只把「文件不在」当异常是不够的——**文件在、格式变了、
-    #: 解析出 0 行**时这一段静默不跑，而整脚本照旧 rc=0 并印「468 / 468 逐字段一致」。
-    import re as _re
-    ROW = _re.compile(
-        r"^\|\s*([^|]+?)\s*\|\s*`(char_[^`]+)`\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*"
-        r"\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|")
-    #: 表头对账：下面的正则按**序**取第 2/4/5/6 列，必须与表头声明的一致。
-    #: ★ 为什么这一条不能省：列一错位（如 `等级` 与 `潜能` 互换），
-    #: Go 与 Python 吃的是**同一份错 configs** ⇒ 逐字段比对照样全绿。
-    #: 这个错**只有输入身份这一层看得见**，比对层永远看不见它（同族：本项目
-    #: 「名字不是身份」那一条）。两列都是数字时更隐蔽——它连「解析失败」都不会发生。
-    HEAD_WANT = ("charId", "精英", "等级", "潜能")
-
-    def _head_ok(cells: list[str]) -> bool:
-        return (len(cells) >= 6 and cells[1] == HEAD_WANT[0] and cells[3] == HEAD_WANT[1]
-                and cells[4] == HEAD_WANT[2] and cells[5] == HEAD_WANT[3])
-
-    wide = 0
-    skipped: list[str] = []
-    #: 名册文件的形态读数：像表行的行数（含表头与分隔行）。窄太多＝格式变了。
-    n_table_lines = 0
-    #: "" ＝ 这一段被真的行使了；否则 MISSING（文件不在）／UNUSABLE（在但解析 0 行）。
-    input_state = ""
+    返回 `(input_state, chan_state)`：
+      `input_state ∈ {"", "MISSING", "UNUSABLE"}` —— 与默认档同一套三态（rc=3）；
+      `chan_state  ∈ {"", "CHANGED", "NO_COL"}` —— 通道自己的错（rc=6）。
+    ★ 冻结档判得出来，是因为这两件事**都不用 import `ak_tactic`**：文件在不在、
+      表头对不对。名册不在/不可用时**跳过那一栏**（其余两栏照跑照比），
+      **绝不静默少比**——少了哪一栏、为什么少，都在下面那句具名输出里。
+    """
     if not ROSTER_DOC.is_file():
-        input_state = "MISSING"
+        return "MISSING", ""
+    if not roster_head_ok(roster_doc_lines()):
+        return "UNUSABLE", ""
+    #: ⚠ 顺序有讲究：**先判「冻结档有没有录过那一栏」**（`NO_COL`），再判
+    #: 「录了却一位都没解析出来」（`UNUSABLE`）。反过来时，「录的时候名册不在、
+    #: 现在在了」会被误报成「解析出 0 行」（两种因不同，判词也不该一样）。
+    if inputs.get("roster_doc_sha16") is None:
+        return "", "NO_COL"
+    if not wide:
+        return "UNUSABLE", ""
+    if GB.file_sha16(ROSTER_DOC) != inputs.get("roster_doc_sha16"):
+        return "", "CHANGED"
+    return "", ""
+
+
+def main() -> int:
+    G = GB.bind("干员", __file__)
+
+    #: ★ **查询集**（三条路的全部配置）走通道：默认档现算，冻结档读冻的那一份。
+    Q = G.expect(("query", "configs"), py_configs)
+    sweep, cols, inputs = Q["sweep"], Q["columns"], Q["inputs"]
+    rows_all = Q["configs"]
+
+    #: ★ 两栏**各自的分母**在冻结档里独立复算一遍（查询集本身带的栏计数
+    #: 必须与 `columns` 记录的一致）——两栏绝不能被并成一个数。
+    n_pre = {t: sum(1 for _c, tt in rows_all if tt == t) for t in TAG_LABEL}
+    ident_bad: list = []
+    if (n_pre[TAG_DEEP] != cols["deep"] or n_pre[TAG_ROSTER] != cols["roster"]
+            or n_pre[TAG_SYNTH] != cols["synth"]):
+        print("✗ 冻结基线自相矛盾：查询集里的栏计数（深扫 %d／名册 %d／合成 %d）"
+              "≠ columns 记录（%d／%d／%d）"
+              % (n_pre[TAG_DEEP], n_pre[TAG_ROSTER], n_pre[TAG_SYNTH],
+                 cols["deep"], cols["roster"], cols["synth"]))
+        ident_bad.append("查询集与 columns 的分母不一致")
+
+    input_state, chan_state = _roster_state(inputs, cols["roster"])
+    skip_roster = bool(input_state) or bool(chan_state)
+    keep = [i for i, (_c, t) in enumerate(rows_all)
+            if not (skip_roster and t == TAG_ROSTER)]
+    configs = [rows_all[i][0] for i in keep]
+    tags = [rows_all[i][1] for i in keep]
+    #: ★ **输入批次对账**：这次要问的配置与冻着的那一批按身份配上，未覆盖的
+    #: **不猜**、具名印出。⚠ 这里的「活的一批」＝这一次真的会问的那些（由查询集
+    #: 给出）⇒ 它证的是「每一个要问的都有冻的期望值」，**不是**「查询集没被改小」
+    #: ——后者由上面那条**分母自证**（查询集栏计数 ≡ columns 记录）管。
+    cov = G.coverage("opcfg", [[cfg_id(c)] for c, _t in rows_all])
+    if G.mode == GB.CHECK and not cov.ok:
+        print(cov.report("opcfg", len(rows_all)))
+    wide = cols["roster"]
+    skipped = Q["skipped"]
+    mod_cfg, mod_ops = Q["mod_cfg"], Q["mod_ops"]
+    #: `roster` 那 20 位是**数据侧**可数的（在库的夹具），不必 import 计算器。
+    n_deep_ops = len(json.loads(ROSTER.read_text(encoding="utf-8")))
+    n_table_lines = len([ln for ln in roster_doc_lines()
+                         if ln.lstrip().startswith("|")]) \
+        if ROSTER_DOC.is_file() else 0
+    head_ok_now = ROSTER_DOC.is_file() and roster_head_ok(roster_doc_lines())
+    head_now: list = []
+    if ROSTER_DOC.is_file():
+        for _ln in roster_doc_lines():
+            if _ln.lstrip().startswith("|"):
+                head_now = [c.strip() for c in _ln.strip().strip("|").split("|")]
+                break
+
+    if input_state == "MISSING":
         print("SUITE_INPUT_MISSING %s %s"
               % (ROSTER_DOC.relative_to(ROOT).as_posix(), ROSTER_REGEN))
         print("        账号名册不在 ⇒ 「覆盖面拉宽」这一段本轮**没跑**。"
               "它不入库是刻意的（个人数据），再生要登录态，见文件头。")
-    else:
-        _lines = ROSTER_DOC.read_text(encoding="utf-8").splitlines()
-        n_table_lines = sum(1 for ln in _lines if ln.lstrip().startswith("|"))
-        _head: list[str] = []
-        for _ln in _lines:
-            if _ln.lstrip().startswith("|"):
-                _head = [c.strip() for c in _ln.strip().strip("|").split("|")]
-                break
-        if not _head_ok(_head):
-            input_state = "UNUSABLE"
-            print("SUITE_INPUT_UNUSABLE %s %s"
-                  % (ROSTER_DOC.relative_to(ROOT).as_posix(), ROSTER_REGEN))
+    elif input_state == "UNUSABLE":
+        print("SUITE_INPUT_UNUSABLE %s %s"
+              % (ROSTER_DOC.relative_to(ROOT).as_posix(), ROSTER_REGEN))
+        if not head_ok_now:
             print("        ⚠ 名册表头与判据按序取的列对不上（实得 %r；"
                   "期望第 2/4/5/6 列 ＝ %r）。列错位时两边吃的是**同一份错 configs**，"
-                  "逐字段比对照样全绿。" % (_head[:6], list(HEAD_WANT)))
+                  "逐字段比对照样全绿。" % (head_now[:6], list(HEAD_WANT)))
         else:
-            for line in _lines:
-                m = ROW.match(line)
-                if not m:
-                    continue
-                cid = m.group(2)
-                if not calc.exists(cid):
-                    skipped.append(cid)
-                    continue
-                try:
-                    elite = int(m.group(4).lstrip("Ee") or 0)
-                    level = int(m.group(5) or 1)
-                    pot = int(m.group(6) or 1)
-                except ValueError:
-                    skipped.append(cid)
-                    continue
-                if not (1 <= level <= int(calc.max_level(cid, elite) or 1)):
-                    skipped.append("%s(E%d L%d 越界)" % (cid, elite, level))
-                    continue
-                configs.append({"char_id": cid, "elite": elite, "level": level,
-                                "trust": 0.0, "potential": pot,
-                                "module": "", "module_level": 0})
-                tags.append(TAG_ROSTER)
-                wide += 1
-        #: ⚠ 表头已判不合格时不再叠一条「0 行」的同一结论（两句话说同一件事会让人以为是两个错）。
-        if not input_state and wide == 0:
-            input_state = "UNUSABLE"
-            print("SUITE_INPUT_UNUSABLE %s %s"
-                  % (ROSTER_DOC.relative_to(ROOT).as_posix(), ROSTER_REGEN))
             print("        ⚠ 名册在，却一行都没解析出来（文件里 %d 行像表行）："
                   "格式变了／换账号导出了／文件被截断。这一段等于没跑，"
                   "**不许**把它当绿。" % n_table_lines)
-        elif not input_state:
-            print("        名册形态读数：文件里 %d 行像表行（含表头与分隔行），"
-                  "本段解析出 %d 位可折算、跳过 %d 位。"
-                  % (n_table_lines, wide, len(skipped)))
+    elif chan_state == "CHANGED":
+        print("SUITE_INPUT_CHANGED %s %s"
+              % (ROSTER_DOC.relative_to(ROOT).as_posix(), ROSTER_REGEN))
+        print("        ⚠ 名册内容与冻结基线里的那一份不同（sha16 对不上）⇒ "
+              "那一栏**这次没比**（不是「比过没问题」），基线该重录。")
+    elif chan_state == "NO_COL":
+        print("SUITE_INPUT_NO_COLUMN %s %s"
+              % (ROSTER_DOC.relative_to(ROOT).as_posix(), ROSTER_REGEN))
+        print("        ⚠ 冻结基线里**没有**账号名册那一栏（录的时候它不在）⇒ "
+              "这一次不拿它当绿，基线该重录。")
+    else:
+        print("        名册形态读数：文件里 %d 行像表行（含表头与分隔行），"
+              "本段解析出 %d 位可折算、跳过 %d 位。"
+              % (n_table_lines, wide, len(skipped)))
 
-    #: ---- 全量宽扫：`char_` 段的**全部 460 位**，合成练度 ----
-    #: ★ 这一路与前两路**不是同一个分母**：前两路吃**真实练度三元组**，
-    #: 能证明「真名册上算得对」；这一路吃**合成练度**，证明「每一位的数据都被
-    #: 真跑过」。两句话的证据不同 ⇒ **分栏报数**，绝不加成一个数。
-    #: ★ 等级**现算**（`calc.max_level`），不写死等级表：写死的表在数据更新后
-    #: 就成了一句没有依据的话。
-    #: ★ 到不了那一档就**跳过那一档**（不是跳过那位干员）；三档都造不出才登记。
-    seg = char_segment()
-    #: 分母的身份：`akdb` 的 `char_` 段 vs 计算器认得的 id 集合。
-    #: ⚠ 两个集合**各自数、各自印**，不比「名字」——名字不是身份（本项目记过）。
-    seg_ids = [c for c, _ in seg]
-    calc_ids = list(calc.all_ids())
-    only_db = sorted(set(seg_ids) - set(calc_ids))
-    only_calc = sorted(set(calc_ids) - set(seg_ids))
+    if G.mode == GB.CHECK:
+        print("冻结基线·两栏身份：深扫夹具 %s ／ 名册 doc %s ／ akdb char_ 段 %s"
+              % (inputs["deep_roster_sha16"], inputs["roster_doc_sha16"],
+                 inputs["akdb_seg_sha16"]))
+        if inputs.get("deep_roster_sha16") != GB.file_sha16(ROSTER):
+            ident_bad.append("深扫夹具 roster_max_modelled.json 内容变了")
+        if inputs.get("akdb_seg_sha16") != seg_identity(char_segment()):
+            ident_bad.append("akdb 的 char_ 段内容变了")
+        for _m in ident_bad:
+            print("✗ 输入身份对不上：%s" % _m)
 
-    syn_cfg = 0
-    syn_ops: list[str] = []
-    syn_elite = {"E0": 0, "E1": 0, "E2": 0}
-    syn_mod_ops: list[str] = []
-    syn_nomod = 0
-    syn_moderr: list[str] = []
-    syn_no: list[str] = []
-    for cid, cname in seg:
-        if not calc.exists(cid):
-            #: 与「到不了那一档」**分开报**：这是「库里/计算器里根本没有它的数据」。
-            syn_no.append("%s（%s）：计算器里没有这位干员的数据" % (cid, cname))
-            continue
-        #: 模组取**该干员自己的**第一个带数值模组（与上面深扫同一口径），
-        #: 等级取它自己的**最高**一级。没有就留空——不是「跳过这位干员」。
-        mid, mlv, moderr = "", 0, ""
-        try:
-            mods = [m for m in calc.modules(cid) if m.get("has_stats")]
-        except Exception as ex:                                  # noqa: BLE001
-            mods, moderr = [], type(ex).__name__
-        if mods:
-            try:
-                _lvls = sorted(calc.module_levels(mods[0]["id"]))
-            except Exception as ex:                              # noqa: BLE001
-                _lvls, moderr = [], type(ex).__name__
-            if _lvls:
-                mid, mlv = mods[0]["id"], int(_lvls[-1])
-        if mid:
-            syn_mod_ops.append(cid)
-        else:
-            syn_nomod += 1
-            if moderr:
-                syn_moderr.append("%s(%s)" % (cid, moderr))
-        here = 0
-        for elite, ename in ((0, "E0"), (1, "E1"), (2, "E2")):
-            try:
-                cap = calc.max_level(cid, elite)
-            except Exception:                                    # noqa: BLE001
-                #: 该干员到不了这一档（库里没有这一档的 phase 数据）——跳过**这一档**。
-                cap = None
-            if not cap:
-                continue
-            _add({"char_id": cid, "elite": elite, "level": int(cap),
-                  "trust": 100.0, "potential": 6,
-                  "module": mid, "module_level": mlv}, TAG_SYNTH)
-            syn_elite[ename] += 1
-            syn_cfg += 1
-            here += 1
-        if here:
-            syn_ops.append(cid)
-        else:
-            syn_no.append("%s（%s）：E0/E1/E2 三档 max_level 全部取不到" % (cid, cname))
-
-    #: ★ 分母对账：`char_` 段里**一档都造不出配置**的，逐位列名（机读行）。
-    #: 「跳过 0 位」与「跳过了 N 位但没印」在这一行上必须能分辨。
-    #: ⚠ 这一行是**造出来的**计数（Go 剔人之前）；**真的比过的**计数在后面
-    #: 现算（`live_*`）。两者在 Go 剔人时不等，混用会把「造出来了」说成「比过了」。
+    #: ---- 全量宽扫的分子结构自证（每个数都来自冻结的那一份）----
     print("SYNTH_SWEEP_DENOM chars=%d calc_ids=%d only_db=%d only_calc=%d "
           "with_cfg=%d no_cfg=%d cfgs=%d e0=%d e1=%d e2=%d with_module=%d "
           "without_module=%d"
-          % (len(seg_ids), len(calc_ids), len(only_db), len(only_calc),
-             len(syn_ops), len(syn_no), syn_cfg, syn_elite["E0"], syn_elite["E1"],
-             syn_elite["E2"], len(syn_mod_ops), syn_nomod))
-    if only_db:
-        print("SYNTH_ONLY_DB %s" % "、".join(only_db))
-    if only_calc:
-        print("SYNTH_ONLY_CALC %s" % "、".join(only_calc))
-    if syn_no:
-        for line in syn_no:
-            print("SYNTH_NO_CONFIG %s" % line)
+          % (sweep["chars"], sweep["calc_ids"], len(sweep["only_db"]),
+             len(sweep["only_calc"]), sweep["with_cfg"], sweep["no_cfg"],
+             sweep["cfgs"], sweep["e0"], sweep["e1"], sweep["e2"],
+             sweep["with_module"], sweep["without_module"]))
+    if sweep["only_db"]:
+        print("SYNTH_ONLY_DB %s" % "、".join(sweep["only_db"]))
+    if sweep["only_calc"]:
+        print("SYNTH_ONLY_CALC %s" % "、".join(sweep["only_calc"]))
+    if sweep["syn_no"]:
+        for _line in sweep["syn_no"]:
+            print("SYNTH_NO_CONFIG %s" % _line)
     else:
         print("SYNTH_NO_CONFIG（无）：char_ 段的 %d 位**每一位都至少造出一档**"
-              % len(seg_ids))
-    if syn_moderr:
-        print("SYNTH_MODULE_ERR %s" % "、".join(syn_moderr[:8]))
+              % sweep["chars"])
+    if sweep["syn_moderr"]:
+        print("SYNTH_MODULE_ERR %s" % "、".join(sweep["syn_moderr"][:8]))
 
     got, configs, tags, dropped, dropped_tags, dropped_cfg = go_opstats(configs, tags)
 
@@ -871,10 +772,10 @@ def main() -> int:
                "no_respawn_cost_add": 0}
     for idx, (cfg, g) in enumerate(zip(configs, got)):
         tag = tags[idx]
-        py = calc.stats(cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
-                        trust=cfg["trust"], potential=cfg["potential"],
-                        module=cfg.get("module") or None,
-                        module_level=cfg.get("module_level") or 0)
+        #: ★ 期望值只能从这里来：默认档现调 Python，冻结档读冻的那份。
+        #: 键是**配置内容**的 sha16（自带全部输入），不是序号。
+        E = G.expect(("opcfg", cfg_id(cfg)),
+                     lambda cfg=cfg: py_cfg_reading(cfg))
         compared += 1
         cmp_by_tag[tag] += 1
         out = []
@@ -885,7 +786,7 @@ def main() -> int:
         #: 所以它不是一个「顺手多比一个键」，是那句结论**本来就欠**的一次比对。
         for part in ("base", "trust_bonus", "potential_bonus", "module_bonus", "total"):
             a = norm(g.get(part) or {})
-            b = norm(getattr(py, part, None) or {})
+            b = norm(E[part] or {})
             if a != b:
                 for k in sorted(set(a) | set(b)):
                     if a.get(k) != b.get(k):
@@ -893,27 +794,21 @@ def main() -> int:
                                    % (part, k, a.get(k), b.get(k)))
         #: 攻速加成那一支（天赋常驻/高台条件 ＋ 模组特性改写/未阻挡条件）。
         #: 模组那一项**只有在这次折算带了模组时**才可能非零。
-        aspd = attack_speed_bonus(
-            calc, cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
-            potential=cfg["potential"],
-            module=cfg.get("module") or None,
-            module_level=cfg.get("module_level") or 0)
+        aspd = E["aspd"]
         for gk, pk in (("aspd_flat", "flat"), ("aspd_when_free", "when_free"),
                        ("aspd_high_ground", "when_high_ground")):
-            a, b = norm(g.get(gk)), norm(getattr(aspd, pk, 0.0))
+            a, b = norm(g.get(gk)), norm(aspd.get(pk, 0.0))
             if b:
                 aspd_hits[gk] += 1
             if a != b:
                 out.append("%s：Go=%r Python=%r" % (gk, a, b))
         #: 普攻连击（隐藏天赋的键组合）。Python 侧 `verify.py:342-344` 的三行
         #: 是「没有这条 1 / 1.0 / 1.0」，Go 侧同口径。
-        combo = read_combo_attack(calc.character(cfg["char_id"]))
+        combo = None if E["combo_is_none"] else E["combo"]
         if combo is not None:
             combo_seen[0] += 1
-            combo_seen[1] = combo.hit_scale
-        py_combo = {"combo_hits": combo.hits if combo else 1,
-                    "combo_hit_scale": combo.hit_scale if combo else 1.0,
-                    "combo_damage_scale": combo.damage_scale if combo else 1.0}
+            combo_seen[1] = combo["combo_hit_scale"]
+        py_combo = E["combo"]
         for k, b in py_combo.items():
             if b != 1 and b != 1.0:
                 combo_hits[k] += 1
@@ -921,11 +816,7 @@ def main() -> int:
             if a != norm(b):
                 out.append("%s：Go=%r Python=%r" % (k, a, b))
         #: 「强击瓶专家」。★ `scale` 的「没有这条」是 **1.0**，`count` 是 0。
-        pa = find_power_attack(tbook.for_operator(
-            cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
-            potential=cfg["potential"]))
-        py_pa = {"power_attack_count": pa.count if pa else 0,
-                 "power_attack_scale": pa.scale if pa else 1.0}
+        py_pa = E["pa"]
         for k, b in py_pa.items():
             if (k == "power_attack_count" and b) or (k == "power_attack_scale" and b != 1.0):
                 pa_hits[k] += 1
@@ -934,17 +825,7 @@ def main() -> int:
         #: 特性那两支：溅射（几何 ＋ 天赋「汹涌怒火」叠三项）与生命流失速率。
         #: ★ 有天赋叠层时 `damage_scale` 的「没有这条」是 **1.0**（它是乘数），
         #: 两个 highland 是 0.0——不能一律按 0 判。
-        ch = calc.character(cfg["char_id"])
-        sp = apply_splash_talent(
-            read_trait_splash(ch),
-            tbook.for_operator(cfg["char_id"], elite=cfg["elite"],
-                               level=cfg["level"], potential=cfg["potential"]))
-        py_tr = {"splash_radius": sp.radius if sp else 0.0,
-                 "splash_scale": sp.scale if sp else 0.0,
-                 "splash_damage_scale": sp.damage_scale if sp else 1.0,
-                 "highland_splash_scale": sp.highland_scale if sp else 0.0,
-                 "highland_splash_sluggish": sp.highland_sluggish if sp else 0.0,
-                 "hp_drain_per_sec": read_hp_drain(ch)}
+        py_tr = E["tr"]
         for k, b in py_tr.items():
             if (k == "splash_damage_scale" and b != 1.0) or (k != "splash_damage_scale" and b):
                 tr_hits[k] += 1
@@ -953,14 +834,7 @@ def main() -> int:
         #: 三个纯文本判据（verify.py:305-308 与 :329-331）。
         #: ⚠ `weakness_damage` 的判据文本是**所有候选**的描述拼接，
         #: 不是「这个练度下生效的那几条」——照解析后的天赋判会漏。
-        trait = ch.get("description") or ""
-        tal_text = " ".join(
-            (cand.get("description") or "")
-            for t_ in (ch.get("talents") or [])
-            for cand in (t_.get("candidates") or []))
-        py_tx = {"damage_type_text": "MAGIC" if "法术伤害" in trait else "PHYSICAL",
-                 "heals": "恢复友方单位生命" in trait,
-                 "weakness_damage": "弱点伤害" in tal_text}
+        py_tx = E["tx"]
         for k, b in py_tx.items():
             #: ⚠ `damage_type_text` 是**字符串**（恒真），按真值计数会数出
             #: 「468 次全被行使」——那是假计数。它要数的是 **MAGIC 的条数**。
@@ -972,8 +846,7 @@ def main() -> int:
             if norm(g.get(k)) != norm(b):
                 out.append("%s：Go=%r Python=%r" % (k, g.get(k), b))
         #: 身份两字段（直接取自 character_table，不做推断）。
-        py_id = {"nation_id": ch.get("nationId") or "",
-                 "profession": ch.get("profession") or ""}
+        py_id = E["id"]
         for k, b in py_id.items():
             if b:
                 id_hits[k] += 1
@@ -981,16 +854,7 @@ def main() -> int:
                 out.append("%s：Go=%r Python=%r" % (k, g.get(k), b))
         #: 天赋「翔虫机动」：**一个天赋两个平面**（落位放宽 ＋ 限时攻击力加成）。
         #: 没有这条时 verify.py:348-354 给的是零值 0.0/False/""。
-        gl = find_glider_mobility(tbook.for_operator(
-            cfg["char_id"], elite=cfg["elite"], level=cfg["level"],
-            potential=cfg["potential"]))
-        py_gl = {"mobility_atk_bonus": gl.atk_bonus if gl else 0.0,
-                 "mobility_atk_duration": gl.atk_duration if gl else 0.0,
-                 "mobility_leftover": gl.projectile if gl else "",
-                 "mobility_deploy_range": gl.deploy_range if gl else "",
-                 "mobility_melee_deploy": gl.ignore_build_type if gl else False,
-                 "mobility_ignore_dir": gl.ignore_dir if gl else 0.0,
-                 "no_respawn_cost_add": gl.no_respawn_cost_add if gl else False}
+        py_gl = E["gl"]
         for k, b in py_gl.items():
             if b:
                 gl_hits[k] += 1
@@ -1023,15 +887,16 @@ def main() -> int:
     print("        合计 %d 次折算（＝两栏相加，只作总数看，不作证据看）" % compared)
     print("覆盖面 · 真实练度：名册 %d 位 × (底/顶/中 三档等级) × 信赖 %s × 潜能 %s，"
           "另加**模组** %d 次（%d 位带数值模组的干员）"
-          % (len(roster), TRUSTS, POTENTIALS, mod_cfg, len(mod_ops)))
+          % (n_deep_ops, TRUSTS, POTENTIALS, mod_cfg, len(mod_ops)))
     print("           ＋账号名册全量 %d 位（`docs/roster-<uid>.md`，各取自己的"
           "精英/等级/潜能、信赖 0）" % wide)
     print("覆盖面 · 合成练度：`akdb` 的 `char_` 段 %d 位**每一位都造了配置**，"
-          "共 %d 次折算" % (len(syn_ops), syn_cfg))
+          "共 %d 次折算" % (sweep["with_cfg"], sweep["cfgs"]))
     print("    ✓ 实际比过 %d 位（造出 %d 位 − Go 侧剔掉 %d 位）；"
           "档位计数：E0 %d ・ E1 %d ・ E2 %d（各是**折算次数**，不是人数）；"
           "带数值模组 %d 位 ・ 无模组 %d 位"
-          % (len(syn_live_ops), len(syn_ops), len(syn_ops) - len(syn_live_ops),
+          % (len(syn_live_ops), sweep["with_cfg"],
+             sweep["with_cfg"] - len(syn_live_ops),
              syn_live_elite["E0"], syn_live_elite["E1"], syn_live_elite["E2"],
              syn_live_mod, syn_live_nomod))
     print("        ★ 零行使分支：%s"
@@ -1091,6 +956,12 @@ def main() -> int:
     else:
         print("★ 名册里**没有**带数值模组的干员 —— 模组那一支这一轮没被行走到")
     print()
+    #: ★ 通道摘要必须印在**比完之后**：它报的「取期望值 N 次」是这一轮真的命中
+    #: 冻的那份的次数。⚠ 插在循环**之前**（本文件第一版就是这样）会印出「1 次」——
+    #: 那时只有查询集那一次命中，读数比事实小三个数量级，是**假读数**。
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
     if mutate:
         #: ★ 两处注入**各自**要判红，且要**指名**——断言的是「我注入的那一条
         #: 就是红了的那一条」，不是「整批里有人红了」（那可能是另一处顶替的）。
@@ -1129,7 +1000,25 @@ def main() -> int:
           % (real_cmp - real_bad, real_cmp,
              cmp_by_tag[TAG_DEEP], cmp_by_tag[TAG_ROSTER],
              syn_cmp - syn_bad_n, syn_cmp, len(syn_live_ops)))
-    return EXIT_JUDGE_RED if bad else 0
+    if bad:
+        #: 比过的部分**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+        return EXIT_JUDGE_RED
+    if chan_state:
+        #: 通道自己的错：名册那一栏没比（不是「比过没问题」）⇒ 不许当绿。
+        print("结论：通道自己的错（%s）：冻结基线里的账号名册那栏不可用 ⇒ "
+              "本轮不给判决；真实练度·深扫 %d / %d、合成练度·全量宽扫 %d / %d "
+              "次折算逐字段一致"
+              % (chan_state, cmp_by_tag[TAG_DEEP] - bad_by_tag[TAG_DEEP],
+                 cmp_by_tag[TAG_DEEP], syn_cmp - syn_bad_n, syn_cmp))
+        return GB.RC_CHANNEL
+    if ident_bad:
+        print("结论：通道自己的错（输入身份对不上：%s）⇒ 本轮不给判决；"
+              "真实练度·深扫 %d / %d、合成练度·全量宽扫 %d / %d 次折算逐字段一致"
+              % ("；".join(ident_bad),
+                 cmp_by_tag[TAG_DEEP] - bad_by_tag[TAG_DEEP],
+                 cmp_by_tag[TAG_DEEP], syn_cmp - syn_bad_n, syn_cmp))
+        return GB.RC_CHANNEL
+    return 0
 
 
 if __name__ == "__main__":
