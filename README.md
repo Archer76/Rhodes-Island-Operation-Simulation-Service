@@ -111,7 +111,7 @@ Python 侧仍是本仓库的 `ak_tactic/`。**Release 里只有代码与二进�
 | `ak_tactic/` | Python 侧全部产品代码（CLI、取数、属性、正文编译、解算、搜索、终端界面、两个本地库） |
 | `rios-sim/` | Go 侧模拟器内核（默认引擎） |
 | `tools/` | 面向使用者的脚本：自检套件、三条回归基线、名册与账号、生成物 |
-| `fixtures/` | **判据集**：可执行作业与回归基线（按 schema 认，不按文件名） |
+| `fixtures/` | **判据集**：可执行作业与回归基线（按 schema 认，不按文件名）。子目录 `fixtures/golden/` 是**冻结基线**——把每套判据的期望值冻进版本控制，让判据可以「Go 现读 vs 冻结基线」地跑，不再实时对拍 Python（迁移进度见 [`docs/golden-baseline.md`](docs/golden-baseline.md)） |
 | `docs/` | 实测报告与口径文档 |
 
 ## 它能做什么
