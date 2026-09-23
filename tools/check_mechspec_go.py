@@ -335,6 +335,55 @@ def coverage_report(cov: dict) -> list[str]:
 
 # ---------------------------------------------------------------- 第五节：口径与证人
 
+def snow_in_buildspec() -> tuple[list[str], dict]:
+    """★ 第三十九批：**`buildspec` 口径下雪不恒空**。
+
+    这条是那条「本命令不吃计划 ⇒ 雪恒 0」的**对面**——少了它，「谁在产出雪」
+    就没有任何判据看着（`mechspec` 的 `unported` 一直列着雪，看久了会以为
+    全仓都造不出）。正**负**两侧都要有，否则可以靠「恒非空／恒空」骗过去：
+
+      · 正：权威规格里带雪的夹具，走 **`buildspec`**（带计划那条路）必须造出
+        `mech_config["snow.field"]`；
+      · 负：同一批里**不带雪**的夹具必须**没有**这个键。
+    """
+    import check_specgo_go as C
+
+    problems: list[str] = []
+    cov = {"正例": 0, "正例命中": 0, "负例": 0, "负例刺破": 0}
+    roster = str(ROOT / "fixtures" / "roster_max_modelled.json")
+    for name, spec, err, lv in C.real_specs():
+        if spec is None:
+            continue
+        want = SNOW_ID in (spec.get("mechanisms") or [])
+        ok, resp = go_mechspec_raw({"id": 1, "cmd": "buildspec", "level": lv,
+                                    "spec": {"plan": str(FIXDIR / name),
+                                             "roster": roster,
+                                             "allow_devices": True,
+                                             "allow_skills": False}})
+        if not ok:
+            problems.append("%s：buildspec 失败 %s" % (name, resp.get("error")))
+            continue
+        got = SNOW_ID in (((resp.get("build_spec") or {}).get("spec") or {})
+                          .get("mech_config") or {})
+        if want:
+            cov["正例"] += 1
+            if got:
+                cov["正例命中"] += 1
+            else:
+                problems.append("%s：`buildspec` 口径下**没造出雪** —— "
+                                "带计划这条路本该造得出来" % name)
+        else:
+            cov["负例"] += 1
+            if got:
+                cov["负例刺破"] += 1
+                problems.append("%s：不带雪的夹具却造出了 `snow.field`"
+                                "（恒非空？）" % name)
+    if not cov["正例"]:
+        problems.append("一条正例都没有 —— 这 24 份里没有带雪的夹具？"
+                        "那「buildspec 口径下雪不恒空」无从取证")
+    return problems, cov
+
+
 def contract_checks(levels: list[str], exp: dict, got: dict) -> list[str]:
     """口径回显 ＋「不吃计划」这条契约的两面。"""
     problems: list[str] = []
@@ -537,7 +586,15 @@ def main() -> int:
         print("  ✗ %s" % m)
     print()
 
-    problems = problems + d_ok + cbad + gbad + p_bad
+    print("五·b · `buildspec` 口径下雪**不恒空**（本条与「本命令恒 0」成对）")
+    s_bad, scov2 = snow_in_buildspec()
+    for k, v in scov2.items():
+        print("  %-22s %d" % (k, v))
+    for m in s_bad:
+        print("  ✗ %s" % m)
+    print()
+
+    problems = problems + d_ok + cbad + gbad + p_bad + s_bad
 
     if mutate_mode:
         print("六 · 反向守卫（每处注入都要独立判红）")

@@ -105,6 +105,22 @@ var mechFarmlandExcluded = map[string]bool{
 // MechQuery 是 `mechspec` 命令的 spec 体。
 type MechQuery struct {
 	Difficulty string `json:"difficulty,omitempty"`
+	//: ★★ **可选的排程输入**（2026-09-23，第三十九批）：`buildspec` 传、`mechspec`
+	//: **不传**（结构取「甲」：机制名的判据仍然只有这一处）。
+	//: 带排程才谈得上雪——`snow_spec` 按「谁在哪一手铺雪」判，而那在计划里。
+	//:
+	//: 为什么不给 `mechspec` 也加一个 `plan`：那条命令的**不吃计划**是一条
+	//: **口径契约**（有判据：传了 plan 必须具名失败）。所以两条命令从这个字段起
+	//: **故意不同口径**：`mechspec` 的 `unported` 一直列着雪（它确实做不到），
+	//: 而 `buildspec` 带上排程、真的做得到时**不再列**。
+	//: ⇒ 两边 `unported` 从此**不相等**，那不是漂移，是口径。
+	Schedule *MechSchedule `json:"-"`
+}
+
+// MechSchedule 是造雪要的那点输入：**已按落地时刻排序**的部署行 ＋ 冻结开关。
+type MechSchedule struct {
+	Rows   []DeployRow
+	Freeze bool
 }
 
 // MechOut 是应答体。`Mechanisms` / `MechConfig` 就是 `build_spec` 的同名两键
@@ -122,17 +138,19 @@ type MechOut struct {
 }
 
 //: 未搬的一条线。与判据脚本的 `UNPORTED` 同源，两边不一致时判据会红。
+//: ⚠ `farmland.devices[].child` **已搬进 Go**（2026-09-23，第三十八批）。
+//: ⚠ 雪这一条**按口径分叉**（第三十九批）：`mechspec` 不传排程 ⇒ **一直列着**；
+//: `buildspec` 传了排程且真造出雪 ⇒ `addSnow` 把它从这份清单里**摘掉**。
 var mechUnportedLines = []string{
-	//: ⚠ `mech_config.farmland.devices[].child` **已搬进 Go**（2026-09-23，第三十八批）：
-	//: 装置 → 甲（`branch_id` → `branches` → `actions[].enemyKey`）→ 乙（甲的
-	//: `awake_enemy_key`）→ 天标（`pileMarkKey`），三份规格都走
-	//: `spawnCtx.unitSpec`（＝`_unit_spec`，与出怪表同一个口径）。原来登记在这里的
-	//: 那一行已删，判据同步把它从 `unported` 移到**逐字段比**。
 	//: 雪：`snow_mech_spec` 要 `snow_spec` → `d.talents` 的「无垠的雪景」
 	//: （`frontend/talent_finders.find_snow`），而且它按**排程**判——
 	//: 本命令不吃计划 ⇒ 这一支在**本口径下恒不可达**（判据每次现算并断言为 0）。
-	"snow.field",
+	//: ★ 但 `buildspec` 那条路上**不恒空**，见 `snowspec.go` 与 `addSnow`。
+	snowUnportedLine,
 }
+
+//: 未搬线里雪那一条的**名字**（摘它/认它都只在这一个常量上，免得两处写字符串）。
+const snowUnportedLine = "snow.field"
 
 // ---------------------------------------------------------------- 田地规格（生产者侧）
 //
@@ -637,14 +655,13 @@ func MechSpecBuild(level, path string, q MechQuery) (MechOut, error) {
 		out.Scanned["env_rune"] = 0
 	}
 	if !hasEnv {
-		//: 没有环境系统 ⇒ `inp.farmland is None` ⇒ `names_for` 一条都不给。
+		//: 没有环境系统 ⇒ `inp.farmland is None` ⇒ 田地那一条不给。
 		//: 这一支在 26 个主线关卡上真会被走到（判据里有计数）。
 		out.Scanned["farmland"] = 0
-		//: 雪：本命令不吃计划 ⇒ `snow_spec` 恒空 ⇒ 这一档的分母恒为 0。
-		//: 它**不是**「查过了没问题」，是「这一趟没有输入」——判据按同一口径
-		//: 取期望值，并对「生产口径里带雪的关数」另印一个数（见判据第五节）。
-		out.Scanned["snow_fields"] = 0
-		return out, nil
+		//: ⚠ **雪与田地从这里就分道**：权威的 `names_for` 里两条各判各的
+		//: （田地看 `inp.farmland`、雪看 `snow_spec`），所以没有环境系统
+		//: **不等于**没有雪。原先这里直接 `return`，会把雪一并漏掉。
+		return out, out.addSnow(st, q)
 	}
 	farm, scanned, err := buildMechFarmland(st, raw, difficulty, params, bb)
 	if err != nil {
@@ -668,7 +685,62 @@ func MechSpecBuild(level, path string, q MechQuery) (MechOut, error) {
 		return out, fmt.Errorf("田地规格消费者收不下（形状漂了）：%v", err)
 	}
 	out.MechConfig[string(mech.FarmlandID)] = cfg
-	return out, nil
+	return out, out.addSnow(st, q)
+}
+
+// addSnow 是**雪那一条**（与田地在 `names_for` 里并列、各判各的）。
+//
+// 三层口径，写清楚免得下一个人把它当漏项：
+//
+//  1. **没有排程 ⇒ 不判也不报**：`mechspec` 这条命令不吃计划（口径契约），
+//     于是 `snow_spec` 无从算起 —— `unported` 里那条雪**留着**（它确实做不到），
+//     `snow_fields` 记 0。0 在这里的含义是「这一趟没有输入」，不是「查过没有」。
+//  2. **有排程但没有雪**（谁都没带「无垠的雪景」）⇒ 同样记 0，`mechanisms` 不加雪。
+//     这一支与上一条的**读数一样**，所以判据要能把两者分开 —— 靠的是
+//     `scanned["snow_input"]`（有没有排程）另记一栏，见下。
+//  3. **有排程且有雪** ⇒ 造规格、加 `mechanisms`、把 `unported` 里那条**摘掉**
+//     （这一趟真做得到，就不再列它）。
+//
+// ⚠ 消费者核对：形状漂了要**当场**失败（与田地那一支同一条规矩），
+// 所以这里也拿 `mech.SnowSpec` 走一遍反序列化。
+func (o *MechOut) addSnow(st *Stage, q MechQuery) error {
+	if q.Schedule == nil {
+		o.Scanned["snow_input"] = 0
+		o.Scanned["snow_fields"] = 0
+		return nil
+	}
+	o.Scanned["snow_input"] = 1
+	blob, n, err := SnowOf(st, q.Schedule.Rows, q.Schedule.Freeze)
+	if err != nil {
+		return err
+	}
+	o.Scanned["snow_fields"] = n
+	//: ★ **有排程就摘掉那条「未搬」**，与这一关有没有雪无关：`unported` 的语义是
+	//: 「**这个口径**造不出来的部分」，而带上排程之后雪是**判得了**的 ——
+	//: 某一关碰巧没有雪，那是「算过了，没有」，不是「做不到」。
+	//: （判据据此把两种口径分开断言，见 `check_buildspec_go.py` 的 `check_slots`。）
+	dropUnported(o, snowUnportedLine)
+	if blob == nil {
+		return nil
+	}
+	var consumable mech.SnowSpec
+	if err := json.Unmarshal(blob, &consumable); err != nil {
+		return fmt.Errorf("积雪规格消费者收不下（形状漂了）：%v", err)
+	}
+	o.Mechanisms = append(o.Mechanisms, string(mech.SnowID))
+	o.MechConfig[string(mech.SnowID)] = blob
+	return nil
+}
+
+// dropUnported 从「未搬」清单里摘掉一条（原地，保序）。
+func dropUnported(o *MechOut, line string) {
+	kept := o.Unported[:0]
+	for _, u := range o.Unported {
+		if u != line {
+			kept = append(kept, u)
+		}
+	}
+	o.Unported = kept
 }
 
 // mechPolluteFromRunes 复刻 `environment.PolluteParams.from_stage`（`environment.py:269-289`）。

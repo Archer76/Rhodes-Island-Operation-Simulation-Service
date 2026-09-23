@@ -73,6 +73,21 @@ type BuildSpecQuery struct {
 	//: 透传给闸门（`unsupported_reasons` 的两个口子）。对拍台用 `allow_devices=true`。
 	AllowDevices bool `json:"allow_devices,omitempty"`
 	AllowSkills  bool `json:"allow_skills,omitempty"`
+	//: ★ 积雪的「满层即冻结」开关（原版 `self.snow_freeze`）。**可选入参 ＋ 缺省 true**：
+	//: `nil`（没送）⇒ true，与权威的默认值同值；送了就按送的算。
+	//:
+	//: 为什么不是写死常量：权威那边它是 `env` 的一个键（`inputs.py:145`
+	//: `snow_freeze: bool = True`、`:187` `_get("snow_freeze", True)`），
+	//: 写死就把「能不能改」也一并向写死了。
+	//:
+	//: 为什么缺省 true 是**安全**的（取证范围写清楚）：
+	//: `git grep -n snow_freeze -- fixtures/ data/ tools/` **零命中**（rc=1），
+	//: `ak_tactic/` 里 3 处全是默认值的定义、**没有一处赋值点**。
+	//: ⇒ 在当前取证范围内，没有任何调用方把它设成 False。
+	//: ⚠ 但这条可达性**不是注释说了算**：`check_buildspec_go.py` 每次都现算
+	//: （扫那两个面 ＋ 现读一次不送 `freeze` 时的产物），哪天有人真送 `false`，
+	//: 缺省路径就必须重新证明自己 —— 与 `p3r_armed` 同一条规矩。
+	Freeze *bool `json:"freeze,omitempty"`
 
 	//: 解析结果（`ParseSpecRequest` 填；调用方不直接设）。
 	//: 两个 `*Path` 与两个内联 `RawMessage` **互斥**，由解析器保证。
@@ -228,13 +243,16 @@ type BuildSpecOut struct {
 	Params    map[string]any `json:"params"`
 }
 
-// buildSpecUnported 是本入口**自己**那两条口径差（各生产者的另计，带前缀并入）。
+// buildSpecUnported 是本入口**自己**那几条口径差（各生产者的另计，带前缀并入）。
 var buildSpecUnported = []string{
-	//: `goal_cells` 的门是「mechanisms 含 snow.field」，而 Go 的 mechanisms 判不出雪
-	//: ⇒ 这道门恒关。差的是**雪的输入**，不是门本身（见文件头）。
-	"goal_cells：门（积雪在场）在 Go 侧恒关（雪判不出，见 mechspec 的 unported）",
+	//: ★★ `goal_cells：…` 那一条**已删**（2026-09-23，第三十九批）：雪搬进 Go 之后，
+	//: 带上排程的 `mechanisms` 真的会含 `snow.field` ⇒ 门就开了、`goal_cells`
+	//: 自己填上。而没有雪的那些关，权威那边也是 `[]`（`spec.py:1281` 写的是
+	//: `if mech.SNOW_ID in mechanisms else []`）⇒ 两侧同口径，不再需要放行项。
 	//: `spawns[].p3r_armed` 要 `total_attack is not None`（装置层）。实测缓存 55 关
 	//: 里非 None 的 0 关 ⇒ 传 false 与原版同值；判据每次现算这个可达性。
+	//: ⚠ 一旦那一层接上（非 None 的关 > 0），这条与 `SpawnsOf(...)` 的第三个实参
+	//: 都要同批改——判据会先红。
 	"spawns[].p3r_armed：total_attack 要装置层，Go 没有 ⇒ 恒传 false",
 }
 
@@ -257,12 +275,13 @@ func ParseSpecRequest(raw json.RawMessage) (BuildSpecQuery, error) {
 	allowed := map[string]bool{
 		"plan": true, "roster": true, "difficulty": true, "max_time": true,
 		"heal_mode": true, "allow_devices": true, "allow_skills": true,
+		"freeze": true,
 	}
 	for k := range m {
 		if !allowed[k] {
 			return q, fmt.Errorf(
 				"buildspec 不认识的 spec 键 %q（只收 plan／roster／difficulty／max_time／"+
-					"heal_mode／allow_devices／allow_skills）。★ 拼错一个键会造出一份"+
+					"heal_mode／allow_devices／allow_skills／freeze）。★ 拼错一个键会造出一份"+
 					"内容全空的规格而看不出错", k)
 		}
 	}
@@ -302,6 +321,15 @@ func ParseSpecRequest(raw json.RawMessage) (BuildSpecQuery, error) {
 		if err := json.Unmarshal(r, &q.AllowSkills); err != nil {
 			return q, fmt.Errorf("allow_skills 不是布尔：%v", err)
 		}
+	}
+	if r, ok := m["freeze"]; ok {
+		//: `nil` 与「送了 false」必须分得开：`*bool` 让三态成立
+		//: （没送＝缺省 true／送 true／送 false），压成 bool 会把前两者塌成一个。
+		var b bool
+		if err := json.Unmarshal(r, &b); err != nil {
+			return q, fmt.Errorf("freeze 不是布尔：%v", err)
+		}
+		q.Freeze = &b
 	}
 	return q, nil
 }
@@ -464,7 +492,9 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 	}
 
 	// ---- spawns ----
-	//: `p3rArmed` 恒 false：见 `buildSpecUnported` 第二条（判据现算可达性）。
+	//: `p3r_armed` 恒 false：见 `buildSpecUnported` 第二条（判据现算可达性）。
+	//: ⚠ **本命令不吃 env**：`plan`／`roster` 是内联对象时连路径都没有，
+	//: 更谈不上「调用方的 env」——所以这里只能传 `false`，并在 unported 里具名。
 	sp, err := SpawnsOf(level, path, difficulty, false)
 	if err != nil {
 		return out, err
@@ -490,7 +520,23 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 	}
 
 	// ---- mechanisms / mech_config ----
-	m, err := MechSpecBuild(level, path, MechQuery{Difficulty: difficulty})
+	//: ★ 带上**排程**（结构取「甲」）：雪按「谁在哪一手铺雪」判，而那在计划里 ——
+	//: `mechspec` 那条命令不吃计划，所以它到这里是 nil（那边的 `unported` 继续
+	//: 列着雪，因为那条口径下确实做不到）。机制名的判据仍然只有 `MechSpecBuild` 一处。
+	freeze := true //: 缺省 true：见 `BuildSpecQuery.Freeze` 的取证
+	if q.Freeze != nil {
+		freeze = *q.Freeze
+	}
+	var sched *MechSchedule
+	if q.hasPlanInput() {
+		rows, err := BuildDeployRows(plan, roster, st)
+		if err != nil {
+			return out, err
+		}
+		sched = &MechSchedule{Rows: rows, Freeze: freeze}
+	}
+	m, err := MechSpecBuild(level, path, MechQuery{Difficulty: difficulty,
+		Schedule: sched})
 	if err != nil {
 		return out, err
 	}

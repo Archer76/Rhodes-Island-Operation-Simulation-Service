@@ -19,17 +19,23 @@
 ★ B 与 C 的作用是**补覆盖**：真夹具的 `unsupported` 与 `skill_uses` 全是空的
 （实测 24/24 为 0），只比 A 的话这两条支的「一致」是两边都为空的空洞相等。
 
-## 一处**具名**的口径差（不是容差）
+## 雪：**已搬进 Go**（第三十九批），不再是口径差
 
-Go 判不出雪（要 `find_snow`，Go 侧没有），所以对**带雪的那几关**：
+第三十八批以前这里有一条具名放行：Go 判不出雪（要 `find_snow`），于是带雪的
+那几关允许 `mechanisms` 少一条、`mech_config` 少一个键、`goal_cells` 恒空。
+**雪搬进 Go 之后那三项逐字段相同**，放行段整段删掉（见 `diff_one`）——
+留着它等于把一条已经造对的路径重新放行。
 
-    mechanisms      ：期望 = Go ＋ ['snow.field']（多一个）
-    mech_config     ：期望多一个键 `snow.field`；`huai_shu_li.farmland` 那一段必须逐字段相同
-    goal_cells      ：期望非空、Go 是 []（那道门是「mechanisms 含 snow.field」⇒ Go 侧恒关）
+★ 但「带雪几例」这个**计数**留着，而且第五节要求它 **> 0**：24 份夹具里带雪的
+是 **2 份**（`hsex8_max` / `plan-hs07`）。若哪天变成 0，那条绿就是零信息量的。
 
-判据**不写容差、不平均掉**：先把差别**算出来**，再逐条断言它恰好是上面这三项；
-多一项少一项都判红。实测 24 份夹具里带雪的 **2 份**（`hsex8_max` / `plan-hs07`），
-而 `goal_cells` 非空的**恰好**也是那 2 份。
+## `freeze` 那条的现算可达性（与 `p3r_armed` 同一规矩）
+
+`snow.field.freeze` 是可选入参，**没送就是 true**（权威的默认值）。这条缺省
+**不是靠注释担保**的：第五节每次现算两件事 ——
+① 扫 `fixtures/ data/ tools/` 有没有人真的送 `freeze`（当前零命中）；
+② 现读一次**不送 `freeze`** 的产物，断言它真是 `true`。
+哪天有人真送 `false`，缺省路径就得重新证明自己。
 
 ## 覆盖率纪律
 
@@ -298,26 +304,13 @@ def diff_one(py: dict, go: dict, name: str) -> tuple[list[str], dict, bool]:
         bad.append("%s：键集不同\n      期望 %s\n      Go   %s"
                    % (name, sorted(py), sorted(go)))
         return bad, cnt, snow
-    #: 有雪时先逐条断言那三项**恰好**是雪造成的（多一项少一项都红）。
-    if snow:
-        pm, gm = list(py.get("mechanisms") or []), list(go.get("mechanisms") or [])
-        if pm != gm + [SNOW_ID]:
-            bad.append("%s：mechanisms 的差不是「恰好多一个 snow.field」：期望 %s / Go %s"
-                       % (name, pm, gm))
-        pc, gc = py.get("mech_config") or {}, go.get("mech_config") or {}
-        if sorted(pc) != sorted(gc) + [SNOW_ID]:
-            bad.append("%s：mech_config 的键差不是「恰好多一个 snow.field」：期望 %s / Go %s"
-                       % (name, sorted(pc), sorted(gc)))
-        if not py.get("goal_cells"):
-            bad.append("%s：带雪却 goal_cells 为空 —— 期望值本身不对（口径变了）" % name)
-        if go.get("goal_cells") != []:
-            bad.append("%s：Go 的 goal_cells 应为 []（门恒关），实得 %s"
-                       % (name, go.get("goal_cells")))
+    #: ⚠ 2026-09-23（第三十九批）：**这里原先有一段「有雪时按具名三项差放行」** ——
+    #: 那时 Go 判不出雪（`mechanisms` 少一条、`mech_config` 少一个键、
+    #: `goal_cells` 因门恒关而为空）。雪搬进 Go 之后那三项**必须逐字段相同**，
+    #: 所以整段删掉：现在雪那一路与别的路**同一条判据**，不再有特例。
+    #: 下面只剩一条**断言性的**计数用途：`snow` 用来数「带雪几例」，
+    #: 免得「没有一份带雪」这种零行使的绿蒙混过去（见第五节）。
     for path, pv, gv in diff_paths(py, go):
-        #: 有雪时这三个键的差另有断言（上面），不在这里重复报。
-        if snow and (path.startswith(".mechanisms") or path.startswith(".goal_cells")
-                     or path.startswith(".mech_config." + SNOW_ID)):
-            continue
         cnt["compared_paths"] += 1
         if gv is MISSING:
             hit = [src for rx, src in REGISTERED_RX if rx.match(path)]
@@ -345,13 +338,33 @@ def check_slots(rec: dict, name: str, *, expect_plan: bool) -> list[str]:
                    % (name, rec.get("gated_keys")))
     #: `unported` 必须**并进来了**：各来源至少一条（合并静默为空是最坏的一种，
     #: 因为「没有未搬项」与「忘了并」长得一模一样）。
+    #
+    #: ★★ 2026-09-23（第三十九批）**按口径改了这一条**：`mechspec` 那一路（田地 ＋ 雪）
+    #: 现在**有排程就全造得出来**，于是带计划的用例里 `mechspec:` **应当一条都没有**。
+    #: 「至少一条」那条老规矩在这里会变成**假红**。改成两条各自可判的：
+    #:   · 带计划（有排程）⇒ `mechspec` 必须**零条**（全造得出来）；
+    #:   · 不带计划（`mechspec` 命令那条口径）⇒ 必须**恰有雪那一条**（它确实做不到）。
+    #: 这样「合并静默为空」照样盖得住：真静默丢时，前者会出现不该有的条目、
+    #: 后者会少一条。
     unp = rec.get("unported") or []
-    srcs = ["spawns", "unsupported", "mechspec"] + (["operators"] if expect_plan else [])
+    mech_entries = [u for u in unp if u.startswith("mechspec: ")]
+    if expect_plan:
+        if mech_entries:
+            bad.append("%s：带计划的用例里 `mechspec` 还有未搬条目 %s —— "
+                       "有排程时田地与雪都该造得出来" % (name, mech_entries))
+    else:
+        if len(mech_entries) != 1:
+            bad.append("%s：不带计划的用例里 `mechspec` 的未搬条目应恰有 1 条"
+                       "（雪），实得 %d 条：%s" % (name, len(mech_entries),
+                                                  mech_entries))
+    srcs = ["spawns", "unsupported"] + (["operators"] if expect_plan else [])
     for src in srcs:
         if not any(u.startswith(src + ": ") for u in unp):
             bad.append("%s：unported 里没有 %s 的来源条目（合并静默为空？）现得 %s"
                        % (name, src, json.dumps(unp, ensure_ascii=False)[:200]))
-    for own in ("goal_cells：", "spawns[].p3r_armed："):
+    #: 本入口自己那条：★ `goal_cells：` **已删**（第三十九批，雪搬进来之后那道门
+    #: 会开、不再需要放行），所以这里只剩 `p3r_armed` 一条。
+    for own in ("spawns[].p3r_armed：",):
         if not any(u.startswith(own) for u in unp):
             bad.append("%s：unported 里缺本入口自己的那条 %s" % (name, own))
     return bad
@@ -360,7 +373,8 @@ def check_slots(rec: dict, name: str, *, expect_plan: bool) -> list[str]:
 # ---------------------------------------------------------------- 反向守卫
 
 MUTATIONS = ("改一个标量", "少一条 spawn", "operators 少一个", "mechanisms 少一个",
-             "mech_config 挖空", "goal_cells 塞一格")
+             "mech_config 挖空", "goal_cells 塞一格",
+             "雪 interval 改一个数", "雪 ground 排序打乱")
 
 
 def mutate(cases: list[dict], which: str):
@@ -386,6 +400,22 @@ def mutate(cases: list[dict], which: str):
         if which == "goal_cells 塞一格" and not py.get("goal_cells"):
             py["goal_cells"] = [[0, 0]]
             return out
+        #: ★ 第三十九批：**雪那一支**的两处注入（PM 指定）。
+        #: ① 改一个数：`interval` 是「每几秒铺一层」，逐字段比必须看见它；
+        #: ② 排序打乱：`ground` 的顺序是**硬约束**（扩散上限先被谁占掉）——
+        #:    它被打乱而判据不红的话，「顺序一致」这句话就没人证过。
+        if which.startswith("雪 "):
+            cfg = (py.get("mech_config") or {}).get(SNOW_ID)
+            if not cfg or not cfg.get("fields"):
+                continue
+            f0 = cfg["fields"][0]
+            if which == "雪 interval 改一个数":
+                f0["interval"] = float(f0.get("interval", 0.0)) + 1.0
+                return out
+            if which == "雪 ground 排序打乱" and f0.get("ground"):
+                f0["ground"] = list(reversed(f0["ground"]))
+                return out
+            continue
     return out
 
 
@@ -397,6 +427,85 @@ def add_case(cases: list[dict], name: str, py: dict, rec: dict,
     go_before = canon_groups(gospec)
     cases.append({"name": name, "py": py, "go": rec, "expect_plan": expect_plan,
                   "groups_order_diff": bool(py_before) and py_before != go_before})
+
+
+def freeze_reachability(cases: list[dict]) -> tuple[list[str], dict]:
+    """`freeze` 缺省值的**现算可达性** —— 与 `p3r_reachable` 同一条规矩。
+
+    三件事都要真做，缺一条这段就是零信息量的绿：
+
+      ① **缺省面**：**不送** `freeze` 时产物里 `snow.field.freeze` 必须是 `true`
+         （与权威的默认值同值）；
+      ② **正对照**：**送** `freeze: false` 必须**翻成 false** —— 没有这一条，
+         「缺省 true」可能只是**参数根本没被读**（那种绿最像真的）；
+      ③ **仓库面**：`git grep -n snow_freeze -- fixtures data tools` 在**排除本文件**
+         之后必须**零命中**（rc=1）。有人在夹具/工具里真送 `snow_freeze`，
+         这条缺省就得重新证明。
+         ⚠ 排除本文件是**必须的**：判据自己的正文里就有这四个字（上面这两行、
+         以及下面那条 `git grep` 的实参）—— 不排除的话它**扫到自己**、
+         永远命中，那条断言就成了恒假红。本仓为此记过一条：
+         「在文档里写名字去证明『它不在仓库里』会自指」（`9d74eab8`）。
+    """
+    import subprocess
+
+    bad: list[str] = []
+    cov = {"snow_cases": 0, "default_true": 0, "flip_false": 0, "scan_hits": 0,
+           "scan_excluded": 0}
+    snow = [c for c in cases if SNOW_ID in (c["py"].get("mechanisms") or [])]
+    cov["snow_cases"] = len(snow)
+    if not snow:
+        bad.append("没有一份带雪的用例 —— `freeze` 这条**无从取证**（要么雪没造出来，"
+                   "要么 24 份里真的没雪，两种都要看）")
+        return bad, cov
+    #: ③ 仓库面：用 `git grep`（快且只扫在库文件；`data/` 很大不能 rglob）。
+    #: ⚠ **排除本文件**，原因见 docstring 的 ③（不排除就是自指、恒假红）。
+    self_rel = str(Path(__file__).resolve().relative_to(ROOT)).replace("\\", "/")
+    p = subprocess.run(["git", "-C", str(ROOT), "grep", "-n", "snow_freeze",
+                        "--", "fixtures", "data", "tools"],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    hits = []
+    for ln in p.stdout.decode("utf-8", "replace").splitlines():
+        f = ln.split(":", 1)[0].replace("\\", "/")
+        if f == self_rel:
+            cov["scan_excluded"] += 1
+            continue
+        hits.append(ln)
+    if hits:
+        cov["scan_hits"] = len(hits)
+        bad.append("仓库里有 %d 处真的写了 `snow_freeze`（取证范围：fixtures/ data/ "
+                   "tools/，**已排除本判据自己** %d 处）——缺省 true 这条要重证：\n      %s"
+                   % (cov["scan_hits"], cov["scan_excluded"],
+                      "\n      ".join(hits)[:400]))
+    #: ① ② 现读两次产物（同一关同一计划，只差一个 `freeze`）。
+    import check_specgo_go as C
+
+    lv = {n: l for n, _s, _e, l in C.real_specs()}
+    #: ⚠ 用例名带口径前缀（`A hsex8_max.json`／`C …`）——**取末段**当夹具名，
+    #: 别直接拿它去查表（第一版就 `KeyError: 'A hsex8_max.json'`）。
+    name = snow[0]["name"].split()[-1]
+    for tag, extra, want, key in (("不送 freeze", {}, True, "default_true"),
+                                  ("送 freeze=false", {"freeze": False}, False,
+                                   "flip_false")):
+        ok, resp = go_buildspec_raw({"id": 1, "cmd": "buildspec", "level": lv[name],
+                                     "spec": {"plan": str(FIXDIR / name),
+                                              "roster": ROSTER_FIX,
+                                              "allow_devices": True, **extra}})
+        if not ok:
+            bad.append("%s：buildspec 失败 %s" % (tag, resp.get("error")))
+            continue
+        got = (((resp["build_spec"]["spec"].get("mech_config") or {})
+                .get(SNOW_ID) or {}).get("freeze"))
+        if got is not want:
+            if key == "flip_false":
+                bad.append("%s：`freeze` 送 false 却没翻（实得 %r）—— 参数**根本没被读**，"
+                           "那条「缺省 true」的绿是假的" % (tag, got))
+            else:
+                bad.append("%s：`snow.field.freeze`=%r，应为 true（权威默认值）" % (tag, got))
+        else:
+            cov[key] = 1
+        print("  %-18s（%s）→ freeze=%r %s" % (tag, name, got,
+                                               "✓" if got is want else "✗"))
+    return bad, cov
 
 
 def compare(cases: list[dict]) -> tuple[list[str], dict]:
@@ -580,7 +689,7 @@ def main() -> int:
     print("二 · 逐用例逐路径对拍（%d 例）" % len(cases))
     problems, cov = compare(cases)
     problems = problems_early + problems
-    print("  带雪（走具名三项差）%d 例；已登记缺键 %d 处；"
+    print("  带雪（**已逐字段比**）%d 例；已登记缺键 %d 处；"
           "groups 原始次序不同的用例 %d 例（那一处已按格集合口径规范化，见 canon_groups）"
           % (cov["_snow_cases"], cov["_registered_missing"], cov["_groups_order_diff"]))
     #: ★ Python 侧那处静默默认值的**规模与样例**（现算）——不印出来，下一个人
@@ -643,6 +752,17 @@ def main() -> int:
         problems.append("有 %d 关带 total_attack —— 单一入口必须改成收 p3r_armed 输入"
                         "（现在恒传 false）" % n_p3r)
 
+    print()
+    print("六·b · 积雪的 `freeze` 缺省值可达性（现算；三件都要真做）")
+    fbad, fcov = freeze_reachability(cases)
+    problems += fbad
+    for m in fbad:
+        print("  ✗ %s" % m)
+    print("  分母：带雪用例 %d 份；缺省 true=%d；送 false 会翻=%d；"
+          "仓库面 `snow_freeze` 命中 %d 处"
+          % (fcov["snow_cases"], fcov["default_true"], fcov["flip_false"],
+             fcov["scan_hits"]))
+
     if mutate_mode:
         print()
         print("七 · 反向守卫（每处注入都要独立判红）")
@@ -677,7 +797,7 @@ def main() -> int:
         print("结论：单一入口对拍**未通过**（%d 处）" % len(problems))
         return 1
     print("结论：%d 例逐路径一致（A 计划 %d ＋ B 空计划 %d ＋ C 合成 %d）；"
-          "带雪 %d 例走具名三项差；已登记缺键 %d 处；19 键全部造齐"
+          "带雪 %d 例已逐字段比；已登记缺键 %d 处；19 键全部造齐"
           "（missing_keys 空、gated_keys 空）；具名拒跑 %d 关（不计入可比分母）"
           % (len(cases), len(rows), len(levels) - n_refused, len(plan_variants()),
              cov["_snow_cases"], cov["_registered_missing"], n_refused))
