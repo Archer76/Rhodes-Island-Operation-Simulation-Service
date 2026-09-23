@@ -17,9 +17,19 @@
 
 **全表所有技能的所有等级的全部黑板键**取并集后逐个比——不抽样。
 
+## 期望值从哪来（**两种模式**）
+
+* 默认（`RIOS_GOLDEN` 未设）：现场调 Python 的 `_classify` / `_split_variant`，**现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/分类.json`，**不 import `ak_tactic`**。
+
+★ **这套要冻的是两半**：键集（`("query", …)`）与逐键期望值。
+**只冻期望值不冻键集**，check 档就问不出该问哪些键——而若有人顺手改成硬编码子集，
+**分母静默变小而全绿**。查询集是判据的一部分。
+
 用法:
     python tools\\check_classify_go.py
     python tools\\check_classify_go.py --mutate
+    python tools\\freeze_baseline.py --record 分类
 """
 from __future__ import annotations
 
@@ -33,10 +43,40 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
 DATA = ROOT / "data" / "gamedata"
+
+
+def py_blackboard_keys() -> list[str]:
+    """查询集：全表所有技能所有等级的黑板键并集（**这是 Python 侧的产物，必须冻住**）。"""
+    from ak_tactic.operator import SkillBook
+    book = SkillBook()
+    keys: set[str] = set()
+    for sid in book.all_ids():
+        for lv in book.levels(sid):
+            keys.update(lv.blackboard.keys())
+    return sorted(keys)
+
+
+def py_classify_expect(k: str) -> dict:
+    """单个键的期望值。★ **直接问 Python 的分类器**，不自己重写一遍表。
+
+    第一版是照着表手写的期望值，于是「control 的量纲」两处都写成 `secs`
+    （Python 是 `sec`），判据照样全绿——**两把相同的尺子互证**。
+    现在期望值来自 `_classify` 本身，才是真的在被测方那一侧取证。
+    """
+    from ak_tactic.operator.skill import _classify, _split_variant
+    var, rest = _split_variant(k)
+    e = {"key": k, "kind": "", "field": "", "unit": "",
+         "variant": var or "", "no_variant": rest, "has_variant": var is not None}
+    hit = _classify(k)
+    if hit:
+        e["kind"], e["field"], e["unit"] = hit
+    return e
 
 
 def go_classify(keys: list[str]) -> list[dict]:
@@ -58,15 +98,9 @@ def go_classify(keys: list[str]) -> list[dict]:
 
 
 def main() -> int:
-    from ak_tactic.operator import SkillBook
-    from ak_tactic.operator.skill import _classify, _split_variant
+    G = GB.bind("分类", __file__)
 
-    book = SkillBook()
-    keys: set[str] = set()
-    for sid in book.all_ids():
-        for lv in book.levels(sid):
-            keys.update(lv.blackboard.keys())
-    keys = sorted(keys)
+    keys = G.expect(("query", "blackboard_keys"), py_blackboard_keys)
     print("全表黑板键并集：%d 个（所有技能 × 所有等级）" % len(keys))
 
     got = go_classify(keys)
@@ -74,26 +108,12 @@ def main() -> int:
     if mutate and got:
         got[0]["kind"] = "<mutated>"
 
-    def expect(k: str) -> dict:
-        """★ **直接问 Python 的分类器**，不自己重写一遍表。
-
-        第一版是我照着表手写的期望值，于是"control 的量纲"我两处都写成
-        `secs`（Python 是 `sec`），判据照样全绿——**两把相同的尺子互证**。
-        现在期望值来自 `_classify` 本身，才是真的在被测方那一侧取证。
-        """
-        var, rest = _split_variant(k)
-        e = {"key": k, "kind": "", "field": "", "unit": "",
-             "variant": var or "", "no_variant": rest, "has_variant": var is not None}
-        hit = _classify(k)
-        if hit:
-            e["kind"], e["field"], e["unit"] = hit
-        return e
-
     bad = 0
     kinds: dict[str, int] = {}
     variants = 0
     for k, g in zip(keys, got):
-        e = expect(k)
+        #: ★ 期望值只能从这里来：默认档现问 Python，冻结档读冻的那份。
+        e = G.expect(("classify", k), lambda k=k: py_classify_expect(k))
         out = [f for f in ("kind", "field", "unit", "variant", "no_variant")
                if g.get(f) != e[f]]
         if e["has_variant"] != g.get("has_variant"):
@@ -112,6 +132,9 @@ def main() -> int:
         "%s=%d" % (k, v) for k, v in sorted(kinds.items())))
     print("★ 带变体限定的键：%d 个" % variants)
     print()
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
     if mutate:
         if bad:
             print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")

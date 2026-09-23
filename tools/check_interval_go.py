@@ -31,9 +31,28 @@
 三条边界**各自都记行使计数**，任何一条为 0 就判红：不是「比过 600 点」，
 而是「这 600 点真的走到过那三条路」。
 
+## 期望值从哪来（**两种模式**）
+
+* 默认（`RIOS_GOLDEN` 未设）：现场调 Python 的 `SkillEffects.attack_interval`，**现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/攻击间隔.json`，**不 import `ak_tactic`**。
+
+★ 这一套冻的**两半**：逐点期望值，以及 `ASPD_MIN` / `MIN_INTERVAL` 两个
+**行使计数的口径常量**（下面的行使计数要用它们判「这一支有没有走到」——
+常量不冻，check 档连计数都算不出来）。
+
+⚠ 这两个常量**不进比法**（比法是 `abs(g - want) > 1e-9`），所以**改它们不会翻转判决**
+——实测：`--control` 的 P1 改坏 `("consts","interval")` 后 rc 仍为 0。
+因此控制组的敏感性探针只拿**期望值**做（见 `freeze_baseline.py --control`）；
+常量冻住的目的只是让行使计数的口径可复现。
+
+★ **第三态**：本文件开头那条「`spec.ASPD_MIN` 与 `skill.ASPD_MIN` 必须相等」是
+**Python 侧自身的自检**。冻结档下两侧同源、恒等 ⇒ **不适用于冻结**，会显式印出来，
+不当作通过（把它读成绿就是又造了一条「预先被决定的绿」）。
+
 用法:
     python tools\\check_interval_go.py
     python tools\\check_interval_go.py --mutate
+    python tools\\freeze_baseline.py --record 攻击间隔
 """
 from __future__ import annotations
 
@@ -47,6 +66,8 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -58,6 +79,27 @@ BASE_IV = [0.2, 0.85, 1.0, 1.3, 2.3, 3.5]
 BASE_SPD = [7.0, 20.0, 100.0, 107.0, 220.0]
 IV_BUFF = [-0.1, 0.0, 0.25, 1.0]
 SPD_BUFF = [-95.0, -30.0, 0.0, 30.0, 500.0]
+
+
+def py_interval_consts() -> dict:
+    """判定参数（**判定时要用到的 Python 常量**，必须与期望值一起冻住）。
+
+    ⚠ `MIN_INTERVAL` 这个名字在仓里有**两处不同含义**：`prts/client.py:31`
+    的 1.2 是抓站限速，跟攻击间隔无关。这里取与 spec 构造同一处的那 0.05。
+    """
+    from ak_tactic.operator.skill import ASPD_MIN
+    from ak_tactic.simgo.spec import ASPD_MIN as SPEC_ASPD_MIN
+    from ak_tactic.simgo.spec import MIN_INTERVAL
+    return {"ASPD_MIN": ASPD_MIN, "SPEC_ASPD_MIN": SPEC_ASPD_MIN,
+            "MIN_INTERVAL": MIN_INTERVAL}
+
+
+def py_interval_want(base_iv: float, base_spd: float,
+                     iv_buff: float, spd_buff: float) -> float:
+    """期望值入口。★ import 写在函数体里：冻结档下本函数不会被调到。"""
+    from ak_tactic.operator.skill import SkillEffects
+    eff = SkillEffects(buffs={"attack_interval": iv_buff, "attack_speed": spd_buff})
+    return eff.attack_interval(base_iv, base_spd)
 
 
 def go_interval(queries: list[dict]) -> list[float]:
@@ -79,15 +121,19 @@ def go_interval(queries: list[dict]) -> list[float]:
 
 
 def main() -> int:
-    from ak_tactic.operator.skill import ASPD_MIN, SkillEffects
-    #: ⚠ `MIN_INTERVAL` 这个名字在仓里有**两处不同含义**：`prts/client.py:31`
-    #: 的 1.2 是抓站限速，跟攻击间隔无关。这里取与 spec 构造同一处的那 0.05。
-    from ak_tactic.simgo.spec import ASPD_MIN as SPEC_ASPD_MIN
-    from ak_tactic.simgo.spec import MIN_INTERVAL
+    G = GB.bind("攻击间隔", __file__)
 
-    if SPEC_ASPD_MIN != ASPD_MIN:
+    C = G.expect(("consts", "interval"), py_interval_consts)
+    ASPD_MIN = C["ASPD_MIN"]
+    MIN_INTERVAL = C["MIN_INTERVAL"]
+    if G.mode == GB.CHECK:
+        #: ★ **第三态**（不适用于冻结）：这一条量的是「Python 两处常量一不一致」，
+        #: 冻结档下两侧都来自同一份记录 ⇒ 恒等、不可能失败。**不许静默当作通过**。
+        print("⚠ 不适用于冻结：`spec.ASPD_MIN` 与 `skill.ASPD_MIN` 的一致性自检"
+              "（两侧现在同源，恒真、零信息量）——本档不拿它当判据")
+    elif C["SPEC_ASPD_MIN"] != ASPD_MIN:
         raise SystemExit("攻速下限两处不同值：spec=%g skill=%g"
-                         % (SPEC_ASPD_MIN, ASPD_MIN))
+                         % (C["SPEC_ASPD_MIN"], ASPD_MIN))
 
     queries = [{"base_iv": bi, "base_spd": bs, "iv_buff": ib, "spd_buff": sb}
                for bi in BASE_IV for bs in BASE_SPD
@@ -99,15 +145,19 @@ def main() -> int:
 
     print("Go 侧仪器：%s" % GO_BIN)
     print("Python 侧权威：SkillEffects.attack_interval"
-          "（ASPD_MIN=%g、MIN_INTERVAL=%g）" % (ASPD_MIN, MIN_INTERVAL))
+          "（ASPD_MIN=%g、MIN_INTERVAL=%g%s）"
+          % (ASPD_MIN, MIN_INTERVAL,
+             "，**这两个数来自冻结基线**" if G.mode == GB.CHECK else ""))
     print()
 
     bad = 0
     branch = {"攻速下限生效": 0, "间隔下限生效": 0, "加算秒数为负": 0, "无技能帧特例": 0}
     for q, g in zip(queries, got):
-        eff = SkillEffects(buffs={"attack_interval": q["iv_buff"],
-                                 "attack_speed": q["spd_buff"]})
-        want = eff.attack_interval(q["base_iv"], q["base_spd"])
+        #: ★ 期望值只能从这里来：默认档现调 Python，冻结档读冻的那份。
+        want = G.expect(("interval", q["base_iv"], q["base_spd"],
+                         q["iv_buff"], q["spd_buff"]),
+                        lambda q=q: py_interval_want(
+                            q["base_iv"], q["base_spd"], q["iv_buff"], q["spd_buff"]))
         spd = max(ASPD_MIN, q["base_spd"] + q["spd_buff"])
         if q["base_spd"] + q["spd_buff"] <= ASPD_MIN:
             branch["攻速下限生效"] += 1
@@ -133,6 +183,9 @@ def main() -> int:
           % ", ".join("%s=%d" % (k, v) for k, v in branch.items()))
     unchecked = [k for k, v in branch.items() if v == 0]
     print()
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
     if mutate:
         if bad:
             print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")

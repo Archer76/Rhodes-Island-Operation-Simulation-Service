@@ -53,16 +53,73 @@ def main() -> int:
 ② 期望值的 import **必须搬进函数里**（顶层 import 会让 check 档在 bind 时就报 6）；
 ③ **判据逻辑一行不动**（比法、计数、反向守卫、结论行全照旧）——迁移是增量的、可回退的。
 
+### ★ 冻结的是**两半**：查询集 ＋ 期望值（只冻一半＝分母会静默缩水）
+
+`分类` 的键集来自 `SkillBook`、`范围` 的代号集来自 `RangeTable`、`关卡` 的清单来自
+`load_stage`——**「问哪些问题」本身就是 Python 侧的产物**。只冻答案不冻问题，check 档
+要么响（拦截器让它响），要么更糟：有人「顺手」把查询集改成硬编码的一个子集，
+**分母静默变小而全绿**（本仓记过：漏跑一套的症状是全绿，只是那份绿少了一块）。
+
+⇒ 规矩：**凡是决定「问哪些问题」的那一段，也走 `G.expect()`**，键名以 `("query", …)`
+开头（与期望值分开）。分母是判据的一部分，不是它的装饰。
+
+★ **记录的分母**：查询集那一条本身就是基线里的一个值（`("query", …)`），
+`--check` 的「新增 / 消失」两栏量到它——**分母变了会红**，不会被吞掉。
+看基线里有多少个问题，直接读那条值即可。
+
+### ★ 类型还原：JSON 会抹掉 `tuple` / `set`
+
+`json` 把 `tuple` 写成 `list`、把 `set` 直接拒掉。于是**冻回来的值与现场那个值的
+Python 类型不同**，而判据里常常有 `sorted(map(tuple, g)) != sorted(cells)` 这种比法
+——那一比会**恒不相等**（假红），或者反过来恒相等（假绿）。
+
+⇒ 规矩：**还原写在判据侧，而且两种模式走同一条路**。取法是把现场值**先规范化成 JSON
+形状**（`[list(c) for c in cells]`），判据侧再统一还原（`[tuple(c) for c in want]`）。
+不许只在 `check` 档还原——那两档就不是同一个判据了。
+
+### ★ 第三态：**不适用于冻结**
+
+判据里的东西有三种，别压成两种：
+
+1. **期望值** ⇒ 冻；
+2. **查询集 / 判定·计数口径常量**（判定或行使计数时要用到的 Python 常量，例如 `ASPD_MIN`）
+   ⇒ 冻。⚠ 两者性质不同：**改常量未必能翻转判决**（实测：「攻击间隔」的 `ASPD_MIN`
+   只进行使计数，改它 rc 照样 0），所以控制组只拿**期望值**做敏感性探针；
+   常量冻住的目的是**让行使计数的口径可复现**，以及让 check 档不去 import Python；
+3. **Python 侧自身的自检**（例如「`spec.ASPD_MIN` 与 `skill.ASPD_MIN` 两处常量必须相等」）
+   ⇒ **冻不了也不该冻**：冻住之后两侧同源、**恒等**，是一条不可能失败的判据。
+   这一态要**显式印出来**（`⚠ 本条在冻结档不适用`），不许静默当作通过——
+   把它读成绿，就是又造了一条「预先被决定的绿」。
+
+### ★ 每套的控制组（`--control`，**不是可选项**）
+
+    python tools\\freeze_baseline.py --control <套名…>
+
+* **P1 · 改一个期望值 ⇒ 必须判红**。证明「冻的值真的是 oracle」，
+  而不是「读了个文件、判决照旧看 Go」。**控制组没红时本工具 exit 1。**
+* **P2 · 查询集删一个 ⇒ 冻结档看不见（有界盲区，读数照印）**，
+  而 **P2b · `--check`**（拿**现读**的查询集对账）**必须看见**。
+  两条合起来才说明：分母缩水这件事有补偿控制，且补偿控制真的管用。
+
+⚠ **登记在案的残余风险**：冻结档**自己**看不见分母被人改小（它只问冻住的那批问题）。
+Python 还在的时候，锚是 `--check`（现读 vs 冻结，两条来源不同）。
+**Python 删掉之后**，那条锚就没了，剩下的锚只有：基线的 `n_values` 身份栏、
+查询集那条值本身、以及**它在版本控制里的历史**。
+⇒ 建议（需要 Go 侧配合，不在本工具范围）：让 Go CLI 能**列出它认识的代号/关卡**，
+则「Go 说有 73 个」↔「冻结的查询集有 73 个」就是一条**独立来源**的分母对账。
+
 ## 目录 / 用法
 
     python tools\\freeze_baseline.py --list                 # 26 套与各自脚本
     python tools\\freeze_baseline.py --record 生命上限      # 录（**必须显式**，会印覆盖了谁）
     python tools\\freeze_baseline.py --check                # 只读：现读 vs 冻结 + 身份对账
     python tools\\freeze_baseline.py --status               # **主判据**：现算几套在冻结模式下跑得通
+    python tools\\freeze_baseline.py --control 生命上限     # **每套都要做**：改坏一个冻的值 ⇒ 必须红
 """
 from __future__ import annotations
 
 import atexit
+import copy
 import datetime
 import hashlib
 import json
@@ -78,6 +135,7 @@ SCHEMA = "rios-golden-baseline/1"
 ENV_MODE = "RIOS_GOLDEN"
 ENV_OUT = "RIOS_GOLDEN_OUT"          # record：收下来的值写到这里（父进程读走再落盘）
 ENV_DIR = "RIOS_GOLDEN_DIR"          # 基线目录，缺省 <仓根>/fixtures/golden
+ENV_RUNNER = "RIOS_GOLDEN_RUNNER"    # 由 runner 置 1：check 档**必须**经它起进程
 
 OFF, RECORD, CHECK = "off", "record", "check"
 
@@ -96,6 +154,19 @@ FORBIDDEN = ("ak_tactic",)
 # 一 · 通道（判据脚本 import 本模块，用 bind / expect）
 # =============================================================================
 
+def _channel_fail(msg: str) -> None:
+    """通道自己的错 ⇒ **一律 rc=6**，绝不与「判据红」共用一个码。
+
+    ★ 为什么单独一个函数：本文件里有十来处「这一套还没转」的出口
+    （无基线 / 键缺 / 顶层 import / 键不可 JSON 化 / 直跑）。
+    它们各自写一遍 `raise SystemExit(文字)` 的话，Python 给的码是 **1**
+    ——那正好是「判据红」的码，两个完全不同的意思压进同一个数。
+    """
+    sys.stderr.write(msg.rstrip() + "\n")
+    sys.stderr.flush()
+    raise SystemExit(RC_CHANNEL)
+
+
 def mode() -> str:
     raw = (os.environ.get(ENV_MODE) or "").strip().lower()
     if raw in ("", "0", "off", "none"):
@@ -105,7 +176,7 @@ def mode() -> str:
     if raw == CHECK:
         return CHECK
     #: 打错字不许静默掉回 off——那会把「我以为在验冻结基线」变成一次普通的对拍。
-    raise SystemExit("★ RIOS_GOLDEN=%r 不是合法取值（off / record / check）" % raw)
+    _channel_fail("★ RIOS_GOLDEN=%r 不是合法取值（off / record / check）" % raw)
 
 
 def golden_dir() -> Path:
@@ -129,7 +200,7 @@ def _canon(obj) -> str:
     try:
         return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError) as e:
-        raise SystemExit(
+        _channel_fail(
             "★ 冻结基线的键不可 JSON 化（%s）：%r\n"
             "  键必须自带全部输入且可 JSON 化；把不可序列化的对象拆成字段再传。" % (e, obj))
 
@@ -144,10 +215,10 @@ def _jsonable(v, where: str) -> None:
     if isinstance(v, dict):
         for k, x in v.items():
             if not isinstance(k, str):
-                raise SystemExit("★ %s 的键不是字符串（%r）——JSON 化会静默改名" % (where, k))
+                _channel_fail("★ %s 的键不是字符串（%r）——JSON 化会静默改名" % (where, k))
             _jsonable(x, "%s.%s" % (where, k))
         return
-    raise SystemExit(
+    _channel_fail(
         "★ %s 的期望值不可 JSON 化（%s）：%r\n"
         "  冻结基线只收无聊的 JSON；取不出来的那部分就具名登记成「不转」的理由。" %
         (where, type(v).__name__, v))
@@ -206,7 +277,7 @@ class Channel:
             if ck in self.values and self.values[ck] != v:
                 #: 同一个键两次算出不同的值 ⇒ 键没带全输入。**必须当场响**：
                 #: 否则录下来的是一份「某一次的」值，而判据以为它是这份输入的函数。
-                raise SystemExit(
+                _channel_fail(
                     "★ 同一个键录到两个不同的值 —— 键没带全输入：\n    %s\n"
                     "  先前 %r，这次 %r" % (ck, self.values[ck], v))
             self.values[ck] = v
@@ -217,7 +288,7 @@ class Channel:
             self.n_hit += 1
             return self.frozen[ck]
         self.n_miss += 1
-        raise SystemExit(
+        _channel_fail(
             "★ 冻结基线里没有这个键（套「%s」）：\n    %s\n"
             "  基线＝%s（录于 %s）。两种可能：\n"
             "    ① 这一套的取期望值点加过/改过而基线没重录；\n"
@@ -253,7 +324,7 @@ class Channel:
         out = os.environ.get(ENV_OUT)
         if not out:
             #: ★ 没有出口就大声失败：静默不落盘＝录了一整轮的假账。
-            raise SystemExit("★ record 档没有 RIOS_GOLDEN_OUT —— 收下来的值无处可去")
+            _channel_fail("★ record 档没有 RIOS_GOLDEN_OUT —— 收下来的值无处可去")
         Path(out).write_text(
             json.dumps(self.payload(), ensure_ascii=False, indent=1, sort_keys=True),
             encoding="utf-8")
@@ -285,8 +356,20 @@ def bind(suite: str, script: str | Path) -> Channel:
         atexit.register(ch._flush)
         return ch
     #: ---- CHECK ----
+    if os.environ.get(ENV_RUNNER) != "1":
+        #: ★ **check 档不许直跑**：直跑时没转过的脚本**根本不会调 bind()**，
+        #: 于是它照常跑 Python 并报绿——「未转」被读成「已转」。
+        #: 典型触发面：有人把 `RIOS_GOLDEN=check` 导进环境，再跑 `check_go_all.py`
+        #: （它是**直跑**子进程的）⇒ 4 套真冻结、23 套假绿，一张总表看不出区别。
+        #: 与其把这条写成文档里的警告，不如让它**物理上做不到**。
+        _channel_fail(
+            "★ check 档**不许直跑**（缺 %s=1 这个 runner 标记）。\n"
+            "  直跑时「没转过的套」不会调 bind()，会照常跑 Python 并报绿 ——\n"
+            "  那是本设计要堵死的那种假绿。请改用：\n"
+            "    python tools\\freeze_baseline.py --status | --check | --control | "
+            "--run-script <脚本>" % ENV_RUNNER)
     if "ak_tactic" in sys.modules:
-        raise SystemExit(
+        _channel_fail(
             "★ 套「%s」在 import 期就吃了 ak_tactic（脚本顶层 import）—— 冻结模式不适用。\n"
             "  改法：把取期望值用的 import 搬进 oracle 函数里，顶层只留 "
             "`import freeze_baseline`。\n"
@@ -295,12 +378,12 @@ def bind(suite: str, script: str | Path) -> Channel:
         sys.meta_path.insert(0, AkBlocker())
     f = suite_file(suite)
     if not f.is_file():
-        raise SystemExit(
+        _channel_fail(
             "★ 套「%s」还没有冻结基线：%s\n"
             "  先录：python tools\\freeze_baseline.py --record %s" % (suite, f, suite))
     blob = load_frozen(suite)
     if blob.get("schema") != SCHEMA:
-        raise SystemExit("★ 冻结基线 schema 不是 %s：%s（实得 %r）"
+        _channel_fail("★ 冻结基线 schema 不是 %s：%s（实得 %r）"
                          % (SCHEMA, f, blob.get("schema")))
     ch.frozen = blob.get("values") or {}
     ch.frozen_readable = blob.get("keys_readable") or {}
@@ -316,7 +399,7 @@ def load_frozen(suite: str) -> dict:
     try:
         return json.loads(f.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
-        raise SystemExit("★ 冻结基线读不了（%s）：%s" % (f, e))
+        _channel_fail("★ 冻结基线读不了（%s）：%s" % (f, e))
 
 
 def channel_summary() -> str:
@@ -379,7 +462,7 @@ def instrument_identity() -> dict:
     p = Path(resolve_exe())
     if not p.is_file():
         #: 默认路径必须大声失败，不退回任何东西。
-        raise SystemExit("★ 找不到仪器 %s —— 冻结基线不许在不知道仪器是谁的情况下录"
+        _channel_fail("★ 找不到仪器 %s —— 冻结基线不许在不知道仪器是谁的情况下录"
                          % p)
     st = p.stat()
     return {
@@ -453,6 +536,8 @@ def _runner(argv: list[str]) -> int:
     m = mode()
     script = Path(argv[0]).resolve()
     args = argv[1:]
+    #: 打上 runner 标记：check 档的 bind() 会认它（直跑不许进冻结档，见 bind）。
+    os.environ[ENV_RUNNER] = "1"
     if m == CHECK and not any(isinstance(f, AkBlocker) for f in sys.meta_path):
         sys.meta_path.insert(0, AkBlocker())
     if m == CHECK:
@@ -561,6 +646,184 @@ def cmd_list() -> int:
             state = "**无基线**"
         print("%-6s %-34s %s" % (name, script, state))
         print("       %s" % what)
+    return 0
+
+
+# ---- 控制组（每套都要做，贴在新路上）----------------------------------------
+
+def _tamper(v, sentinel: int = 999999):
+    """把一个期望值**改坏一处**，返回改后的值；改不动就返回 `None`。
+
+    ★ 只作**控制组**用（探针），任何写回基线的路径都不会调它。
+    ⚠ **会原地改**传入的那个对象（递归进 dict/list）⇒ **调用方必须先 deepcopy**。
+    实测教训：第一版用浅拷贝，`_tamper` 把内存里的真值也改了，于是下一个探针
+    凭空多出一条「改值」——控制组自己把读数污染了。
+    """
+    if isinstance(v, bool):
+        return not v
+    if isinstance(v, (int, float)):
+        return v + 1.0
+    if isinstance(v, str):
+        return v + "<tampered>"
+    if isinstance(v, list):
+        #: 加一个哨兵元素：格集合/键名单都能被它撞出差异。
+        return v + [[sentinel, sentinel]]
+    if isinstance(v, dict):
+        for kk in sorted(v):
+            t = _tamper(v[kk], sentinel)
+            if t is not None:
+                v[kk] = t
+                return v
+    return None
+
+
+#: 非「期望值」的两类键前缀：查询集与判定/计数口径常量。P1 只挑**期望值**。
+_NON_EXPECT_PREFIX = ('["query"', '["consts"')
+
+
+def _diff_keys(oldv: dict, nowv: dict) -> tuple[list, list, list]:
+    """现读与冻结的逐键差：新增 / 消失 / 同键改值。**只此一份**。
+
+    （本仓记过：同一个公式两处各写一份，一改就对不上。）
+    """
+    added = sorted(set(nowv) - set(oldv))
+    gone = sorted(set(oldv) - set(nowv))
+    diff = sorted(k for k in set(oldv) & set(nowv) if oldv[k] != nowv[k])
+    return added, gone, diff
+
+
+def _run_with_dir(script: str, mode_: str, d: Path, timeout: float) -> dict:
+    """把基线目录指到 `d` 跑一次判据（控制组用；跑完还原环境变量）。"""
+    old = os.environ.get(ENV_DIR)
+    os.environ[ENV_DIR] = str(d)
+    try:
+        return run_suite(script, [], mode_, None, timeout)
+    finally:
+        if old is None:
+            os.environ.pop(ENV_DIR, None)
+        else:
+            os.environ[ENV_DIR] = old
+
+
+def _live_values(script: str, timeout: float) -> tuple[dict | None, dict]:
+    """现读：以 record 档跑一遍判据，把通道出口读进内存（**不落盘**）。"""
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td) / "now.json"
+        r = run_suite(script, [], RECORD, tmp, timeout)
+        if not tmp.is_file():
+            return None, r
+        return (json.loads(tmp.read_text(encoding="utf-8")).get("values") or {}), r
+
+
+def cmd_control(names: list[str], timeout: float) -> int:
+    """★ **敏感性控制组**：把冻的值改坏一处，判据**必须红**。
+
+    本仓规矩：**控制组没红时工具自己吼出来并 exit 1**（没有反向守卫的绿是零信息量的绿）。
+    两个探针，极性相反、各堵一种洞：
+
+    * **P1 改一个期望值** ⇒ 必须**判红**。
+      证明的是这句：**冻的值真的是 oracle**，而不是「读了个文件、判决照旧看 Go」。
+    * **P2 从查询集里删一个** ⇒ 冻结档**看不见分母变小**（这是有界的盲区，读数照印，
+      不假装不存在）；而 `--check`（拿**现读**的查询集对账）**必须看见**。
+      两条合起来才说明：分母缩水这件事有补偿控制，且补偿控制真的管用。
+    """
+    rows = suite_table()
+    known = {n: s for n, s, _w, _l in rows}
+    names = names or [n for n, _s, _w, _l in rows]
+    print("=" * 92)
+    print("冻结基线的敏感性控制组（**每套都要做，贴在新路上**）")
+    print("=" * 92)
+    bad = 0
+    for name in names:
+        if name not in known:
+            print("✗ 套名不在 SUITE 里：%r" % name)
+            bad += 1
+            continue
+        script = known[name]
+        blob = load_frozen(name)
+        values = blob.get("values") or {}
+        if not values:
+            print("⊘ %-6s 无基线，控制组无从做起（先 --record）" % name)
+            continue
+        print("-" * 92)
+        print("%s（%s）；基线 %d 个值" % (name, script, len(values)))
+        n_q = sum(1 for k in values if k.startswith('["query"'))
+        n_c = sum(1 for k in values if k.startswith('["consts"'))
+        print("  键的类：查询集 %d ／ 判定·计数口径常量 %d ／ 期望值 %d"
+              % (n_q, n_c, len(values) - n_q - n_c))
+
+        #: ---- P1：改一个**期望值** ----------------------------------------
+        #: ⚠ 不许挑查询集或常量：改常量**未必**进判决（例如「攻击间隔」的
+        #: `ASPD_MIN` 只进行使计数），拿它当 P1 会出一条假的「没红」。
+        vkeys = [k for k in sorted(values)
+                 if not k.startswith(_NON_EXPECT_PREFIX)]
+        if not vkeys:
+            print("  ✗ P1 跳过：基线里只有查询集/常量、没有期望值")
+            bad += 1
+        else:
+            pick = vkeys[0]
+            t1 = copy.deepcopy(values)
+            nv = _tamper(t1[pick])
+            if nv is None:
+                print("  ✗ P1 跳过：挑不到可改坏的期望值（%s）" % pick[:90])
+                bad += 1
+            else:
+                t1[pick] = nv
+                with tempfile.TemporaryDirectory() as td:
+                    d = Path(td)
+                    b1 = copy.deepcopy(blob)
+                    b1["values"] = t1
+                    (d / ("%s.json" % name)).write_text(
+                        json.dumps(b1, ensure_ascii=False), encoding="utf-8")
+                    r1 = _run_with_dir(script, CHECK, d, timeout)
+                red = r1["rc"] != 0 and r1["rc"] != RC_CHANNEL
+                if red:
+                    print("  ✓ P1 改坏 %s ⇒ 判据红（rc=%d）：%s"
+                          % (pick[:90], r1["rc"], verdict_of(r1["out"]) or "（无结论行）"))
+                else:
+                    print("  ✗ P1 改坏 %s ⇒ **判据没红**（rc=%d）—— 冻的值可能没进判决路径"
+                          % (pick[:90], r1["rc"]))
+                    bad += 1
+
+        #: ---- P2：查询集删一个 --------------------------------------------
+        qkey = next((k for k in sorted(values) if k.startswith('["query"')), None)
+        if qkey is None:
+            print("  ⊘ P2 不适用：本套没有冻结的查询集（`(\"query\", …)`）")
+        else:
+            qv = values[qkey]
+            if not isinstance(qv, list) or len(qv) < 2:
+                print("  ⊘ P2 不适用：查询集不是长度 ≥2 的列表（%r）" % type(qv).__name__)
+            else:
+                t2 = copy.deepcopy(values)
+                t2[qkey] = qv[1:]
+                b2 = copy.deepcopy(blob)
+                b2["values"] = t2
+                with tempfile.TemporaryDirectory() as td:
+                    d = Path(td)
+                    (d / ("%s.json" % name)).write_text(
+                        json.dumps(b2, ensure_ascii=False), encoding="utf-8")
+                    r2 = _run_with_dir(script, CHECK, d, timeout)
+                live, _r3 = _live_values(script, timeout)
+                #: ⚠ 查询集被删一个**不是**「新增/消失」：键还是同一个键，变的是**值**。
+                #: 所以它落在「改值」那一栏——这条口径写清楚，别让人去找不存在的键差。
+                added, gone, diff = _diff_keys(t2, live or {})
+                print("  · P2 查询集 %d → %d 个问题：冻结档 rc=%d  %s"
+                      % (len(qv), len(qv) - 1, r2["rc"],
+                         verdict_of(r2["out"]) or "（无结论行）"))
+                print("    ⇒ 冻结档**看不见分母被改小**（它只问冻住的那批问题，照样全绿）"
+                      "——有界盲区，登记不掩饰")
+                if added or gone or diff:
+                    print("    ✓ P2b `--check`（拿**现读**的查询集对账）看见了："
+                          "新增 %d / 消失 %d / 改值 %d（查询集落在「改值」栏）"
+                          % (len(added), len(gone), len(diff)))
+                else:
+                    print("    ✗ P2b `--check` **没看见**查询集被删 —— 补偿控制失效")
+                    bad += 1
+    print("-" * 92)
+    if bad:
+        print("★ %d 处控制组不成立 —— **这一批的绿全部作废**（本仓规矩：控制组没红就是没有判据）" % bad)
+        return 1
+    print("✓ 全部控制组成立（P1 都红；P2b 都看得见分母被改小）")
     return 0
 
 
@@ -688,9 +951,7 @@ def cmd_check(names: list[str], timeout: float) -> int:
                 continue
             nowv = json.loads(tmp.read_text(encoding="utf-8")).get("values") or {}
         oldv = meta.get("values") or {}
-        added = sorted(set(nowv) - set(oldv))
-        gone = sorted(set(oldv) - set(nowv))
-        diff = sorted(k for k in set(oldv) & set(nowv) if oldv[k] != nowv[k])
+        added, gone, diff = _diff_keys(oldv, nowv)
         if added or gone or diff:
             prob += 1
             print("✗ %-6s 现读与冻结**不一致**：新增 %d / 消失 %d / 改值 %d"
@@ -813,13 +1074,13 @@ def main() -> int:
         timeout = float(argv[i + 1])
         del argv[i:i + 2]
     action = None
-    for a in ("--list", "--record", "--check", "--status"):
+    for a in ("--list", "--record", "--check", "--status", "--control"):
         if a in argv:
             action = a
             break
     if action is None:
         print("★ 没给动作。可用：--list / --record <套名…|--all> / --check [<套名…>] / "
-              "--status [--quick] [--show]")
+              "--status [--quick] [--show] / --control [<套名…>]")
         return 2
     quick = "--quick" in argv
     show = "--show" in argv
@@ -834,6 +1095,8 @@ def main() -> int:
         return cmd_record(words, timeout)
     if action == "--check":
         return cmd_check(words, timeout)
+    if action == "--control":
+        return cmd_control(words, timeout)
     return cmd_status(words, timeout, quick, show)
 
 

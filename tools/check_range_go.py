@@ -14,9 +14,23 @@
 **全表每个范围代号 × 四个朝向 × 一个落点**——不抽样。
 「只查几个代号」的话，剩下那些读错了也照样绿。
 
+## 期望值从哪来（**两种模式**）
+
+* 默认（`RIOS_GOLDEN` 未设）：现场调 Python 的 `RangeTable.cells` ＋ `footprint`，**现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/范围.json`，**不 import `ak_tactic`**。
+
+★ 这套冻的**两半**：代号集（`("query", …)`，来自 `RangeTable.known()`）与逐点期望值。
+**只冻期望值不冻代号集**，check 档就问不出该问哪些代号——分母静默变小而全绿是本仓记过的形状。
+
+★ **类型还原（JSON 会抹掉 `tuple` / `set`）**：`tbl.cells()` 给的是 `tuple` 列表、
+`footprint()` 给的是 `set[tuple]`，而 `json` 只认 `list`。所以取期望值时**先规范化成
+JSON 形状**，判据侧再**统一还原**成 `tuple`——**两种模式走同一条还原路径**
+（只在 check 档还原的话，两档就不是同一个判据了）。
+
 用法:
     python tools\\check_range_go.py
     python tools\\check_range_go.py --mutate
+    python tools\\freeze_baseline.py --record 范围
 """
 from __future__ import annotations
 
@@ -30,6 +44,8 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -37,6 +53,40 @@ DATA = ROOT / "data" / "gamedata"
 
 DIRECTIONS = ["Right", "Up", "Left", "Down"]
 ORIGIN = (3, 4)
+
+_TBL = None
+
+
+def _range_table():
+    """`RangeTable()` 要读数据，全表只建一次（冻结档下**根本不会建**）。"""
+    global _TBL
+    if _TBL is None:
+        from ak_tactic.gamedata.range import RangeTable
+        _TBL = RangeTable()
+    return _TBL
+
+
+def py_range_codes() -> list[str]:
+    """查询集：全表已知的范围代号（**Python 侧的产物，必须冻住**）。"""
+    return _range_table().known()
+
+
+def py_range_expect(code: str, direction: str) -> dict:
+    """一个 (代号, 朝向) 的期望值：相对格 ＋ 绝对格。
+
+    ★ 返回值**先规范化成 JSON 形状**（`tuple` → `list`、`set` → 排序后的 `list`），
+    判据侧再用 `tuples()` 还原。这样两种模式比的是同一个东西。
+    """
+    from ak_tactic.battle.range import footprint
+    cells = _range_table().cells(code)
+    fp = footprint(cells, direction, ORIGIN)
+    return {"cells": [list(c) for c in cells],
+            "footprint": [list(c) for c in fp]}
+
+
+def tuples(rows) -> list[tuple]:
+    """JSON 形状 → `tuple` 列表。**两种模式共用这一个还原口**。"""
+    return [tuple(r) for r in rows]
 
 
 def go_range(queries: list[dict]) -> list[dict]:
@@ -58,11 +108,9 @@ def go_range(queries: list[dict]) -> list[dict]:
 
 
 def main() -> int:
-    from ak_tactic.battle.range import footprint
-    from ak_tactic.gamedata.range import RangeTable
+    G = GB.bind("范围", __file__)
 
-    tbl = RangeTable()
-    codes = tbl.known()
+    codes = G.expect(("query", "range_codes"), py_range_codes)
     queries = [{"code": c, "direction": d, "x": ORIGIN[0], "y": ORIGIN[1]}
                for c in codes for d in DIRECTIONS]
     got = go_range(queries)
@@ -75,8 +123,11 @@ def main() -> int:
     empty = 0
     compared = 0
     for q, g in zip(queries, got):
-        cells = tbl.cells(q["code"])
-        py_fp = footprint(cells, q["direction"], ORIGIN)
+        #: ★ 期望值只能从这里来；还原成 tuple 这一步**两种模式共用**同一个口。
+        want = G.expect(("range", q["code"], q["direction"]),
+                        lambda q=q: py_range_expect(q["code"], q["direction"]))
+        cells = tuples(want["cells"])
+        py_fp = set(tuples(want["footprint"]))
         compared += 1
         if not cells:
             empty += 1
@@ -102,6 +153,9 @@ def main() -> int:
     else:
         print("★ 零个空集：每一次都比到了真实的格集合（不是「两边都空」的假绿）")
     print()
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
     if mutate:
         if bad:
             print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")
