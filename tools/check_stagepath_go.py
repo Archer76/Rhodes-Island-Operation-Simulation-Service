@@ -95,6 +95,12 @@ Python 侧的全部产物——寻路问题（`qs`，含 `diagonal`）与点列�
 ★ **结构不可达的两条与 `STRUCTURAL_ZERO` 守卫照旧每跑一次重算**：它们量的是
 「这一批输入下可达性仍为零」（`py_cov` 与 Go 自报两侧同口径），不是写死一句话。
 
+★ **一关那份投影的字段名是给控制组排的**：`paths` 排在 `sorted()` 第一位，所以
+`--control` 的 P1 改坏的是**被比的那一栏**（`paths` 的比较**先查条数**）⇒ 得到
+「`✗ … 寻路条数：Go=32 Python=33`」这样的**带结论行的干净判决红**。把
+`idxs` / `kinds` / `legs` / `state` 排到前面去只会得到**崩溃红**（哨兵元素被拿去
+问 Go、被当字典键、或被 `zip` 截掉）——那种红证明不了「碰的是判决路径」。
+
 用法:
     python tools\\check_stagepath_go.py
     python tools\\check_stagepath_go.py --mutate
@@ -195,7 +201,7 @@ def py_expect_level(lv: str) -> dict:
     try:
         st = load_stage(lv)
     except Exception as exc:                                   # noqa: BLE001
-        return {"loaded": False, "why": "%s: %s" % (type(exc).__name__, exc)}
+        return {"state": False, "why": "%s: %s" % (type(exc).__name__, exc)}
     qs, paths, kinds = [], [], []
     for r in st.routes:
         for diag in (True, False):
@@ -212,22 +218,32 @@ def py_expect_level(lv: str) -> dict:
                 kinds.append("端点不可走")
             else:
                 kinds.append("正常寻路")
-    return {"loaded": True, "why": "", "qs": qs, "paths": paths, "kinds": kinds,
-            "idxs": [r.index for r in st.routes],
+    #: ⚠ **字段名是给控制组排的，不是随手起的**：`paths` 必须排在 `sorted()`
+    #: 第一位。控制组的 P1 会把值里 sorted 第一个键改坏一处，而 `paths` 的比较
+    #: **先查条数** ⇒ 改坏它得到的是「✗ … 寻路条数：Go=32 Python=33」那样的
+    #: **带结论行的干净判决红**。让 `idxs` / `kinds` / `legs` / `loaded` 排前面
+    #: 只会得到**崩溃红**（哨兵元素被拿去问 Go、被当字典键、或被 zip 截掉）——
+    #: 那种红只证明「有人碰了东西」，证明不了「碰的是判决路径」（实测过一次）。
+    return {"paths": paths,
+            "py_cov": py_route_plan_coverage(st),
+            "qs": qs,
+            "route_ids": [r.index for r in st.routes],
+            "route_kinds": kinds,
+            "route_legs": [_proj_legs(r.legs(walk_map=st.map))
+                           for r in st.routes],
             "route_meta": _proj_route_meta(st.routes),
-            "legs": [_proj_legs(r.legs(walk_map=st.map)) for r in st.routes],
             "rp": {str(k): _proj_plan(v) for k, v in route_plans(st).items()},
-            "py_cov": py_route_plan_coverage(st)}
+            "state": True, "why": ""}
 
 
 def py_expect_syn() -> dict:
     """合成夹具的期望值（本文件的 `synthetic_stage()` 是纯函数，冻结档也能算身份）。"""
     from ak_tactic.gamedata.stage import parse_stage
     st_syn = parse_stage(synthetic_stage(), level_id=SYN_LEVEL_ID)
-    return {"idxs": [r.index for r in st_syn.routes],
-            "route_meta": _proj_route_meta(st_syn.routes),
-            "legs": [_proj_legs(r.legs(walk_map=st_syn.map))
-                     for r in st_syn.routes]}
+    return {"route_ids": [r.index for r in st_syn.routes],
+            "route_legs": [_proj_legs(r.legs(walk_map=st_syn.map))
+                           for r in st_syn.routes],
+            "route_meta": _proj_route_meta(st_syn.routes)}
 
 
 def syn_id() -> str:
@@ -639,11 +655,11 @@ def main() -> int:
         #: ★ 键自带输入身份：缓存内容变了 ⇒ 键配不上 ⇒ 由对账如实报出。
         E = G.expect(("stagepath", lv, rec["sha16"]),
                      lambda lv=lv: py_expect_level(lv))
-        if not E["loaded"]:
+        if not E["state"]:
             continue
 
         # ---------------------------------------------------------- 寻路
-        qs, wants, kinds = E["qs"], E["paths"], E["kinds"]
+        qs, wants, kinds = E["qs"], E["paths"], E["route_kinds"]
         if qs:
             got = go_call("path", lv, qs)["paths"]
             if len(got) != len(wants):
@@ -681,11 +697,11 @@ def main() -> int:
                                         break
 
         # ---------------------------------------------------------- 分段（真夹具）
-        idxs = E["idxs"]
+        idxs = E["route_ids"]
         if not idxs:
             continue
         #: ★ 期望值就是权威本身，只是从通道（冻结的那份）拿。
-        want_legs = E["legs"]
+        want_legs = E["route_legs"]
         got_legs = go_call("legs", lv, idxs)["legs"]
         if len(got_legs) != len(want_legs):
             bad += 1
@@ -729,8 +745,8 @@ def main() -> int:
         #: ★ 合成关卡的期望值也走通道：它的身份是**本文件那个纯函数**的内容 sha16
         #: （不 import `ak_tactic`，所以冻结档照样算得出）。
         syn = G.expect(("stagepath_syn", syn_id()), py_expect_syn)
-        syn_ids = syn["idxs"]
-        want_syn = syn["legs"]
+        syn_ids = syn["route_ids"]
+        want_syn = syn["route_legs"]
         got_syn = go_call("legs", SYN_LEVEL_ID, syn_ids, data_root=td)["legs"]
         if len(got_syn) != len(want_syn):
             bad += 1

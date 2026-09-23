@@ -56,9 +56,32 @@ Go 送的是 `OperatorStats.Total[...]` 那一套。**两者是不是同一个�
 ④ 删掉一条 operator（分母由 N 变 N−1）；⑤~⑨ 段 B 那五个键各一处。
 每处各自拒绝「已被别处占用的夹具」，所以是九条独立的路，不是同一条 elif 链上的九个分支。
 
+## 期望值从哪来（**两种模式**）
+
+* 默认（`RIOS_GOLDEN` 未设）：现场跑 Python（`real_specs` 生产路径 ＋
+  `LiveCapture` 的活对象读数 ＋ `talent_finders`），**现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/干员规格.json`，
+  **不 import `ak_tactic`**。
+
+★ 一夹具一条键 `("operators", 夹具名, 夹具字节 sha16, 名册字节 sha16)`
+＋ `G.coverage("operators", …)` 对账（夹具批是活的），值里装**这一份夹具的
+全部 Python 侧产物**：权威的 `want_ops`、第二把尺子的 `live_ops`、判据独立
+数的 `live_cov`、两条结构零的 `struct_zero`，以及三种「抄不到」的状态
+（生产路径抛错 / 权威缺 / 活抄缺）——**它们各自有各自的判词**，不许压成一个
+布尔（原版对这三种情形印的是三句不同的话）。
+
+★ 另外两处期望值与身份：
+
+  · §6 那一批 `opstats` 的入参（逐夹具的练度配置）与「生产规格里 `heals`
+    为真的人」：键 `("opstats", "cfgs", 夹具批 sha16)`；
+  · §7 的键集总账（`ast` 抽 `_operator_spec` 读了哪些属性、正则抽
+    `wire.OperatorSpec` 的 json 键）**不进冻**：它们读的是**源文件正文**、
+    不 import、不跑 Python——抽出来冻住反而让「源改了」这件事不再响。
+
 用法:
     python tools\\check_operators_go.py
     python tools\\check_operators_go.py --mutate
+    python tools\\freeze_baseline.py --record 干员规格
 """
 from __future__ import annotations
 
@@ -77,6 +100,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -456,6 +480,133 @@ def live_counters(op, d, prov, code_ok: bool, origin_added: bool) -> dict:
     return c
 
 
+# --------------------------------------------------------------- 期望值（可冻）
+_SPECS = None
+
+
+def _specs_batch() -> dict:
+    """§1 那一份生产规格（**离冻档专用**）：`name → spec`，只跑一次。"""
+    global _SPECS
+    if _SPECS is None:
+        import check_specgo_go as C
+        _SPECS = {n: s for n, s, _e, _l in C.real_specs() if s is not None}
+    return _SPECS
+
+
+def scan_plan_fixtures() -> list[list]:
+    """夹具批次的输入身份（数据侧；与判据同一套子集口径）。"""
+    out: list[list] = []
+    for f in sorted((ROOT / "fixtures").glob("*.json")):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8-sig"))
+        except Exception:                                      # noqa: BLE001
+            continue
+        if isinstance(d, dict) and ("deploys" in d or "deploy" in d):
+            out.append([f.name, GB.file_sha16(f)])
+    return out
+
+
+def batch_id(rows: list[list]) -> str:
+    """夹具批 ＋ 名册的**批次身份**（给 §6 那条键用）。"""
+    return GB.sh16(json.dumps(rows, sort_keys=True, ensure_ascii=False,
+                              separators=(",", ":")).encode("utf-8"))
+
+
+def py_operators_expect(name: str) -> dict:
+    """一份夹具的两把尺子 ＋ 判据独立数的计数（**离冻档专用**）。
+
+    ★ `ak_tactic` 的 import 全在函数体里：冻结档下本函数不会被调到。
+    """
+    from ak_tactic.battle.range import RangeProvider
+    from ak_tactic.gamedata.range import RangeTable
+    from ak_tactic.operator import OperatorCalculator
+    from ak_tactic.plan import Plan, Roster
+
+    want_spec = _specs_batch().get(name)
+    raw = json.loads((ROOT / "fixtures" / name).read_text(encoding="utf-8-sig"))
+    calc = OperatorCalculator()
+    roster = Roster.from_json(ROSTER_FIX)
+
+    def range_id_of(char_id: str, elite: int) -> str:
+        phases = calc.character(char_id).get("phases") or []
+        e = max(0, min(elite, len(phases) - 1))
+        return (phases[e].get("rangeId") if phases else None) or "1-1"
+
+    rtbl = RangeTable()
+    prov = RangeProvider(rtbl, range_id_of, block_of=lambda c, e: 1)
+    out = {"want_ok": want_spec is not None, "live_raised": False, "why": "",
+           "live_spec_ok": False, "n_rows": 0,
+           "want_ops": list((want_spec or {}).get("operators") or []),
+           "live_ops": [], "live_cov": {k: 0 for k in COVERED_KEYS},
+           "struct_zero": {k: 0 for k in STRUCTURAL_ZERO}}
+    cap = LiveCapture()
+    try:
+        live_spec, rows = cap.run(Plan.from_dict(raw), roster)
+    except Exception as e:                                     # noqa: BLE001
+        out["live_raised"] = True
+        out["why"] = "%s: %s" % (type(e).__name__, e)
+        return out
+    out["live_spec_ok"] = live_spec is not None
+    out["n_rows"] = len(rows or [])
+    if live_spec is None or not rows:
+        return out
+    for d, op in rows:
+        live = live_expect(op, d, prov)
+        phases = calc.character(op.char_id).get("phases") or []
+        e = max(0, min(op.elite, len(phases) - 1))
+        code = (phases[e].get("rangeId") if phases else None) or "1-1"
+        try:
+            cells = rtbl.cells(code)
+            code_ok = True
+            origin_added = (0, 0) not in cells
+        except Exception:                                      # noqa: BLE001
+            code_ok, origin_added = False, False
+        for k, v in live_counters(op, d, prov, code_ok, origin_added).items():
+            out["live_cov"][k] += v
+        if op.current_range_id() is not None:
+            out["struct_zero"]["range_id_rewritten"] += 1
+        if live["redeploy_time"] != REDEPLOY_DEFAULT:
+            out["struct_zero"]["redeploy_time_nondefault"] += 1
+        out["live_ops"].append(live)
+    return out
+
+
+def py_opstats_batch() -> dict:
+    """§6 的入参：逐夹具的练度配置 ＋「生产规格里 `heals` 为真的人」。"""
+    from ak_tactic.operator import OperatorCalculator
+    from ak_tactic.plan import Plan, Roster
+    from ak_tactic.verify import Verifier
+
+    class _S:
+        _by_name = Verifier._by_name
+        _entry = Verifier._entry
+
+        def __init__(self, c):
+            self.calc = c
+
+    calc = OperatorCalculator()
+    roster = Roster.from_json(ROSTER_FIX)
+    stub = _S(calc)
+    cfgs: list = []
+    heals_cids: set = set()
+    for f in sorted((ROOT / "fixtures").glob("*.json")):
+        sp = _specs_batch().get(f.name)
+        if sp is None:
+            continue
+        raw = json.loads(f.read_text(encoding="utf-8-sig"))
+        for d in Plan.from_dict(raw).deploys:
+            e = stub._entry(d, roster)
+            cfgs.append({"char_id": e["char_id"], "elite": e["elite"],
+                         "level": e["level"], "trust": e.get("trust") or 0,
+                         "potential": e.get("potential", 1),
+                         "module": e.get("module") or "",
+                         "module_level": e.get("module_level") or 0})
+        for o in sp.get("operators") or []:
+            if o.get("heals"):
+                heals_cids.add(str(o["char_id"]))
+    return {"cfgs": cfgs, "heals_cids": sorted(heals_cids)}
+
+
 # --------------------------------------------------------------- 源码守卫
 
 def operator_reads() -> tuple[set, set]:
@@ -521,6 +672,8 @@ def exe_identity() -> tuple:
 # --------------------------------------------------------------- 主流程
 
 def main() -> int:
+    G = GB.bind("干员规格", __file__)
+
     mutate = "--mutate" in sys.argv
     guard = Guard(mutate)
     printed: list[str] = []
@@ -528,25 +681,6 @@ def main() -> int:
     bad_slots = 0
     n_compared = 0
     n_fixtures = 0
-
-    from ak_tactic.battle.range import RangeProvider
-    from ak_tactic.gamedata.range import RangeTable
-    from ak_tactic.operator import OperatorCalculator
-    from ak_tactic.plan import Plan, Roster
-    import check_specgo_go as C
-
-    calc = OperatorCalculator()
-    roster = Roster.from_json(ROSTER_FIX)
-
-    def range_id_of(char_id: str, elite: int) -> str:
-        phases = calc.character(char_id).get("phases") or []
-        e = max(0, min(elite, len(phases) - 1))
-        return (phases[e].get("rangeId") if phases else None) or "1-1"
-
-    rtbl = RangeTable()
-
-    def make_provider():
-        return RangeProvider(rtbl, range_id_of, block_of=lambda c, e: 1)
 
     sha, stale, explicit = exe_identity()
     print("Go 侧仪器：%s" % GO_BIN)
@@ -558,63 +692,51 @@ def main() -> int:
           "（期望值走生产路径抄，见 check_specgo_go.real_specs）")
     print()
 
-    #: 权威那份规格**另跑一遍**（共享的钩子），与上面的活读数构成两把尺子。
-    specs = {n: s for n, s, _e, _l in C.real_specs() if s is not None}
-    print("§1 生产规格：抄到 %d 份" % len(specs))
+    #: 权威那份规格 ＋ 活读数：**两种模式各取各的**（冻结档读冻的那份）。
+    if G.mode == GB.CHECK:
+        print("§1 生产规格：冻结档不跑生产路径"
+              "（期望值读 fixtures/golden/干员规格.json）")
+    else:
+        print("§1 生产规格：抄到 %d 份" % len(_specs_batch()))
 
-    # ============================================================ 2/3 · 67 人次主循环
+    #: ★ 夹具批是**活的**（别的会话会往里加夹具）⇒ 键带输入身份 ＋ 先对账。
+    rsha = GB.file_sha16(ROSTER_FIX)
+    live_batch = [[n, sha1, rsha] for n, sha1 in scan_plan_fixtures()]
+    bid = batch_id(live_batch)
+    cov = G.coverage("operators", live_batch)
+    fixtures_iter = live_batch
+    if G.mode == GB.CHECK and not cov.ok:
+        #: 只比两边都有的。**未覆盖的不猜**。
+        covered = {tuple(x) for x in cov.covered}
+        fixtures_iter = [x for x in fixtures_iter if tuple(x) in covered]
+
+    # ============================================================ 2/3 · 人次主循环
     print()
     print("§2 Go 产出的 %d 个键 vs 生产规格；§3 生产规格 vs 活对象读数"
           % len(PORTED))
     real_fixtures = 0
-    for f in sorted((ROOT / "fixtures").glob("*.json")):
-        try:
-            raw = json.loads(f.read_text(encoding="utf-8-sig"))
-        except Exception:                                   # noqa: BLE001
-            continue
-        if not isinstance(raw, dict) or ("deploys" not in raw
-                                         and "deploy" not in raw):
-            continue
-        want_spec = specs.get(f.name)
-        cap = LiveCapture()
-        try:
-            live_spec, rows = cap.run(Plan.from_dict(raw), roster)
-        except Exception as e:                              # noqa: BLE001
-            printed.append("✗ %s 生产路径走不通：%s: %s"
-                           % (f.name, type(e).__name__, e))
+    for name, ident, _rs in fixtures_iter:
+        f = ROOT / "fixtures" / name
+        #: ★ 键自带输入身份：夹具或名册变了 ⇒ 键配不上 ⇒ 由对账如实报出。
+        E = G.expect(("operators", name, ident, rsha),
+                     lambda name=name: py_operators_expect(name))
+        #: ⚠ 三种「抄不到」各自有各自的判词（原版印的就是三句不同的话）。
+        if E["live_raised"]:
+            printed.append("✗ %s 生产路径走不通：%s" % (name, E["why"]))
             bad += 1
             continue
-        if want_spec is None or live_spec is None or not rows:
+        if not E["want_ok"] or not E["live_spec_ok"] or not E["n_rows"]:
             printed.append("✗ %s 抄不到规格（权威=%s 活抄=%s 人次=%s）"
-                           % (f.name, want_spec is not None,
-                              live_spec is not None, len(rows or [])))
+                           % (name, E["want_ok"], E["live_spec_ok"],
+                              E["n_rows"]))
             bad += 1
             continue
         real_fixtures += 1
         #: ★ 期望值在**循环顶部无条件**算出（不许用海象写在分支里）。
-        want_ops = list(want_spec.get("operators") or [])
-        prov = make_provider()
-        live_ops = []
-        live_cov = {k: 0 for k in COVERED_KEYS}
-        struct_zero = {k: 0 for k in STRUCTURAL_ZERO}
-        for d, op in rows:
-            live = live_expect(op, d, prov)
-            phases = calc.character(op.char_id).get("phases") or []
-            e = max(0, min(op.elite, len(phases) - 1))
-            code = (phases[e].get("rangeId") if phases else None) or "1-1"
-            try:
-                cells = rtbl.cells(code)
-                code_ok = True
-                origin_added = (0, 0) not in cells
-            except Exception:                               # noqa: BLE001
-                code_ok, origin_added = False, False
-            for k, v in live_counters(op, d, prov, code_ok, origin_added).items():
-                live_cov[k] += v
-            if op.current_range_id() is not None:
-                struct_zero["range_id_rewritten"] += 1
-            if live["redeploy_time"] != REDEPLOY_DEFAULT:
-                struct_zero["redeploy_time_nondefault"] += 1
-            live_ops.append(live)
+        want_ops = list(E["want_ops"])
+        live_ops = list(E["live_ops"])
+        live_cov = dict(E["live_cov"])
+        struct_zero = dict(E["struct_zero"])
         #: 两把尺子先自己对齐：活读数与生产规格**逐人次逐键**相同。
         #: 不同 ⇒ 判据这一侧的表达式写错了（**尺子错**，不是实现错）。
         if len(live_ops) != len(want_ops):
@@ -820,32 +942,9 @@ def main() -> int:
     for k, why in sorted(UNPORTED_READY.items()):
         ready_measured[k] = 0
     #: `heals`：Go 的 `opstats` 里就有（`TextDerived.Heals`）。逐人次比一次。
-    cfgs, heals_cids = [], set()
-    for f in sorted((ROOT / "fixtures").glob("*.json")):
-        sp = specs.get(f.name)
-        if sp is None:
-            continue
-        from ak_tactic.verify import Verifier
-
-        class _S:
-            _by_name = Verifier._by_name
-            _entry = Verifier._entry
-
-            def __init__(self, c):
-                self.calc = c
-
-        stub = _S(calc)
-        raw = json.loads(f.read_text(encoding="utf-8-sig"))
-        for d in Plan.from_dict(raw).deploys:
-            e = stub._entry(d, roster)
-            cfgs.append({"char_id": e["char_id"], "elite": e["elite"],
-                         "level": e["level"], "trust": e.get("trust") or 0,
-                         "potential": e.get("potential", 1),
-                         "module": e.get("module") or "",
-                         "module_level": e.get("module_level") or 0})
-        for o in sp.get("operators") or []:
-            if o.get("heals"):
-                heals_cids.add(str(o["char_id"]))
+    #: ★ 入参（逐夹具的练度配置）是 Python 侧产物 ⇒ 走通道冻住；键里带批次身份。
+    _p = G.expect(("opstats", "cfgs", bid), py_opstats_batch)
+    cfgs, heals_cids = list(_p["cfgs"]), set(_p["heals_cids"])
     if cfgs:
         env = dict(os.environ)
         env["RIOS_DATA"] = str(DATA)
@@ -923,6 +1022,11 @@ def main() -> int:
     if len(printed) > 40:
         print("（只印前 40 处）")
     print()
+    if G.mode == GB.CHECK and not cov.ok:
+        print(cov.report("operators", len(live_batch)))
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
     if stale and not explicit:
         print("✗ 仪器比本树最新的 .go 旧 —— 读数不可信（先按闸门 1 重新 build）")
         return 1
@@ -945,7 +1049,13 @@ def main() -> int:
     print("结论：干员规格 %d / %d 人次逐位一致（段 A 的 %d 个键，含条件键的"
           "存在性；段 B 的 %d 个键具名进 unported）"
           % (n_compared - bad_slots, n_compared, len(PORTED), len(UNPORTED)))
-    return 1 if bad else 0
+    if bad:
+        #: 比过的部分**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+        return 1
+    if G.mode == GB.CHECK and not cov.ok:
+        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        return GB.RC_CHANNEL
+    return 0
 
 
 #: 段 B 每个键「Python 一共送出过几次」——两层循环都往里加。
