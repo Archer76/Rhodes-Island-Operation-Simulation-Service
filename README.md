@@ -340,6 +340,9 @@ ak-tactic/
 | 关卡数据与解法记录 | [`docs/stage-1-7.md`](docs/stage-1-7.md)、[`docs/stage-sr-6.md`](docs/stage-sr-6.md)、[`docs/stage-sr-ex-8.md`](docs/stage-sr-ex-8.md)、[`docs/srx8-qi-solution.md`](docs/srx8-qi-solution.md)、[`docs/real-run-srx8.md`](docs/real-run-srx8.md)、[`docs/mainline-stages.md`](docs/mainline-stages.md) |
 | 具体干员／敌人的机制口径 | [`docs/wang-mechanics.md`](docs/wang-mechanics.md)、[`docs/ranged-enemy-rule.md`](docs/ranged-enemy-rule.md)、[`docs/squad-skill-audit.md`](docs/squad-skill-audit.md)、[`docs/enemies-sr-ex-8.md`](docs/enemies-sr-ex-8.md) |
 | 实施进度与任务拆分 | [`docs/roadmap.md`](docs/roadmap.md)、[`docs/batch2-plan.md`](docs/batch2-plan.md) |
+| **判据怎么退出「实时对拍 Python」**（冻结基线：逐套状态、四种态、信任模型） | [`docs/golden-baseline.md`](docs/golden-baseline.md) |
+| **整闸在某一棵树上的读数**（树／仪器／输入／结果四件套） | [`docs/gate-readings.md`](docs/gate-readings.md) |
+| Go 自足进度与「哪一层已搬」 | [`docs/go-selfsufficiency.md`](docs/go-selfsufficiency.md) |
 | 还没定的事、还在猜的事 | [`docs/uncertainties.md`](docs/uncertainties.md)、[`docs/limitations.md`](docs/limitations.md) |
 
 ## 已知局限
