@@ -1,0 +1,210 @@
+# 主线第 3～10 章：跨实现对拍与规格面逐章审计
+
+> **建立者**：RIOS 主线第 3～10 章取数与对拍（`session-4db0d760-9af0-4ba6-8f5d-38044b9df14e`）
+> **本文性质**：**手写文档**。文中数字都是**当次读数**，不是会自己更新的水位；
+> 引用它们时**必须连仪器（exe 路径＋sha16）、对象（哪几关）与时刻一起引**。
+> **逐章追加**：本文件按章推进，每章一节，边做边写。
+
+---
+
+## 〇 · 一句话
+
+第 3～10 章共 **108 关**，取数 **108/108 落缓存**（逐关核过文件在不在）。
+**第 3 章已验**：8/8 关逐字段一致、68 只敌人逐字段一致；空计划 `buildspec`
+八关 `mechanisms` 全 []、`unsupported` 0 条。
+**第 4～10 章的对拍与规格面尚未做**（§二／§三 那两栏是 `—`，见 §六，逐章追加）。
+
+---
+
+## 一 · 口径声明
+
+### 1.1 范围与关数
+
+* **对象**：`main_03-*` … `main_10-*`，即 `data/gamedata/_level_index.json` 里键形如
+  `main_NN-XX` 的条目。
+* **`#f#` 不算独立关**：索引里另有 `main_NN-XX#f#`（突袭档）条目，**与普通档共用同一个
+  `data_path`**，故不计入本轮的关数。
+* **现算核对**（python 直接扫索引，不是抄别处的表）：
+
+| 章 | `main_NN-XX` 关数 | `main_NN-XX#f#` 条数（不计） |
+| ---: | ---: | ---: |
+| 3 | 8 | 8 |
+| 4 | 10 | 10 |
+| 5 | 10 | 10 |
+| 6 | 15 | 13 |
+| 7 | 16 | 16 |
+| 8 | 17 | 16 |
+| 9 | 17 | 17 |
+| 10 | 15 | 0 |
+| **合计** | **108** | 90 |
+
+### 1.2 仪器与时刻
+
+| 项 | 值 |
+| --- | --- |
+| 引擎 | `out/acceptance/rios-sim-stage3.exe` |
+| sha16 | `908E2D2EDCE63543` |
+| 字节数 | 4,990,464 B |
+| mtime | 2026-09-24 02:01:55 |
+| 构建 | 当次 `cd rios-sim; go build -o out/acceptance/rios-sim-stage3.exe .`（rc=0，go1.26.0 windows/amd64） |
+| 树 | `<仓库根>` |
+| 树 HEAD | `c0800c191fd4e7a5f184248558bb199fcf3b409a` |
+| 工作区 | 受跟踪文件**无改动**；`git status --short` 只列 4 个别人的未跟踪文件（`docs/batch4-enemy-families.md`、`docs/kl-level-families.md`、`tools/opfamily_inventory.py`、`zz_tmp_book.py`）＋另两个（`docs/worklog.md`、`tools/wl.py`） |
+
+★ `RIOS_SIM_BIN` **每一趟都显式设**为本表那条路径；不设会静默落到工作树里的旧 exe 上（本仓为此栽过）。
+
+### 1.3 命令与请求形状
+
+```powershell
+# 取数（逐关串行；rc 不作唯一判据，另核缓存文件在不在）
+python -X utf8 -m ak_tactic stage <levelId>
+
+# 对拍（RIOS_SIM_BIN 显式设）
+$env:RIOS_SIM_BIN = "out/acceptance/rios-sim-stage3.exe"
+python -X utf8 tools\check_stage_go.py <该章全部 levelId>
+python -X utf8 tools\check_enemy_go.py <该章全部 levelId>
+
+# 规格面：空计划 buildspec（走 Go 的一行一行协议）
+#   请求体：顶层 cmd 与 level，其余参数放**外层对象 spec** 里
+{"id": 1, "cmd": "buildspec", "level": "<levelId>"}
+```
+
+★ **取数这一步 rc 不作唯一判据**：`stage` 命令在「敌人有字段缺失」时会**打印末尾崩**
+（`NoneType.__format__`，rc=1）而**关卡已经落到缓存**。本轮 108 关**没有一关 rc≠0**，
+但仍然**逐关核了缓存文件**（见 §四）。
+★ **buildspec 的参数位置是个坑**：把 `plan` 之类放到顶层会被**静默忽略**——
+量出来是「机制没生效」，不是「没有机制」。本轮是**空计划**，请求里**根本不带 `spec` 键**。
+
+---
+
+## 二 · 逐章对拍读数
+
+| 章 | 关数 | 缓存命中 | `check_stage_go.py`（地图／路线／出怪） | `check_enemy_go.py`（敌人） | 未移植字段 | rc |
+| ---: | ---: | ---: | --- | --- | --- | ---: |
+| 3 | 8 | 8/8 | **8/8 关逐字段一致** | **68 只敌人逐字段一致** | **无** | 0 |
+| 4 | 10 | — | — | — | — | — |
+| 5 | 10 | — | — | — | — | — |
+| 6 | 15 | — | — | — | — | — |
+| 7 | 16 | — | — | — | — | — |
+| 8 | 17 | — | — | — | — | — |
+| 9 | 17 | — | — | — | — | — |
+| 10 | 15 | — | — | — | — | — |
+
+**正负对照**（判据本身有没有分辨力）：
+
+| 对照 | 命令 | 期望 | 实测 |
+| --- | --- | --- | --- |
+| 正对照（已知答案） | `check_stage_go.py main_02-01 main_02-02` | 2/2 一致、rc=0 | ✓ 一致、rc=0 |
+| 反证（地图键人为改动） | `check_stage_go.py main_03-03 --mutate` | 判红、rc=0 | ✓ 1 处不一致、rc=0 |
+| 反证（敌人合成不一致） | `check_enemy_go.py main_03-03 --mutate` | 判红、rc=0 | ✓ 10 只全报、rc=0 |
+
+---
+
+## 三 · 逐章规格面（空计划 `buildspec`）
+
+**收哪几栏**：`mechanisms`（挂了哪些机制）、`unsupported`（理由条数）、
+`scanned` 里的 `mechspec.blockers` / `mechspec.env_rune` / `gate_goal_open` / `gate_highland_open`，
+另记 `missing_keys` 与 `gated_keys`。
+
+| 章 | 关数 | 挂机制的关 | `mechanisms` | `unsupported`（条数／内容） | `mechspec.blockers` | `mechspec.env_rune` | `gate_goal_open` | `gate_highland_open` |
+| ---: | ---: | ---: | --- | --- | --- | --- | --- | --- |
+| 3 | 8 | 0 | 全 `[]` | 0 条 | 全 `<缺席>` | 全 0 | 全 0 | 全 0 |
+| 4 | 10 | — | — | — | — | — | — | — |
+| 5 | 10 | — | — | — | — | — | — | — |
+| 6 | 15 | — | — | — | — | — | — | — |
+| 7 | 16 | — | — | — | — | — | — | — |
+| 8 | 17 | — | — | — | — | — | — | — |
+| 9 | 17 | — | — | — | — | — | — | — |
+| 10 | 15 | — | — | — | — | — | — | — |
+
+### 3.1 三态纪律：`<缺席>` 与 `0` 是两回事
+
+* `mechspec.blockers` **只在田地分支跑起来时才进 `scanned`**（`mechspec.go` 的
+  `scanned["blockers"] = blockers` 在 `buildMechFarmland` 里）。
+  第 3 章八关的 `mechspec.farmland` 都是 0 ⇒ 田地分支没跑 ⇒ 这一栏**根本不存在**。
+  记成 `0` 会把「这条线没被行使」说成「这条线量到 0」。
+* 反过来，`mechspec.env_rune` 是**每条路都写**的（0 或 1），所以它是真读数。
+
+### 3.2 这一面**看不见什么**（沉默不等于没有）
+
+* **空计划下 `unsupported` 的可见范围**：第 3 章八关的
+  `unsupported.spawn` 分别非 0（出怪侧那条线跑了），但**理由条数恒 0**——
+  这不是「这一关没有未建模机制」，而是「**这一局的排程里没有东西触发那几条线**」。
+* **装置那条线在 `unported` 里**：Go 侧没有装置层，
+  `关卡装置 ×N` 这条线具名列在 `unported`（第 3 章八关的 `unported` 都是同 10 条）。
+  按 `docs/mainline-stages.md` §九 的表，**第 3 章 16 行里 4 行带装置、装置条目 6 个**，
+  而**这一面一条都不会报**。⇒ 本轮这一栏只能当「有没有未建模机制的**字段驱动**下界」，
+  不能当「没有缺口」的证明。
+* **行为面**由另一个会话在扫，与本文件分工不同。
+
+第 3 章的 `unported`（八关逐字相同）：
+
+```
+spawns[].p3r_armed：total_attack 要装置层，Go 没有 ⇒ 恒传 false
+spawns: species_provider
+spawns: total_attack
+unsupported: skill_name
+unsupported: snow_talent
+unsupported: devices
+unsupported: total_attack
+unsupported: death_token
+unsupported: operator_side
+mechspec: snow.field
+```
+
+---
+
+## 四 · 取不到的关与原因
+
+| 章 | 取不到的关 | 原因 |
+| ---: | --- | --- |
+| 3 | **无**（8/8 取到） | — |
+| 4～10 | 待逐章填 | — |
+
+第 3 章逐关缓存核对（`data/gamedata/map.ark-nights.com/levels/<data_path>`）：
+
+| 关 | 缓存 | 字节 |
+| --- | --- | ---: |
+| `main_03-01` | ✓ | 38,894 |
+| `main_03-02` | ✓ | 53,256 |
+| `main_03-03` | ✓ | 77,855 |
+| `main_03-04` | ✓ | 56,547 |
+| `main_03-05` | ✓ | 63,086 |
+| `main_03-06` | ✓ | 33,309 |
+| `main_03-07` | ✓ | 49,001 |
+| `main_03-08` | ✓ | 53,942 |
+
+---
+
+## 五 · 每章一行：本关群引用的敌人在两侧数据源上的规模
+
+**两侧是什么**（都是**本地**数据，不是现去网上取）：
+
+* **gamedata 侧**＝`data/gamedata/map.ark-nights.com/levels/enemydata/enemy_database.json`
+  （**2154** 条 `Key`）。这是 Python 权威侧 `EnemyLibrary` 的属性库。
+* **prts.wiki 侧**＝`data/enemydb.sqlite`，其 `meta.enemy_source` 写明来路是
+  **prts.wiki 分类:敌人**；规模 **1807 个敌人页 / 2114 个级别档**。
+  匹配按**页面名＝敌人名**。
+
+**口径**：章内引用的敌人取 Go `enemies` 命令逐关的 `refs`，
+逐关按 `(id, level)` 去重后**跨关取联合**。
+
+| 章 | 引用（去重 id） | 引用（去重 名字） | gamedata 侧命中 | prts.wiki 侧命中 | 两侧都不命中的 |
+| ---: | ---: | ---: | --- | --- | --- |
+| 3 | 31（32 个 id＋档 组合） | 31 | **31/31** | **30/31** | prts 侧缺「持盾刀兵」 |
+
+第 3 章那一个 prts 侧未命中：`enemy_1029_shdsbr`（显示名「持盾刀兵」）。
+**查询本身已证明跑成功**：同一连接里 `name='潜伏者'` 命中（正对照），
+且 `name like '%刀兵%'` 只回「萨卡兹刀兵」、`name like '%持盾%'` 回四条但都不是它
+⇒ 是**该名字在 enemydb 里查无此页**，不是尺子没跑。
+
+---
+
+## 六 · 未做 / 未核（登记，不许当成 0）
+
+1. **第 4～10 章尚未做**（本文件逐章追加）。
+2. **`#f#` 突袭档本轮未纳入**。
+3. **装置面未核**：见 §3.2，空计划 `buildspec` 对装置**零分辨力**；
+   第 3 章带装置的关**具体是哪几关、各几个**，本文件未取。
+4. **敌人两侧规模只用「名字」匹配**：名字改动、别名、同名异页都可能造出**假未命中**；
+   本轮只对第 3 章那一个未命中做了手工复核。
