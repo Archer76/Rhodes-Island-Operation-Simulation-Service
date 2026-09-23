@@ -122,6 +122,15 @@ SUITE = [
     #: 不引用它的当对照），所以它不绑死任何关卡名。
     ("命令面", "tools/check_cli_go.py",
      "Python CLI 在缺值输入下不崩（现算正例/对照 ＋ 注入旧写法必崩）", False),
+    #: ★ 2026-09-24 加（第二十七套）：**敌人机制建模判据**。
+    #: 它答的不是「Go 与 Python 是否一致」——那一层由上面的「敌人」管；
+    #: 它答的是「**Go 到底实现了哪些敌人机制**」。
+    #: ★ 判据是**两条腿**的（父会话当晚裁定后重挑）：只量「Go 读不读」会把
+    #: **两台引擎共同的边界**记成 Go 的欠账（假红等于没有判据）。
+    #: 于是：真红＝¬Go消费 ∧ Python 有落点；共同边界（两侧都没有）登记、不计红；
+    #: 判不了不计红。rc=1 只在**真红**上给。
+    ("敌方机制", "tools/check_enemy_mech_go.py",
+     "敌人机制键：Go 消费 vs Python 消费（真红／共同边界／仅 Go）", True),
 ]
 
 
@@ -136,6 +145,24 @@ def cached_levels() -> list[str]:
     levels_dir = root / "map.ark-nights.com" / "levels"
     return sorted(lid for lid, e in idx.items()
                   if (levels_dir / e["data_path"]).exists())
+
+
+def cached_content_count(levels: list[str]) -> int:
+    """这些**关卡键**对应几份**不同的关卡内容**（★ 与 `len(levels)` 不是同一个数）。
+
+    为什么要单列这一个数：索引里 `main_XX-YY#f#`（四星档）与普通档**共用同一个
+    `data_path`**，差别只在标签字段。于是「缓存可达的关卡 320 个」会被读成
+    「320 份不同内容」，而**真值是 159 份**——同一份内容被比了两遍。
+
+    ⚠ **只把口径印清楚，不去重、也不少传**：去重会让「少了 161 个用例」变成
+    静默的省略（本仓记过：计数缩水不会自己变红）。将来谁要真的去重，
+    手里先有这两个数。
+    口径：同一份索引 ＋ 同一套缓存存在性判断，按 `data_path` 去重**现算**，不写死。
+    """
+    import json
+    root = ROOT / "data" / "gamedata"
+    idx = json.loads((root / "_level_index.json").read_text(encoding="utf-8"))
+    return len({idx[l]["data_path"] for l in levels if l in idx})
 
 
 def main() -> int:
@@ -199,7 +226,9 @@ def main() -> int:
     instr = hashlib.sha256(Path(exe).read_bytes()).hexdigest()[:16]
     print("仪器：%s" % exe)
     print("     sha256(16)=%s（每一套判据都用这一枚）" % instr)
-    print("取证范围：缓存可达的关卡 %d 个（喂给需要清单的那两套判据）" % len(lvls))
+    print("取证范围：缓存可达的关卡**键** %d 个（＝不同关卡**内容** %d 份 × 难度与别名标签；"
+          "喂给需要清单的那两套判据）"
+          % (len(lvls), cached_content_count(lvls)))
     for name, script, what, wants_levels in SUITE:
         cmd = [PY, "-X", "utf8", str(ROOT / script)]
         if wants_levels:
