@@ -16,9 +16,39 @@ taunt_level / name / talent_blackboard / skills`。
 `skill_atk_*`。这一族**在本批敌人上非默认的条数会单独印出来**：
 非 0 就是真缺口，不能因为"没比"就当它不存在。
 
+## 期望值从哪来（**两种模式**）
+
+* 默认（`RIOS_GOLDEN` 未设）：现场调 Python 的 `enemy_stats`，**现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/敌人.json`，**不 import `ak_tactic`**。
+
+## ★ 本套比关卡多三件麻烦事（每一件都对应一条会造假信号的路径）
+
+**① 期望值是 dataclass 对象** ⇒ 必须先**投影**成 JSON（`py_enemy_expect`），
+而不是把对象直接冻起来。投影只做形状转换，**比法的谓词一个字不改**。
+
+**② `refs` 是 Go 的产出，同时又是查询集的来源**（问哪些敌人由 Go 决定）。
+于是「现读 ≠ 冻结」有三种因，**必须分得开**：
+
+| 因 | 归属 | 码 |
+| --- | --- | --- |
+| 这一关的**输入**（缓存文件内容）变了 | 调用方/数据侧 | `6` |
+| **Go 的 `refs` 产出**变了（多了/少了引用） | **Go 侧** | `6` |
+| 覆盖到的 ref 上**逐字段不一致** | 实现 | `1` |
+
+压成一种读法，就会出现那条最危险的误导：**Go 改了 refs 的产出被读成「对象集变了」**。
+所以输入身份记**两侧**：关卡批次（id ＋ 缓存内容 sha16）＋ 每个 ref（id, level）。
+
+★ 顺带补一个**原来没有的守卫**：refs **少了**意味着分母缩水，而旧判据只会
+「比更少的敌人」然后照样绿——现在它进对账、具名印出。
+
+**③ `DEFAULTS`（dataclass 默认值）是 Python 侧产物** ⇒ 当**判定参数**冻住。
+不冻的话，将来往 `NOT_PORTED` 加字段时，check 档会拿一份**空** `DEFAULTS` 判「非默认」，
+**把每一只敌人都报成缺口**（假红）。
+
 用法:
     python tools\\check_enemy_go.py main_00-01 main_01-07 main_02-01
     python tools\\check_enemy_go.py main_00-01 --mutate      # 反向守卫
+    python tools\\freeze_baseline.py --record 敌人            # 录/重录
 """
 from __future__ import annotations
 
@@ -30,13 +60,16 @@ import sys
 from pathlib import Path
 
 _MISSING = object()
-#: 字段名 → dataclass 默认值（main 里填）。空字典时判「非默认」一律为假。
+#: 字段名 → dataclass 默认值。**默认档从 Python 读、冻结档读冻的那份**
+#: （判定参数，见文件头 ③）。空字典时判「非默认」一律为假——那正是要冻它的理由。
 DEFAULTS: dict[str, object] = {}
 
 sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -123,48 +156,130 @@ def is_default(v, name: str) -> bool:
     第一版按「非 None / 非 0 / 非空即非默认」判，于是 `reborn_hp_ratio`（默认 1.0）
     与 `aura_hit_radius`（模块常量）**在每一只敌人身上都被报成缺口**——
     那是尺子的毛病，不是敌人的。判据要跟着数据类的默认值走。
+
+    ★ 两侧都过 `norm()`：冻回来的默认值只能是 JSON 形状（`()` 会变成 `[]`），
+    不归一化就会拿 `()` 与 `[]` 比 ⇒ **每一只敌人都被报成缺口**（假红）。
     """
     d = DEFAULTS.get(name, _MISSING)
     if d is _MISSING:
         return False
-    return v == d
+    return norm(v) == norm(d)
+
+
+_LIB = None
+_STAGES: dict[str, object] = {}
+
+
+def _library():
+    """`EnemyLibrary` 全表只建一次（冻结档下**根本不会建**）。"""
+    global _LIB
+    if _LIB is None:
+        from ak_tactic.gamedata.enemy import EnemyLibrary
+        _LIB = EnemyLibrary()
+    return _LIB
+
+
+def _stage(level: str):
+    if level not in _STAGES:
+        from ak_tactic.gamedata.stage import load_stage
+        _STAGES[level] = load_stage(level)
+    return _STAGES[level]
+
+
+def py_enemy_defaults() -> dict:
+    """判定参数：`EnemyStats` 每个字段的 dataclass 默认值（**Python 侧产物**）。"""
+    from ak_tactic.gamedata.enemy import EnemyStats
+    out: dict[str, object] = {}
+    for f in dataclasses.fields(EnemyStats):
+        if f.default is not dataclasses.MISSING:
+            out[f.name] = norm(f.default)
+        elif f.default_factory is not dataclasses.MISSING:      # type: ignore[misc]
+            out[f.name] = norm(f.default_factory())
+    return out
+
+
+def py_enemy_expect(level: str, key: str, lv: int) -> dict:
+    """期望值入口：把 Python 的 `EnemyStats` **投影**成判据要比的全部字段。
+
+    ★ 投影只做形状转换，**不改谓词**：`core` 原样、`derived` 过 `norm`（与旧判据
+    一模一样），免疫取原值（旧判据用 `bool()` 判，投影到这边照旧）。
+    """
+    from ak_tactic.frontend.enemy_stats import enemy_stats
+    py = enemy_stats(_library().get, _stage(level), key, lv)
+    return {
+        "core": {gk: getattr(py, pk, None) for gk, pk in CORE},
+        "immunities": {f: py.immunities.get(f) for f in IMMUNES},
+        "talent_blackboard": dict(py.talent_blackboard),
+        "skills": list(py.skills_raw or ()),
+        "derived": {f: norm(getattr(py, f, None)) for f in DERIVED},
+        #: ★ 仍未移植族也**进投影**：不进的话，将来往 `NOT_PORTED` 加字段时，
+        #: 冻的那份里没有它 ⇒ `.get(f)` 得 `None` ⇒ 被判「非默认」⇒ 每只敌人都报缺口。
+        #: 进了投影，加字段会改脚本内容 sha 与值条数 ⇒ `--check` 当场报「该重录」。
+        "not_ported": {f: norm(getattr(py, f, None)) for f in NOT_PORTED},
+    }
 
 
 def main() -> int:
+    G = GB.bind("敌人", __file__)
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     mutate = "--mutate" in sys.argv
     levels = args or ["main_00-01"]
 
-    from ak_tactic.frontend.enemy_stats import enemy_stats
-    from ak_tactic.gamedata.enemy import EnemyLibrary, EnemyStats
-    from ak_tactic.gamedata.stage import load_stage
-    lib = EnemyLibrary()
-
-    #: 每个字段在 dataclass 里的默认值——「没建模」的判据要拿它比。
+    #: ③ 判定参数：dataclass 默认值 ⇒ 与期望值一起冻住。
     global DEFAULTS
-    for f in dataclasses.fields(EnemyStats):
-        if f.default is not dataclasses.MISSING:
-            DEFAULTS[f.name] = f.default
-        elif f.default_factory is not dataclasses.MISSING:      # type: ignore[misc]
-            DEFAULTS[f.name] = f.default_factory()
+    DEFAULTS = G.expect(("consts", "enemy_defaults"), py_enemy_defaults)
+
+    #: 输入身份两侧之一：调用方给的**关卡批次**（id ＋ 缓存内容 sha16）。
+    batch = GB.level_inputs(DATA, levels)
+    #: `record` 档返回这一批、`check` 档返回冻的那一批 —— 同一行代码，两种语义。
+    batch_ref = G.expect(("query", "level_batch"), lambda: batch)
+
+    now_by_lv = {r["level"]: r["sha16"] for r in batch}
+    ref_by_lv = {r["level"]: r["sha16"] for r in batch_ref}
+    lv_same = sorted(l for l in now_by_lv if ref_by_lv.get(l) == now_by_lv[l])
+    lv_changed = sorted(l for l in now_by_lv
+                        if l in ref_by_lv and ref_by_lv[l] != now_by_lv[l])
+    lv_new = sorted(set(now_by_lv) - set(ref_by_lv))
+    lv_gone = sorted(set(ref_by_lv) - set(now_by_lv))
+
+    #: ② refs 是 Go 的产出、又是查询集的来源。先把 Go 的答案**收齐**（每关一次调用），
+    #: 再拿它去与冻的那一批对账，最后才逐字段比。
+    go_cache = {l: go_enemies(l) for l in lv_same}
+    live_groups = []
+    for lv in lv_same:
+        sha = now_by_lv[lv]
+        for r in go_cache[lv]["refs"]:
+            live_groups.append((lv, sha, r["id"], r["level"]))
+    cov = G.coverage("enemy", live_groups)
+    frozen_lv = {(r["level"], r["sha16"]) for r in batch_ref}
+    #: 归属：同一个 ref 差，落在「输入变了」还是「Go 的 refs 产出变了」，
+    #: 看它那一关的输入身份在不在冻的那一批里。**这两条必须能分辨**。
+    go_up = [g for g in cov.extra if (g[0], g[1]) in frozen_lv]
+    in_up = [g for g in cov.extra if (g[0], g[1]) not in frozen_lv]
+    go_down = [g for g in cov.missing if (g[0], g[1]) in frozen_lv]
+    in_down = [g for g in cov.missing if (g[0], g[1]) not in frozen_lv]
+    covered = {tuple(x) for x in cov.covered}
 
     bad = 0
     compared = 0
     gap_fields: dict[str, list[str]] = {}
-    for stage in levels:
-        got = go_enemies(stage)
-        #: ★ 取数要走 Python 的**同一条路**：库里没有的 id 要先落到关卡本地定义上
-        #: （`frontend/enemy_stats.py:37-55`）。直接 `lib.get(key, lv)` 会对
-        #: `useDb:false` 的敌人抛 KeyError——那是**测试自己的用法错**，不是实现差。
-        py_stage = load_stage(stage)
+    for stage in lv_same:
+        got = go_cache[stage]
         for ref in got["refs"]:
             key, lv = ref["id"], ref["level"]
+            grp = (stage, now_by_lv[stage], key, lv)
+            if G.mode == GB.CHECK and grp not in covered:
+                #: 未覆盖的 ref **不猜**（猜＝自己写一份期望值）；它已在对账里具名。
+                continue
             g = ref["stats"]
-            py = enemy_stats(lib.get, py_stage, key, lv)
+            #: ★ 期望值只能从这里来：键带**两侧输入身份**（关卡 id ＋ 内容 sha ＋ ref）。
+            want = G.expect(
+                ("enemy", stage, now_by_lv[stage], key, lv),
+                lambda stage=stage, key=key, lv=lv: py_enemy_expect(stage, key, lv))
             compared += 1
             out = []
             for gk, pk in CORE:
-                a, b = g.get(gk), getattr(py, pk, None)
+                a, b = g.get(gk), want["core"][gk]
                 if isinstance(a, float) and isinstance(b, float):
                     if a != b:
                         out.append("%s：Go=%r Python=%r" % (gk, a, b))
@@ -172,25 +287,25 @@ def main() -> int:
                     out.append("%s：Go=%r Python=%r" % (gk, a, b))
             for f in IMMUNES:
                 a = g.get("immunities", {}).get(f)
-                b = py.immunities.get(f)
+                b = want["immunities"][f]
                 if bool(a) != bool(b):
                     out.append("immunities.%s：Go=%r Python=%r" % (f, a, b))
-            if g.get("talent_blackboard") != dict(py.talent_blackboard):
+            if g.get("talent_blackboard") != want["talent_blackboard"]:
                 out.append("talent_blackboard 不一致（Go %d 键 / Python %d 键）"
                            % (len(g.get("talent_blackboard") or {}),
-                              len(py.talent_blackboard)))
-            if list(g.get("skills") or []) != list(py.skills_raw or ()):
+                              len(want["talent_blackboard"])))
+            if list(g.get("skills") or []) != list(want["skills"]):
                 out.append("skills 不一致（Go %d 条 / Python %d 条）"
-                           % (len(g.get("skills") or []), len(py.skills_raw or ())))
+                           % (len(g.get("skills") or []), len(want["skills"])))
             # 派生字段：**已移植的逐字段比**（这一栏才是判据）
             for f in DERIVED:
                 a = norm(g.get(f))
-                b = norm(getattr(py, f, None))
+                b = want["derived"][f]
                 if a != b:
                     out.append("派生.%s：Go=%r Python=%r" % (f, _short(a), _short(b)))
             # 仍未移植族：只统计「非默认」的，具名落账
             for f in NOT_PORTED:
-                if not is_default(getattr(py, f, None), f):
+                if not is_default(want["not_ported"].get(f), f):
                     gap_fields.setdefault(f, []).append("%s@%d" % (key, lv))
             if mutate:
                 out.append("__mutate__：Go.max_hp=%r" % g.get("max_hp"))
@@ -213,13 +328,49 @@ def main() -> int:
             print("    %-24s %d 处，如 %s" % (f, len(who), who[0]))
     else:
         print("★ 未移植族在本批敌人上**全部取默认值** —— 这一批不因此失真")
+
+    #: ---- 对账：三种因分开报（② 的要害）------------------------------------
+    named = (lv_changed or lv_new or lv_gone or go_up or go_down or in_up or in_down)
+    if G.mode == GB.CHECK and named:
+        print()
+        print("输入批次对账（enemy）：这一批 %d 关 ＝ 逐关身份相同 %d；"
+              "改动 %d／新增 %d／这次没问 %d"
+              % (len(batch), len(lv_same), len(lv_changed), len(lv_new), len(lv_gone)))
+        for tag, who in (("输入改动", lv_changed), ("输入新增", lv_new),
+                         ("这次没问", lv_gone)):
+            if who:
+                print("  · %s（前 8 关）：%s" % (tag, "、".join(who[:8])))
+        if in_up or in_down:
+            print("  · 由**输入变化**引起的 ref 差：+%d / −%d"
+                  "（这些 ref 的期望值随输入重算，不是 Go 的事）"
+                  % (len(in_up), len(in_down)))
+        if go_up or go_down:
+            print("  · ★ **Go 的 refs 产出变了**：+%d / −%d"
+                  % (len(go_up), len(go_down)))
+            for tag, who in (("新增", go_up), ("消失", go_down)):
+                for g in who[:6]:
+                    print("      %s：%s@%s（关卡 %s，输入身份相同）"
+                          % (tag, g[2], g[3], g[0]))
+            print("    ⇒ 这两栏的**归属不同**：上面那栏是输入变了，这一栏是 **Go 侧**变了"
+                  "（关卡输入逐关相同）")
+        print("  ⇒ 读数**不可用**（分母不完整），基线该重录："
+              "python tools\\freeze_baseline.py --record 敌人")
+
     print()
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
     if mutate:
+        print()
         print("反向守卫：本轮**期望**判红（合成一处不一致）——%s"
               % ("成立 ✓" if bad else "不成立 ✗（判据没有分辨力）"))
         return 0 if bad else 1
     print("结论：%d 只敌人逐字段一致" % (compared - bad))
-    return 1 if bad else 0
+    if bad:
+        return 1
+    if G.mode == GB.CHECK and named:
+        return GB.RC_CHANNEL
+    return 0
 
 
 if __name__ == "__main__":

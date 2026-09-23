@@ -61,42 +61,14 @@ GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
 DATA = ROOT / "data" / "gamedata"
 
-_INDEX = None
-
-
-def level_index() -> dict:
-    """权威索引：关卡 id → `data_path`（`cached_levels()` 用的是同一份）。"""
-    global _INDEX
-    if _INDEX is None:
-        _INDEX = json.loads((DATA / "_level_index.json").read_text(encoding="utf-8"))
-    return _INDEX
-
 
 def level_batch(levels: list[str]) -> list[dict]:
     """这一批关卡的**输入身份**：关卡 id ＋ 缓存文件路径 ＋ **内容 sha16**。
 
-    ★ 这是**数据侧**取数（只读 json 与文件字节），**不 import `ak_tactic`**
-    ——所以冻结档也跑得动，而且它量的是「喂给引擎的实物」，不是 Python 的形状。
+    ★ 公式只有一份，在 `freeze_baseline.level_inputs()` 里——**敌人那套用同一份**。
+      本仓记过：同一个公式两处各写一份，一改就对不上。
     """
-    idx = level_index()
-    out = []
-    for lid in levels:
-        e = idx.get(lid)
-        if e is None:
-            GB_fail("★ 权威索引里没有这个关卡：%s（缓存清单与索引不是同一批？）" % lid)
-        p = DATA / "map.ark-nights.com" / "levels" / e["data_path"]
-        if not p.is_file():
-            GB_fail("★ 关卡 %s 的缓存文件不在场：%s" % (lid, p))
-        out.append({"level": lid, "data_path": str(e["data_path"]),
-                    "sha16": hashlib.sha256(p.read_bytes()).hexdigest()[:16]})
-    return out
-
-
-def GB_fail(msg: str) -> None:
-    """本文件自己的具名失败（走通道的同一个码 6：这不是判据红）。"""
-    sys.stderr.write(msg.rstrip() + "\n")
-    sys.stderr.flush()
-    raise SystemExit(GB.RC_CHANNEL)
+    return GB.level_inputs(DATA, levels)
 
 
 def go_load(level: str) -> dict:

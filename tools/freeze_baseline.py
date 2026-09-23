@@ -321,12 +321,6 @@ class Channel:
     # ---- 输入批次（乙类：对象集是活的）------------------------------------
 
     def coverage(self, tag: str, live: list[tuple]) -> Coverage:
-        """把「这一次要问的对象」与「冻的那一批」按**输入身份**对上。
-
-        `live` 的每一项是 `(对象名, 输入身份…)`，身份写在键里
-        （例如 `("stage", 关卡 id, 缓存文件内容 sha16)`）——**键自带输入身份**，
-        所以对象集或对象内容一变，就配不上，这里如实报出来。
-        """
         self.coverage_used = True
         src = self.values if self.mode == RECORD else self.frozen
         frozen_groups: set[tuple] = set()
@@ -344,6 +338,22 @@ class Channel:
         extra = sorted(live_groups - frozen_groups)
         missing = sorted(frozen_groups - live_groups)
         return Coverage(covered, extra, missing)
+
+    def groups(self, tag: str) -> set[tuple]:
+        """冻的那一批里按 `tag` 分组的**对象身份**集合（键去掉 tag 之后的部分）。
+
+        给「要自己按归属分类」的套用（例如敌人的 refs：它既是 Go 的产出、
+        又是查询集的来源——归属要分得比 `coverage()` 更细）。
+        """
+        out: set[tuple] = set()
+        for k in self.frozen:
+            try:
+                parts = json.loads(k)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(parts, list) and parts and parts[0] == tag and len(parts) >= 2:
+                out.add(tuple(parts[1:]))
+        return out
 
     # ---- 唯一取数口 --------------------------------------------------------
 
@@ -566,6 +576,16 @@ def resolve_exe() -> str:
 # 三 · 套表（**唯一来源**是 check_go_all.SUITE，不在这里抄第二份）
 # =============================================================================
 
+#: ★ **第三态**：不适用于冻结的套（**不是「未转」**）。口径见 `docs/golden-baseline.md` §4。
+#: 为什么要有这张表而不是只在文档里写一句：文档里写了、`--status` 却把它们算进「未转」，
+#: 那两条登记就**互相打架**（一边说三种状态，一边只认两种）。这里是**唯一**的分类处，
+#: 文档只指向它、不抄第二份。
+NOT_APPLICABLE: dict[str, str] = {
+    "命令面": "被测方就是 Python CLI（spawn `python -m ak_tactic stage …`）——它测的是 "
+              "Python，不是从 Python 取期望值，所以没有「Python 侧的期望值」可冻。",
+}
+
+
 def suite_table() -> list[tuple[str, str, str, bool]]:
     """(套名, 脚本, 这条判据答什么, 要不要喂关卡清单)。"""
     sys.path.insert(0, str(TOOLS))
@@ -598,6 +618,28 @@ def suite_args(name: str) -> list[str]:
         if n == name:
             return list(cached_levels()) if wants else []
     return []
+
+
+def level_inputs(data_dir: Path | str, levels: list[str]) -> list[dict]:
+    """关卡批次的**输入身份**：关卡 id ＋ `data_path` ＋ 缓存文件**内容 sha16**。
+
+    ★ **数据侧**取数（只读 json 与文件字节），**不 import `ak_tactic`** ⇒ 冻结档也跑得动。
+    ★ 关卡与敌人两套**共用这一份公式**——本仓记过：同一个公式两处各写一份，
+      一改就对不上（`source_sig` 那次的根因就是这个）。
+    """
+    data_dir = Path(data_dir)
+    idx = json.loads((data_dir / "_level_index.json").read_text(encoding="utf-8"))
+    out = []
+    for lid in levels:
+        e = idx.get(lid)
+        if e is None:
+            _channel_fail("★ 权威索引里没有这个关卡：%s（缓存清单与索引不是同一批？）" % lid)
+        p = data_dir / "map.ark-nights.com" / "levels" / e["data_path"]
+        if not p.is_file():
+            _channel_fail("★ 关卡 %s 的缓存文件不在场：%s" % (lid, p))
+        out.append({"level": lid, "data_path": str(e["data_path"]),
+                    "sha16": file_sha16(p)})
+    return out
 
 
 # =============================================================================
@@ -924,11 +966,17 @@ def cmd_control(names: list[str], timeout: float) -> int:
                       % (len(qv), len(qv) - 1, r2["rc"],
                          verdict_of(r2["out"]) or "（无结论行）"))
                 if blob.get("input_identity"):
-                    #: ★ 这一套的**真正查询集是调用方给的清单**（对象集是活的），
-                    #: 所以冻结档看不见的只是那条**批次记录**被改小；真正问哪些对象
-                    #: 由 P3／P3b 管。措辞不许含糊：说错会让人去查一个不存在的东西。
-                    print("    ⇒ 冻结档看不见**批次记录**被改小（真正问哪些对象由调用方的"
-                          "清单决定 ⇒ 那是 P3／P3b 的事）——有界盲区，登记不掩饰")
+                    #: ★ 这一套的**真正查询集是调用方给的清单**（对象集是活的）。
+                    #: 那条 `("query", …)` 到底「只是记录」还是「被消费」，**按实测说**：
+                    #: 实测「敌人」是**被消费**的（它决定比哪些关 ⇒ 改小它就红），
+                    #: 而在冻的那批里改小它不一定等于「分母缩水」——措辞不许含糊，
+                    #: 说错会让人去查一个不存在的东西。
+                    if r2["rc"] == 0:
+                        print("    ⇒ 冻结档**看不见**那条批次记录被改小"
+                              "（它只问调用方给的那批对象）—— 有界盲区，登记不掩饰")
+                    else:
+                        print("    ⇒ 冻结档**自己就红了**（rc=%d）—— 这条不是盲区："
+                              "那条记录**被消费**（它参与决定比哪些对象）" % r2["rc"])
                 else:
                     print("    ⇒ 冻结档**看不见分母被改小**（它只问冻住的那批问题，"
                           "照样全绿）——有界盲区，登记不掩饰")
@@ -1176,8 +1224,15 @@ def cmd_status(names: list[str], timeout: float, quick: bool, show: bool) -> int
               "没基线的套印 ⊘无基线，它在默认档的绿由 check_go_all.py 总表覆盖。")
     print("-" * 92)
     green = 0
+    na = 0
     rows_out = []
     for name, script, _what, _l in picked:
+        if name in NOT_APPLICABLE:
+            #: **第三态**：不适用于冻结 ⇒ 不进「跑得通」也不进「待转」，
+            #: 否则那两条登记（文档说三种状态／本表只认两种）会互相打架。
+            na += 1
+            print("⊘ %-6s 不适用于冻结  %s" % (name, NOT_APPLICABLE[name]))
+            continue
         f = suite_file(name)
         recorded = f.is_file()
         extra = suite_args(name)
@@ -1219,22 +1274,26 @@ def cmd_status(names: list[str], timeout: float, quick: bool, show: bool) -> int
         if show and hit:
             print("        %s" % hit)
     print("-" * 92)
-    print("★ **冻结模式下跑得通：%d / %d 套**" % (green, len(picked)))
+    denom = len(picked) - na
+    print("★ **冻结模式下跑得通：%d / %d 套**（分母 ＝ 本次 %d 套 − 不适用于冻结 %d 套）"
+          % (green, denom, len(picked), na))
+    undone = [(n, rs) for n, _s, _r, c, _d, rs, _h in rows_out if c != 0]
     if not quick:
-        #: ⚠ 分母只说**跑过默认档那一腿的套**（＝有基线的套）：拿 26 当分母，
+        #: ⚠ 分母只说**跑过默认档那一腿的套**（＝有基线的套）：拿总套数当分母，
         #: 会把「没跑」与「跑了但不一致」混成一个数（本仓记过：两套分母的数不许并列）。
         n_leg = sum(1 for _n, _s, _r, _c, d, _rs, _h in rows_out if d is not None)
         both = sum(1 for _n, _s, _r, c, d, _rs, _h in rows_out if c == 0 and d == 0)
         print("   有基线的 %d 套里，两种模式**都给绿**（＝这一套的基线录对了）：%d / %d"
               % (n_leg, both, n_leg))
-    undone = [(n, rs) for n, _s, _r, c, _d, rs, _h in rows_out if c != 0]
+    print("   三分账（**不重不漏**）：跑通 %d ＋ 待转 %d ＋ 不适用于冻结 %d ＝ 本次 %d 套"
+          % (green, len(undone), na, len(picked)))
     if undone:
-        print("   未转/未通的 %d 套与具名理由：" % len(undone))
+        print("   待转的 %d 套与具名理由：" % len(undone))
         for n, rs in undone:
             print("     - %s：%s" % (n, rs))
-    print("   还有 %d 套连基线都没有。" % sum(1 for _n, _s, r, _c, _d, _rs, _h in rows_out
+    print("   其中 %d 套连基线都没有。" % sum(1 for _n, _s, r, _c, _d, _rs, _h in rows_out
                                               if not r))
-    return 0 if green == len(picked) else 1
+    return 0 if not undone else 1
 
 
 def main() -> int:
