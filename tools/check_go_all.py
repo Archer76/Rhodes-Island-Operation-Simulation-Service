@@ -131,6 +131,38 @@ def cached_levels() -> list[str]:
 
 
 def main() -> int:
+    #: ★ **前置闸门**：数据不齐就**直接拒跑**，不要把 25 套跑完再让人去发现分母缩了。
+    #:
+    #: 事故形状（2026-09-24 00:46）：一个会话收尾时的 `git worktree remove --force`
+    #: 穿透 junction，删掉了主仓 `data/` 的内容；于是下面那行「取证范围：缓存可达的
+    #: 关卡 N 个」从 **55 关掉到 2 关**，而**它不红**——一串判据在缩水的分母上照样全绿，
+    #: 靠人眼看那行字才发现。这条前置检查存在的唯一理由就是把那种情形变红。
+    #:
+    #: ⚠ 它**不是**跨实现对拍判据，所以**不进 `SUITE` 表**：加进去会一并改掉
+    #: `tools/closeout_selfsufficiency.py` 的 `DECLARED["suites"]` 与台账读数表行数
+    #: 两处（两处都要重算，而它们量的本来就不是同一件事）。
+    #:
+    #: ⚠ **可关**：环境变量 `RIOS_SKIP_DATA_READY`。
+    #:   语义：**精确等于 `1` 才跳过**这一刀；其它值（含空串、`0`、`true`）都照跑。
+    #:   为什么留这个口子：将来要在一个**已知不完整**的数据集上跑单套判据做诊断，
+    #:   不能被总闸一刀切死。
+    #:   跳过时会显式印一行——「跳过了」不许静默（本项目记过：没有守卫的绿是零信息量）。
+    if os.environ.get("RIOS_SKIP_DATA_READY") == "1":
+        print("★ 已按 RIOS_SKIP_DATA_READY=1 跳过数据前置检查"
+              "（本次的「全绿」不含「data/ 完整」这一层）")
+    else:
+        dr = subprocess.run([PY, "-X", "utf8",
+                             str(ROOT / "tools" / "check_data_ready.py")],
+                            cwd=str(ROOT))
+        if dr.returncode != 0:
+            print("★ 数据不齐：tools/check_data_ready.py rc=%d —— **拒跑**。"
+                  "（不把 25 套跑完再让人去发现分母缩了）" % dr.returncode)
+            print("  要在一个已知不完整的数据集上跑单套判据做诊断，"
+                  "设 RIOS_SKIP_DATA_READY=1 跳过这道理。")
+            #: 把它自己的两个码原样带出去：1＝数据坏了，3＝仪器缺输入；
+            #: 其余（含 5＝它自己崩了）一律按「判据红」报。
+            return dr.returncode if dr.returncode in (1, 3) else 1
+
     rows = []
     lvls = cached_levels()
     #: `--selfcheck`：**把每套判据的反向守卫也跑一遍**。
