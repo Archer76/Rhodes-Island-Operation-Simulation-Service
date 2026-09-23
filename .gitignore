@@ -105,10 +105,10 @@ tools/dump_*.py
 # 判据＝**这个文件对「用这个仓库的人」有没有意义**（博士 2026-09-20 定）。
 # 名单是**现算**的，不是手写的（规则见提交信息）——手写名单会随交付漂移，
 # 而且**名单本身会污染读它的尺子**：它逐条列出被摘路径，任何拿 .gitignore
-# 当语料的检查都会让每个文件"命中"。本轮已踩过一次。
+# 当语料的检查都会让每个文件「命中」。本轮已踩过一次。
 #
 # ⚠ 本规则**不会**把已跟踪的文件摘出来（gitignore 只管未跟踪文件）；摘出靠
-#    `git rm --cached`。两件事必须一起做，只做一半会得到"看不见但还在库里"的
+#    `git rm --cached`。两件事必须一起做，只做一半会得到「看不见但还在库里」的
 #    假象——2026-09-20 在 d5f65d9 上正是这么栽的。
 docs/acceptance-baseline.json
 docs/acceptance-claims.md
@@ -161,8 +161,14 @@ tools/dict_status.py
 tools/diff_spec_talents.py
 tools/doc_ident_lint.py
 tools/dump_mech_spec.py
+# ★ `tools/engine_pin.py` **不在这张名单里**（2026-09-23 移出，已入库）：
+#   它是**在库判据的传递依赖** —— `tools/golden_go.py:69` 与 `tools/parity_ledger.py:412`
+#   直接 import 它，而 `golden_go` 又被多套判据 import。实测（干净检出、只接 data/）：
+#   少了它 **9 / 25 套**判据起不来（`ModuleNotFoundError: No module named 'engine_pin'`）。
+#   它自己也**不含个人数据、不含机器特定路径**（路径全部由 `__file__` 推、`go`/`git` 走 PATH）。
+#   判据同本节＝「这个文件对用这个仓库的人有没有意义」——没有它，那 9 套跑不起来。
+#   ⚠ 这张名单是**现算**的 ⇒ 下次重新生成时会把它再摘出去一遍；这条注释就是给那一步看的。
 tools/engine_identity_probe.py
-tools/engine_pin.py
 tools/fetch_prts_notes.py
 tools/fix_probe_signatures.py
 tools/gate_inventory.py

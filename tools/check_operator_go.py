@@ -19,6 +19,36 @@
 那份表不在本机 `excel/` 缓存里。工具会把「名册里带模组的干员」逐个列出来，
 不静默略过。
 
+## 两份输入：一份在库、一份**刻意不入库**（缺了必须大声失败）
+
+| 输入 | 入库？ | 缺了会怎样 |
+|---|---|---|
+| `fixtures/roster_max_modelled.json`（20 位，深扫） | **在库** | 崩（rc=1） |
+| `docs/roster-<uid>.md`（账号名册 211 位，拉宽） | **不入库**（`.gitignore:32`：uid／昵称／完整练度＝个人数据） | **具名失败**（rc=3） |
+
+## 退出码三态（**判据红**与**仪器缺输入**不共用一个码）
+
+    0 ＝ 判据全绿（两份输入都在，且都被真的行走到）
+    1 ＝ **判据红**：Go 与 Python 有逐字段不一致
+    3 ＝ **仪器缺输入**：名册不在，或它在却一行都解析不出来
+
+rc=3 时印一条**机读行**（纯 ASCII，便于机器消费）：
+
+    SUITE_INPUT_MISSING docs/roster-<uid>.md python tools/skland.py fetch && python tools/roster.py
+    SUITE_INPUT_UNUSABLE docs/roster-<uid>.md python tools/skland.py fetch && python tools/roster.py
+
+## 怎么再生这份名册（要登录态，**不能**离线重建）
+
+    python tools/skland.py fetch      # 拉本账号森空岛名册 → data/skland/opers_<uid>.json（不入库）
+    python tools/roster.py            # 翻成算符口径 + 导出 docs/roster-<uid>.md（不入库）
+
+★ 为什么是 rc=3 而不是「跳过并登记为绿」：2026-09-23 实测两件事，**形状不同**——
+  · 名册**不在**：`read_text` 抛 `FileNotFoundError` ⇒ rc=1。这是崩，不是静默。
+  · 名册**在、却被解析成 0 行**（只留表头的空壳）：这一段静默不跑，脚本照旧
+    **rc=0**，仍印「结论：468 / 468 次折算逐字段一致」——**覆盖面的塌缩长得与全绿一样**。
+    这一条才是假绿，本条 rc=3 与上面那条 `SUITE_INPUT_UNUSABLE` 就是堵它的。
+  ⇒ 纪律：**宁可假红，也不许静默变绿**；「没跑」不许长成「通过」。
+
 用法:
     python tools\\check_operator_go.py
     python tools\\check_operator_go.py --mutate
@@ -41,6 +71,16 @@ GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
 DATA = ROOT / "data" / "gamedata"
 ROSTER = ROOT / "fixtures" / "roster_max_modelled.json"
+
+#: ★ **判据红**与**仪器缺输入**不许共用一个退出码（见文件头「退出码三态」）。
+EXIT_JUDGE_RED = 1
+EXIT_INPUT_MISSING = 3
+
+#: 账号名册（个人数据、**刻意不入库** ⇒ `.gitignore:32`）。
+#: ⚠ 它是**唯一**带真实练度三元组（精英／等级／潜能）的输入，且**不能离线重建**：
+#: 它由 `tools/skland.py fetch`（要登录态）＋ `tools/roster.py` 两步产出。
+ROSTER_DOC = ROOT / "docs" / "roster-<uid>.md"
+ROSTER_REGEN = "python tools/skland.py fetch && python tools/roster.py"
 
 TRUSTS = [0.0, 50.0, 100.0]
 POTENTIALS = [1, 6]
@@ -153,35 +193,88 @@ def main() -> int:
     #: 「取证范围不许窄于结论范围」——只测 20 位就宣布面板层没问题，是不成立的。
     #: 这里每位只取**它自己的**精英/等级/潜能、信赖取 0：
     #: 信赖的标度（显示% ÷ 2）在两种名册里口径不同，**不猜**，留给上面的深扫。
+    #:
+    #: ⚠⚠ 这一段的输入**不在库里**（`.gitignore:32`：名册含 uid／昵称／完整练度）。
+    #: 所以它必须**自己证明输入在、且真的解析出了行**——两条都印机读行并给独立退出码。
+    #: 实测教训（2026-09-23）：只把「文件不在」当异常是不够的——**文件在、格式变了、
+    #: 解析出 0 行**时这一段静默不跑，而整脚本照旧 rc=0 并印「468 / 468 逐字段一致」。
     import re as _re
     ROW = _re.compile(
         r"^\|\s*([^|]+?)\s*\|\s*`(char_[^`]+)`\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*"
         r"\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|")
+    #: 表头对账：下面的正则按**序**取第 2/4/5/6 列，必须与表头声明的一致。
+    #: ★ 为什么这一条不能省：列一错位（如 `等级` 与 `潜能` 互换），
+    #: Go 与 Python 吃的是**同一份错 configs** ⇒ 逐字段比对照样全绿。
+    #: 这个错**只有输入身份这一层看得见**，比对层永远看不见它（同族：本项目
+    #: 「名字不是身份」那一条）。两列都是数字时更隐蔽——它连「解析失败」都不会发生。
+    HEAD_WANT = ("charId", "精英", "等级", "潜能")
+
+    def _head_ok(cells: list[str]) -> bool:
+        return (len(cells) >= 6 and cells[1] == HEAD_WANT[0] and cells[3] == HEAD_WANT[1]
+                and cells[4] == HEAD_WANT[2] and cells[5] == HEAD_WANT[3])
+
     wide = 0
     skipped: list[str] = []
-    for line in (ROOT / "docs" / "roster-<uid>.md").read_text(
-            encoding="utf-8").splitlines():
-        m = ROW.match(line)
-        if not m:
-            continue
-        cid = m.group(2)
-        if not calc.exists(cid):
-            skipped.append(cid)
-            continue
-        try:
-            elite = int(m.group(4).lstrip("Ee") or 0)
-            level = int(m.group(5) or 1)
-            pot = int(m.group(6) or 1)
-        except ValueError:
-            skipped.append(cid)
-            continue
-        if not (1 <= level <= int(calc.max_level(cid, elite) or 1)):
-            skipped.append("%s(E%d L%d 越界)" % (cid, elite, level))
-            continue
-        configs.append({"char_id": cid, "elite": elite, "level": level,
-                        "trust": 0.0, "potential": pot,
-                        "module": "", "module_level": 0})
-        wide += 1
+    #: 名册文件的形态读数：像表行的行数（含表头与分隔行）。窄太多＝格式变了。
+    n_table_lines = 0
+    #: "" ＝ 这一段被真的行使了；否则 MISSING（文件不在）／UNUSABLE（在但解析 0 行）。
+    input_state = ""
+    if not ROSTER_DOC.is_file():
+        input_state = "MISSING"
+        print("SUITE_INPUT_MISSING %s %s"
+              % (ROSTER_DOC.relative_to(ROOT).as_posix(), ROSTER_REGEN))
+        print("        账号名册不在 ⇒ 「覆盖面拉宽」这一段本轮**没跑**。"
+              "它不入库是刻意的（个人数据），再生要登录态，见文件头。")
+    else:
+        _lines = ROSTER_DOC.read_text(encoding="utf-8").splitlines()
+        n_table_lines = sum(1 for ln in _lines if ln.lstrip().startswith("|"))
+        _head: list[str] = []
+        for _ln in _lines:
+            if _ln.lstrip().startswith("|"):
+                _head = [c.strip() for c in _ln.strip().strip("|").split("|")]
+                break
+        if not _head_ok(_head):
+            input_state = "UNUSABLE"
+            print("SUITE_INPUT_UNUSABLE %s %s"
+                  % (ROSTER_DOC.relative_to(ROOT).as_posix(), ROSTER_REGEN))
+            print("        ⚠ 名册表头与判据按序取的列对不上（实得 %r；"
+                  "期望第 2/4/5/6 列 ＝ %r）。列错位时两边吃的是**同一份错 configs**，"
+                  "逐字段比对照样全绿。" % (_head[:6], list(HEAD_WANT)))
+        else:
+            for line in _lines:
+                m = ROW.match(line)
+                if not m:
+                    continue
+                cid = m.group(2)
+                if not calc.exists(cid):
+                    skipped.append(cid)
+                    continue
+                try:
+                    elite = int(m.group(4).lstrip("Ee") or 0)
+                    level = int(m.group(5) or 1)
+                    pot = int(m.group(6) or 1)
+                except ValueError:
+                    skipped.append(cid)
+                    continue
+                if not (1 <= level <= int(calc.max_level(cid, elite) or 1)):
+                    skipped.append("%s(E%d L%d 越界)" % (cid, elite, level))
+                    continue
+                configs.append({"char_id": cid, "elite": elite, "level": level,
+                                "trust": 0.0, "potential": pot,
+                                "module": "", "module_level": 0})
+                wide += 1
+        #: ⚠ 表头已判不合格时不再叠一条「0 行」的同一结论（两句话说同一件事会让人以为是两个错）。
+        if not input_state and wide == 0:
+            input_state = "UNUSABLE"
+            print("SUITE_INPUT_UNUSABLE %s %s"
+                  % (ROSTER_DOC.relative_to(ROOT).as_posix(), ROSTER_REGEN))
+            print("        ⚠ 名册在，却一行都没解析出来（文件里 %d 行像表行）："
+                  "格式变了／换账号导出了／文件被截断。这一段等于没跑，"
+                  "**不许**把它当绿。" % n_table_lines)
+        elif not input_state:
+            print("        名册形态读数：文件里 %d 行像表行（含表头与分隔行），"
+                  "本段解析出 %d 位可折算、跳过 %d 位。"
+                  % (n_table_lines, wide, len(skipped)))
 
     got, configs, dropped = go_opstats(configs)
 
@@ -413,8 +506,14 @@ def main() -> int:
             return 0
         print("反向守卫：不成立 ✗（注入了改动却没红，判据没有分辨力）")
         return 1
+    if input_state:
+        #: ★ 缺输入**优先于**判据绿：宁可假红，也不许覆盖面静默塌缩成绿（见文件头）。
+        print("结论：**输入%s，本轮不给判决**——上面那 %d / %d 次折算只盖到深扫那一段，"
+              "名册那一尺本轮没量到（机读行见上）。"
+              % (input_state, compared - bad, compared))
+        return EXIT_INPUT_MISSING
     print("结论：%d / %d 次折算逐字段一致" % (compared - bad, compared))
-    return 1 if bad else 0
+    return EXIT_JUDGE_RED if bad else 0
 
 
 if __name__ == "__main__":
