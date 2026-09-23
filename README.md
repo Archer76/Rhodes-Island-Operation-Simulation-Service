@@ -15,6 +15,70 @@
 
 ---
 
+## 已建模的干员与关卡
+
+**先说清楚一件事：干员与关卡都不是「逐个建模」的。** 引擎是通用的 30fps 逐帧推演，
+名册里谁上场都能算；真正要一项一项建起来的，是下面这两张表。
+
+### 干员
+
+| 层 | 覆盖面 | 判据 |
+| --- | --- | --- |
+| **面板层** | **账号名册全量 212 位** | 等级插值 ＋ 信赖 ＋ 潜能 ＋ 模组 → `base`／`trust_bonus`／`potential_bonus`／`module_bonus`／`total` 五份 ＋ 攻速三字段，与参照实现**逐字段一致**（判据 679 次折算） |
+| **干员规格层** | **全量** | 每人 33 个键（含条件键的存在性）逐位一致：64 / 64 人次 |
+| **天赋机制层** | **按机制建，不按干员** | 已建模的机制见下 |
+| **技能效果层** | **未搬** | `operators[].skill`／`active` 具名 `unported`，见 [`docs/go-selfsufficiency.md`](docs/go-selfsufficiency.md) 第三节 |
+
+**被实战打法验证过的干员**（出现在 22 份已验收打法里的 10 位）：
+
+> 泥岩 ・ 怒潮凛冬 ・ 能天使 ・ 焰狐龙梓兰 ・ 凯尔希·思衡托 ・ 可露希尔 ・ 星熊 ・ 圣聆初雪 ・ 新约能天使 ・ 拉普兰德
+
+### 关卡
+
+**引擎是关卡无关的**：`data/gamedata` 取得到的关卡都能直接跑（关卡索引 4715 条，含突袭档）。
+逐关建起来的只有**活动机制**。
+
+| 类 | 已验收的清单 |
+| --- | --- |
+| **活动 · 怀黍离**（`act31side`） | **19 关全部**：`01`～`09`、`ex01`～`ex08`、`tr01`、`tr02`（另含 `ex08` 突袭档 `#f#`） |
+| **主线 · 序章** | `0-1` ～ `0-11`（`main_00-01` ～ `main_00-11`） |
+| **主线 · 第一章** | `1-1` ～ `1-12`（`main_01-01` ～ `main_01-12`） |
+| 回归基线 | `1-7`、`SR-6`、`SR-EX-8` 三条（见「快速开始」） |
+
+序章与第一章那 23 关的读法是：Go 与参照实现**逐字段一致**（地图／路线／出怪），
+并且它们已经落在关卡静态、格表、寻路三套判据的取证范围里。
+
+### 已建模的机制
+
+权威清单就是 `ping` 的应答：
+
+```bash
+echo '{"cmd":"ping"}' | rios-sim.exe
+# → {"...","spec_done":true,"mechanisms":["chain","huai_shu_li.farmland","snow.field"]}
+```
+
+| 代号 | 是什么 |
+| --- | --- |
+| `chain` | 天桩召唤链（天桩-甲／乙／天标，含 `diver` 与落点爆炸） |
+| `huai_shu_li.farmland` | 怀黍离的田地与泵站：病害值、层数护盾、装置接入 |
+| `snow.field` | 积雪：铺场、扩散、减速与满层冻结 |
+
+另有两类**未实现即具名拒跑**的线（见 `unsupported`）：`devices`（装置通道，目前只装泵站与天桩）
+与 `snow_talent`。碰到它们的关卡**不会被静默跑出一个错结果**，而是明确拒跑并给出理由。
+
+## 下载
+
+不想装 Go 的话，用 [Releases](https://github.com/Archer76/Rhodes-Island-Operation-Simulation-Service/releases)
+里的预编译引擎（Windows amd64）：
+
+```powershell
+$env:RIOS_SIM_BIN = "D:\path\to\rios-sim.exe"     # cmd: set RIOS_SIM_BIN=D:\path\to\rios-sim.exe
+```
+
+Python 侧仍是本仓库的 `ak_tactic/`。**Release 里只有代码与二进制，不含任何游戏数据**
+——关卡、敌人与干员数值要自己按 [`docs/data-sources.md`](docs/data-sources.md) 取，
+或在本机跑 `python tools/rebuild_data.py` 一条命令重建。
+
 ## 这个仓库里有什么
 
 **只放「拿它做事的人用得到的东西」。** 这句不是修辞，它是一条会执行的判据：凡是只有在这一台机器上、
@@ -81,6 +145,9 @@ cd <仓库目录>
 # 1) 建两个本地库
 python -m ak_tactic db build          # 干员库，不联网，约 3.4s
 python -m ak_tactic enemydb build     # 敌人库，要联网，首次约 53s（prts.wiki 限速 1.2s/请求）
+#    也可以一条命令把 data/ 下该有的东西全建出来（含上面两步与 prts 备注库、范围表）：
+#    python tools/rebuild_data.py --offline   # 只跑不联网的
+#    python tools/rebuild_data.py             # 全量
 
 # 2) 跑全套自检 —— 全绿才算没退化
 #    套数会随规则增删而变，本文件不写死：ls tools/check_*.py 就是当前清单
