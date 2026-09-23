@@ -13,15 +13,37 @@
 逐字段比，任一处不等即红并打印到字段级；**并给一条正负对照**：
 控制组不许红，且人为改动 Go 的一项必须能变红（`--mutate`）。
 
+## 期望值从哪来（**两种模式**）
+
+* 默认（`RIOS_GOLDEN` 未设）：现场调 Python 的 `load_stage`，**现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/关卡.json`，**不 import `ak_tactic`**。
+
+## ★ 本套是「乙类」：对象集是**活的**，所以键必须**自带输入身份**
+
+取证范围由调用方（`check_go_all` 的 `cached_levels()`）喂进来，而它按**缓存**现算
+——缓存被别的会话逐章取数时会**长大**（实测 2026-09-24 当晚 72 → 320）。
+于是「现读 ≠ 冻结」有两种**完全不同**的因：
+
+* **Go 漂移了** ⇒ 判据红（rc=1），要人去看实现；
+* **对象集/对象内容变了** ⇒ 读数**不可用**（rc=6，印「输入批次对账」），基线该重录。
+
+⇒ 两个动作：
+① **键里带输入身份** `("stage", 关卡 id, 该关缓存文件内容 sha16)`——只记关卡名，
+   缓存内容变了就分不出「对象变了」；
+② 每次跑先做 `G.coverage("stage", …)` 对账：只比两边都有的，未覆盖的**不猜**
+   （猜＝自己写一份期望值，正是本仓禁止的），并把未覆盖的**具名印出来**。
+
 用法:
     python tools\\check_stage_go.py main_00-01
     python tools\\check_stage_go.py main_00-01 main_01-07 main_02-01
     python tools\\check_stage_go.py 1-7 --mutate      # 反向守卫
+    python tools\\freeze_baseline.py --record 关卡     # 录/重录（缓存长大之后要重录）
 
-    RIOS_SIM_BIN 可指定 Go 二进制（默认 out/acceptance/rios-sim-stage1.exe）
+    RIOS_SIM_BIN 可指定 Go 二进制（默认 out/acceptance/rios-sim-stage3.exe）
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -32,10 +54,49 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
 DATA = ROOT / "data" / "gamedata"
+
+_INDEX = None
+
+
+def level_index() -> dict:
+    """权威索引：关卡 id → `data_path`（`cached_levels()` 用的是同一份）。"""
+    global _INDEX
+    if _INDEX is None:
+        _INDEX = json.loads((DATA / "_level_index.json").read_text(encoding="utf-8"))
+    return _INDEX
+
+
+def level_batch(levels: list[str]) -> list[dict]:
+    """这一批关卡的**输入身份**：关卡 id ＋ 缓存文件路径 ＋ **内容 sha16**。
+
+    ★ 这是**数据侧**取数（只读 json 与文件字节），**不 import `ak_tactic`**
+    ——所以冻结档也跑得动，而且它量的是「喂给引擎的实物」，不是 Python 的形状。
+    """
+    idx = level_index()
+    out = []
+    for lid in levels:
+        e = idx.get(lid)
+        if e is None:
+            GB_fail("★ 权威索引里没有这个关卡：%s（缓存清单与索引不是同一批？）" % lid)
+        p = DATA / "map.ark-nights.com" / "levels" / e["data_path"]
+        if not p.is_file():
+            GB_fail("★ 关卡 %s 的缓存文件不在场：%s" % (lid, p))
+        out.append({"level": lid, "data_path": str(e["data_path"]),
+                    "sha16": hashlib.sha256(p.read_bytes()).hexdigest()[:16]})
+    return out
+
+
+def GB_fail(msg: str) -> None:
+    """本文件自己的具名失败（走通道的同一个码 6：这不是判据红）。"""
+    sys.stderr.write(msg.rstrip() + "\n")
+    sys.stderr.flush()
+    raise SystemExit(GB.RC_CHANNEL)
 
 
 def go_load(level: str) -> dict:
@@ -58,11 +119,13 @@ def go_load(level: str) -> dict:
     return resp["stage"]
 
 
-def py_load(level: str) -> dict:
-    """Python 那一份，按它自己的 `to_dict()` 出。"""
+def py_stage_expect(level: str) -> dict:
+    """期望值入口：Python 那一份，按它自己的口径摊成与 Go 同形的 dict。
+
+    ★ `ak_tactic` 的 import **写在函数体里**：冻结档下本函数不会被调到。
+    """
     from ak_tactic.gamedata.stage import load_stage
-    st = load_stage(level)
-    return st
+    return go_side(load_stage(level), level)
 
 
 def diff(prefix: str, a, b, out: list[str]) -> None:
@@ -152,14 +215,33 @@ def _route(r) -> dict:
 
 
 def main() -> int:
+    G = GB.bind("关卡", __file__)
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     mutate = "--mutate" in sys.argv
     levels = args or ["main_00-01"]
+
+    batch = level_batch(levels)
+    if G.mode == GB.RECORD:
+        #: 把「这一次录的是哪一批关卡」记成一条**可读的**记录（含每关的内容 sha16）。
+        #: 冻结档**不读它**用来判定——它回答的是「这份基线录的是哪一批」，
+        #: 而 `--check` 的「改值」栏会量到它：缓存一变，这里第一个显形。
+        G.expect(("query", "level_batch"), lambda: batch)
+    cov = G.coverage("stage", [(r["level"], r["sha16"]) for r in batch])
+    to_cmp = batch
+    if G.mode == GB.CHECK and not cov.ok:
+        #: 只比两边都有的。**未覆盖的不猜**——猜就是自己写一份期望值，
+        #: 那正是本仓记过的那条（两把相同的尺子互证）。
+        covered = {tuple(x) for x in cov.covered}
+        to_cmp = [r for r in batch if (r["level"], r["sha16"]) in covered]
+
     bad = 0
-    for level in levels:
+    for rec in to_cmp:
+        level = rec["level"]
         got = go_load(level)
-        st = py_load(level)
-        want = go_side(st, level)
+        #: ★ 键自带输入身份：缓存内容变了 ⇒ 键配不上 ⇒ 由上面那条对账如实报出，
+        #: 而不是拿一份旧内容的期望值去比新内容（那会造出一条假红）。
+        want = G.expect(("stage", level, rec["sha16"]),
+                        lambda level=level: py_stage_expect(level))
         if mutate:
             # 反向守卫：把 Go 的一格地图键改掉，判据**必须**红。
             want["map"]["tiles"][0][0]["key"] = "<mutated>"
@@ -175,14 +257,29 @@ def main() -> int:
                 print("    " + line)
         else:
             print(head)
+    print()
+    if G.mode == GB.CHECK and not cov.ok:
+        print(cov.report("stage", len(batch)))
+        print()
+    print("已比：%d 关（传入 %d 关%s）"
+          % (len(to_cmp), len(batch),
+             "" if len(to_cmp) == len(batch) else "；**未覆盖 %d 关**" % (len(batch) - len(to_cmp))))
     if mutate:
         print()
         print("反向守卫：本轮**期望**判红（地图键被人为改动）——"
               "%s" % ("成立 ✓" if bad else "不成立 ✗（判据没有分辨力）"))
         return 0 if bad else 1
-    print()
-    print("结论：%d / %d 关逐字段一致" % (len(levels) - bad, len(levels)))
-    return 1 if bad else 0
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
+    print("结论：%d / %d 关逐字段一致" % (len(to_cmp) - bad, len(to_cmp)))
+    if bad:
+        #: 覆盖部分**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+        return 1
+    if G.mode == GB.CHECK and not cov.ok:
+        #: 覆盖部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        return GB.RC_CHANNEL
+    return 0
 
 
 if __name__ == "__main__":

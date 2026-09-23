@@ -167,6 +167,16 @@ def _channel_fail(msg: str) -> None:
     raise SystemExit(RC_CHANNEL)
 
 
+def _dump(obj) -> str:
+    """基线落盘的**唯一**写法。紧凑（不缩进）。
+
+    ★ 缩进会把几 MB 的关卡基线再放大两成，而它**每次缓存长大都要重录**
+    （实测关卡缓存 72 → 320）。机器数据的可读性由工具提供，不由缩进提供。
+    """
+    return json.dumps(obj, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":"))
+
+
 def mode() -> str:
     raw = (os.environ.get(ENV_MODE) or "").strip().lower()
     if raw in ("", "0", "off", "none"):
@@ -251,6 +261,49 @@ class AkBlocker:
         return None
 
 
+class Coverage:
+    """**输入批次**的对账：这一次要问的对象集，与冻的那一批比。
+
+    ★ 为什么单独一个东西：乙类套（关卡/敌人/计划/…）的**对象集是活的**——
+    `check_go_all` 按缓存现算关卡清单喂进来，而缓存在被别的会话逐章取数时**会长大**
+    （实测当晚 72 → 320）。于是「现读 ≠ 冻结」有两种**完全不同**的因：
+
+    * **Go 漂移了** ⇒ 判据红，要人去看实现；
+    * **对象集变了**（多了/少了关卡）⇒ 读数**不可用**，基线该重录。
+
+    这两种红压成一种，后果是本仓记过的那条：**永久假红等于没有判据**——
+    天天红的判据，最后没人看。
+    """
+
+    def __init__(self, covered, extra, missing):
+        self.covered = covered        # 两边都有（按输入身份配上的）
+        self.extra = extra            # 只在**这一批**里有 ⇒ 基线没冻它们
+        self.missing = missing        # 只在**冻的那一批**里有 ⇒ 分母缩水
+
+    @property
+    def ok(self) -> bool:
+        return not self.extra and not self.missing
+
+    def report(self, tag: str, n_live: int) -> str:
+        lines = [
+            "★ 输入批次对账（%s）：这一批 %d 个对象 ＝ 覆盖 %d ＋ **未覆盖 %d**；"
+            "冻的那一批另有 %d 个**这次没问**"
+            % (tag, n_live, len(self.covered), len(self.extra), len(self.missing)),
+        ]
+        if self.extra:
+            lines.append("  · 基线里没有（前 8 个）：%s"
+                         % "、".join(str(x[0]) for x in self.extra[:8]))
+        if self.missing:
+            lines.append("  · 这次没问、但冻着（前 8 个）：%s"
+                         % "、".join(str(x[0]) for x in self.missing[:8]))
+        lines.append(
+            "  ⇒ **这不是「Go 漂移了」，是「录的是哪一批对象」变了**："
+            "未覆盖的对象拿不到冻的期望值，分母因此不完整。\n"
+            "     处置＝重录（`python tools\\freeze_baseline.py --record <套名>`）；"
+            "重录是显式的、会印出覆盖了谁。")
+        return "\n".join(lines)
+
+
 class Channel:
     def __init__(self, suite: str, script: str | Path):
         self.suite = suite
@@ -263,6 +316,34 @@ class Channel:
         self.meta: dict = {}
         self.n_hit = 0
         self.n_miss = 0
+        self.coverage_used = False                   # 用过 input 批次对账就置起
+
+    # ---- 输入批次（乙类：对象集是活的）------------------------------------
+
+    def coverage(self, tag: str, live: list[tuple]) -> Coverage:
+        """把「这一次要问的对象」与「冻的那一批」按**输入身份**对上。
+
+        `live` 的每一项是 `(对象名, 输入身份…)`，身份写在键里
+        （例如 `("stage", 关卡 id, 缓存文件内容 sha16)`）——**键自带输入身份**，
+        所以对象集或对象内容一变，就配不上，这里如实报出来。
+        """
+        self.coverage_used = True
+        src = self.values if self.mode == RECORD else self.frozen
+        frozen_groups: set[tuple] = set()
+        for k in src:
+            try:
+                parts = json.loads(k)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(parts, list) and parts and parts[0] == tag and len(parts) >= 2:
+                frozen_groups.add(tuple(parts[1:]))
+        live_groups = {tuple(x) for x in live}
+        if self.mode == RECORD:
+            return Coverage(sorted(live_groups), [], [])
+        covered = sorted(live_groups & frozen_groups)
+        extra = sorted(live_groups - frozen_groups)
+        missing = sorted(frozen_groups - live_groups)
+        return Coverage(covered, extra, missing)
 
     # ---- 唯一取数口 --------------------------------------------------------
 
@@ -313,6 +394,9 @@ class Channel:
             "recorded_at": _now(),
             "instrument": instrument_identity(),
             "python": python_identity(),
+            #: ★ 这一套的**对象集是活的**（键里自带输入身份，见 `coverage()`）。
+            #: 记下来给 `--control` 用：它据此决定要不要做「对象集变小」那个探针。
+            "input_identity": bool(self.coverage_used),
             "n_values": len(self.values),
             "values": self.values,
             "keys_readable": self.readable,
@@ -325,16 +409,15 @@ class Channel:
         if not out:
             #: ★ 没有出口就大声失败：静默不落盘＝录了一整轮的假账。
             _channel_fail("★ record 档没有 RIOS_GOLDEN_OUT —— 收下来的值无处可去")
-        Path(out).write_text(
-            json.dumps(self.payload(), ensure_ascii=False, indent=1, sort_keys=True),
-            encoding="utf-8")
+        Path(out).write_text(_dump(self.payload()), encoding="utf-8")
 
     def summary(self) -> str:
         if self.mode == "off":
             return ""
         if self.mode == RECORD:
-            return "★ 冻结基线通道 record —— 收下 %d 个期望值（套「%s」）" % (
-                len(self.values), self.suite)
+            return "★ 冻结基线通道 record —— 收下 %d 个期望值（套「%s」%s）" % (
+                len(self.values), self.suite,
+                "，含输入批次身份" if self.coverage_used else "")
         import_status = ("已封死（sys.modules 里没有顶层名 ak_tactic）"
                          if "ak_tactic" not in sys.modules else
                          "**仍在 sys.modules 里**（不该出现，请报）")
@@ -488,6 +571,33 @@ def suite_table() -> list[tuple[str, str, str, bool]]:
     sys.path.insert(0, str(TOOLS))
     import check_go_all                                        # noqa: PLC0415
     return list(check_go_all.SUITE)
+
+
+_LEVELS: list[str] | None = None
+
+
+def cached_levels() -> list[str]:
+    """`check_go_all.cached_levels()`（**同一份**，不在本文件抄第二遍）。"""
+    global _LEVELS
+    if _LEVELS is None:
+        sys.path.insert(0, str(TOOLS))
+        import check_go_all                                    # noqa: PLC0415
+        _LEVELS = list(check_go_all.cached_levels())
+    return _LEVELS
+
+
+def suite_args(name: str) -> list[str]:
+    """喂给这一套的**额外参数**——与总入口同一口径。
+
+    ★ 必须与 `check_go_all` 同源：关卡/敌人那几套的取证范围是**调用方喂进来的
+    清单**（按缓存现算）。这里不给清单的话，`--record`／`--status` 只会跑那一套的
+    **缺省样本**（1 关）——**分母小得误导**，正是本仓记过的形状
+    （总表印「1 / 1」看着漂亮、覆盖面其实是抽样）。
+    """
+    for n, _s, _w, wants in suite_table():
+        if n == name:
+            return list(cached_levels()) if wants else []
+    return []
 
 
 # =============================================================================
@@ -692,12 +802,13 @@ def _diff_keys(oldv: dict, nowv: dict) -> tuple[list, list, list]:
     return added, gone, diff
 
 
-def _run_with_dir(script: str, mode_: str, d: Path, timeout: float) -> dict:
+def _run_with_dir(script: str, mode_: str, d: Path, timeout: float,
+                  extra: list[str] | None = None) -> dict:
     """把基线目录指到 `d` 跑一次判据（控制组用；跑完还原环境变量）。"""
     old = os.environ.get(ENV_DIR)
     os.environ[ENV_DIR] = str(d)
     try:
-        return run_suite(script, [], mode_, None, timeout)
+        return run_suite(script, extra or [], mode_, None, timeout)
     finally:
         if old is None:
             os.environ.pop(ENV_DIR, None)
@@ -705,11 +816,12 @@ def _run_with_dir(script: str, mode_: str, d: Path, timeout: float) -> dict:
             os.environ[ENV_DIR] = old
 
 
-def _live_values(script: str, timeout: float) -> tuple[dict | None, dict]:
+def _live_values(script: str, timeout: float,
+                 extra: list[str] | None = None) -> tuple[dict | None, dict]:
     """现读：以 record 档跑一遍判据，把通道出口读进内存（**不落盘**）。"""
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td) / "now.json"
-        r = run_suite(script, [], RECORD, tmp, timeout)
+        r = run_suite(script, extra, RECORD, tmp, timeout)
         if not tmp.is_file():
             return None, r
         return (json.loads(tmp.read_text(encoding="utf-8")).get("values") or {}), r
@@ -740,6 +852,7 @@ def cmd_control(names: list[str], timeout: float) -> int:
             bad += 1
             continue
         script = known[name]
+        extra = suite_args(name)          # 与总入口同一口径（关卡/敌人要喂清单）
         blob = load_frozen(name)
         values = blob.get("values") or {}
         if not values:
@@ -775,7 +888,7 @@ def cmd_control(names: list[str], timeout: float) -> int:
                     b1["values"] = t1
                     (d / ("%s.json" % name)).write_text(
                         json.dumps(b1, ensure_ascii=False), encoding="utf-8")
-                    r1 = _run_with_dir(script, CHECK, d, timeout)
+                    r1 = _run_with_dir(script, CHECK, d, timeout, extra)
                 red = r1["rc"] != 0 and r1["rc"] != RC_CHANNEL
                 if red:
                     print("  ✓ P1 改坏 %s ⇒ 判据红（rc=%d）：%s"
@@ -802,16 +915,23 @@ def cmd_control(names: list[str], timeout: float) -> int:
                     d = Path(td)
                     (d / ("%s.json" % name)).write_text(
                         json.dumps(b2, ensure_ascii=False), encoding="utf-8")
-                    r2 = _run_with_dir(script, CHECK, d, timeout)
-                live, _r3 = _live_values(script, timeout)
+                    r2 = _run_with_dir(script, CHECK, d, timeout, extra)
+                live, _r3 = _live_values(script, timeout, extra)
                 #: ⚠ 查询集被删一个**不是**「新增/消失」：键还是同一个键，变的是**值**。
                 #: 所以它落在「改值」那一栏——这条口径写清楚，别让人去找不存在的键差。
                 added, gone, diff = _diff_keys(t2, live or {})
                 print("  · P2 查询集 %d → %d 个问题：冻结档 rc=%d  %s"
                       % (len(qv), len(qv) - 1, r2["rc"],
                          verdict_of(r2["out"]) or "（无结论行）"))
-                print("    ⇒ 冻结档**看不见分母被改小**（它只问冻住的那批问题，照样全绿）"
-                      "——有界盲区，登记不掩饰")
+                if blob.get("input_identity"):
+                    #: ★ 这一套的**真正查询集是调用方给的清单**（对象集是活的），
+                    #: 所以冻结档看不见的只是那条**批次记录**被改小；真正问哪些对象
+                    #: 由 P3／P3b 管。措辞不许含糊：说错会让人去查一个不存在的东西。
+                    print("    ⇒ 冻结档看不见**批次记录**被改小（真正问哪些对象由调用方的"
+                          "清单决定 ⇒ 那是 P3／P3b 的事）——有界盲区，登记不掩饰")
+                else:
+                    print("    ⇒ 冻结档**看不见分母被改小**（它只问冻住的那批问题，"
+                          "照样全绿）——有界盲区，登记不掩饰")
                 if added or gone or diff:
                     print("    ✓ P2b `--check`（拿**现读**的查询集对账）看见了："
                           "新增 %d / 消失 %d / 改值 %d（查询集落在「改值」栏）"
@@ -819,11 +939,70 @@ def cmd_control(names: list[str], timeout: float) -> int:
                 else:
                     print("    ✗ P2b `--check` **没看见**查询集被删 —— 补偿控制失效")
                     bad += 1
+
+        #: ---- P3：对象集变小（只对**带输入身份**的套）------------------------
+        #: 乙类套的对象集是活的（缓存长大就变）。这条探针证的是**分类**这件事：
+        #: 「对象集变了」必须被报成**对象变了**，而不是被读成「Go 漂移了」。
+        if not blob.get("input_identity"):
+            print("  ⊘ P3 不适用：本套的键不带输入身份"
+                  "（对象集写死在脚本里或来自冻结的查询集）")
+        else:
+            groups: dict[tuple, list[str]] = {}
+            for k in sorted(values):
+                try:
+                    parts = json.loads(k)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(parts, list) and len(parts) >= 2 and parts[0] != "query":
+                    groups.setdefault(tuple(parts[:2]), []).append(k)
+            pick_g = max(groups, key=lambda g: len(groups[g])) if groups else None
+            if pick_g is None:
+                print("  ✗ P3 跳过：基线里挑不出「按对象分组」的键")
+                bad += 1
+            else:
+                drop = set(groups[pick_g])
+                t3 = {k: v for k, v in values.items() if k not in drop}
+                b3 = copy.deepcopy(blob)
+                b3["values"] = t3
+                with tempfile.TemporaryDirectory() as td:
+                    d = Path(td)
+                    (d / ("%s.json" % name)).write_text(_dump(b3), encoding="utf-8")
+                    r3 = _run_with_dir(script, CHECK, d, timeout, extra)
+                named = "输入批次对账" in (r3["out"] + "\n" + r3["err"])
+                print("  · P3 删掉一个对象的全部键（%s，共 %d 键）：冻结档 rc=%d"
+                      % ("/".join(str(x) for x in pick_g), len(drop), r3["rc"]))
+                if r3["rc"] == RC_CHANNEL and named:
+                    print("    ✓ 被判成**对象变了**（rc=6 且印出「输入批次对账」）"
+                          "—— 与「Go 漂移了」（判据红 rc=1）分得开")
+                else:
+                    print("    ✗ **没有**被判成对象变了（rc=%d，具名消息=%s）"
+                          "—— 这两种红会混成一个" % (r3["rc"], named))
+                    bad += 1
+
+            #: ---- P3b：反方向——**这一批少问了**（冻着、这次没问）------------
+            #: 缓存被清（本仓真出过：`git worktree remove` 穿透 junction 删过
+            #: 主仓 `data/`）时就是这个形状：分母缩水，而它**不红**才是灾难。
+            if not extra:
+                print("  ⊘ P3b 不适用：本套不从调用方拿清单（没有可少问的对象）")
+            else:
+                short = extra[:-1]
+                r4 = run_suite(script, short, CHECK, None, timeout)
+                named4 = "输入批次对账" in (r4["out"] + "\n" + r4["err"])
+                print("  · P3b 少喂一个对象（%d → %d）：冻结档 rc=%d"
+                      % (len(extra), len(short), r4["rc"]))
+                if r4["rc"] == RC_CHANNEL and named4:
+                    print("    ✓ 被判成**分母缩水**（rc=6 且印出「输入批次对账」）"
+                          "—— 「这次没问」不会被当成绿")
+                else:
+                    print("    ✗ **没有**被判成分母缩水（rc=%d，具名消息=%s）"
+                          % (r4["rc"], named4))
+                    bad += 1
     print("-" * 92)
     if bad:
         print("★ %d 处控制组不成立 —— **这一批的绿全部作废**（本仓规矩：控制组没红就是没有判据）" % bad)
         return 1
-    print("✓ 全部控制组成立（P1 都红；P2b 都看得见分母被改小）")
+    print("✓ 全部控制组成立（P1 都红；P2b 都看得见分母被改小；"
+          "P3 都把对象集变小判成「对象变了」）")
     return 0
 
 
@@ -873,10 +1052,13 @@ def cmd_record(names: list[str], timeout: float) -> int:
             print("  旧值与新值的关系在下面「值差异」栏里逐块报出。")
         else:
             print("新建：%s" % target)
+        extra = suite_args(name)
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td) / "recorded.json"
-            r = run_suite(script, [], RECORD, tmp, timeout)
-            print("  跑法：RIOS_GOLDEN=record 经 runner（rc=%d，%.1fs）" % (r["rc"], r["sec"]))
+            r = run_suite(script, extra, RECORD, tmp, timeout)
+            print("  跑法：RIOS_GOLDEN=record 经 runner（rc=%d，%.1fs）；喂参数 %d 个%s"
+                  % (r["rc"], r["sec"], len(extra),
+                     "（关卡/敌人清单，与总入口同一口径）" if extra else ""))
             if r["rc"] == RC_CHANNEL or not tmp.is_file():
                 print("✗ 录不出值（rc=%d）：%s" % (r["rc"], named_reason(r) or "通道没收下任何值"))
                 for line in (r["err"] or "").strip().splitlines()[-6:]:
@@ -896,8 +1078,7 @@ def cmd_record(names: list[str], timeout: float) -> int:
                     for k in ks[:5]:
                         print("    %s %s" % (tag, k[:120]))
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(json.dumps(new, ensure_ascii=False, indent=1, sort_keys=True),
-                              encoding="utf-8")
+            target.write_text(_dump(new), encoding="utf-8")
             print("✓ 已写入 %s（%d 个值）" % (target, new.get("n_values")))
     return 1 if bad else 0
 
@@ -943,7 +1124,7 @@ def cmd_check(names: list[str], timeout: float) -> int:
                          "**期望值可能已经变了**" % (ak_old, ak_now))
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td) / "now.json"
-            r = run_suite(script, [], RECORD, tmp, timeout)
+            r = run_suite(script, suite_args(name), RECORD, tmp, timeout)
             if not tmp.is_file():
                 print("✗ %-6s 现读收不上（rc=%d）：%s" % (name, r["rc"],
                                                          named_reason(r) or "无出口"))
@@ -999,7 +1180,8 @@ def cmd_status(names: list[str], timeout: float, quick: bool, show: bool) -> int
     for name, script, _what, _l in picked:
         f = suite_file(name)
         recorded = f.is_file()
-        r1 = run_suite(script, [], CHECK, None, timeout)
+        extra = suite_args(name)
+        r1 = run_suite(script, extra, CHECK, None, timeout)
         ok = r1["rc"] == 0
         if ok:
             green += 1
@@ -1011,7 +1193,7 @@ def cmd_status(names: list[str], timeout: float, quick: bool, show: bool) -> int
         #: 已录的套有意义。没录的套在默认档绿不绿由 `check_go_all.py` 的总表覆盖
         #: ——在这里再跑一遍只是重复一次重活，而**不产出任何关于迁移的读数**。
         if not quick and recorded:
-            r0 = run_suite(script, [], "off", None, timeout)
+            r0 = run_suite(script, extra, "off", None, timeout)
             default_rc = r0["rc"]
         hit = ""
         for line in r1["out"].splitlines():
