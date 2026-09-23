@@ -328,6 +328,8 @@ class Channel:
         self.n_miss = 0
         self.coverage_used = False                   # 用过 input 批次对账就置起
         self.batch_used = False                      # 批次记录**真的进了判定**就置起
+        self.section_rows: list[dict] = []           # 逐段覆盖面声明（第四态的依据）
+        self.sections_declared = False
 
     def batch_consumed(self) -> None:
         """声明：本套**用**冻的批次记录做判定（不只是记着）。
@@ -338,6 +340,60 @@ class Channel:
         （它看起来像有守卫）。
         """
         self.batch_used = True
+
+    # ---- 覆盖面：第四态「部分覆盖」的落点 ---------------------------------
+
+    #: 段的三种类。**工具按它计数，不按形容词**。
+    SECTION_CLASSES = ("frozen", "python_both", "source_coupled")
+
+    def sections(self, rows: list[dict]) -> None:
+        """**逐段声明**本套判据的覆盖面。每行一条：
+
+            {"id": "§2", "class": "python_both",
+             "why": "harness() 与 spec['spawns'] 两侧都是 Python"}
+
+        `class` 只能是三者之一：
+
+        * `frozen` —— 这一段的两侧是「Python 期望值 ↔ Go 现读」⇒ 冻得住；
+        * `python_both` —— **两侧都是 Python**（差分／敏感性／控制组）⇒
+          冻住等于**让同一份冻值跟自己比**（恒等假绿，本仓禁止的「两把相同的尺子互证」）；
+        * `source_coupled` —— 期望值取自**源码文本**（ast 等）⇒ 等值冻它＝每次改源码
+          都该重录＝**永久假红**（本仓：永久假红等于没有判据）。
+
+        ★ 声明进基线（`payload["sections"]`）。**`--status` 据此把这一套判成
+        「部分覆盖」，而部分覆盖永远不进「跑通」的分子**——否则主判据会说谎
+        （分子静默缩水，只不过这次缩的是**分子**）。
+
+        ⚠ **信任模型**：这是**套自己声明**的，**工具验不了它是否真的覆盖了那么多**。
+        工具只保证两件事：**声明可见**、**且不许当跑通**。
+        （与 `batch_consumed` 同一个信任模型。）
+        """
+        rows = list(rows)
+        for r in rows:
+            if not isinstance(r, dict) or not r.get("id") or not r.get("why"):
+                _channel_fail("★ 段声明必须带 id 与 why（这是一张表，不是形容词）：%r" % (r,))
+            if r.get("class") not in self.SECTION_CLASSES:
+                _channel_fail("★ 段「%s」的 class=%r 不合法（只能是 %s）"
+                              % (r.get("id"), r.get("class"),
+                                 "／".join(self.SECTION_CLASSES)))
+        self.section_rows = rows
+        self.sections_declared = True
+
+    def section_counts(self) -> tuple[int, int, int]:
+        """(总段数, 可冻段数, 未覆盖段数)。"""
+        rows = getattr(self, "section_rows", []) or []
+        un = [r for r in rows if r.get("class") != "frozen"]
+        return len(rows), len(rows) - len(un), len(un)
+
+    def uncovered_sections_text(self) -> str:
+        rows = getattr(self, "section_rows", []) or []
+        un = [r for r in rows if r.get("class") != "frozen"]
+        if not un:
+            return ""
+        n_all, n_frozen, _ = self.section_counts()
+        return "（本套冻结覆盖 %d/%d 段；%s 不适用等值冻结）" % (
+            n_frozen, n_all,
+            "／".join("%s %s" % (r["id"], r["class"]) for r in un))
 
     # ---- 输入批次（乙类：对象集是活的）------------------------------------
 
@@ -431,6 +487,14 @@ class Channel:
             #: ★ 记下来给 `--control` 的 **P4** 用（同一对象集、内容变了）：
             #: 只有**记录真的进了判定**的套才红得起来那个形状，见 `batch_consumed()`。
             "batch_consumed": bool(self.batch_used),
+            #: ★ **第四态「部分覆盖」的依据**：逐段声明 ＋ 由工具数出来的三个数。
+            #: `--status` 据此把这一套判成 `部分覆盖`，而**它永远不进「跑通」的分子**。
+            #: ⚠ 声明是**套自己写的**，工具验不了覆盖是否真有那么多——只保证
+            #: 「声明可见」＋「不许当跑通」。
+            "sections": self.section_rows,
+            "sections_total": self.section_counts()[0],
+            "sections_frozen": self.section_counts()[1],
+            "sections_uncovered": self.section_counts()[2],
             "n_values": len(self.values),
             "values": self.values,
             "keys_readable": self.readable,
@@ -448,15 +512,19 @@ class Channel:
     def summary(self) -> str:
         if self.mode == "off":
             return ""
+        #: ★ **未覆盖段每次都要印出来**（按名字）——覆盖面要在**用它的地方**可见，
+        #: 不是只在一个要另外去跑的地方（`--status`）可见。
+        tail = self.uncovered_sections_text()
         if self.mode == RECORD:
-            return "★ 冻结基线通道 record —— 收下 %d 个期望值（套「%s」%s）" % (
+            return "★ 冻结基线通道 record —— 收下 %d 个期望值（套「%s」%s）%s" % (
                 len(self.values), self.suite,
-                "，含输入批次身份" if self.coverage_used else "")
+                "，含输入批次身份" if self.coverage_used else "",
+                ("　" + tail) if tail else "")
         import_status = ("已封死（sys.modules 里没有顶层名 ak_tactic）"
                          if "ak_tactic" not in sys.modules else
                          "**仍在 sys.modules 里**（不该出现，请报）")
         return ("★ 冻结基线通道 check —— 取期望值 %d 次全部命中冻的那份，零次吃 Python；"
-                "%s" % (self.n_hit, import_status))
+                "%s%s" % (self.n_hit, import_status, ("\n" + tail) if tail else ""))
 
 
 _CHANNEL: Channel | None = None
@@ -766,6 +834,20 @@ def _runner(argv: list[str]) -> int:
                 "或改走 G.expect()。\n" % "、".join(_BLOCKED[:3]))
             sys.stderr.flush()
             os._exit(RC_CHANNEL)
+        if m == CHECK:
+            #: ★ **覆盖面每次都要印**（第四态的第一条规矩）：由 runner 自动印，
+            #: 不依赖套的作者记得写那一行——「只在 --status 里可见」是不够的。
+            try:
+                tail = ch.uncovered_sections_text()
+            except AttributeError:
+                tail = ""
+            if tail:
+                sys.stdout.write(
+                    "★ 本套是**部分覆盖**：%s\n"
+                    "  ⇒ 未覆盖的那几段**不适用等值冻结**（两侧同源 ⇒ 冻了就是恒等假绿；\n"
+                    "     源码耦合 ⇒ 冻了就是永久假红）。**这一套不计入「跑通」。**\n"
+                    % tail.lstrip("（").rstrip("）"))
+                sys.stdout.flush()
         if m == CHECK and ch.n_miss:
             sys.stderr.write("★ 冻结基线防线：缺键 %d 个 ⇒ rc=6。\n" % ch.n_miss)
             sys.stderr.flush()
@@ -1381,6 +1463,7 @@ def cmd_status(names: list[str], timeout: float, quick: bool, show: bool) -> int
     print("-" * 92)
     green = 0
     na = 0
+    partial: list[tuple[str, int, int]] = []
     rows_out = []
     for name, script, _what, _l in picked:
         if name in NOT_APPLICABLE:
@@ -1391,11 +1474,19 @@ def cmd_status(names: list[str], timeout: float, quick: bool, show: bool) -> int
             continue
         f = suite_file(name)
         recorded = f.is_file()
+        #: ★ **第四态「部分覆盖」的依据读自基线**（套逐段声明的三个数）。
+        meta0 = load_frozen(name) if recorded else {}
+        n_all = int(meta0.get("sections_total") or 0)
+        n_un = int(meta0.get("sections_uncovered") or 0)
         extra = suite_args(name)
         r1 = run_suite(script, extra, CHECK, None, timeout)
-        ok = r1["rc"] == 0
+        ok = r1["rc"] == 0 and n_un == 0
         if ok:
             green += 1
+        elif r1["rc"] == 0 and n_un:
+            #: ★ **部分覆盖永远不进「跑通」的分子**——否则主判据会说谎：
+            #: 这一套的 check 档只覆盖了它一部分判据，却会以 rc=0 混进分子。
+            partial.append((name, n_all - n_un, n_all))
         reason = ""
         if not ok:
             reason = named_reason(r1) or verdict_of(r1["out"]) or ("rc=%d" % r1["rc"])
@@ -1416,14 +1507,21 @@ def cmd_status(names: list[str], timeout: float, quick: bool, show: bool) -> int
             if "spawn 过" in line:
                 spawn_note = line.strip()
         rows_out.append((name, script, recorded, r1["rc"], default_rc, reason, hit))
-        mark = "✓" if ok else "✗"
+        mark = "✓" if ok else ("◐" if r1["rc"] == 0 and n_un else "✗")
         if default_rc is None:
             d = "⊘无基线" if not recorded else "⊘"
         else:
             d = "绿" if default_rc == 0 else "红(%d)" % default_rc
         print("%s %-6s 冻结rc=%-3d 默认档=%-8s 基线=%s  %.1fs" %
               (mark, name, r1["rc"], d, "有" if recorded else "**无**", r1["sec"]))
-        if not ok:
+        if r1["rc"] == 0 and n_un:
+            print("        ◐ **部分覆盖**：声明 %d 段，其中 %d 段不适用等值冻结"
+                  " ⇒ **不计入「跑通」**" % (n_all, n_un))
+            for row in (meta0.get("sections") or []):
+                if row.get("class") != "frozen":
+                    print("           · %s（%s）：%s"
+                          % (row.get("id"), row.get("class"), row.get("why")))
+        if not ok and not (r1["rc"] == 0 and n_un):
             print("        未转理由：%s" % reason)
         if spawn_note:
             print("        %s" % spawn_note)
@@ -1441,15 +1539,22 @@ def cmd_status(names: list[str], timeout: float, quick: bool, show: bool) -> int
         both = sum(1 for _n, _s, _r, c, d, _rs, _h in rows_out if c == 0 and d == 0)
         print("   有基线的 %d 套里，两种模式**都给绿**（＝这一套的基线录对了）：%d / %d"
               % (n_leg, both, n_leg))
-    print("   三分账（**不重不漏**）：跑通 %d ＋ 待转 %d ＋ 不适用于冻结 %d ＝ 本次 %d 套"
-          % (green, len(undone), na, len(picked)))
+    print("   **四分账**（**不重不漏**）：跑通 %d ＋ **部分覆盖 %d** ＋ 待转 %d "
+          "＋ 不适用于冻结 %d ＝ 本次 %d 套"
+          % (green, len(partial), len(undone), na, len(picked)))
+    if partial:
+        print("   ★ 部分覆盖（**永远不进「跑通」的分子**）：")
+        for n, nf, nt in partial:
+            print("     - %s：冻结覆盖 %d / %d 段；其余段两侧同源或源码耦合，"
+                  "不适用等值冻结" % (n, nf, nt))
     if undone:
         print("   待转的 %d 套与具名理由：" % len(undone))
         for n, rs in undone:
             print("     - %s：%s" % (n, rs))
     print("   其中 %d 套连基线都没有。" % sum(1 for _n, _s, r, _c, _d, _rs, _h in rows_out
                                               if not r))
-    return 0 if not undone else 1
+    #: 只要还有待转**或部分覆盖**，就没全绿 ⇒ rc=1（宁可严，不放宽守卫）。
+    return 0 if (not undone and not partial) else 1
 
 
 def main() -> int:
