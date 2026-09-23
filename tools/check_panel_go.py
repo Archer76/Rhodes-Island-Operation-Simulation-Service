@@ -26,9 +26,20 @@
 
 ★ 不写「全称」结论：这是**一组叉乘**，不是对全部输入空间的穷举。
 
+## 期望值从哪来（**两种模式**）
+
+* 默认（`RIOS_GOLDEN` 未设）：现场把 Python 的七个方法当纯函数调，**现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/面板.json`，**不 import `ak_tactic`**。
+
+★ 这一套的网格**写死在脚本里**（`EFFS` / `EDGE_MAX` / 那串叉乘），所以没有可冻的
+「查询集」——与「攻击间隔」同一形状。但**键里带这一行的输入身份**
+（行号 ＋ 行内容的 sha16），于是「网格被人改了」在 `--check` 的「新增/消失」栏
+第一个显形，而不是被读成七处读数同时变值。
+
 用法:
     python tools\\check_panel_go.py
     python tools\\check_panel_go.py --mutate
+    python tools\\freeze_baseline.py --record 面板
 """
 from __future__ import annotations
 
@@ -44,6 +55,8 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -241,7 +254,21 @@ def build_rows() -> list[dict]:
     return rows
 
 
+def row_id(row: dict) -> str:
+    """这一行输入的**内容身份**：行内容的 sha16（数据侧算，不 import `ak_tactic`）。
+
+    ★ 键里只放行号是不够的：网格被改一行，行号照旧而输入换了 ⇒ 会拿一份旧输入的
+    期望值去比新输入，造出一条假红（本仓记过：`("stage", 关卡 id, sha16)` 那条
+    规矩的同一形状）。
+    """
+    blob = json.dumps(row, sort_keys=True, ensure_ascii=False,
+                      separators=(",", ":")).encode("utf-8")
+    return GB.sh16(blob)
+
+
 def main() -> int:
+    G = GB.bind("面板", __file__)
+
     rows = build_rows()
     print("Go 侧仪器：%s" % GO_BIN)
     print("Python 侧权威：frontend/operator_view.py 的七个读数方法（替身对象调）")
@@ -256,10 +283,12 @@ def main() -> int:
 
     bad = 0
     seen: dict[str, int] = {}
-    for row, g in zip(rows, got):
+    for i, (row, g) in enumerate(zip(rows, got)):
         for b in branches(row):
             seen[b] = seen.get(b, 0) + 1
-        w = want(row)
+        #: ★ 期望值只能从这里来：默认档现调 Python 的七个方法，冻结档读冻的那份。
+        w = G.expect(("panel", i, row_id(row)),
+                     lambda row=row: want(row))
         diff = []
         for f in w:
             if f == "attack_type":
@@ -298,6 +327,9 @@ def main() -> int:
         "目标数原值非正", "目标数原值分数", "目标数原值>=2")
         if seen.get(b, 0) == 0]
     print()
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
     if mutate:
         if bad:
             print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")

@@ -30,9 +30,20 @@
 认不出的 id）。判据把它单列，要求「Go 拒 / 原版收」这一对**同时成立**才算
 这条分歧被登记到，而不是被当成对拍失败。
 
+## 期望值从哪来（**两种模式**）
+
+* 默认（`RIOS_GOLDEN` 未设）：现场调 Python 的 `Roster.from_json`，**现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/名册.json`，**不 import `ak_tactic`**。
+
+★ 冻的是**一条用例一份期望值**（`{"accept", "entries", "names", "why"}`），
+键里带**这一例的输入身份**（例号 ＋ 该例文件字节的 sha16）——那批合成用例是
+脚本写死的常量，可**真夹具那一例**（`fixtures/roster_max_modelled.json`）是
+活文件，只记例号会在夹具被改之后拿一份旧输入的期望值去比新输入。
+
 用法:
     python tools\\check_roster_go.py
     python tools\\check_roster_go.py --mutate
+    python tools\\freeze_baseline.py --record 名册
 """
 from __future__ import annotations
 
@@ -47,6 +58,8 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -135,13 +148,41 @@ def py_roster(path: Path):
     return rows, r.names()
 
 
-def main() -> int:
+def py_roster_expect(path: Path) -> dict:
+    """一条用例的期望值（**两种模式共用的形状**）。
+
+    ★ `accept` 记「原版收不收」——判据里有「Go 拒 ∧ 原版收」那一支，
+    所以**「收不收」本身就是期望值**，不只冻那几行字段。
+    ★ `ak_tactic` 的 import 住在 `py_roster()` 里：冻结档下本函数不会被调到。
+    """
+    try:
+        rows, names = py_roster(path)
+    except Exception as exc:                                   # noqa: BLE001
+        msg = "%s: %s" % (type(exc).__name__, exc)
+        #: ★ 报错正文里带着**这一次的临时文件路径**（每次跑都不同）——它不是期望值的
+        #: 一部分，冻进去等于录了一个「只对那一次成立」的值（实测：不换掉的话
+        #: `--check` 天天报改值 1，那正是本仓记过的「永久假红等于没有判据」）。
+        #: ⚠ 只在**这一支**（原版拒收）上换；判据判的是 `accept` 与那几行字段。
+        return {"accept": False, "entries": [], "names": [],
+                "why": msg.replace(str(path), "<case>")}
+    return {"accept": True, "entries": rows, "names": names, "why": ""}
+
+
+def py_authority() -> str:
+    """那一行的文件名。冻结档下不 import，也就没有它。"""
     import ak_tactic.plan as P
-    from ak_tactic.plan import Roster
+    return Path(P.__file__).name
+
+
+def main() -> int:
+    G = GB.bind("名册", __file__)
 
     print("Go 侧仪器：%s" % GO_BIN)
-    print("Python 侧权威：ak_tactic.plan.Roster.from_json（%s）"
-          % Path(P.__file__).name)
+    if G.mode == GB.CHECK:
+        print("Python 侧权威：ak_tactic.plan.Roster.from_json"
+              "（冻结档不 import：读的是 fixtures/golden/名册.json）")
+    else:
+        print("Python 侧权威：ak_tactic.plan.Roster.from_json（%s）" % py_authority())
     print()
 
     mutate = "--mutate" in sys.argv
@@ -159,12 +200,13 @@ def main() -> int:
                 seen[b] = seen.get(b, 0) + 1
 
             ok, got = go_roster(path)
-            try:
-                rows, names = py_roster(path)
-                py_ok = True
-            except Exception as exc:                       # noqa: BLE001
-                rows, names, py_ok = [], [], False
-                py_err = "%s: %s" % (type(exc).__name__, exc)
+            #: ★ 键里带这一例的**输入身份**：例号 ＋ 该例文件字节的 sha16
+            #: （真夹具那一例的文件是活的，只记例号会在它被改之后比错对象）。
+            e = G.expect(("roster", i, GB.file_sha16(path)),
+                         lambda path=path: py_roster_expect(path))
+            rows, names = e["entries"], e["names"]
+            py_ok = e["accept"]
+            py_err = e["why"]
 
             if expect == "both-refuse":
                 if ok or py_ok:
@@ -218,6 +260,9 @@ def main() -> int:
         print("    %-22s %d" % (b, n))
     unchecked = [b for _, _, _, brs in CASES for b in brs if seen.get(b, 0) == 0]
     print()
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
     if diverged:
         print("★ 已登记的分歧（要求「Go 拒 ∧ 原版收」同时成立，不算对拍失败）：")
         for d in diverged:

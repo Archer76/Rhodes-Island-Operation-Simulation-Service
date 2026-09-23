@@ -19,9 +19,23 @@
 `types.SimpleNamespace` 造替身、把**真实函数**当纯函数调即可——不必起 sim，
 也不必解析真实天赋表（那是另一层的事，本判据不声称覆盖它）。
 
+## 期望值从哪来（**两种模式**）
+
+* 默认（`RIOS_GOLDEN` 未设）：现场调 Python 的 `squad_cost_bonus`，**现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/费用天赋.json`，
+  **不 import `ak_tactic`**。
+
+★ 冻的**两半**与各自的身份：
+  · 第一部分的**查询集**（黑板形状 × 队伍组合）写死在脚本里，键里带全部输入
+    （那一串黑板本身）；
+  · 第二部分的两批输入：名册夹具那 20 位（走 `("query", "costbonus_roster")`
+    冻住它的顺序与练度）与从**全表**捞出来的那几位（键里带
+    `("talentbonus", char_id, elite, level, potential)`——全输入，自带身份）。
+
 用法:
     python tools\\check_costbonus_go.py
     python tools\\check_costbonus_go.py --mutate
+    python tools\\freeze_baseline.py --record 费用天赋
 """
 from __future__ import annotations
 
@@ -37,6 +51,8 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -62,6 +78,42 @@ BOARDS = [
 def board_of(bb: dict) -> types.SimpleNamespace:
     return types.SimpleNamespace(
         blackboard=dict(bb), value=lambda k, b=bb: float(b.get(k, 0.0)))
+
+
+_TB = None
+
+
+def _talent_book():
+    """`TalentBook()` 只建一次（冻结档下**根本不会建**）。"""
+    global _TB
+    if _TB is None:
+        from ak_tactic.operator import TalentBook
+        _TB = TalentBook()
+    return _TB
+
+
+def py_squad_bonus(boards: list[dict]) -> float:
+    """第一部分（合成黑板）的期望值。★ import 写在函数体里：冻结档下不会被调到。"""
+    from ak_tactic.battle.talents import squad_cost_bonus
+    return squad_cost_bonus([board_of(b) for b in boards])
+
+
+def py_talent_bonus(char_id, elite, level, potential) -> float:
+    """第二部分（**真实天赋表**）的期望值：`for_operator` 取黑板再走同一个函数。"""
+    from ak_tactic.battle.talents import squad_cost_bonus
+    return squad_cost_bonus(_talent_book().for_operator(
+        char_id, elite=elite, level=level, potential=potential))
+
+
+def py_roster_rows() -> list[list]:
+    """名册夹具的**输入身份**：逐人 `[char_id, elite, level]`，**顺序也要冻住**
+    （`cfgs` 的次序就是它的次序，`zip(cfgs, got)` 靠它配对）。
+
+    ★ `ak_tactic` 的 import 写在函数体里：冻结档下本函数不会被调到。
+    """
+    from ak_tactic.plan import Roster
+    ros = Roster.from_json(ROOT / "fixtures" / "roster_max_modelled.json")
+    return [[e["char_id"], e["elite"], e["level"]] for _n, e in ros.entries.items()]
 
 
 def go_costbonus(queries: list[dict]) -> list[float]:
@@ -125,9 +177,7 @@ def go_talentbonus(cfgs: list[dict]) -> list[float]:
 
 
 def main() -> int:
-    from ak_tactic.battle.talents import squad_cost_bonus
-    from ak_tactic.operator import TalentBook
-    from ak_tactic.plan import Roster
+    G = GB.bind("费用天赋", __file__)
 
     #: 一份入参 = 一次求解：全队的天赋黑板。用叉乘把「命中/不命中/混杂」全走一遍。
     picks = [(), (1,), (5,), (7,), (0, 2), (1, 2), (5, 5), (7, 7), (1, 7), (2, 3, 5)]
@@ -144,7 +194,10 @@ def main() -> int:
     bad = 0
     seen: dict[str, int] = {"单条命中": 0, "单条不认": 0, "一次多板": 0}
     for q, g in zip(queries, got):
-        want = squad_cost_bonus([board_of(b) for b in q["boards"]])
+        #: ★ 期望值只能从这里来：默认档现调 Python，冻结档读冻的那份。
+        #: 键就是那串黑板本身（**自带全部输入**，不是只记一个下标）。
+        want = G.expect(("costbonus", q["boards"]),
+                        lambda q=q: py_squad_bonus(q["boards"]))
         if len(q["boards"]) > 1:
             seen["一次多板"] += 1
         for b in q["boards"]:
@@ -160,24 +213,26 @@ def main() -> int:
           % ", ".join("%s=%d" % (k, v) for k, v in sorted(seen.items())))
     unchecked = [k for k, v in seen.items() if v == 0]
     #: ---- 第二部分：从**真实天赋表**算（这才是排程要用的那一步）----
-    tb = TalentBook()
-    ros = Roster.from_json(ROOT / "fixtures" / "roster_max_modelled.json")
+    ros_rows = G.expect(("query", "costbonus_roster"), py_roster_rows)
     cfgs, wants = [], []
-    for _name, e in ros.entries.items():
+    for cid, elite, level in ros_rows:
         for pot in (1, 3, 6):
-            cfgs.append({"char_id": e["char_id"], "elite": e["elite"],
-                         "level": e["level"], "potential": pot})
-            wants.append(squad_cost_bonus(tb.for_operator(
-                e["char_id"], elite=e["elite"], level=e["level"],
-                potential=pot)))
+            #: ★ 期望值只能从这里来：默认档现调 Python，冻结档读冻的那份。
+            w = G.expect(("talentbonus", cid, elite, level, pot),
+                         lambda cid=cid, elite=elite, level=level, pot=pot:
+                         py_talent_bonus(cid, elite, level, pot))
+            cfgs.append({"char_id": cid, "elite": elite,
+                         "level": level, "potential": pot})
+            wants.append(w)
     #: ⚠ 名册那 20 位里一个带这条天赋的都没有（实测非零 0 例）⇒ 只验到了
     #: 「返回 0」那一条支。这里从**全表**捞真有这条天赋的干员补进网格。
     picked = find_cost_talent_chars(limit=8)
     added = 0
     for cid in picked:
         for elite, level, pot in ((2, 90, 6), (2, 90, 1), (0, 1, 1), (1, 55, 3)):
-            w = squad_cost_bonus(tb.for_operator(
-                cid, elite=elite, level=level, potential=pot))
+            w = G.expect(("talentbonus", cid, elite, level, pot),
+                         lambda cid=cid, elite=elite, level=level, pot=pot:
+                         py_talent_bonus(cid, elite, level, pot))
             if w:
                 cfgs.append({"char_id": cid, "elite": elite, "level": level,
                              "potential": pot})
@@ -203,6 +258,9 @@ def main() -> int:
     print("已比（第二部分）：%d 位干员 × 3 档潜能，对拍 TalentBook.for_operator"
           "（其中 %d 例数额非零）" % (len(cfgs), nonzero))
     print()
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
     if mutate:
         if bad:
             print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")
