@@ -240,6 +240,27 @@ def _gamedata(args: argparse.Namespace) -> GameDataSource:
     return GameDataSource(use_cache=not getattr(args, "no_cache", False))
 
 
+def _num(v, suffix: str = "") -> str:
+    """把一个可能是 `None` 的数值印成人看得懂的样子：缺值印 `—`，不让整条命令挂掉。
+
+    ★ 来历（2026-09-24 实测）：`stage main_02-07` 崩在
+    `TypeError: unsupported format string passed to NoneType.__format__`——
+    敌人「御4」（`enemy_1017_defdrn`）的 `weight` 是 `None`。
+
+    为什么是 `None` 而不是数字：游戏本体用 **`massLevel`** 表达重量等级，
+    而「没覆写」的那些是 `m_defined=false`（缺省 0）。取数层按「只认 m_defined: true」
+    合并逐档数据，于是这一项**根本没进合并结果**，读出来就是 `None`。
+    2154 个敌人里有 **73** 个是这样，几乎全是**飞行单位与装置**
+    （御4、枯朽之种、年代印痕、护障、浮海飘航者……）。
+
+    ⚠ 为什么不是「按 0 印」：这一项**模拟器其实按 0 用**
+    （`battle/sim.py` 的 `weight=float(getattr(stats, "weight", 0) or 0)`），
+    但**命令行不是模拟器**——它该把「上游没给这个数」这件事**看得见**地印出来，
+    而不是替上游补一个 0。补数字会把「取数口径缺一项」永远盖住。
+    """
+    return "—" if v is None else f"{v:g}{suffix}"
+
+
 def _print_stage_map(stage, *, with_routes: bool) -> None:
     legend = ("H 高台可部署  # 不可部署  . 地面可部署(近战位)  "
               ", 地面不可部署  S 敌人出生点  E 防守点")
@@ -333,10 +354,10 @@ def cmd_stage(args: argparse.Namespace) -> int:
             s = lib.get(eid, 0)
             alias = f"（战斗数据里叫「{s.alias}」）" if s.alias else ""
             print(f"  {s.name}{alias}  ×{n}")
-            print(f"      HP {s.max_hp:g}  攻 {s.atk:g}  防 {s.defense:g}  "
-                  f"法抗 {s.magic_resistance:g}%  移速 {s.move_speed:g}  "
-                  f"攻击间隔 {s.base_attack_time:g}s  重量 {s.weight:g}  "
-                  f"漏怪扣 {s.life_point_reduce:g}")
+            print(f"      HP {_num(s.max_hp)}  攻 {_num(s.atk)}  防 {_num(s.defense)}  "
+                  f"法抗 {_num(s.magic_resistance, '%')}  移速 {_num(s.move_speed)}  "
+                  f"攻击间隔 {_num(s.base_attack_time, 's')}  重量 {_num(s.weight)}  "
+                  f"漏怪扣 {_num(s.life_point_reduce)}")
         print(f"\n  合计 {stage.total_enemies()} 只")
 
         print()
