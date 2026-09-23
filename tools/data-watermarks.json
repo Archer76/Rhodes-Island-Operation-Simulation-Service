@@ -1,0 +1,129 @@
+{
+  "schema": "ak-tactic/data-watermarks@1",
+  "generated_at": "2026-09-24T01:13:50+08:00",
+  "tool": "tools/check_data_ready.py --write-ratchet",
+  "manifest": {
+    "path": "docs/data-sources.md",
+    "at": "2026-09-24T01:13:50+08:00",
+    "items": [
+      "data/akdb.sqlite",
+      "data/cache/",
+      "data/cache/_fetch_stats.json",
+      "data/cache/prts/",
+      "data/cache/theresa/",
+      "data/enemydb.sqlite",
+      "data/gamedata/",
+      "data/gamedata/*/levels/enemydata/",
+      "data/gamedata/map.ark-nights.com/",
+      "data/gamedata/raw.githubusercontent.com/excel/",
+      "data/op-briefs.txt",
+      "data/operbox/",
+      "data/prts-notes.sqlite",
+      "data/ranges.json",
+      "data/skland/"
+    ],
+    "why": "权威清单从这份文档现解析（§四 落点一览代码块 ＋ §二 本地落点栏），不另抄一份"
+  },
+  "incident_anchors": {
+    "note": "2026-09-24 00:46 的事故：一个会话用 git worktree remove --force 收尾时穿透 junction，删掉了主仓 data/ 的内容。症状不是报错，而是一串判据在缩水的分母上照样全绿（check_go_all.py 印「取证范围：缓存可达的关卡 N 个」却不因 N 变小而红，当晚从 55 关掉到 2 关，靠人眼看那行字才发现）。下面三个数只作对照锚，不作任何下限。",
+    "run": "2026-09-24 00:26 check_go_all.py --selfcheck",
+    "instrument_sha256_16": "3611501bac8628a3",
+    "evidence": "out/_main_selfcheck_postfix.txt",
+    "cached_levels": 55,
+    "enemies": 251,
+    "operator_scale": "679/679"
+  },
+  "items": {
+    "data/akdb.sqlite/operator": {
+      "value": 1164,
+      "at": "2026-09-24T01:13:49+08:00",
+      "source": "select count(*) from operator（mode=ro）",
+      "floor": true,
+      "note": ""
+    },
+    "data/akdb.sqlite/skill": {
+      "value": 1624,
+      "at": "2026-09-24T01:13:49+08:00",
+      "source": "select count(*) from skill（mode=ro）",
+      "floor": true,
+      "note": ""
+    },
+    "data/akdb.sqlite/stage": {
+      "value": 3055,
+      "at": "2026-09-24T01:13:49+08:00",
+      "source": "select count(*) from stage（mode=ro）",
+      "floor": true,
+      "note": ""
+    },
+    "data/akdb.sqlite/zone": {
+      "value": 352,
+      "at": "2026-09-24T01:13:49+08:00",
+      "source": "select count(*) from zone（mode=ro）",
+      "floor": true,
+      "note": ""
+    },
+    "data/enemydb.sqlite/enemy": {
+      "value": 1807,
+      "at": "2026-09-24T01:13:49+08:00",
+      "source": "select count(*) from enemy（mode=ro）",
+      "floor": true,
+      "note": ""
+    },
+    "data/prts-notes.sqlite/page": {
+      "value": 459,
+      "at": "2026-09-24T01:13:50+08:00",
+      "source": "select count(*) from page（mode=ro）",
+      "floor": true,
+      "note": ""
+    },
+    "data/prts-notes.sqlite/fact": {
+      "value": 3247,
+      "at": "2026-09-24T01:13:50+08:00",
+      "source": "select count(*) from fact（mode=ro）",
+      "floor": true,
+      "note": ""
+    },
+    "upstream/enemydb_enemy_intersection": {
+      "value": 1773,
+      "at": "2026-09-24T01:13:50+08:00",
+      "source": "enemy_database.json 的名 × enemydb.enemy 的 name 交集",
+      "floor": true,
+      "note": ""
+    },
+    "fixtures/referenced_levels": {
+      "value": 22,
+      "at": "2026-09-24T01:13:50+08:00",
+      "source": "fixtures/**/*.json 的顶层 stage 去重",
+      "floor": false,
+      "note": "夹具侧的分母，跟着 fixtures/ 走，不作下限"
+    },
+    "gamedata/level_files": {
+      "value": 21,
+      "at": "2026-09-24T01:13:50+08:00",
+      "source": "rglob level_*.json under data/gamedata/map.ark-nights.com/levels",
+      "floor": false,
+      "note": "按需缓存，只作事故对照，不作为判据下限"
+    },
+    "data/op-briefs.txt/lines": {
+      "value": 3249,
+      "at": "2026-09-24T01:13:50+08:00",
+      "source": "op-briefs.txt 行数",
+      "floor": true,
+      "note": ""
+    },
+    "data/op-briefs.txt/bytes": {
+      "value": 455473,
+      "at": "2026-09-24T01:13:50+08:00",
+      "source": "op-briefs.txt 字节数",
+      "floor": false,
+      "note": "字节数随行尾口径变，只登记"
+    },
+    "data/ranges.json/codes": {
+      "value": 72,
+      "at": "2026-09-24T01:13:50+08:00",
+      "source": "ranges.json 顶层代号数",
+      "floor": true,
+      "note": ""
+    }
+  }
+}
