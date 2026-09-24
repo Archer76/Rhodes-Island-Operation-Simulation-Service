@@ -146,6 +146,14 @@ func activate(op *operator, t float64, spec *Spec, cost *float64,
 		op.sp = math.Max(0, op.sp-sk.SPCost)
 	}
 	op.skillActive = true
+	//: ★ **行使见证**（2026-09-24）：技能这条机制以前**没有任何运行期痕迹**——
+	//: 规格里有没有 `skill` 键、模拟里有没有真开过，在输出上长得一模一样。
+	//: 本仓的规矩是「行使判据必须是运行期计数」，所以这里打一行：
+	//: 每开一次技能一行，`who` ＋ 花费 ＋ 时长/无限 ＋ 弹药数。
+	//: 它同时是「加一名新干员不改判定逻辑」那条验收标准的度量工具——
+	//: 新干员的技能只要真被走到，这一行就会出现。
+	trace("SKILL t=%.4f op=%s activate sp_cost=%.1f duration=%.2f infinite=%t ammo=%d",
+		t, op.spec.Name, sk.SPCost, sk.Duration, sk.Infinite, sk.Ammo)
 	if sk.Infinite {
 		op.skillTimer = math.Inf(1)
 	} else {
