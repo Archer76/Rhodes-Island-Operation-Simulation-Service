@@ -914,8 +914,18 @@ def verdict_of(out: str) -> str:
 
 
 def named_reason(r: dict) -> str:
-    """从输出里抠出**具名**的不转理由（不是「跑不通」三个字）。"""
+    """从输出里抠出**具名**的不转理由（不是「跑不通」三个字）。
+
+    ★ 顺序有讲究：**「输入批次对账」优先**。它才是「对象集/内容变了 ⇒ 基线该重录」
+    那句话；而通道自己的 summary 行（`★ 冻结基线通道 check —— 取期望值 320 次全部命中…`）
+    也带 `★` 且含「冻结基线」，被它抢先匹配的话，印出来的「理由」会是一句**与因无关的
+    读数**（实测：`格表` 的 rc=6 底下印的是「320 次全部命中」——那句是真的，但它是
+    **结论**不是**因**，读的人会去找一个不存在的通道故障）。
+    """
     blob = (r["err"] or "") + "\n" + (r["out"] or "")
+    for line in blob.splitlines():
+        if "输入批次对账" in line:
+            return line.strip().lstrip("★ ").strip()
     for line in blob.splitlines():
         s = line.strip()
         if s.startswith("★") and ("冻结基线" in s or "禁止 import" in s or "未转" in s):
@@ -923,6 +933,20 @@ def named_reason(r: dict) -> str:
     if r["rc"] == 124:
         return "超时（未在限内跑完）"
     return ""
+
+
+def is_stale(r: dict) -> bool:
+    """这一跑的 `rc=6` 是不是**「对象集/内容变了 ⇒ 基线该重录」**那一种。
+
+    ★ 为什么要分开：`rc=6` 底下压着**两种因**——
+    ① 「这一套还没接」（从未绑定通道）；
+    ② 「接了，但**录的是哪一批对象**变了」（缓存长大、夹具改了）。
+    压成一个「待转」标签，读的人会去重做一套**已经做完**的迁移（实测：缓存从 320 键
+    长到 562 键之后，`格表` 被印成「待转」，而它其实只差一次 `--record`）。
+    这正是本仓那条「两个不同的意思不许压进同一个值」。
+    """
+    return ("输入批次对账" in ((r.get("out") or "") + "\n" + (r.get("err") or "")))
+
 
 
 # =============================================================================
@@ -1493,6 +1517,7 @@ def cmd_status(names: list[str], timeout: float, quick: bool, show: bool) -> int
     green = 0
     na = 0
     partial: list[tuple[str, int, int]] = []
+    stale_rows: list[tuple[str, str]] = []
     rows_out = []
     for name, script, _what, _l in picked:
         if name in NOT_APPLICABLE:
@@ -1536,7 +1561,12 @@ def cmd_status(names: list[str], timeout: float, quick: bool, show: bool) -> int
             if "spawn 过" in line:
                 spawn_note = line.strip()
         rows_out.append((name, script, recorded, r1["rc"], default_rc, reason, hit))
-        mark = "✓" if ok else ("◐" if r1["rc"] == 0 and n_un else "✗")
+        #: ★ `rc=6` 的**两种因**在这里分开：`stale`＝「录的是哪一批对象变了」。
+        stale = (r1["rc"] == RC_CHANNEL and is_stale(r1))
+        if stale:
+            stale_rows.append((name, reason))
+        mark = "✓" if ok else ("◐" if r1["rc"] == 0 and n_un
+                               else ("◑" if stale else "✗"))
         if default_rc is None:
             d = "⊘无基线" if not recorded else "⊘"
         else:
@@ -1550,7 +1580,9 @@ def cmd_status(names: list[str], timeout: float, quick: bool, show: bool) -> int
                 if row.get("class") != "frozen":
                     print("           · %s（%s）：%s"
                           % (row.get("id"), row.get("class"), row.get("why")))
-        if not ok and not (r1["rc"] == 0 and n_un):
+        if stale:
+            print("        ◑ **基线该重录**（不是「未转」）：%s" % reason)
+        elif not ok and not (r1["rc"] == 0 and n_un):
             print("        未转理由：%s" % reason)
         if spawn_note:
             print("        %s" % spawn_note)
@@ -1560,7 +1592,9 @@ def cmd_status(names: list[str], timeout: float, quick: bool, show: bool) -> int
     denom = len(picked) - na
     print("★ **冻结模式下跑得通：%d / %d 套**（分母 ＝ 本次 %d 套 − 不适用于冻结 %d 套）"
           % (green, denom, len(picked), na))
-    undone = [(n, rs) for n, _s, _r, c, _d, rs, _h in rows_out if c != 0]
+    stale_names = {n for n, _r in stale_rows}
+    undone = [(n, rs) for n, _s, _r, c, _d, rs, _h in rows_out
+              if c != 0 and n not in stale_names]
     if not quick:
         #: ⚠ 分母只说**跑过默认档那一腿的套**（＝有基线的套）：拿总套数当分母，
         #: 会把「没跑」与「跑了但不一致」混成一个数（本仓记过：两套分母的数不许并列）。
@@ -1568,22 +1602,31 @@ def cmd_status(names: list[str], timeout: float, quick: bool, show: bool) -> int
         both = sum(1 for _n, _s, _r, c, d, _rs, _h in rows_out if c == 0 and d == 0)
         print("   有基线的 %d 套里，两种模式**都给绿**（＝这一套的基线录对了）：%d / %d"
               % (n_leg, both, n_leg))
-    print("   **四分账**（**不重不漏**）：跑通 %d ＋ **部分覆盖 %d** ＋ 待转 %d "
-          "＋ 不适用于冻结 %d ＝ 本次 %d 套"
-          % (green, len(partial), len(undone), na, len(picked)))
+    #: ★ **五态**（不重不漏）：`待重录` 与 `待转` 不是一回事——前者这一套**已经接好了**，
+    #: 只是「录的是哪一批对象」变了（缓存长大、夹具改了）。压成一个标签会让人去重做
+    #: 一套做完的迁移。
+    print("   **五态账**（**不重不漏**）：跑通 %d ＋ **部分覆盖 %d** ＋ **待重录 %d** "
+          "＋ 待转 %d ＋ 不适用于冻结 %d ＝ 本次 %d 套"
+          % (green, len(partial), len(stale_rows), len(undone), na, len(picked)))
     if partial:
         print("   ★ 部分覆盖（**永远不进「跑通」的分子**）：")
         for n, nf, nt in partial:
             print("     - %s：冻结覆盖 %d / %d 段；其余段两侧同源或源码耦合，"
                   "不适用等值冻结" % (n, nf, nt))
+    if stale_rows:
+        print("   ★ **待重录**（已接好，只是对象集/内容变了 —— 不是「未转」）：")
+        for n, rs in stale_rows:
+            print("     - %s：%s" % (n, rs))
+        print("     处置＝ `python tools\\freeze_baseline.py --record <套名>`"
+              "（显式、会印出覆盖了谁）。")
     if undone:
         print("   待转的 %d 套与具名理由：" % len(undone))
         for n, rs in undone:
             print("     - %s：%s" % (n, rs))
     print("   其中 %d 套连基线都没有。" % sum(1 for _n, _s, r, _c, _d, _rs, _h in rows_out
                                               if not r))
-    #: 只要还有待转**或部分覆盖**，就没全绿 ⇒ rc=1（宁可严，不放宽守卫）。
-    return 0 if (not undone and not partial) else 1
+    #: 只要还有**待重录**、待转**或部分覆盖**，就没全绿 ⇒ rc=1（宁可严，不放宽守卫）。
+    return 0 if (not undone and not partial and not stale_rows) else 1
 
 
 def main() -> int:
