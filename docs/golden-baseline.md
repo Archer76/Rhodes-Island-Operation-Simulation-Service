@@ -151,7 +151,7 @@ python -X utf8 tools\freeze_baseline.py --status
 | 18 | 寻路 | `check_stagepath_go.py` | **未转** | `eta.leading_wait` / `eta.route_plans` / `load_stage` | 乙 |
 | 19 | 闸门 | `check_unsupported_go.py` | **未转** | `spec.unsupported_reasons` 一族 | 乙 |
 | 20 | 出怪规格 | `check_spawns_go.py` | **◐ 部分覆盖**（56 值；**11 段里 7 段可冻**，4 段不适用；控制组 P1/P2/P2b/P3 成立，P3b ⊘、**P4 ⊘ 具名**；**永不进「跑通」的分子**） | `parse_stage` / `_route_tables` / `_spawn_spec` / `stage_mul` / `enemy_view` | 乙 · **已核（部分）** |
-| 21 | 机制规格 | `check_mechspec_go.py` | **未转** | `build_spec` 一族 | 乙 |
+| 21 | 机制规格 | `check_mechspec_go.py` | **已转**（**587 值** ＝ 562 个关卡键 ＋ 批次记录 ＋ 24 份夹具批；键形＝`["mechspec", 关卡 id, 缓存文件内容 sha16]` 与 `["mechspec_fix", 夹具名, 夹具 sha16, 名册 sha16]`；`input_identity=True`／`batch_consumed=False`；控制组 P1/P2/P2b/P3 成立，P3b ⊘、**P4 ⊘ 具名**） | `build_spec` 一族（关卡批 ＋ 夹具批两份期望，§五 与 §五·b 共用一份） | 乙 · **已核** |
 | 22 | 单一入口 | `check_buildspec_go.py` | **未转** | `build_spec` 一族 / `battle.sim.make_total_attack` | 乙 |
 | 23 | 干员规格 | `check_operators_go.py` | **已转**（**归另一个会话**，25 值；键形＝`["operators", 夹具名, **夹具 sha16**, **名册 sha16**]` 一份夹具一条；`input_identity=True`／`batch_consumed=False`；本会话只读不碰） | `build_spec` / `talent_finders` / `OperatorCalculator` / `Verifier` | 乙 |
 | 24 | 自造规格 | `check_sim_selfspec_go.py` | **◐ 部分覆盖**（26 值 ＝ **1 查询集** ＋ 25 判决快照；**4 段里 2 段可冻**，2 段 `live_both` 不适用；控制组 P1/P2/P2b/P3 成立，P3b ⊘、**P4 成立**；**永不进「跑通」的分子**） | **无 `ak_tactic` import**：判据是 Go 两种入参形式的**差分** ＋ 「现读 Go ↔ **冻结的 Go**」的漂移检测 | 丙 · **已核** |
@@ -414,6 +414,26 @@ Python 还在的时候，锚是 `--check`（现读 vs 冻结，两条来源不�
 
 ⇒ 每转一套都要回答一句：**这一套的取数口是不是全走 `G.expect()`**（spawn 计数为 0）。
 被测方本来就是 Python CLI 的套（命令面）不算违规——**它测的是 Python，不是从 Python 取期望值**。
+
+### 7.1 ★ **缓存长大 ⇒ 7 套的查询集已经过期（基线该重录）**（2026-09-24 现算）
+
+**这是本设计里唯一一个会自己变坏的量**：乙类套的查询集来自**调用方按缓存现算的关卡清单**
+（`check_go_all.cached_levels()`），而缓存在别的会话逐章取数时会**长大**。
+实测：**320 个键（159 份内容）→ 562 个键（388 份内容）**，`#s` 变体与新章节一起进来。
+
+**便宜探针**（不跑判据、不跑二进制，只比「冻的批次记录」与「现读 `cached_levels()`」）：
+
+| 套 | 冻的批 | 现读 | 状态 |
+| --- | ---: | ---: | --- |
+| 关卡／关卡静态／寻路／敌人／格表／部分规格 | 320 | 562 | **该重录**（现读 +242） |
+| 机制规格 | 320 → **562** | 562 | **已重录**（2026-09-24，587 值，523.7 s） |
+
+⇒ **`--check` 在这几套上会 `rc=1`，而那不是「Go 漂移了」，是「录的是哪一批对象」变了**
+（`rc=6` 与 `rc=1` 必须分开的那条纪律，在这里被**同一批对象集**触发）。
+**处置＝显式重录**：`python tools\freeze_baseline.py --record <套名>`，会印出覆盖了谁。
+⚠ **不重录也不会让闸门变红**：`check_go_all` 跑的是**默认档**（现读 vs Python），
+冻结档那一腿只问**冻住的那批**——所以这是一个**不会自己喊出来的**过期，
+必须靠上面这张表定期现算。**未重录的 6 套已具名登记，不假装没有。**
 
 ## 8 · 各节点的实测：命令 + rc + 读数
 

@@ -31,6 +31,32 @@ Go 的 `mechspec` 命令**不吃计划**，所以期望值也在**同一个口�
 2. **`_seed()` 那处歧义**（`environment.py:369-393`，原文自陈「待实机校正」）：
    照原版取**逐格**。判据不去判它哪种读法对，只判「Go 与原版一致」；
    差别是实的（逐格给 20、整片给 320），所以实现文件里把这段理由照抄了。
+## 期望值从哪来（**两种模式**）
+
+* 默认（`RIOS_GOLDEN` 未设）：现场调 Python 的 `build_spec`（空排程口径）＋
+  `real_specs`（生产口径），**现状不变**；
+* **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/机制规格.json`，
+  **不 import `ak_tactic`**。
+
+★ 两批对象、两个身份（**都是活的**）：**关卡批**（缓存可达的 320 关）用键
+`("mechspec", 关卡 id, 缓存文件内容 sha16)` ＋ `G.coverage("mechspec", …)`
+（公式与「关卡／格表／寻路」同一份）；**夹具批**（24 份，两个口径对账那一节）用键
+`("mechspec_fix", 夹具名, 夹具字节 sha16, 名册字节 sha16)` ＋ `G.coverage(...)`。
+另记一条可读批次记录 `("query", "level_batch")`——它**不参与判定**，
+但 `--check` 的「改值」栏量得到它。
+
+★ 三种因**分得开**：Go 漂移 ⇒ 判据红（rc=1）；对象集或内容变了 ⇒ rc=6 且印
+「输入批次对账」；分母缩水（有对象这次没问）⇒ 同样 rc=6 且印对账。冻结档
+**自己**看不见查询集被人改小（有界盲区），补偿控制是 `--check`。
+
+★ **逐段审计（本轮做的，结论：本套不需要「部分覆盖」那一态）**：
+§一 口径回显／传 plan 必须具名失败 = 契约（不以 Python 为期望值）；
+§一·③ 难度下传 = **Go ↔ Go 的差分**（两次输入不同，不是恒等）；§二 逐关
+mechanisms/mech_config = **Python ↔ Go（可冻）**；§三 覆盖率 = 由冻结值复算；
+§四 登记的守卫 = **源码耦合**（读 `rios-sim/mechspec.go`，只读文件不 import，
+故照旧现算）；§五 生产口径对账 = **两条不同输入的 Python 差分**（`from_stage`＋
+空排程 ↔ `from_sim`＋计划）**可冻**；§五·b = Python 的「该带雪」↔ Go。
+⇒ **没有「两侧同源（同一份值的两种用法）」的段**，所以不声明未覆盖段。
 
 用法:
     python tools\\check_mechspec_go.py
@@ -50,6 +76,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -139,6 +166,68 @@ def py_expected(level: str) -> tuple[list[str], dict]:
                                 schedule=Schedule())
     spec = build_spec(inp)
     return list(spec["mechanisms"]), dict(spec["mech_config"])
+
+
+# ---------------------------------------------------------------- 期望值（可冻）
+_SPECS = None
+
+
+def _specs_batch() -> dict:
+    """`real_specs()` 的**一次**结果：`name → (spec, err, lv)`（离冻档专用）。"""
+    global _SPECS
+    if _SPECS is None:
+        import check_specgo_go as C
+        _SPECS = {n: (s, e, lv) for n, s, e, lv in C.real_specs()}
+    return _SPECS
+
+
+def scan_plan_fixtures() -> list[list]:
+    """夹具批次的输入身份（数据侧；`utf-8-sig` 与 `real_specs()` 同源）。"""
+    out: list[list] = []
+    for f in sorted(FIXDIR.glob("*.json")):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8-sig"))
+        except Exception:                                      # noqa: BLE001
+            continue
+        if isinstance(d, dict) and ("deploys" in d or "deploy" in d):
+            out.append([f.name, GB.file_sha16(f)])
+    return out
+
+
+def py_expected_shape(level: str) -> dict:
+    """一关的期望值，**规范化成 JSON 形状**（`(mechanisms, mech_config)`）。
+
+    ★ `ak_tactic` 的 import 住在 `py_expected()` 里：冻结档下本函数不会被调到。
+    """
+    mechs, cfg = py_expected(level)
+    return {"mechs": list(mechs), "cfg": dict(cfg)}
+
+
+def py_fixture_expect(name: str) -> dict:
+    """一份夹具在**两个口径**下的期望值（§五 与 §五·b **共用这一份**）。
+
+    · `w_*`：**生产规格**（`from_sim`，带计划）；
+    · `s2_*`：**本命令的空排程口径**（`from_stage` ＋ `Schedule()`）。
+    """
+    from ak_tactic.frontend.inputs import SpecInputs
+    from ak_tactic.frontend.schedule import Schedule
+    from ak_tactic.gamedata.enemy import EnemyLibrary
+    from ak_tactic.gamedata.stage import load_stage
+    from ak_tactic.simgo.spec import build_spec
+
+    spec, err, lv = _specs_batch().get(name, (None, "", ""))
+    if spec is None:
+        return {"spec_ok": False, "why": err or "", "lv": lv or ""}
+    lib = EnemyLibrary()
+    inp = SpecInputs.from_stage(load_stage(lv), enemy_at=lib.get,
+                                species_provider=lib.species_of,
+                                schedule=Schedule())
+    s2 = build_spec(inp)
+    return {"spec_ok": True, "why": "", "lv": lv,
+            "w_mechs": list(spec["mechanisms"]),
+            "w_farm": (spec["mech_config"] or {}).get(FARMLAND_ID),
+            "s2_mechs": list(s2["mechanisms"]),
+            "s2_farm": (s2["mech_config"] or {}).get(FARMLAND_ID)}
 
 
 # ---------------------------------------------------------------- 比较
@@ -335,7 +424,7 @@ def coverage_report(cov: dict) -> list[str]:
 
 # ---------------------------------------------------------------- 第五节：口径与证人
 
-def snow_in_buildspec() -> tuple[list[str], dict]:
+def snow_in_buildspec(G, fix_rows, rsha) -> tuple[list[str], dict]:
     """★ 第三十九批：**`buildspec` 口径下雪不恒空**。
 
     这条是那条「本命令不吃计划 ⇒ 雪恒 0」的**对面**——少了它，「谁在产出雪」
@@ -351,11 +440,14 @@ def snow_in_buildspec() -> tuple[list[str], dict]:
     problems: list[str] = []
     cov = {"正例": 0, "正例命中": 0, "负例": 0, "负例刺破": 0}
     roster = str(ROOT / "fixtures" / "roster_max_modelled.json")
-    for name, spec, err, lv in C.real_specs():
-        if spec is None:
+    for name, ident, _rs in fix_rows:
+        E = G.expect(("mechspec_fix", name, ident, rsha),
+                     lambda name=name: py_fixture_expect(name))
+        if not E["spec_ok"]:
             continue
-        want = SNOW_ID in (spec.get("mechanisms") or [])
-        ok, resp = go_mechspec_raw({"id": 1, "cmd": "buildspec", "level": lv,
+        want = SNOW_ID in (E["w_mechs"] or [])
+        ok, resp = go_mechspec_raw({"id": 1, "cmd": "buildspec",
+                                    "level": E["lv"],
                                     "spec": {"plan": str(FIXDIR / name),
                                              "roster": roster,
                                              "allow_devices": True,
@@ -426,36 +518,22 @@ def contract_checks(levels: list[str], exp: dict, got: dict) -> list[str]:
 
 # ---------------------------------------------------------------- 第六节：与生产口径对账
 
-def production_crosscheck() -> tuple[list[str], dict]:
-    """拿 24 份夹具的**生产规格**（`from_sim`，带计划）对账。
-
-    要证两件事，各自都是可判的：
-      * `mech_config[FARMLAND_ID]` 在两个口径下**逐字段相同**（田地与计划无关）
-        —— 若不同，说明本判据挑的口径把别的东西也丢了，整张表作废；
-      * `mechanisms` 的差**恰好**是 `snow.field`（多一个少一个都红）。
-    """
-    import check_specgo_go as C
-    from ak_tactic.frontend.inputs import SpecInputs
-    from ak_tactic.frontend.schedule import Schedule
-    from ak_tactic.gamedata.enemy import EnemyLibrary
-    from ak_tactic.gamedata.stage import load_stage
-    from ak_tactic.simgo.spec import build_spec
-
+def production_crosscheck(G, fix_rows, rsha) -> tuple[list[str], dict]:
     problems: list[str] = []
     cov = {"夹具": 0, "生产口径带雪": 0, "田地逐字段相同": 0, "mechanisms 差恰为雪": 0}
-    lib = EnemyLibrary()
-    for name, spec, err, lv in C.real_specs():
-        if spec is None:
-            problems.append("生产规格抄不到（%s）：%s" % (name, err))
+    for name, ident, _rs in fix_rows:
+        #: ★ 期望值只能从这里来：默认档现跑**两个口径**，冻结档读冻的那份。
+        E = G.expect(("mechspec_fix", name, ident, rsha),
+                     lambda name=name: py_fixture_expect(name))
+        if not E["spec_ok"]:
+            problems.append("生产规格抄不到（%s）：%s" % (name, E["why"]))
             continue
         cov["夹具"] += 1
-        w_mechs = list(spec["mechanisms"])
-        w_farm = (spec["mech_config"] or {}).get(FARMLAND_ID)
-        stage = load_stage(lv)
-        inp = SpecInputs.from_stage(stage, enemy_at=lib.get,
-                                    species_provider=lib.species_of,
-                                    schedule=Schedule())
-        s2 = build_spec(inp)
+        w_mechs = list(E["w_mechs"])
+        w_farm = E["w_farm"]
+        s2 = {"mechanisms": E["s2_mechs"],
+              "mech_config": ({FARMLAND_ID: E["s2_farm"]}
+                              if E["s2_farm"] is not None else {})}
         if "snow.field" in w_mechs:
             cov["生产口径带雪"] += 1
         #: ① 差必须恰好是雪
@@ -520,6 +598,8 @@ def mutate(exp: dict, got: dict, which: str):
 
 
 def main() -> int:
+    G = GB.bind("机制规格", __file__)
+
     mutate_mode = "--mutate" in sys.argv
     print("Go 侧仪器：%s" % GO_BIN)
     print("Python 侧权威：`simgo/spec.py::build_spec`（空排程口径："
@@ -535,19 +615,46 @@ def main() -> int:
         return 1
     print()
 
+    #: ★ **关卡批**：输入身份 ＋ 对账（公式与关卡/格表/寻路同一份）。
+    batch = GB.level_inputs(DATA, levels)
+    if G.mode == GB.RECORD:
+        G.expect(("query", "level_batch"), lambda: batch)
+    cov_lv = G.coverage("mechspec", [[r["level"], r["sha16"]] for r in batch])
+    to_cmp = batch
+    if G.mode == GB.CHECK and not cov_lv.ok:
+        #: 只比两边都有的。**未覆盖的不猜**——猜就是自己写一份期望值。
+        _covered = {tuple(x) for x in cov_lv.covered}
+        to_cmp = [r for r in batch if (r["level"], r["sha16"]) in _covered]
     exp: dict[str, tuple[list[str], dict]] = {}
-    for lv in levels:
-        exp[lv] = py_expected(lv)          # ← 循环顶部无条件算
-    got = go_mechspec_batch(levels)
+    for _rec in to_cmp:
+        #: ★ 键自带输入身份：缓存内容变了 ⇒ 键配不上 ⇒ 由对账如实报出。
+        _E = G.expect(("mechspec", _rec["level"], _rec["sha16"]),
+                      lambda lv=_rec["level"]: py_expected_shape(lv))
+        exp[_rec["level"]] = (list(_E["mechs"]), dict(_E["cfg"]))
+    lv_cmp = [r["level"] for r in to_cmp]
+    got = go_mechspec_batch(lv_cmp)
+    #: ★ **夹具批**：同样带身份 ＋ 对账（两个口径对账那一节要用）。
+    rsha = GB.file_sha16(ROSTER_FIX)
+    fix_live = [[n, sha, rsha] for n, sha in scan_plan_fixtures()]
+    cov_fix = G.coverage("mechspec_fix", fix_live)
+    fix_rows = fix_live
+    if G.mode == GB.CHECK and not cov_fix.ok:
+        _covf = {tuple(x) for x in cov_fix.covered}
+        fix_rows = [x for x in fix_rows if tuple(x) in _covf]
+    if G.mode == GB.CHECK:
+        for _tag, _cov, _n in (("mechspec", cov_lv, len(batch)),
+                               ("mechspec_fix", cov_fix, len(fix_live))):
+            if not _cov.ok:
+                print(_cov.report(_tag, _n))
 
     print("一 · 口径与契约")
-    d_ok = contract_checks(levels, exp, got)
+    d_ok = contract_checks(lv_cmp, exp, got)
     for m in d_ok:
         print("  ✗ %s" % m)
     print()
 
-    problems, cov = compare(levels, exp, got)
-    print("二 · 逐关逐字段对拍（%d 关）" % len(levels))
+    problems, cov = compare(lv_cmp, exp, got)
+    print("二 · 逐关逐字段对拍（%d 关）" % len(lv_cmp))
     print("  比到的字段：每关 %d 个（%d 标量 ＋ %d 参数 ＋ %d 常量 ＋ groups/actual/"
           "severed/devices 四张表）" % (
               cov["比到的字段数"] // max(1, cov["有田地"]),
@@ -579,7 +686,7 @@ def main() -> int:
     print()
 
     print("五 · 与**生产口径**对账（24 份夹具，带计划）")
-    p_bad, pcov = production_crosscheck()
+    p_bad, pcov = production_crosscheck(G, fix_rows, rsha)
     for k, v in pcov.items():
         print("  %-22s %d" % (k, v))
     for m in p_bad:
@@ -587,7 +694,7 @@ def main() -> int:
     print()
 
     print("五·b · `buildspec` 口径下雪**不恒空**（本条与「本命令恒 0」成对）")
-    s_bad, scov2 = snow_in_buildspec()
+    s_bad, scov2 = snow_in_buildspec(G, fix_rows, rsha)
     for k, v in scov2.items():
         print("  %-22s %d" % (k, v))
     for m in s_bad:
@@ -596,6 +703,9 @@ def main() -> int:
 
     problems = problems + d_ok + cbad + gbad + p_bad + s_bad
 
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
     if mutate_mode:
         print("六 · 反向守卫（每处注入都要独立判红）")
         if problems:
@@ -608,7 +718,7 @@ def main() -> int:
                 print("  ✗ 注入「%s」**没有落到任何对象上**（这一处是空转）" % which)
                 bad_guard += 1
                 continue
-            mp, _c = compare(levels, e2, g2)
+            mp, _c = compare(lv_cmp, e2, g2)
             ok = bool(mp)
             if not ok:
                 bad_guard += 1
@@ -632,10 +742,13 @@ def main() -> int:
           "生产口径对账 24 份夹具：田地逐字段相同 %d 份、mechanisms 差恰为雪 %d 份；"
           "未搬 %d 条；**天桩召唤链已逐字段比过 %d 条（%d 个字段，"
           "其中走到乙 %d 条、走到天标 %d 条）**"
-          % (len(levels), cov["有田地"], cov["无田地"], pcov["田地逐字段相同"],
+          % (len(lv_cmp), cov["有田地"], cov["无田地"], pcov["田地逐字段相同"],
              pcov["mechanisms 差恰为雪"], len(UNPORTED), cov["child 比过的条数"],
              cov["child 比到的字段数"], cov["chain 走到乙的条数"],
              cov["chain 走到天标的条数"]))
+    if G.mode == GB.CHECK and not (cov_lv.ok and cov_fix.ok):
+        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        return GB.RC_CHANNEL
     return 0
 
 
