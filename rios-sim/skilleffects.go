@@ -29,6 +29,7 @@ package main
 import (
 	"math"
 	"sort"
+	"strings"
 )
 
 // skillMods 是一份黑板算出来的**修正集合**。零值＝「这条键没出现」。
@@ -99,6 +100,67 @@ func SkillKeyTable() map[string]string {
 	out := make(map[string]string, len(skillKeyTable))
 	for k, v := range skillKeyTable {
 		out[k] = v
+	}
+	return out
+}
+
+// damageTypeSwitches 是**技能把伤害类型改掉**那一族的判据表（**按正文短语**，不按技能名）。
+//
+// 博士 2026-09-24 给的口径：
+//
+//	① **基准**：干员一律造成**物理**伤害，除非它的**特性正文**说「法术伤害」
+//	   （全库 129 位）—— 那一位就是法术；
+//	② **另行说明**：技能的正文写明「伤害类型变为 …」时，在**技能开启期间**按那句话切换
+//	   （月见夜 `skchr_midn_1` 的「普通攻击的伤害类型变为法术」是这一族）；
+//	③ 还有一族是**条件触发的转化**（赤刃明霄陈的「伤害类型转化为弱点伤害」）。
+//
+// ⚠ 为什么按**短语**而不是按技能 id：全库正文含「伤害类型」的技能只有 **18 个**，
+// 而它们分布在多名干员上——按 id 硬编码就是「加一名干员改一次判定逻辑」，
+// 与博士要的模块化正好相反；短语表可以随新干员自然扩展。
+//
+// ⚠ 逐条是**整串短语**匹配、不做子串猜测，所以「变为物理」与「变为法术」不会互相误中。
+//
+// ★ **故意不收的两族**（博士 2026-09-24：只记录，暂不接，当前优先做三星）：
+//
+//	· 「弱点伤害」族 —— 全库只有两位干员带它（**赤刃明霄陈** `char_1050_chen3` 的天赋
+//	  「形意洞照」写作「攻击变为…弱点伤害」；**结城理** `char_4217_makoto` 的技能
+//	  `skchr_makoto_3` 写作「…造成攻击力 140% 的弱点伤害」），外加一个**装置**
+//	  `trap_1067_acarm067`（双模机械臂）的 `sktok_acarm067_1/2`；
+//	· 「攻击变为物理伤害」—— `char_411_tomimi` 的天赋。
+//	证据与原文逐条在 `docs/three-star-modelling.md` §九。现在收进来等于**没验证就改判决**
+//	（那几位的活还没做），所以留在文档里、另开节点时照那张表接。
+var damageTypeSwitches = []struct {
+	Phrase string
+	Type   string
+}{
+	{"伤害类型转化为真实", "TRUE"},
+	{"伤害类型变为真实", "TRUE"},
+	{"普通攻击的伤害类型变为法术", "MAGIC"},
+	{"伤害类型变为法术", "MAGIC"},
+	{"伤害类型变为物理", "PHYSICAL"},
+}
+
+// DamageTypeFromSkillText 按技能正文决定「技能开启期间」的伤害类型。
+//
+// 命中不到任何一条 ⇒ 原样返回 `base`（＝这名干员基准的伤害类型，由**特性**决定）。
+// ⇒ 「没有另行说明就沿用基准」这条就是博士口径的落点。
+func DamageTypeFromSkillText(desc, base string) string {
+	if desc == "" {
+		return base
+	}
+	for _, sw := range damageTypeSwitches {
+		if strings.Contains(desc, sw.Phrase) {
+			return sw.Type
+		}
+	}
+	return base
+}
+
+// DamageTypeSwitchTable 给覆盖账与文档用：这一族**认哪些短语**。
+func DamageTypeSwitchTable() map[string]string {
+	out := make(map[string]string, len(damageTypeSwitches))
+	for _, sw := range damageTypeSwitches {
+		out[sw.Phrase] = sw.Type
 	}
 	return out
 }

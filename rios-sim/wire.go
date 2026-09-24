@@ -261,6 +261,11 @@ type OperatorSpec struct {
 
 	//: 技能（没有技能槽就是 nil）。数值由 Python 算完送来，Go 只跑状态机：
 	//: 攒技力、什么时候能开、开多久、结束。
+	//: **天赋折进面板的那三个比例**（`talentpanel.go`）——Go 有意与 Python 分道扬镳：
+	//: Go 折、Python 不折。判据要比「两边一致」就得知道 Go 乘了多少，
+	//: 才能把两边还原到同一个量；这一栏由 Go 自己报，判据不猜也不手抄。
+	TalentPanelMods map[string]float64 `json:"talent_panel_mods,omitempty"`
+
 	Skill *SkillSpec `json:"skill,omitempty"`
 	//: **技能开启期间**的那一套数值。`Skill != nil` 时必须有。
 	//: 与 `OperatorSpec` 顶层的（＝未开启的那一套）成对使用：Go 只负责在

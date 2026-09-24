@@ -190,6 +190,14 @@ type OperatorOut struct {
 	//: 逐人一份会把同一个键重复报很多遍，读的人反而看不出「一共缺哪几个键」。
 	SkillUnknownKeys []string `json:"-"`
 
+	//: **天赋折进面板的那三个比例**（`talentpanel.go`），原样透出给判据。
+	//:
+	//: ★ 为什么必须出去：Go 与 Python 在这一点上**有意分道扬镳**
+	//: （博士 2026-09-24：不用管 Python，Go 折、Python 不折）。判据要比「两边一致」，
+	//: 就得知道**Go 乘了多少**才能把两边还原到同一个量；否则它只能报红，
+	//: 而那是把「已登记的口径差」当成缺陷。判据**不猜、不手抄**——这一栏由 Go 自己报。
+	TalentPanelMods map[string]float64 `json:"talent_panel_mods,omitempty"`
+
 	SplashRadius           *float64 `json:"splash_radius,omitempty"`
 	SplashScale            *float64 `json:"splash_scale,omitempty"`
 	SplashDamageScale      *float64 `json:"splash_damage_scale,omitempty"`
@@ -710,17 +718,15 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 	//: ★ 未识别的黑板键**不许静默丢**：计数进 `covered`，名字进 bundle 的
 	//: `SkillUnknownKeys`（调用方在 `BuildOperators` 里汇总）。
 	if sk, act, unknown, err := bindSkillTo(e.CharID, r.Skill, atk, def, res,
-		maxHP, spd, interval); err != nil {
+		maxHP, spd, interval, st.TextDerived.DamageType); err != nil {
 		return OperatorOut{}, fmt.Errorf("%s（%s）的技能绑定：%v", r.Operator, e.CharID, err)
 	} else if sk != nil {
 		covered["skill_bound"]++
-		//: ⚠ `Profile.DamageType` 必须填**这名干员基准的伤害类型**（与顶层那份同源，
-		//: 见上面 `DamageType: st.TextDerived.DamageType`）。留空字符串会让技能期间的
-		//: 每一次出手都带着一个空类型往下走——`sim.go` 的伤害分派按它选物理/法术，
+		//: ★ 伤害类型**不再在这里填**：`bindSkillTo` 已经按博士 2026-09-24 的口径算好了
+		//: ——基准由**特性**决定（没写「法术伤害」就一律物理），技能正文写明
+		//: 「伤害类型变为 …」时按那句话切换（`DamageTypeFromSkillText`，按短语不按名字）。
+		//: 留空串会让技能期间每一次出手都带空类型往下走：`sim.go` 按它选物理/法术，
 		//: 空串既不是物理也不是法术，**不报错**，只是伤害算错。
-		//: （技能把伤害类型改成法术那一支本批未接：三星里只有月见夜的 `skchr_midn_1`
-		//: 是这种，它的改写写在**正文**里、不在黑板上——具名在覆盖账，不猜。）
-		act.DamageType = st.TextDerived.DamageType
 		out.Skill, out.Active = sk, act
 		if len(unknown) > 0 {
 			covered["skill_unknown_key_instances"] += len(unknown)
@@ -731,6 +737,20 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		}
 	} else {
 		covered["skill_none"]++
+	}
+	//: **天赋折进面板的三个比例**原样透出（判据靠它把两边还原到同一个量）。
+	//: 没有天赋给面板加成时**不送这个键**（`omitempty`）——与「有这条、比例是 0」
+	//: 分开：后者不出现（`talentPanelMods` 只在真有非零比例时才写）。
+	if len(st.TalentPanelMods) > 0 {
+		nonzero := false
+		for _, v := range st.TalentPanelMods {
+			if v != 0 {
+				nonzero = true
+			}
+		}
+		if nonzero {
+			out.TalentPanelMods = st.TalentPanelMods
+		}
 	}
 	return out, nil
 }

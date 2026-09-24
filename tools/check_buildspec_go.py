@@ -412,10 +412,60 @@ REGISTERED_RX = tuple((re.compile(p), src) for p, src in REGISTERED_MISSING)
 REGISTERED_EXTRA: tuple[tuple[str, str], ...] = (
     (r"^\.operators\[\d+\]\.hp_drain_per_sec$",
      "干员职业特性「自身生命会不断流失」的速率；Python 的 `_operator_spec` 不产出它"),
+    (r"^\.operators\[\d+\]\.skill$",
+     "技能槽（博士 2026-09-24 口径：计划里 `skill: 0` ＝ 默认技能＝技 1）；"
+     "Python 那条路在槽号 0 上**不绑**技能，所以它没有这个键"),
+    (r"^\.operators\[\d+\]\.active$",
+     "同上：技能开启期间的数值快照。有 `skill` 才有它，两者同来同去"),
+    (r"^\.operators\[\d+\]\.talent_panel_mods$",
+     "**天赋折进面板的那三个比例**，Go 自己报出来的；判据靠它把两边还原到同一个量。"
+     "Python 不折天赋，所以它没有这个键"),
 )
 REGISTERED_EXTRA_RX = tuple((re.compile(p), src) for p, src in REGISTERED_EXTRA)
 
 MISSING = "<缺>"
+
+#: 「这一例里天赋面板倍率抬了哪几项」——给结论行印出来用（登记不等于不说）。
+TALENT_LIFTED: dict[str, list[str]] = {}
+
+
+def lift_talent_panel(py: dict, go: dict) -> tuple[dict, list[str]]:
+    """把 Python 那一侧的干员面板**抬到 Go 的口径**再比。
+
+    Go 从 2026-09-24 起把**天赋的面板倍率**折进了 `atk`／`def`／`max_hp`
+    （`rios-sim/talentpanel.go`），而 Python 一个都不折——实测 212 / 460 位干员
+    带这类天赋，所以这一处差值**必然**出现。
+
+    做法：按 **Go 自己报出来的** `talent_panel_mods`（判据不猜、不手抄）把 Python 的值
+    乘上去、按整数四舍五入（Go 的 `applyRounding` 也取整），再交给 `diff_paths` 去比
+    ⇒ **这不是容差，是把两边还原到同一个量**。
+    没有这一栏的干员原样不动；乘不上的（比例在而键不在）原样比、照旧可能判红。
+    """
+    ops = go.get("operators")
+    py_ops = py.get("operators")
+    if not isinstance(ops, list) or not isinstance(py_ops, list) or not py_ops:
+        return py, []
+    lifted: list[str] = []
+    new_ops = []
+    for i, po in enumerate(py_ops):
+        if not isinstance(po, dict) or i >= len(ops) or not isinstance(ops[i], dict):
+            new_ops.append(po)
+            continue
+        mods = ops[i].get("talent_panel_mods") or {}
+        if not mods:
+            new_ops.append(po)
+            continue
+        po = dict(po)
+        for mk, tk in (("atk", "atk"), ("def", "def"), ("max_hp", "max_hp")):
+            pct = float(mods.get(mk) or 0.0)
+            v = po.get(tk)
+            if pct and isinstance(v, (int, float)):
+                po[tk] = float(round(v * (1.0 + pct)))
+                lifted.append("%s+%.0f%%" % (tk, pct * 100.0))
+        new_ops.append(po)
+    out = dict(py)
+    out["operators"] = new_ops
+    return out, lifted
 
 
 def diff_paths(a, b, p: str = "") -> list[tuple[str, object, object]]:
@@ -470,6 +520,10 @@ def diff_one(py: dict, go: dict, name: str) -> tuple[list[str], dict, bool]:
     bad: list[str] = []
     cnt = {"registered_missing": 0, "registered_extra": 0, "compared_paths": 0}
     snow = SNOW_ID in (py.get("mechanisms") or [])
+    #: ★ 口径变更登记（见 `lift_talent_panel`）：把 Python 那一侧抬到 Go 的天赋口径再比。
+    py, _lifted = lift_talent_panel(py, go)
+    if _lifted:
+        TALENT_LIFTED[name] = _lifted
     if sorted(py) != sorted(go):
         bad.append("%s：键集不同\n      期望 %s\n      Go   %s"
                    % (name, sorted(py), sorted(go)))
@@ -535,11 +589,25 @@ def check_slots(rec: dict, name: str, *, expect_plan: bool) -> list[str]:
             bad.append("%s：不带计划的用例里 `mechspec` 的未搬条目应恰有 1 条"
                        "（雪），实得 %d 条：%s" % (name, len(mech_entries),
                                                   mech_entries))
-    srcs = ["spawns", "unsupported"] + (["operators"] if expect_plan else [])
+    srcs = ["spawns", "unsupported"]
     for src in srcs:
         if not any(u.startswith(src + ": ") for u in unp):
             bad.append("%s：unported 里没有 %s 的来源条目（合并静默为空？）现得 %s"
                        % (name, src, json.dumps(unp, ensure_ascii=False)[:200]))
+    #: ★★ **2026-09-24 又按口径改了一条**（与上面 `mechspec` 那次同一个理由）：
+    #: `operators` 那一族现在**零 unported** —— Go 自己产出了 `skill` / `active`
+    #: （`rios-sim/skillbind.go`），`OperatorUnported` 因此清空。
+    #: 老规矩「每个来源至少一条」在这里变成**假红**（实测 27 例全是这一条）。
+    #: 改成两条各自可判的：
+    #:   · 带计划 ⇒ `operators` 那族**必须零条**（全造得出来）；
+    #:   · 不带计划 ⇒ 不要求它出现（那时 `BuildOperatorsFor` 根本没被调用）。
+    #: ⚠ 「合并静默为空」并没有因此失去覆盖：它现在露在**19 键齐不齐**与**键集逐位比**
+    #: 那两条上（真忘了并，`operators` 那族会出现不该有的条目 —— 即下面这条判红）。
+    ops_entries = [u for u in unp if u.startswith("operators: ")]
+    if expect_plan and ops_entries:
+        bad.append("%s：带计划的用例里 `operators` 还有未搬条目 %s —— "
+                   "Go 现在自己产出 skill／active，那一族应当零条"
+                   % (name, ops_entries))
     #: 本入口自己那条：★ `goal_cells：` **已删**（第三十九批，雪搬进来之后那道门
     #: 会开、不再需要放行），所以这里只剩 `p3r_armed` 一条。
     for own in ("spawns[].p3r_armed：",):

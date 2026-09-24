@@ -173,7 +173,7 @@ GO_ONLY = ("hp_drain_per_sec",)
 #: ⇒ 逐人次键集比对里把这两个键**从 Go 的键集里摘掉**再比（不摘会造一条永久假红），
 #: 并另配两条现算守卫：**Go 真的送出过它**（0 人次＝死登记）、**Python 一次都没送过**
 #: （送过 ⇒ 口径变了，这条登记要重做）。
-EXTRA_OPS = ("skill", "active")
+EXTRA_OPS = ("skill", "active", "talent_panel_mods")
 EXTRA_OPS_SEEN: dict = {}
 EXTRA_OPS_FROM_PY: dict = {}
 
@@ -849,6 +849,7 @@ def main() -> int:
                            % (f.name, len(ruler_bad)))
             printed.extend("      " + x for x in ruler_bad[:4])
 
+        talent_panel_seen: list[str] = []
         resp = go_operators(str(ROOT / "fixtures" / f.name), str(ROSTER_FIX))
         got = resp["operators"]
 
@@ -973,6 +974,28 @@ def main() -> int:
                 GO_ONLY_SEEN[k] = GO_ONLY_SEEN.get(k, 0) + 1
             for k in sorted(py_keys & set(GO_ONLY)):
                 GO_ONLY_FROM_PY[k] = GO_ONLY_FROM_PY.get(k, 0) + 1
+            #: ★ **2026-09-24 口径变更（有意与 Python 分道扬镳）**：Go 把**天赋的面板倍率**
+            #: 折进了 `atk`／`def`／`max_hp`（`rios-sim/talentpanel.go`），Python 一个都不折
+            #: ——实测 212 / 460 位干员带这类天赋，所以这一处差值**必然**出现。
+            #:
+            #: 处置：把两边**还原到同一个量**再比 —— `期望 = Python 的值 × (1 + 比例)`，
+            #: 比例取自 **Go 自己报出来的 `talent_panel_mods`**（判据不猜、不手抄），
+            #: 两边都按整数四舍五入（Go 的 `applyRounding` 也取整）
+            #: ⇒ **这不是容差**。`g("total")` 不在 PORTED 里（它比的是规格顶层键），
+            #: 所以这一处只牵动这三个键。
+            wt = dict(wt)
+            _mods = gt.get("talent_panel_mods") or {}
+            _adj = []
+            for _mk, _tk in (("atk", "atk"), ("def", "def"), ("max_hp", "max_hp")):
+                _pct = float(_mods.get(_mk) or 0.0)
+                if not _pct or _tk not in wt:
+                    continue
+                _v = wt.get(_tk)
+                if isinstance(_v, (int, float)):
+                    wt[_tk] = float(round(_v * (1.0 + _pct)))
+                    _adj.append("%s+%.0f%%" % (_tk, _pct * 100.0))
+            if _adj:
+                talent_panel_seen.append("、".join(_adj))
             #: 25 个键逐个比（**含存在性**——条件键「该不该出现」也是内容）。
             for k in PORTED:
                 g_same = (k in gt) == (k in wt) and same(wt.get(k), gt.get(k))

@@ -42,7 +42,8 @@ const SkillLevelDefault = 7
 //	  规格里出现一个「看着有技能、其实绑错了」的干员）；
 //	技能 id 取得到但 `SkillMetaFor` 取不到这一级 ⇒ 报错（数据缺口，不猜）。
 func bindSkillTo(charID string, slot int, baseATK, baseDEF, baseRES, baseMaxHP,
-	baseASPD, baseInterval float64) (*SkillSpec, *Profile, []string, error) {
+	baseASPD, baseInterval float64, baseDamageType string) (*SkillSpec, *Profile,
+	[]string, error) {
 	if slot == 0 {
 		//: ★ 博士口径：0 ＝ 默认技能 ＝ 技 1（一二星没有技能槽，下面 `len(ids)==0` 兜住）。
 		slot = 1
@@ -93,11 +94,14 @@ func bindSkillTo(charID string, slot int, baseATK, baseDEF, baseRES, baseMaxHP,
 	atk, def, maxHP, _, interval := applyMods(baseATK, baseDEF, baseMaxHP,
 		baseASPD, baseInterval, mods)
 	prof := &Profile{
-		ATK:        atk,
-		DEF:        def,
-		RES:        baseRES,
-		Interval:   interval,
-		DamageType: "", // 由调用方填（技能的伤害类型改写本批未接，具名在覆盖账里）
+		ATK:      atk,
+		DEF:      def,
+		RES:      baseRES,
+		Interval: interval,
+		//: ★ 伤害类型：**基准由特性决定**（博士 2026-09-24 口径：特性没写「法术伤害」
+		//: 就一律物理），**技能正文写明「伤害类型变为 …」时按那句话切换**
+		//: （`DamageTypeFromSkillText`：按短语、不按技能名 ⇒ 加一名干员不用改判定）。
+		DamageType: DamageTypeFromSkillText(meta.Description, baseDamageType),
 		MaxTarget:  1,
 		AtkScale:   mods.AtkScale,
 		HitCount:   mods.Times,
