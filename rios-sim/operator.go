@@ -124,6 +124,41 @@ type OperatorStats struct {
 
 var charTableCache map[string]json.RawMessage
 
+// OperatorSkillIDs 返回一名干员的**技能槽列表**（按 `character_table.json` 里
+// `skills` 数组的书写顺序；槽号 1 起算，即 `skills[0]` 是技能 1）。
+//
+// 它服务的是一条判定口径（博士 2026-09-24）：计划 json 里的 `deploys[*].skill: 0`
+// **不等于「不用技能」**——除了一二星干员是真的没有技能之外，0 都会选到
+// **玩家的默认技能**；测试期间把 `skill: 0` 认定为 `skill: 1`。
+//
+// 为什么从 `character_table` 取：那是**唯一**一份带顺序的技能槽表
+// （`akdb` 的 `operator_skill` 也有，但那是另一条取数线，两处各取一份迟早分叉）。
+func OperatorSkillIDs(charID string) ([]string, error) {
+	tbl, err := loadCharTable()
+	if err != nil {
+		return nil, err
+	}
+	raw, ok := tbl[charID]
+	if !ok || string(raw) == "null" {
+		return nil, fmt.Errorf("character_table 里没有 %q", charID)
+	}
+	var char struct {
+		Skills []struct {
+			SkillID string `json:"skillId"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal(raw, &char); err != nil {
+		return nil, fmt.Errorf("%s 的技能槽解析失败：%w", charID, err)
+	}
+	out := make([]string, 0, len(char.Skills))
+	for _, s := range char.Skills {
+		if s.SkillID != "" {
+			out = append(out, s.SkillID)
+		}
+	}
+	return out, nil
+}
+
 // loadCharTable 读 `character_table.json`（14 MB），只读一次并缓存。
 //
 // 复刻 `stats.py:400-423` 的**两步**：

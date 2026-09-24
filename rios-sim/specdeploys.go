@@ -105,6 +105,12 @@ type DeployRow struct {
 	//: 落地时刻（费用模型算出来的）。排序键。
 	At        float64
 	AutoSkill bool
+	//: 计划里的**技能槽号**（`DeployOrder.Skill`，0–3）。
+	//:
+	//: ★ 口径（博士 2026-09-24）：**`0` 不等于「不用技能」**——除了一二星干员是真的
+	//: 没有技能之外，0 都会选到**玩家的默认技能**；测试期间把 `0` 认定为 `1`。
+	//: 绑定发生在 `buildOperatorOut`（走 `OperatorSkillIDs` 把槽号映射成技能 id）。
+	Skill int
 }
 
 // BuildDeployRows 复刻 `verify.py:393-480` 的费用模型，返回**按落地时刻稳定排序**
@@ -166,7 +172,7 @@ func BuildDeployRows(plan PlayPlan, roster RosterRead,
 		rows = append(rows, DeployRow{
 			PlanIdx: i, Operator: d.Operator, Position: d.Position,
 			Direction: d.Direction, Entry: e, Cost: cost, At: at,
-			AutoSkill: d.AutoSkill,
+			AutoSkill: d.AutoSkill, Skill: d.Skill,
 		})
 	}
 	//: 原版 `sorted(sch.deployments, key=lambda d: d.time)`——**稳定**排序，
