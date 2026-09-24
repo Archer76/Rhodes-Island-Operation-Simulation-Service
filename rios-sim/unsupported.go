@@ -218,26 +218,35 @@ func UnsupportedGate(level, path string, q GateQuery) (GateOut, error) {
 	}
 	skipped := 0
 	for _, sp := range spawns {
-		es, err := lib.At(sp.EnemyID, sp.Level)
+		//: ★ **走 `StatsForSpawn`，不走 `lib.At`**（2026-09-24 修）：它带「库里取不到
+		//: 就查关卡本地定义」那条回退（`enemy_stats.py:34-55`），与出怪那条路同一个入口。
+		//: 修之前这里直接调 `lib.At`，于是**新取进来的关卡**（第 14/16/17 章那四关）
+		//: 一出怪就大声失败——下面这段注释**当初就预言了这一天**（见「一旦有哪一关的
+		//: 出怪表真引用了本地定义」）。
+		es, err := StatsForSpawn(lib, st, sp.EnemyID, sp.Level)
 		if err != nil {
 			// ⚠ **这里与 `mech._spawns_of` 的 `except: continue` 故意不同口径。**
 			//
 			// 原版取不到敌人时**静默跳过**那一项——那是闸门自己的盲区：跳过的敌人
-			// 一条理由都不贡献，而规格里照样有它。今天不会显形，因为缓存 55 关的
-			// **出怪表**引用的 key 全部在敌人库里；但有一个已量到的口子：
-			// `act31side_03/04/07/tr01/tr02` 的 `enemyDbRefs` 里有 9 条
-			// `useDb: false` 的**关卡本地定义**（`enemy_1398_dhdcr_b`、
-			// `enemy_1399_dhtb_b`），原版走 `with_overwrite` 现造，
-			// 而 Go 这一版还没读关卡里的 `enemies` 数组。它们目前**一个都不在
-			// waves 里**（5 关逐关核过），所以这个口子暂时点不着。
+			// 一条理由都不贡献，而规格里照样有它。本函数不跟那个口径：取不到就
+			// **大声失败**。
 			//
-			// ⇒ 一旦有哪一关的出怪表真引用了本地定义，这里会**大声失败**，
-			// 而不是跟着原版一起沉默。正解是接 `EnemyLibrary.WithOverwrite`。
+			// ★ **2026-09-24 这一天真的到了**（原注释在这里记过它只是「暂时点不着」）：
+			// 第 14/16/17 章新取进来的 4 关（`easy_14-11`／`main_14-11`／`main_16-08`／
+			// `main_17-17`）的出怪表**真的引用**了关卡本地定义（`enemy_1424_lrboom_3` 等）
+			// ⇒ 这一段当场响，`单一入口` 与 `出怪规格` 一族都红在它上面。
+			// 处置＝**接线，不是登记**：这一行已改走 `StatsForSpawn`（`enemy.go`），
+			// 它带「库里取不到就查 `st.LocalEnemies` 再 `WithOverwrite`」那条回退，
+			// 与 `enemy_stats.py:34-55` 同口径、与出怪那条路**同一个入口**。
+			//
+			// ⇒ 现在这一段只在**两处都没有**时才响（真的没有这份定义），
+			// 那才是该大声失败的时候。
 			skipped++
 			return out, fmt.Errorf(
-				"闸门的第 %d 个出怪项取不到敌人 %q 第 %d 档：它可能是关卡本地定义"+
-					"（enemyDbRefs 里 useDb=false 那条路，原版走 with_overwrite 现造，"+
-					"Go 侧还没接）。★ 原版在这里是**静默跳过**，本函数故意不跟——"+
+				"闸门的第 %d 个出怪项取不到敌人 %q 第 %d 档："+
+					"敌人库里没有它，这一关的 `enemyDbRefs` 里也没有它"+
+					"（`useDb:false` 的本地定义那条回退已经走过，见 `StatsForSpawn`）。"+
+					"★ 原版在这里是**静默跳过**，本函数故意不跟——"+
 					"静默跳过会让这条闸门对那只敌人永远沉默，而规格里照样有它",
 				skipped, sp.EnemyID, sp.Level)
 		}

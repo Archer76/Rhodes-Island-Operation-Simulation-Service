@@ -928,8 +928,19 @@ def named_reason(r: dict) -> str:
             return line.strip().lstrip("★ ").strip()
     for line in blob.splitlines():
         s = line.strip()
+        #: ⚠ **通道自述行要排掉**：`★ 冻结基线通道 check —— 取期望值 582 次全部命中冻的那份，
+        #: 零次吃 Python` 也带 `★` 且含「冻结基线」，于是**判据红**的那些套会被印成
+        #: 「像未转」，而它其实通道全通（实测：`单一入口` 判据红时就是这样）。
+        #: 它是**读数**不是**因**——「给尺子写答案」的反面就在这里。
+        if s.startswith("★") and "冻结基线通道" in s:
+            continue
         if s.startswith("★") and ("冻结基线" in s or "禁止 import" in s or "未转" in s):
             return s.lstrip("★ ").strip()
+    #: 判据红的因在**结论行**里（「结论：… 未通过（N 处）」）。
+    for line in blob.splitlines():
+        s = line.strip()
+        if s.startswith("结论："):
+            return s
     if r["rc"] == 124:
         return "超时（未在限内跑完）"
     return ""

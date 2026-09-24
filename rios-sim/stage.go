@@ -133,6 +133,12 @@ type Stage struct {
 	//: 去掉键名**不影响读入**：加载器是**手工构造** `Stage` 的（`runes` 走
 	//: `parseRunes(raw["runes"])`，见本文件 `Load` 那一段），不经过结构体反序列化。
 	Runes []Rune `json:"-"`
+	//: 关卡自带的敌人定义：`id → overwrittenData`（只有 `enemyDbRefs` 里
+	//: `useDb:false` 的那些）。与 Python 的 `stage.local_enemies()` 同口径。
+	//:
+	//: ⚠ 标签同样是 `json:"-"`：原版 `load_stage` 的返回值里**没有**这个键
+	//: （它住在 `st.raw` 里），带上键名会让 `load` 应答多送一个键而判红。
+	LocalEnemies map[string]map[string]json.RawMessage `json:"-"`
 }
 
 // EnemyRef 是 `enemyDbRefs` 的一条：这一关引用了哪个敌人、用哪一档。
@@ -276,11 +282,23 @@ func ParseStage(raw map[string]json.RawMessage, levelID, code, difficulty string
 	if err != nil {
 		return nil, fmt.Errorf("runes：%w", err)
 	}
+	//: ★ 关卡**自带的**敌人定义（`enemyDbRefs` 里 `useDb:false` 的那些）挂在这里，
+	//: 与 Python 的 `stage.local_enemies()`（`gamedata/stage.py:690-701`）同口径。
+	//: 为什么必须有它：这些 id **不在属性库里**，整份数据写在关卡文件里，只有
+	//: `prefabKey` 指向的那个在库里。取敌人时**先当它在库里，取不到才走本地覆盖**
+	//: （`frontend/enemy_stats.py:37-55`）——少这一条回退，闸门会在
+	//: `unsupported.go` 那里对这类敌人**大声失败**（本轮实测：第 14/16/17 章的
+	//: `easy_14-11`/`main_14-11`/`main_16-08`/`main_17-17` 四关的出怪表真的引用了）。
+	defs, err := parseLocalEnemyDefs(raw)
+	if err != nil {
+		return nil, fmt.Errorf("enemyDbRefs：%w", err)
+	}
+	locals := localEnemies(defs)
 	return &Stage{
 		LevelID: levelID, Code: code, Difficulty: difficulty,
 		Map: world, Routes: routes, ExtraRoutes: extra,
 		Branches: branches, Spawns: spawns, Options: opts,
-		Runes: runes,
+		Runes: runes, LocalEnemies: locals,
 	}, nil
 }
 

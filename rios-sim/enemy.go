@@ -415,6 +415,37 @@ func copyIntMap(m map[string]int) map[string]int {
 	return out
 }
 
+// StatsForSpawn 取一只敌人在某一档的数值 —— **先当它在库里，取不到才走关卡本地定义**。
+//
+// 这是 `frontend/enemy_stats.py:34-55` 那条回退的**唯一** Go 版：
+//
+//	try:  return enemy_at(id, level)
+//	except: local = stage.local_enemies().get(id)
+//	        if not local: raise           ← 本地也没有就**照原样抛**，不静默给空值
+//	        return owner.with_overwrite(id, local, level)
+//
+// ★ 为什么要有它（而不是各处自己写 `lib.At`）：本轮实测，第 14/16/17 章的
+// `easy_14-11`/`main_14-11`/`main_16-08`/`main_17-17` 四关的出怪表**真的引用**了
+// 关卡本地定义（`enemy_1424_lrboom_3` 等）。出怪那条路（`spawns.go` 的 `spawnCtx.locals`）
+// 早就接了，而**闸门**那条路直接调 `lib.At` ⇒ 它对这类敌人**大声失败**。
+// 两条路现在共用这一个入口，免得下次只有一条被修好。
+//
+// ⚠ 与 `EnemiesForStage` 里那段**故意不同**：那一段是按「库里有没有这个 id」
+// （`lib.ByKey`）分支，而这里是按「取不取得到」分支。原版是后者（try/except），
+// 所以这里跟原版；两者的差别只在「id 在库里但这一档不在」这种形状上。
+func StatsForSpawn(lib *EnemyLibrary, st *Stage, id string, level int) (*EnemyStats, error) {
+	es, err := lib.At(id, level)
+	if err == nil {
+		return es, nil
+	}
+	if st != nil {
+		if def, ok := st.LocalEnemies[id]; ok && len(def) > 0 {
+			return lib.WithOverwrite(id, level, def)
+		}
+	}
+	return nil, err
+}
+
 // WithOverwrite 把关卡自带的敌人定义盖到 prefab 档位上（`enemy.py:1038-1122`）。
 //
 // 用在 `useDb: false` 的敌人上：它们的 id **不在属性库里**，整份数据写在关卡里，

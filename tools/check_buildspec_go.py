@@ -42,6 +42,26 @@
 19 个键**逐个**数「有几例非空」。某个键在全部用例里都是空的 ⇒ 那条「一致」是
 零信息量的绿 ⇒ 必须登记（`EMPTY_REGISTRY`），否则判红。
 
+## 冻结基线（`tools/freeze_baseline.py`，套名「单一入口」）
+
+三个口径的期望值全部走 `G.expect()` 冻住；**问题集也一起冻**（A 的夹具清单与关卡号、
+B 的缓存关卡批次、C 的计划原文）——只冻答案不冻问题，分母会静默缩水。
+
+* **冻**：A／B／C 三个口径的期望值（键自带输入身份：夹具内容 sha16／关卡 id ＋
+  缓存文件 sha16／计划原文 sha16）、四类问题集（`("query", …)`）、一个判定参数键
+  （`("consts", "A_fixture_levels")`，`§六·b` 拿它去问 Go）、
+  `from_stage_defaults`（那四项静默默认值的**唯一痕迹**）与 `p3r_reachable`
+  （Python 侧的可达关数）；
+* **不冻**（`SECTIONS` 里逐段具名）：槽账（§二·四）、allowance 白名单两侧守卫、
+  §五 契约、§六·b 的 freeze 可达性 —— 它们的宾语是**活 Go** 的产物，
+  冻住就没有宾语（冻 Go 自己的产物＝两条同源读数互证，证不了「参数真被读」）。
+  ⇒ 这一套的状态是**部分覆盖**，**不进「跑通」的分子**。
+
+跑法：
+    python tools\\freeze_baseline.py --record 单一入口
+    $env:RIOS_GOLDEN="check"
+    python tools\\freeze_baseline.py --run-script tools\\check_buildspec_go.py
+
 用法:
     python tools\\check_buildspec_go.py
     python tools\\check_buildspec_go.py --mutate
@@ -62,6 +82,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
+import freeze_baseline as GB                                   # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -86,6 +107,40 @@ SNOW_DIFF_KEYS = ("mechanisms", "mech_config", "goal_cells")
 #: 有 2 例非空 ⇒ 它不是「零覆盖」，是「具名口径差」；故不进这张表，
 #: 由 `diff_spec` 的三条断言盯着。
 EMPTY_REGISTRY: dict[str, str] = {}
+
+#: 逐段声明覆盖面（第四态「部分覆盖」的依据）。★ **只有真不适用等值冻结的段才写上来**：
+#: 全可冻的段不许声明 —— 声明了就把这一套变成「部分覆盖」，永远不进「跑通」的分子。
+SECTIONS = [
+    {"id": "§二 A 计划口径（24 份夹具）", "class": "frozen",
+     "why": "Python 的生产规格（check_specgo_go.real_specs 里那句 build_spec）"
+            "↔ Go buildspec 的 19 键，逐路径比"},
+    {"id": "§二 B 空计划口径（缓存可达的关卡）", "class": "frozen",
+     "why": "py_from_stage（SpecInputs.from_stage ＋ build_spec）↔ Go buildspec"},
+    {"id": "§二 C 计划侧合成（3 例）", "class": "frozen",
+     "why": "check_specgo_go._capture(raw) ↔ Go buildspec（把真夹具零行使的两条支走到）"},
+    {"id": "§二·四 槽账 missing_keys／gated_keys／unported", "class": "live_both",
+     "why": "断言打的是**活 Go 记录自己**那三个槽（非空即红、每条来源至少一条）——"
+            "脚本侧只有结构规则，没有可冻的 Python 期望值；冻住等于把 Go 自己的产物"
+            "跟它自己比（恒等假绿）"},
+    {"id": "§二 allowance 白名单两侧守卫", "class": "live_both",
+     "why": "反向注入用 _deepdrop 删**活 Go 规格**里的一条路径"
+            "（operators[0].max_hp）再看判据红不红 —— 冻住就没有宾语，"
+            "而「有宾语」正是这一段要证的事"},
+    {"id": "§三 19 键行使计数", "class": "frozen",
+     "why": "计数现算自**冻的**期望值（每个键在全部用例里几例非空）：某个键全空 ⇒ "
+            "那条「一致」是两边都为空的空洞相等 ⇒ 判红（EMPTY_REGISTRY 的纪律）"},
+    {"id": "§五 认不得的 spec 键必须具名失败", "class": "live_both",
+     "why": "宾语是**活 Go** 的应答（传拼错的 plans 必须拒跑并点到那个键）；"
+            "脚本侧没有可取期望值的 Python 产物 ⇒ 冻住没有宾语"},
+    {"id": "§六 p3r 可达性", "class": "frozen",
+     "why": "Python 侧 make_total_attack 的**可达关数**（现算值冻住；非 0 即红）"},
+    {"id": "§六·b 积雪 freeze 缺省可达性", "class": "live_both",
+     "why": "两次都读**活 Go** 的产物（不送 freeze ↔ 送 freeze=false）＋一次仓库扫描；"
+            "冻 Go 自己的产物＝两条同源读数互证，证不了「参数真被读」"},
+    {"id": "§七 反向守卫（--mutate）", "class": "frozen",
+     "why": "8 处注入打在**冻的**期望值上，判红来源是活 Go 的逐路径比；"
+            "注入空转即判红"},
+]
 
 
 # ---------------------------------------------------------------- Go 侧
@@ -224,6 +279,96 @@ def plan_variants() -> list[tuple[str, dict]]:
     skills["skills"] = [{"operator": who, "time": 30.0, "slot": 0}]
     return [("C1 撤退 ×1", retreat), ("C2 技能槽 1", slot),
             ("C3 手动开技能（skill_uses）", skills)]
+
+
+# ---------------------------------------------------------------- 冻结通道的取数口
+
+_A_BATCH = None
+
+
+def fixture_records() -> list[dict]:
+    """夹具批次的**输入身份**：文件名 ＋ 文件字节 sha16（数据侧算，冻结档也跑得动）。
+
+    ★ 入选条件与 `check_specgo_go.real_specs()` **逐字同口径**（带 deploys／deploy
+    的那几份）：判据侧要能**独立**数出「这一批该问几份」，否则分母只能照抄 Python。
+    """
+    out: list[dict] = []
+    for f in sorted(FIXDIR.glob("*.json")):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8-sig"))
+        except Exception:                                        # noqa: BLE001
+            continue
+        if isinstance(d, dict) and ("deploys" in d or "deploy" in d):
+            out.append({"name": f.name, "sha16": GB.file_sha16(f)})
+    return out
+
+
+def _a_batch() -> list:
+    """A 口径的 Python 侧取数（★ **只在非冻结档调**）：`real_specs()` 的原样。
+
+    ★ 缓存一份：`real_specs()` 每份夹具要走一次生产路径（排程 ＋ `build_spec`），
+    不缓存的话 24 个键会各跑一遍。
+    """
+    global _A_BATCH
+    if _A_BATCH is None:
+        import check_specgo_go as C                              # noqa: PLC0415
+        _A_BATCH = list(C.real_specs())
+    return _A_BATCH
+
+
+def _a_query() -> list:
+    """A 口径的问题集：夹具名 ＋ 关卡 id（★ 关卡 id 只有 Python 侧算得出来）。"""
+    return [[r[0], r[3]] for r in _a_batch()]
+
+
+def _a_lv_map() -> dict:
+    """A 口径的**判定参数**：夹具名 → 关卡 id（`§六·b` 要拿它去问 Go）。"""
+    return {r[0]: r[3] for r in _a_batch()}
+
+
+def _a_expect(name: str) -> dict:
+    """A 口径的期望值：一份夹具的生产规格；抄不到就连具名错因一起交上去。"""
+    for n, spec, err, _lv in _a_batch():
+        if n == name:
+            if spec is None:
+                return {"spec": None, "why": err or ""}
+            return {"spec": spec, "why": ""}
+    raise SystemExit("★ 生产规格那一批里没有这份夹具：%s" % name)
+
+
+def _c_query() -> list:
+    """C 口径的问题集：标签 ＋ 计划原文 ＋ 计划原文 sha16。
+
+    ★ 计划原文**必须一起冻**：冻结档写不出喂给 Go 的那份计划文件就没有宾语
+    （与 `check_specgo_go` 的 syn 那批同一条规矩）。
+    """
+    out: list = []
+    for label, raw in plan_variants():
+        out.append([label, raw,
+                    GB.sh16(json.dumps(raw, sort_keys=True, ensure_ascii=False,
+                                       separators=(",", ":")).encode("utf-8"))])
+    return out
+
+
+def _c_capture(raw: dict) -> dict:
+    """C 口径的期望值：把一份打法 dict 走生产路径抄成规格。★ import 住函数里。"""
+    import check_specgo_go as C                                  # noqa: PLC0415
+    spec, err = C._capture(raw)
+    return {"spec": spec, "why": err or ""}
+
+
+def _fsd_snapshot() -> dict:
+    """`FROM_STAGE_DEFAULTS` 的现算快照（`py_from_stage` 逐关累加出来的）。
+
+    ★ **一个读数之所以要冻，不是因为它是个数，而是因为它是某件事的唯一痕迹**
+    （出处：本轮交付方给的逐段审计）：那四项静默默认值**只在 Python 侧**算得出来，
+    它是「B 口径与真实关卡静态差在哪」这件事的唯一痕迹。冻结档里 `py_from_stage`
+    不会被调用（期望值直接读冻的那份）——不冻这一行，第二节那句「N / M 关受影响」
+    就会退化成恒为 0 的空话。
+    """
+    return {"n": int(FROM_STAGE_DEFAULTS["n"]),
+            "sample": str(FROM_STAGE_DEFAULTS["sample"]),
+            "fields": dict(FROM_STAGE_DEFAULTS["fields"])}
 
 
 # ---------------------------------------------------------------- 比较
@@ -429,8 +574,12 @@ def add_case(cases: list[dict], name: str, py: dict, rec: dict,
                   "groups_order_diff": bool(py_before) and py_before != go_before})
 
 
-def freeze_reachability(cases: list[dict]) -> tuple[list[str], dict]:
+def freeze_reachability(cases: list[dict], lv_map: dict) -> tuple[list[str], dict]:
     """`freeze` 缺省值的**现算可达性** —— 与 `p3r_reachable` 同一条规矩。
+
+    ⚠ `lv_map`（夹具名 → 关卡号）是**参数**：它只有 Python 侧算得出来，冻结档
+    读的是冻的那一份（`("consts", "A_fixture_levels")`）—— 本函数自己**不 import
+    `ak_tactic`**，冻的是参数不是宾语。
 
     三件事都要真做，缺一条这段就是零信息量的绿：
 
@@ -477,16 +626,19 @@ def freeze_reachability(cases: list[dict]) -> tuple[list[str], dict]:
                    % (cov["scan_hits"], cov["scan_excluded"],
                       "\n      ".join(hits)[:400]))
     #: ① ② 现读两次产物（同一关同一计划，只差一个 `freeze`）。
-    import check_specgo_go as C
-
-    lv = {n: l for n, _s, _e, l in C.real_specs()}
     #: ⚠ 用例名带口径前缀（`A hsex8_max.json`／`C …`）——**取末段**当夹具名，
     #: 别直接拿它去查表（第一版就 `KeyError: 'A hsex8_max.json'`）。
     name = snow[0]["name"].split()[-1]
+    if name not in lv_map:
+        #: ★ 具名失败，不猜：冻结档的判定参数键里没有它 ⇒ 这一段的宾语不见了。
+        bad.append("冻结档的判定参数键里没有这份夹具的关卡号（%s）—— "
+                   "`§六·b` 无从取证" % name)
+        return bad, cov
     for tag, extra, want, key in (("不送 freeze", {}, True, "default_true"),
                                   ("送 freeze=false", {"freeze": False}, False,
                                    "flip_false")):
-        ok, resp = go_buildspec_raw({"id": 1, "cmd": "buildspec", "level": lv[name],
+        ok, resp = go_buildspec_raw({"id": 1, "cmd": "buildspec",
+                                     "level": lv_map[name],
                                      "spec": {"plan": str(FIXDIR / name),
                                               "roster": ROSTER_FIX,
                                               "allow_devices": True, **extra}})
@@ -611,19 +763,57 @@ def _deepdrop(obj, path: str):
 
 
 def main() -> int:
+    G = GB.bind("单一入口", __file__)
+    #: ★ **逐段声明覆盖面**（第四态「部分覆盖」的依据）。工具按 `class` 计数，
+    #: 不按形容词：声明过的段里只要有一段不适用等值冻结，这一套就不进「跑通」的分子。
+    G.sections(SECTIONS)
     mutate_mode = "--mutate" in sys.argv
     print("Go 侧仪器：%s" % GO_BIN)
     print("Python 侧权威：`simgo/spec.py::build_spec`（三个口径，见文件头）")
 
-    import check_specgo_go as C
     try:
         from check_go_all import cached_levels
         levels = cached_levels()
     except Exception as e:                                       # noqa: BLE001
         raise SystemExit("取不到缓存关卡清单：%s" % e)
-    rows = C.real_specs()
+
+    # ============================================================ 问题集（都走通道）
+    #: ★ 「**问哪些问题**」本身就是 Python 侧的产物：A 的**关卡号**只有
+    #: `real_specs()` 算得出来（四星档 `#f#` 住在 id 上，不在显示代号上），
+    #: C 的**计划原文**要一起带走才写得出发给 Go 的那份文件。只冻答案不冻问题，
+    #: 冻结档要么当场响，要么有人「顺手」把查询集改小、分母静默缩水而全绿。
+    live_a = fixture_records()
+    fsha = {r["name"]: r["sha16"] for r in live_a}
+    cov_a = G.coverage("A_plan", [(r["name"], r["sha16"]) for r in live_a])
+    if G.mode == GB.CHECK:
+        a_batch = G.expect(("query", "A_fixtures"), lambda: live_a)
+        lv_map = G.expect(("consts", "A_fixture_levels"), lambda: {})
+        covered_a = {tuple(x) for x in cov_a.covered}
+        #: ⚠ 未覆盖的**不比**（对账里会具名）——猜＝自己写一份期望值。
+        rows = [(r["name"], lv_map[r["name"]]) for r in a_batch
+                if r["name"] in lv_map
+                and (r["name"], fsha.get(r["name"], "")) in covered_a]
+    else:
+        if G.mode == GB.RECORD:
+            G.expect(("query", "A_fixtures"), lambda: live_a)
+            G.expect(("consts", "A_fixture_levels"), lambda: _a_lv_map())
+        lv_map = _a_lv_map()
+        rows = [(r[0], r[3]) for r in _a_batch()]
+
+    #: B 的批次身份＝「关卡 id ＋ 缓存文件内容 sha16」两件：`cached_levels()` 只决定
+    #: 「问哪些」，内容身份另算（数据侧算，冻结档也跑得动）。
+    batch = GB.level_inputs(DATA, levels)
+    #: 批次**记录**：`--check` 拿现读与它对账。★ 它**不参与判定**（内容身份住在**键**
+    #: 里）⇒ 本套**不声明** `batch_consumed`，`--control` 的 P4 因此不适用（具名印出）。
+    #: ⚠ 它的**值**还有第二个用处：记下「录基线时问过哪几个对象」，好让冻结档把
+    #: 「录完才出现的新对象」与「录过、现在答不上来的对象」分开（见 B 那一圈）。
+    q_b = G.expect(("query", "B_level_batch"), lambda: batch)
+    asked_b = {(r["level"], r["sha16"]) for r in q_b}
+
+    c_q = G.expect(("query", "C_plans"), lambda: _c_query())
+
     print("分母：A 计划口径 %d 份夹具；B 空计划口径 %d 关；C 计划侧合成 %d 例"
-          % (len(rows), len(levels), len(plan_variants())))
+          % (len(rows), len(levels), len(c_q)))
     if not rows or not levels:
         print("★ 分母是 0 —— 判据瞎了，不给判定")
         return 1
@@ -634,56 +824,88 @@ def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="buildspec_"))
 
     # ---- A：24 份夹具（带计划）----
-    #: A 的 plan 逐份不同 ⇒ 只能一份一条请求（B 那 55 关共用空计划，可以批量）。
-    for name, spec, err, lv in rows:
-        if spec is None:
-            raise SystemExit("生产规格抄不到（%s）：%s" % (name, err))
+    #: A 的 plan 逐份不同 ⇒ 只能一份一条请求（B 那批共用空计划，可以批量）。
+    #: ★ 期望值键自带**夹具内容 sha16**：夹具一改内容，键就配不上（由对账如实报出）。
+    for name, lv in rows:
+        want = G.expect(("A_plan", name, fsha.get(name, "")),
+                        lambda n=name: _a_expect(n))
+        if want["spec"] is None:
+            raise SystemExit("生产规格抄不到（%s）：%s" % (name, want["why"]))
         ok, resp = go_buildspec_raw({
             "id": 1, "cmd": "buildspec", "level": lv,
             "spec": {"plan": str(FIXDIR / name), "roster": ROSTER_FIX,
                      "allow_devices": True}})
         if not ok:
             raise SystemExit("Go 回 error（%s）：%s" % (name, resp.get("error")))
-        add_case(cases, "A %s" % name, spec, resp["build_spec"], expect_plan=True)
+        add_case(cases, "A %s" % name, want["spec"], resp["build_spec"],
+                 expect_plan=True)
 
-    # ---- B：55 关（空计划）----
+    # ---- B：缓存可达的关卡（空计划）----
     #: ⚠ 三态：**可比** / **具名拒跑** / 其它错。拒跑不是本判据的失败，
     #: 但必须**逐关具名**列出来——把它算进「比了 N 例」就是把没比的说成比了。
-    got_b = go_buildspec_batch(levels)
+    #: ★ 对账里的「这一批问过的对象」＝**真的比得到的那些**：具名拒跑是**登记在案的
+    #: 结局**，不是覆盖面的洞——把它算成「未覆盖」，这一套在冻结档就永久 rc=6，
+    #: 那正是本仓记过的「永久假红等于没有判据」。
+    b_levels = [r["level"] for r in batch]
+    b_sha = {r["level"]: r["sha16"] for r in batch}
+    got_b = go_buildspec_batch(b_levels)
     n_refused = 0
     refused: list[str] = []
-    for lv, (ok, resp) in zip(levels, got_b):
+    cmp_b: list[tuple[str, dict]] = []
+    for lv, (ok, resp) in zip(b_levels, got_b):
         if ok:
-            add_case(cases, "B %s" % lv, py_from_stage(lv), resp["build_spec"],
-                     expect_plan=False)
+            cmp_b.append((lv, resp["build_spec"]))
             continue
         if is_named_refusal(resp):
             n_refused += 1
             refused.append(lv)
             continue
+        if G.mode == GB.CHECK and (lv, b_sha[lv]) not in asked_b:
+            #: ★ 录基线时**没问过**这个对象（缓存长大了、或那份内容换了）⇒ 判据对它
+            #: **没有期望值**：既不比、也不判红。它的出现由下面的批次对账具名报出
+            #: （rc=6 ＝「读数不可用、该重录」）。把它的 Go 应答当成**判据红**，
+            #: 就是本仓禁的「把两种因压成一个数」——下一个人会去查实现，而真因是
+            #: 对象集变了。
+            continue
         problems_early.append("B %s：Go 回了**非具名**的错误：%s"
                               % (lv, str(resp.get("error"))[:160]))
+    cov_b = G.coverage("B_plan", [(lv, b_sha[lv]) for lv, _g in cmp_b])
+    covered_b = {tuple(x) for x in cov_b.covered}
+    for lv, gspec in cmp_b:
+        if G.mode == GB.CHECK and (lv, b_sha[lv]) not in covered_b:
+            #: ⚠ 未覆盖的**不比**（对账里会具名）——猜＝自己写一份期望值。
+            continue
+        add_case(cases, "B %s" % lv,
+                 G.expect(("B_plan", lv, b_sha[lv]),
+                          lambda lv=lv: py_from_stage(lv)),
+                 gspec, expect_plan=False)
+
+    #: ★ 那四项静默默认值的**唯一痕迹**：`py_from_stage` 在 B 那一圈里逐关累加，
+    #: 累完就地**冻住**（口径见 `_fsd_snapshot` 的 docstring）。
+    fsd = G.expect(("from_stage_defaults",), _fsd_snapshot)
 
     # ---- C：计划侧合成 ----
-    for label, raw in plan_variants():
+    for label, raw, c_sha in c_q:
         p = tmp / ("plan_%s.json" % label.split()[0])
         p.write_text(json.dumps(raw, ensure_ascii=False, indent=1), encoding="utf-8")
-        spec, err = C._capture(raw)
-        if spec is None:
-            raise SystemExit("合成计划抄不到（%s）：%s" % (label, err))
+        want = G.expect(("C_plan", label, c_sha),
+                        lambda raw=raw: _c_capture(raw))
+        if want["spec"] is None:
+            raise SystemExit("合成计划抄不到（%s）：%s" % (label, want["why"]))
         ok, resp = go_buildspec_raw({
             "id": 1, "cmd": "buildspec", "level": str(raw["stage"]),
             "spec": {"plan": str(p), "roster": ROSTER_FIX,
                      "allow_devices": True}})
         if not ok:
             raise SystemExit("Go 回 error（%s）：%s" % (label, resp.get("error")))
-        add_case(cases, "C %s" % label, spec, resp["build_spec"], expect_plan=True)
+        add_case(cases, "C %s" % label, want["spec"], resp["build_spec"],
+                 expect_plan=True)
 
     print("一 · 三种结局（分母现算：不把「拒跑」算进「比了」）")
     print("  A 计划口径 %d 例：全部可比（实测 24/24）" % len(rows))
     print("  B 空计划口径 %d 关：可比 %d ＋ 具名拒跑 %d %s"
-          % (len(levels), len(levels) - n_refused, n_refused, refused))
-    print("  C 计划侧合成 %d 例" % len(plan_variants()))
+          % (len(b_levels), len(b_levels) - n_refused, n_refused, refused))
+    print("  C 计划侧合成 %d 例" % len(c_q))
     print("  可比合计 %d 例" % len(cases))
     print()
     print("二 · 逐用例逐路径对拍（%d 例）" % len(cases))
@@ -696,10 +918,9 @@ def main() -> int:
     #: 会以为 B 口径测的就是生产路径。
     print("  ⚠ `SpecInputs.from_stage` 的 fps／speed_scale／ranged_enemies／enemy_windup"
           " 四项**静默落默认**（它用 getattr 读一个 dict），本判据就地补回真实值："
-          "%d / %d 关受影响 %s" % (FROM_STAGE_DEFAULTS["n"], len(levels),
-                                   FROM_STAGE_DEFAULTS["fields"]))
-    if FROM_STAGE_DEFAULTS["sample"]:
-        print("     样例：%s" % FROM_STAGE_DEFAULTS["sample"])
+          "%d / %d 关受影响 %s" % (fsd["n"], len(b_levels), fsd["fields"]))
+    if fsd["sample"]:
+        print("     样例：%s" % fsd["sample"])
     #: 白名单两侧的守卫 ＋ 逐条（按路径分组）报告。
     aguard, acnt = allowance_guards(cases)
     problems += aguard
@@ -746,7 +967,10 @@ def main() -> int:
 
     print()
     print("六 · 仪器的 p3r 可达性（现算；非 0 即红）")
-    n_p3r = p3r_reachable(levels)
+    #: ★ 那条可达性是**只有 Python 侧算得出来**的读数（`make_total_attack` 的宾语），
+    #: 非冻结档现算、冻结档读冻的那份 —— 它的输入集就是 B 那批缓存关卡，
+    #: 那一批变了由上面的批次对账具名报出。
+    n_p3r = G.expect(("p3r_reachable",), lambda: p3r_reachable(levels))
     print("  缓存 %d 关里 total_attack 非 None 的：%d" % (len(levels), n_p3r))
     if n_p3r:
         problems.append("有 %d 关带 total_attack —— 单一入口必须改成收 p3r_armed 输入"
@@ -754,7 +978,7 @@ def main() -> int:
 
     print()
     print("六·b · 积雪的 `freeze` 缺省值可达性（现算；三件都要真做）")
-    fbad, fcov = freeze_reachability(cases)
+    fbad, fcov = freeze_reachability(cases, lv_map)
     problems += fbad
     for m in fbad:
         print("  ✗ %s" % m)
@@ -788,6 +1012,50 @@ def main() -> int:
         print("  反向守卫成立：%d / %d 处注入都判红" % (len(MUTATIONS), len(MUTATIONS)))
         return 0
 
+    #: ★ **先给这一跑定性**：工具（`freeze_baseline.named_reason`）认「输出里第一句 ★
+    #: 且提到冻结基线的行」当这一套的原因，而下面那行通道读数正是这种行——不先定性，
+    #: 它会把「判据红」或「该重录」读成同一句话（那正是两个不同的意思压成一个值，
+    #: 本仓记过的那类假信号）。
+    if problems:
+        print("★ 这一跑是**判据红**（rc=1，%d 处不一致）：宾语是活 Go 的应答，"
+              "与通道、与对象集对账都无关（那两者各有自己的码与具名消息）"
+              % len(problems))
+        print()
+    elif G.mode == GB.CHECK and not (cov_a.ok and cov_b.ok):
+        print("★ 这一跑是**通道自己的 6**（rc=6）：录的是哪一批对象变了 ⇒ 这读数不可用、"
+              "该重录；它与「Go 漂移了」那条判据红分开（对账明细见下）")
+        print()
+
+    #: 通道自己的读数：record 档「收下 N 个期望值」／check 档「取期望值 N 次全部命中
+    #: 冻的那份，零次吃 Python」。★ 这一行是「这一套真的走通道了吗」的现场证据。
+    _sum = GB.channel_summary()
+    if _sum:
+        print(_sum)
+        print()
+
+    #: ★ **输入批次对账**：只在冻结档、且两边对不齐时印。它把两种因分开：
+    #: 「对象集变了（多了／少了／换了内容）」是**读数不可用**（rc=6，该重录），
+    #: 「Go 漂移了」才是判据红（rc=1）——压成一个数，下一个人就无从处置。
+    if G.mode == GB.CHECK and not (cov_a.ok and cov_b.ok):
+        for _tag, _cov, _n in (("A_plan", cov_a, len(live_a)),
+                               ("B_plan", cov_b, len(batch))):
+            if _cov.ok:
+                continue
+            print(_cov.report(_tag, _n))
+            _ex = {g[0] for g in _cov.extra}
+            _ms = {g[0] for g in _cov.missing}
+            _chg, _add, _gone = sorted(_ex & _ms), sorted(_ex - _ms), sorted(_ms - _ex)
+            if _chg:
+                print("  · ★ **内容变了**（同一个对象的内容 sha 变了，%d 个）：%s"
+                      % (len(_chg), "、".join(_chg[:8])))
+            if _add:
+                print("  · **对象集变了**（新增、基线里没有，%d 个）：%s"
+                      % (len(_add), "、".join(_add[:8])))
+            if _gone:
+                print("  · **对象集变了**（这次没问、但冻着，%d 个）：%s"
+                      % (len(_gone), "、".join(_gone[:8])))
+        print()
+
     if problems:
         print("★ %d 处不一致：" % len(problems))
         for m in problems[:20]:
@@ -796,11 +1064,23 @@ def main() -> int:
             print("  · …（另有 %d 条）" % (len(problems) - 20))
         print("结论：单一入口对拍**未通过**（%d 处）" % len(problems))
         return 1
+    if G.mode != GB.CHECK:
+        #: ⚠ 默认档这一档「一致」的宾语是**现算的 Python 期望值**，不是冻的那份：
+        #: 不许把它印成「与冻结的基线一致」——本档没有冻的那份，那句话是恒等的、
+        #: 零信息量（本仓记过的那类假信号）。
+        print("⊘ 默认档不适用「与冻结的基线一致」这一句：本档没有冻的那份，"
+              "期望值现取自 Python（这一跑只用来录基线）")
+    #: ★ **结论行带上覆盖面**：读这一行的人当场就知道这一档没覆盖哪几段，
+    #: 不用另外去跑 `--status`。
     print("结论：%d 例逐路径一致（A 计划 %d ＋ B 空计划 %d ＋ C 合成 %d）；"
           "带雪 %d 例已逐字段比；已登记缺键 %d 处；19 键全部造齐"
-          "（missing_keys 空、gated_keys 空）；具名拒跑 %d 关（不计入可比分母）"
-          % (len(cases), len(rows), len(levels) - n_refused, len(plan_variants()),
-             cov["_snow_cases"], cov["_registered_missing"], n_refused))
+          "（missing_keys 空、gated_keys 空）；具名拒跑 %d 关（不计入可比分母）%s"
+          % (len(cases), len(rows), len(b_levels) - n_refused, len(c_q),
+             cov["_snow_cases"], cov["_registered_missing"], n_refused,
+             G.uncovered_sections_text()))
+    if G.mode == GB.CHECK and not (cov_a.ok and cov_b.ok):
+        #: 比过的部分一致，但**对象集/内容变了** ⇒ 读数不可用（rc=6），不是判据红。
+        return GB.RC_CHANNEL
     return 0
 
 

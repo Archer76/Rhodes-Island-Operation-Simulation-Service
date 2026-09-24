@@ -152,7 +152,7 @@ python -X utf8 tools\freeze_baseline.py --status
 | 19 | 闸门 | `check_unsupported_go.py` | **未转** | `spec.unsupported_reasons` 一族 | 乙 |
 | 20 | 出怪规格 | `check_spawns_go.py` | **◐ 部分覆盖**（56 值；**11 段里 7 段可冻**，4 段不适用；控制组 P1/P2/P2b/P3 成立，P3b ⊘、**P4 ⊘ 具名**；**永不进「跑通」的分子**） | `parse_stage` / `_route_tables` / `_spawn_spec` / `stage_mul` / `enemy_view` | 乙 · **已核（部分）** |
 | 21 | 机制规格 | `check_mechspec_go.py` | **已转**（**587 值** ＝ 562 个关卡键 ＋ 批次记录 ＋ 24 份夹具批；键形＝`["mechspec", 关卡 id, 缓存文件内容 sha16]` 与 `["mechspec_fix", 夹具名, 夹具 sha16, 名册 sha16]`；`input_identity=True`／`batch_consumed=False`；控制组 P1/P2/P2b/P3 成立，P3b ⊘、**P4 ⊘ 具名**） | `build_spec` 一族（关卡批 ＋ 夹具批两份期望，§五 与 §五·b 共用一份） | 乙 · **已核** |
-| 22 | 单一入口 | `check_buildspec_go.py` | **未转** | `build_spec` 一族 / `battle.sim.make_total_attack` | 乙 |
+| 22 | 单一入口 | `check_buildspec_go.py` | **◐ 部分覆盖**（**586 值** ＝ 3 条查询集 ＋ 1 判定参数 ＋ 578 期望值；**10 段里 6 段可冻**，4 段 `live_both`（注入打在**活 Go** 上，冻住没有宾语）；**永不进「跑通」的分子**） | `build_spec` 一族 / `battle.sim.make_total_attack` | 乙 · **已核（部分）** |
 | 23 | 干员规格 | `check_operators_go.py` | **已转**（**归另一个会话**，25 值；键形＝`["operators", 夹具名, **夹具 sha16**, **名册 sha16**]` 一份夹具一条；`input_identity=True`／`batch_consumed=False`；本会话只读不碰） | `build_spec` / `talent_finders` / `OperatorCalculator` / `Verifier` | 乙 |
 | 24 | 自造规格 | `check_sim_selfspec_go.py` | **◐ 部分覆盖**（26 值 ＝ **1 查询集** ＋ 25 判决快照；**4 段里 2 段可冻**，2 段 `live_both` 不适用；控制组 P1/P2/P2b/P3 成立，P3b ⊘、**P4 成立**；**永不进「跑通」的分子**） | **无 `ak_tactic` import**：判据是 Go 两种入参形式的**差分** ＋ 「现读 Go ↔ **冻结的 Go**」的漂移检测 | 丙 · **已核** |
 | 25 | 调用链 | `check_sim_via_python_go.py` | **不适用于冻结**（具名理由由 `NOT_APPLICABLE` 现算；**不等于「未转」**） | **被测方就是 Python 自己**：静态四条 AST 读 `ak_tactic/verify.py`＋`simgo/*.py` 源码文本；端到端与三态跑真的 Python `Verifier`。它**已经有自己的冻结**：`fixtures/golden_go.json`（在库）＋ `git show d4ddc4c:` 原文 | 丙 · **具名不转** |
@@ -425,8 +425,13 @@ Python 还在的时候，锚是 `--check`（现读 vs 冻结，两条来源不�
 
 | 套 | 冻的批 | 现读 | 状态 |
 | --- | ---: | ---: | --- |
-| 关卡／关卡静态／寻路／敌人／格表／部分规格 | 320 | 562 | **该重录**（现读 +242） |
+| 关卡／关卡静态／寻路／敌人／格表／部分规格 | 320 → **562** | 562 | **已重录**（2026-09-24）：563／580／564／3079／563／594 值，六套重录后冻结档全部 `rc=0` |
 | 机制规格 | 320 → **562** | 562 | **已重录**（2026-09-24，587 值，523.7 s） |
+| 单一入口 | — | 562 | **已重录**（586 值，871.2 s；它的 B 批另受「4 关本地定义」影响，见节点九） |
+
+⇒ **八套全部重录完毕，冻结档逐套回到 `rc=0`**（六套 level 批的复核实测：
+格表 23.9 s／关卡 25.1 s／敌人 219.3 s／寻路 73.5 s／关卡静态 47.2 s／部分规格 31.8 s，
+五态账各为「跑通 1 ＋ 部分覆盖 0 ＋ 待重录 0 ＋ 待转 0 ＋ 不适用 0 ＝ 1」）。
 
 ⇒ **这两套状态机要分开读**（实测，`--status 格表 --quick`）：
 
@@ -734,4 +739,55 @@ sha16 改掉／删掉一个 `["enemy",…]` 键，再用 `RIOS_GOLDEN_DIR` 指�
 `tools/freeze_baseline.py` 的第四个类名、§3 逐套表第 24 行与 §4 第 24 行的「已落地」；
 六道闸门全过（`--selfcheck` 27/27 套全绿、27/27 套守卫成立；
 `closeout_selfsufficiency.py` 目标状态：达成）。
+
+### 节点九 · 单一入口 ＋ 一次**由新内容暴露的真缺口**（闸门接上关卡本地敌人定义）
+
+**A · 单一入口转完**（`check_buildspec_go.py`，**582 值**）：
+
+| 键 | 值 | 说明 |
+| --- | --- | --- |
+| `("query", "A_fixtures")` | 24 | 夹具名 ＋ 文件 sha16 |
+| `("query", "B_level_batch")` | 562 | 关卡 id ＋ data_path ＋ 缓存 sha16 |
+| `("query", "C_plans")` | 3 | 标签 ＋ 计划原文 ＋ 原文 sha16 |
+| `("consts", "A_fixture_levels")` | 24 | **判定参数**：§六·b 拿它问 Go |
+| 期望值 | 578 | `A_plan`×24 ／ `B_plan`×549 ／ `C_plan`×3 ／ `from_stage_defaults` ／ `p3r_reachable` |
+
+★ `from_stage_defaults` 是一条**「某件事的唯一痕迹」**式的读数——本轮口径：
+**一个读数之所以要冻，不是因为它是个数，而是因为它是某件事的唯一痕迹**（写进了那段代码的注释）。
+★ 19 键的**计数本身不单独冻**：它现算自**冻的**期望值，单独冻它是与自己比的恒等。
+
+**段（10 段里 6 段可冻）**：`§二·四 槽账`／`§二 allowance 两侧守卫`／`§五 契约`／
+`§六·b 两次活 Go` 是 `live_both`（**注入打在活 Go 上，冻住就没有宾语**）
+⇒ 本套是 **◐ 部分覆盖，不进「跑通」的分子**。
+
+**B · 期间暴露的真缺口（本节的重点）**：缓存被别的会话从 320 关取到 562 关之后，
+第 14/16/17 章的 4 关（`easy_14-11`／`main_14-11`／`main_16-08`／`main_17-17`）
+的出怪表**真的引用**了 `enemyDbRefs` 里 `useDb:false` 的**关卡本地定义**
+（`enemy_1424_lrboom_3` 等）。闸门那条路直接调 `lib.At` ⇒ **大声失败**
+⇒ `单一入口` 两种档都 rc=1。**这不是迁移造的**：把 HEAD 版原样取出来跑，同样 4 处红。
+
+★ `unsupported.go` 那段注释**当初就预言了这一天**：「一旦有哪一关的出怪表真引用了
+本地定义，这里会大声失败……正解是接 `EnemyLibrary.WithOverwrite`」。**本次就是那天。**
+
+**处置＝接线，不是登记**（博士 2026-09-24 裁定选 ③）：
+
+| 改哪 | 改了什么 |
+| --- | --- |
+| `rios-sim/enemy.go` | 新增 `StatsForSpawn(lib, st, id, level)`：先 `lib.At`，取不到再查 `st.LocalEnemies[id]` 走 `WithOverwrite`，两处都没有才抛原错误（逐条对 `frontend/enemy_stats.py:34-55` 的 try／except／raise） |
+| `rios-sim/stage.go` | `Stage` 新增 `LocalEnemies`（`json:"-"`，理由同 `Runes`：原版 `load_stage` 返回值里没有这个键），`ParseStage` 里用 `parseLocalEnemyDefs` ＋ `localEnemies` 填好 ⇒ 与 `stage.local_enemies()` 同口径 |
+| `rios-sim/unsupported.go` | 出怪循环改走 `StatsForSpawn`；旧注释（「Go 这一版还没读关卡里的 enemies 数组」）同步改写 |
+
+★ **出怪那条路早就接了**（`spawns.go` 的 `spawnCtx.locals`），只有闸门没接——
+两条路现在共用同一个入口，免得下次只有一条被修好。
+
+**读数**（仪器 sha256(16) 由 `908e2d2edce63543` 变为 `B84A1755A21D21E3`）：
+
+| # | 检查 | rc | 读数 |
+| --- | --- | --- | --- |
+| 1 | `go build` ＋ `go vet ./...` | 0 | 无告警 |
+| 2 | 四关的 `unsupported` 直问 | — | `ok=true`、`reasons=[]`、`spawn_skipped=0`（`main_14-11` 出怪 63 项全解析） |
+| 3 | `check_buildspec_go.py` 默认档 | **0** | 580 例逐路径一致（A 24 ＋ B 553 ＋ C 3）；19 键全部造齐；具名拒跑 9 关（不计入可比分母） |
+| 4 | 修前冻结档 | **6** | **对象集变了**：新增 `easy_14-11`／`main_14-11`／`main_16-08`／`main_17-17` —— 那 4 关录基线时还是拒跑态，能算了就**该重录**（这正是 `待重录` 那一态在说的意思） |
+| 5 | 重录后冻结档／`--check`／`--control`／`--mutate` | 见 `--status` 与 §10 之末 | — |
+
 
