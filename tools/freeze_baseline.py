@@ -343,8 +343,14 @@ class Channel:
 
     # ---- 覆盖面：第四态「部分覆盖」的落点 ---------------------------------
 
-    #: 段的三种类。**工具按它计数，不按形容词**。
-    SECTION_CLASSES = ("frozen", "python_both", "source_coupled")
+    #: 段的四种类。**工具按它计数，不按形容词**。
+    #:
+    #: ⚠ `python_both` 是**历史命名**：它的**判据**是「两侧都在同一次运行里现算
+    #: （两侧同源）」——**不是**「两侧是 Python」。同样的形状也出现在「同一次运行里
+    #: 的两跑 Go」上（差分类判据）⇒ 新代码写 `live_both`，两者等价。
+    #: ★ 与它相对的是 `frozen`：**「当前 X ↔ 冻结的 X」不是同源**——一侧活、一侧是
+    #: 过去冻下来的，那是**合法的漂移检测器**（判据是「X 自己变了没有」）。
+    SECTION_CLASSES = ("frozen", "python_both", "live_both", "source_coupled")
 
     def sections(self, rows: list[dict]) -> None:
         """**逐段声明**本套判据的覆盖面。每行一条：

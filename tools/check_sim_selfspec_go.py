@@ -53,10 +53,32 @@ import sys
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
+import freeze_baseline as GB                                   # noqa: E402
+
+#: ★ **本套是唯一一套完全不吃 Python 的**：两次提问都是 Go（查询形式／旧形式）。
+#: 所以这里要写清一个**很容易被一起归错类**的区别：
+#:
+#: * `live_both`（旧名 `python_both`）＝ 两侧都在**同一次运行里现算**的值
+#:   （差分／敏感性／控制组）⇒ 冻了就是**恒等假绿**；
+#: * **「当前 Go ↔ 冻结的 Go」不是这种**：一侧是活的、一侧是过去冻下来的
+#:   ⇒ 它是**合法的漂移检测器**（判据是「Go 自己变了没有」），**属于 `frozen`**。
+#:
+#: 别把后者一起归进「不适用」——那会把这一套唯一能红「Go 侧漂移」的那一路删掉。
+SECTIONS = [
+    {"id": "一·契约组", "class": "frozen",
+     "why": "Go 的契约面（判别不许猜／必填不许兜底）↔ 程序里的具名期望"},
+    {"id": "三·差分（两种入参形式）", "class": "live_both",
+     "why": "查询形式与旧形式都在**同一次运行里现算**（两侧同源）⇒ 冻住等于让"
+            "同一份活值跟自己比；它是**同一趟运行内的一致性判据**，本档照跑不冻"},
+    {"id": "四·判决快照（Go ↔ 冻结的 Go）", "class": "frozen",
+     "why": "判决四数（除墙钟）＋ `unsupported` 逐位与**冻结的 Go** 比——"
+            "**当前 Go ↔ 冻结的 Go 不是同源**，它是漂移检测器"},
+    {"id": "六·口径控制组／七·反向守卫", "class": "live_both",
+     "why": "注入与回声都在同一次运行里现算 ⇒ 不适用等值冻结"},
+]
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -114,7 +136,7 @@ def query_body(name: str, *, allow_devices: bool = True,
 #: 24 份真夹具原先有 **11 例「两边都拒跑」**，所以「拒跑那半边」是被真行使的；
 #: 那两个键（`farmland.devices[].child`、`operators[].shield`）搬进 Go 之后，
 #: 这 11 例**全部变成真判决** ⇒ 拒跑那半边**零行使** ⇒ 本套自己的覆盖率判据
-#: 当场判红（"一例都没拒跑"）。**正确的处置是补一例把它走回来**，
+#: 当场判红（「一例都没拒跑」）。**正确的处置是补一例把它走回来**，
 #: 不是把那条要求删掉——删掉就成了「用降低覆盖换绿」。
 #:
 #: 用的触发器是**字段驱动**的那条（`unsupported.go` 的「技能槽号 N」）：
@@ -124,11 +146,76 @@ SYNTH_BASE = "hsex8.json"
 SYNTH_MARK = "技能槽号"
 
 
-def synth_reading() -> dict:
-    """合成一例**两边都拒跑**的读数（见 `SYNTH_NAME` 的注释）。"""
-    import check_specgo_go as C
+SYNTH_KEY = "__synth__"
 
-    lv = next(lv for n, _s, _e, lv in C.real_specs() if n == SYNTH_BASE)
+
+def fixture_records() -> list[dict]:
+    """**数据侧**现算：带 `deploys` 的夹具（名字 ＋ 文件内容 sha16）。
+
+    ★ 这一路**不 import `ak_tactic`**（只读 json 与文件字节）⇒ 冻结档也跑得动。
+    它同时是「对象集」与「内容身份」两个问题的**独立来源**：冻的那一份若与它不符，
+    说明基线该重录，**不是**「Go 漂移了」。
+    """
+    out = []
+    for f in sorted(FIXDIR.glob("*.json")):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8-sig"))
+        except Exception:                                       # noqa: BLE001
+            continue
+        if isinstance(d, dict) and ("deploys" in d or "deploy" in d):
+            out.append({"name": f.name, "sha16": GB.file_sha16(f)})
+    return out
+
+
+def fixture_plan() -> list[dict]:
+    """**查询集**：夹具名 → 关卡号（只有 Python 侧能跑）＋ 内容 sha16。
+
+    ★ 只冻答案不冻问题＝分母会静默缩水（见 `freeze_baseline` 的规矩）：这一条是
+    「问哪些夹具、各在哪一关」本身，所以它走 `("query", …)` 键，
+    **不是** `("consts", …)`——它决定问哪些问题，不是判定口径常量。
+    """
+    import check_specgo_go as C
+    lv = {n: l for n, _s, _e, l in C.real_specs()}
+    out = []
+    for r in fixture_records():
+        if r["name"] not in lv:
+            #: 数据侧新加、Python 侧还不知道它在哪一关 ⇒ 不进查询集（下面会对账报出来）。
+            continue
+        out.append({"name": r["name"], "level": lv[r["name"]], "sha16": r["sha16"]})
+    out.append({"name": SYNTH_KEY, "level": lv[SYNTH_BASE], "sha16": ""})
+    return sorted(out, key=lambda r: r["name"])
+
+
+#: ★ 对账消息里这五个字是**别人的接口**（`freeze_baseline` 的 P3／P4 靠它判
+#: 「被判成对象变了」还是「被判成内容变了」，而不是被读成「Go 漂移了」）。
+BATCH_TAG = "输入批次对账"
+
+
+def batch_diff(live: list[dict], frozen: list[dict]) -> list[str]:
+    """数据侧现算 vs 冻的那一批：多出／没问／内容 sha16 变了。**只此一份**。"""
+    lv = {r["name"]: r["sha16"] for r in live}
+    fz = {r["name"]: r["sha16"] for r in frozen if r["name"] != SYNTH_KEY}
+    out = []
+    extra = sorted(set(lv) - set(fz))
+    gone = sorted(set(fz) - set(lv))
+    changed = sorted(n for n in set(lv) & set(fz) if lv[n] != fz[n])
+    if extra:
+        out.append("  · 基线里没问、数据侧却有 %d 份（前 8）：%s"
+                   % (len(extra), "、".join(extra[:8])))
+    if gone:
+        out.append("  · 基线问了、数据侧却没有 %d 份（前 8）：%s"
+                   % (len(gone), "、".join(gone[:8])))
+    if changed:
+        out.append("  · 内容 sha16 变了 %d 份（前 8）：%s"
+                   % (len(changed), "、".join(changed[:8])))
+    return out
+
+
+def synth_reading(lv: str) -> dict:
+    """合成一例**两边都拒跑**的读数（见 `SYNTH_NAME` 的注释）。
+
+    ★ 关卡号从**判定参数**来（`real_specs()` 只有 Python 侧能跑）；其余三步**全是 Go**。
+    """
     raw = json.loads((FIXDIR / SYNTH_BASE).read_text(encoding="utf-8-sig"))
     raw["deploys"][0]["skill"] = 1
     body = {"plan": raw, "roster": ROSTER_FIX,
@@ -143,15 +230,15 @@ def synth_reading() -> dict:
             "built": rb["build_spec"], "old": ro, "spec": built}
 
 
-def build_readings() -> list[dict]:
-    """每个夹具问三次：查询形式、buildspec（拿它当旧形式的规格）、旧形式。"""
-    import check_specgo_go as C
+def build_readings(lv_map: dict) -> list[dict]:
+    """每个夹具问三次：查询形式、buildspec（拿它当旧形式的规格）、旧形式。
 
-    rows = C.real_specs()
+    ★ **三次提问全是 Go**（这一点让本套在冻结档也跑得动）；只有**关卡号**是判定参数
+    ——`record` 档现算并存进基线，`check` 档读冻的那份。
+    """
     out: list[dict] = []
-    for name, spec, err, lv in rows:
-        if spec is None:
-            raise SystemExit("生产规格抄不到（%s）：%s" % (name, err))
+    for name in sorted(k for k in lv_map if k != SYNTH_KEY):
+        lv = lv_map[name]
         q = {"id": 1, "cmd": "sim", "level": lv, "spec": query_body(name)}
         b = {"id": 2, "cmd": "buildspec", "level": lv, "spec": query_body(name)}
         rq, rb = go_call([q, b])
@@ -161,7 +248,7 @@ def build_readings() -> list[dict]:
         ro, = go_call([{"id": 3, "cmd": "sim", "spec": built}])
         out.append({"name": name, "level": lv, "query": rq, "built": rb["build_spec"],
                     "old": ro, "spec": built})
-    out.append(synth_reading())
+    out.append(synth_reading(lv_map[SYNTH_KEY]))
     return out
 
 
@@ -407,6 +494,11 @@ def echo_control(readings: list[dict]) -> tuple[list[str], dict]:
 
 
 def main() -> int:
+    G = GB.bind("自造规格", __file__)
+    #: ★ 逐段声明覆盖面（第四态的依据）：差分那两路是**同一次运行里现算**
+    #: （`live_both`）⇒ 不适用等值冻结；**判决快照**那一路是「**当前 Go ↔ 冻结的 Go**」
+    #: ⇒ 它是漂移检测器，属于可冻段（别把它一起归进「不适用」）。
+    G.sections(SECTIONS)
     mutate_mode = "--mutate" in sys.argv
     print("Go 侧仪器：%s" % GO_BIN)
     print("差分对象：`sim` 的查询形式（Go 自造规格）vs 旧形式（送 buildspec 造出的规格）")
@@ -420,10 +512,90 @@ def main() -> int:
     print("一 · 契约组（判别不许猜 ＋ 必填字段不许兜底）")
     cbad = contract_checks(levels)
 
-    readings = build_readings()
+    #: ---- 查询集（决定「问哪些夹具、各在哪一关」）＋ 两路对账 ------------------
+    #: ★ 关卡号只有 Python 侧跑得出来 ⇒ 它是**判定参数**；而「问哪些夹具」是**分母**。
+    #: 两者住同一条记录里 ⇒ 走 `("query", …)` 键：只冻答案不冻问题，分母会静默缩水。
+    if G.mode == GB.CHECK:
+        plan = G.expect(("query", "fixtures"), lambda: [])
+    else:
+        plan = G.expect(("query", "fixtures"), fixture_plan)
+    #: 这条记录**进了判定**（它决定比哪些夹具、各在哪一关）⇒ 声明给控制组的 P4 用。
+    G.batch_consumed()
+    lv_map = {r["name"]: r["level"] for r in plan}
+    #: ⚠ 对账用的名字必须是**快照键里的那个名字**：合成例在 `plan` 里叫 `__synth__`
+    #: （它只是个占位键），而它的快照键用 `SYNTH_NAME`。拿 `__synth__` 去对账会
+    #: 恒报「多出 1 份／没问 1 份」⇒ 整套在冻结档里永远 rc=6（一条**永久假红**，
+    #: 而它看起来像「基线该重录」）。
+    covered = [[SYNTH_NAME if r["name"] == SYNTH_KEY else r["name"], r["level"]]
+               for r in plan]
+    cov_batch = G.coverage("snapshot", covered)
+    #: ★ **数据侧现算** vs 冻的那一批：对象集变了、或内容 sha16 变了 ⇒ 读数不可用。
+    live_fix = fixture_records()
+    batch_lines = batch_diff(live_fix, plan)
+
+    #: ★★ **对账排在跑之前**——两条因（对象集／内容变了）都在这一步判：
+    #: ① 不早退的话，缺的那一例会在 `G.expect()` 里撞成**缺键**（rc=6）或
+    #:    在 `lv_map[SYNTH_KEY]` 上撞成 **KeyError（rc=1）**——后者是「判据红」的码，
+    #:    与「基线该重录」完全不同的意思又被压进同一个数（本仓记过的第三次同型）；
+    #: ② 也不许把这一批**只比覆盖到的部分**就报绿：那会让「少问了一例」变成静默省略。
     print()
-    print("二 · 差分（分母现算：%d 份夹具，全部跑；`sim` 每关约 1.5s）" % len(readings))
+    print("二 · 跑之前的对账（这一批对象／内容 vs 冻的那一批）")
+    if G.mode == GB.CHECK and not cov_batch.ok:
+        print(cov_batch.report("fixtures", len(covered)))
+    if G.mode == GB.CHECK and batch_lines:
+        print("★ %s（fixtures）：数据侧现算 %d 份／冻的查询集 %d 份（含合成例）"
+              % (BATCH_TAG, len(live_fix), len(plan)))
+        for ln in batch_lines:
+            print(ln)
+        print("  ⇒ **这不是「Go 漂移了」，是「录的是哪一批对象／哪一份内容」变了**：\n"
+              "     未覆盖的对象拿不到冻的期望值，分母因此不完整。\n"
+              "     处置＝重录（`python tools\\freeze_baseline.py --record 自造规格`），"
+              "重录是显式的、会印出覆盖了谁。")
+    if G.mode != GB.CHECK:
+        print("  ⊘ 默认档不做这条对账：没有冻的那一批可比（只在冻结档／录基线时才有宾语）")
+    if G.mode == GB.CHECK and (not cov_batch.ok or batch_lines):
+        print("★ 对象集／内容变了（%s）⇒ 读数不可用，基线该重录" % BATCH_TAG)
+        return GB.RC_CHANNEL
+    if G.mode == GB.CHECK:
+        print("  ✓ 对账通过：这一批 %d 个对象与冻的那一批逐个对得上，"
+              "内容 sha16 无一改动" % len(covered))
+
+    readings = build_readings(lv_map)
+    print()
+    print("三 · 差分（分母现算：%d 份夹具，全部跑；`sim` 每关约 1.5s）" % len(readings))
     problems, cov = compare(readings)
+
+    #: ★ **新增一路（裁定：冻 Go 自己的产物）**：判决四数（除墙钟）＋ `unsupported`
+    #: 逐位，与**冻结的 Go** 比。
+    #: ⚠ 这一路**不是**「两侧同源」：一侧是活 Go、一侧是过去冻下来的 Go ⇒
+    #: 它是**漂移检测器**（判据是「Go 自己变了没有」），所以它属于 `frozen` 段。
+    drift: list[str] = []
+    for r in readings:
+        snap = {
+            "verdict": {k: v for k, v in (r["query"].get("verdict") or {}).items()
+                        if k not in NONDET_VERDICT_FIELDS},
+            "unsupported": r["query"].get("unsupported"),
+        }
+        key = ("snapshot", r["name"], r["level"])
+        want = G.expect(key, lambda snap=snap: snap)
+        if snap != want:
+            drift.append("%s：判决快照漂移\n      现读 %s\n      冻结 %s"
+                         % (r["name"],
+                            json.dumps(snap, ensure_ascii=False, sort_keys=True)[:200],
+                            json.dumps(want, ensure_ascii=False, sort_keys=True)[:200]))
+    print()
+    print("四 · 判决快照（**当前 Go ↔ 冻结的 Go**，不是同源比对）")
+    if G.mode != GB.CHECK:
+        #: ⚠ **默认档这一路是恒等的**（现读比现读）——不许把它印成「一致 ✓」
+        #: 那样会造一条零信息量的读数（本仓记过的那类假信号）。
+        print("  ⊘ 默认档不适用：这一路比的是「现在 ↔ 冻的那份」，"
+              "本档没有冻的那份 ⇒ 恒等、零信息量（只用它录基线）")
+    elif drift:
+        for line in drift[:6]:
+            print("  ✗ %s" % line)
+    else:
+        print("  ✓ %d 例的判决四数（除墙钟）＋ `unsupported` 与冻结的那份逐位相同"
+              % len(readings))
     print("  两边都跑出判决 %d 例（比判决逐路径）／两边都以同一条错拒跑 %d 例"
           "（比错误文本逐字）" % (cov["both_ok"], cov["both_refused"]))
     print("  同因拒跑 %d 例（已知那条：%s…）" % (cov["same_error"], KNOWN_REFUSAL))
@@ -433,7 +605,7 @@ def main() -> int:
           % (cov["unsupported_present"], len(readings),
              cov["unsupported_equal"], len(readings)))
     print()
-    print("三 · 覆盖率（两种有声的结局都要真被行使）")
+    print("五 · 覆盖率（两种有声的结局都要真被行使）")
     c2: list[str] = []
     if not cov["both_ok"]:
         c2.append("一例都没跑出判决 —— 判决那条断言**一次都没行使**，这套绿是零信息量的")
@@ -447,7 +619,7 @@ def main() -> int:
         print("  ✓ 判决 %d 例 ＋ 拒跑 %d 例 ＋ unsupported %d 例，三种都真跑到了"
               % (cov["both_ok"], cov["both_refused"], cov["unsupported_equal"]))
     print()
-    print("四 · 口径控制组（`allow_devices` 被带进去了吗 ＋ 它现在有没有效果）")
+    print("六 · 口径控制组（`allow_devices` 被带进去了吗 ＋ 它现在有没有效果）")
     fbad, fcov = echo_control(readings)
     for m in fbad:
         print("  ✗ %s" % m)
@@ -456,7 +628,7 @@ def main() -> int:
     problems = cbad + problems + c2 + fbad
 
     if mutate_mode:
-        print("五 · 反向守卫（每处注入都要独立判红，且要打在**具名的那条断言**上）")
+        print("七 · 反向守卫（每处注入都要独立判红，且要打在**具名的那条断言**上）")
         if problems:
             print("★ 基线本身不干净 ⇒ 反向守卫无从成立")
             return 1
@@ -481,6 +653,18 @@ def main() -> int:
               % (len(MUTATIONS), len(MUTATIONS)))
         return 0
 
+    if drift:
+        print("★ 判决快照漂移 %d 例（Go 自己变了）：" % len(drift))
+        for line in drift[:6]:
+            print("  · %s" % line)
+        print("结论：判决快照与冻结的 Go 不一致（%d 例）—— 要么重录基线，"
+              "要么去看 Go 改了什么" % len(drift))
+        return 1
+    if G.mode == GB.CHECK and (not cov_batch.ok or batch_lines):
+        #: 兜底：走到这里说明「跑之前的对账」放行了，而跑完之后对象集又对不上
+        #: （理论上到不了；留着是为了不让任何一条路**静默通过**）。
+        print("★ 对象集／内容变了（%s）⇒ 读数不可用，基线该重录" % BATCH_TAG)
+        return GB.RC_CHANNEL
     if problems:
         print("★ %d 处不一致：" % len(problems))
         for m in problems[:20]:
@@ -489,9 +673,15 @@ def main() -> int:
             print("  · …（另有 %d 条）" % (len(problems) - 20))
         print("结论：自造规格的 `sim` 对拍**未通过**（%d 处）" % len(problems))
         return 1
+    #: ★ 结论行**不许在默认档声称「与冻结的 Go 一致」**：默认档那一趟是
+    #: 「现读 ↔ 现读」⇒ 恒等，那句话零信息量（本仓记过的那类假信号）。
+    snap_txt = ("判决快照 %d 例与冻结的 Go 逐位相同" % len(readings)
+                if G.mode == GB.CHECK else
+                "判决快照：本档没有冻的那份（默认档恒等，不声称一致）")
     print("结论：%d 例差分一致（判决 %d 例逐路径相同、拒跑 %d 例同因、"
-          "unsupported %d 例逐位相同）；契约组 5 条具名失败全成立"
-          % (len(readings), cov["both_ok"], cov["both_refused"], cov["unsupported_equal"]))
+          "unsupported %d 例逐位相同）；契约组 5 条具名失败全成立；%s%s"
+          % (len(readings), cov["both_ok"], cov["both_refused"], cov["unsupported_equal"],
+             snap_txt, G.uncovered_sections_text()))
     return 0
 
 
