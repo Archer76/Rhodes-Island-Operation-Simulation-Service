@@ -136,3 +136,25 @@
 ★ 这张表**同时服务天赋**：三星的天赋黑板也是同一套键（`atk`／`def`／`max_hp`／
 `attack_speed`／`cost`／`atk_scale`＋`prob`），所以「天赋面板倍率族」用它同一份实现，
 **不是第二套代码**。
+
+### 5.3 天赋那一侧的同一份测量（证明「一张表服务两边」不是猜想）
+
+现算（`akdb` 的 `operator_talent`，**2649 条天赋行**）：
+
+| | 读数 |
+| --- | ---: |
+| 全库天赋不同黑板键 | **568** |
+| **三星 17 位天赋用到的键** | **10** |
+| 它们在全库的频次 | `atk` 416／`prob` 219／`atk_scale` 233／`max_hp` 95／`sp` 134／`attack_speed` 170／`duration` 178／`def` 183／`cost` 59 ＋ `attack@prob`（长尾） |
+
+**与技能那一侧的交集**（两边共用）：`atk`／`def`／`max_hp`／`attack_speed`／`cost`／`atk_scale`／`prob`／`duration`。
+⇒ **一张键表同时服务技能与天赋**，这条现在是**量出来的**，不是设计者的愿望。
+
+★ 并集＝模块的**首发表**（15 个键）：
+`atk`／`def`／`max_hp`／`attack_speed`／`base_attack_time`／`cost`／`heal_scale`／`atk_scale`／
+`times`／`ability_range_forward_extend`／`attack@range_scale`／`prob`／`attack@prob`／`sp`／`duration`。
+
+★ 首发表之外、但**全库高频**、留给后续外扩的（不进首发表也要**出现在覆盖账上**）：
+`cnt` 234／`interval` 195／`hp_ratio` 157／`damage_scale` 155／`damage_resistance` 102／
+`max_stack_cnt` 84／`value` 56／`stun` 46／`magic_resistance` 44／`block_cnt` 41／
+`max_deploy_count` 43／`taunt_level` 31／`sp_recovery_per_sec` 30。
