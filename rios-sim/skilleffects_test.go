@@ -77,7 +77,7 @@ func TestApplyBlackboard_缺省不是零(t *testing.T) {
 	if m.Times != 1 {
 		t.Errorf("空黑板的 times 应为 1（缺省＝打一下），实得 %v", m.Times)
 	}
-	//: 反向：**写了 0** 就是 0，不许被缺省值盖掉（"没有这条键" 与 "这条键是 0" 是两回事）。
+	//: 反向：**写了 0** 就是 0，不许被缺省值盖掉（「没有这条键」与「这条键是 0」是两回事）。
 	m2, _ := ApplyBlackboard(map[string]any{"atk_scale": 0.0})
 	if m2.AtkScale != 0.0 {
 		t.Errorf("显式写 0 必须保留为 0，实得 %v", m2.AtkScale)
