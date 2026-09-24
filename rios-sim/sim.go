@@ -419,6 +419,16 @@ type operator struct {
 	//: （原版 `sim.py:2448` 读 `sp_charges == 0`，位置在它自增**之前**），
 	//: 之后每出一轮扣一层。每次部署都从 0 起——所以它和技能状态一起清。
 	powerAttackLeft float64
+	//: 【天赋·烟雾加装】授出的**限时物理闪避**：剩余秒数与其比例
+	//: （`talenteffects.go` 的 `dodge_on_heal` / `dodge_seconds`，来源＝治疗友方单位）。
+	//:
+	//: ⚠ 与 `spec.TalentDodgePhys` **不是同一族**：那个是**常驻**的（`find_damage_block`），
+	//: 这个只在被治疗后的几秒里有效。两者都进 `dodgeVs`，相加（本仓对同类增益一律相加，
+	//: 见 `regenPerSec` 的 `math.Max` 与光环的相加口径）。
+	//:
+	//: 递减写在 `talentTick`（帧序 5.6），每次部署从 0 起。
+	dodgeGrantLeft float64
+	dodgeGrantPhys float64
 }
 
 func (o *operator) alive() bool { return o.hp > 0 && !o.retreated }
@@ -438,6 +448,45 @@ func (o *operator) heal(amount float64) float64 {
 			*o.sim.time, o.spec.Name, amount, got, o.hp, o.maxHP())
 	}
 	return got
+}
+
+// grantTalentDodge 授出/续期一份**限时物理闪避**（天赋「烟雾加装」）。
+//
+// 两处口径：
+//   - **取 max 续期**，不覆盖：与 `sluggishTimer` / `regenLeft` / `shieldTimer`
+//     全仓一致的写法。覆盖会让"连续治疗"把剩余时间越续越短。
+//   - 上一份已经过期（`left <= 0`）时先把比例清掉再挂新的：否则「吃了 25% 的人
+//     过期后又吃到 10%」会留下 25%。
+func (o *operator) grantTalentDodge(prob, seconds float64) {
+	if prob <= 0 || seconds <= 0 {
+		return
+	}
+	if o.dodgeGrantLeft <= 0 {
+		o.dodgeGrantPhys = 0
+	}
+	o.dodgeGrantPhys = math.Max(o.dodgeGrantPhys, prob)
+	o.dodgeGrantLeft = math.Max(o.dodgeGrantLeft, seconds)
+}
+
+// talentTick 是天赋授出的**限时**效果的递减（帧序 5.6：光环/增益治疗之后、
+// 我方出手之前）。
+//
+// 位置的理由：本帧刚授出的那一份，本帧敌方出手（帧序 7）**就该吃得上**——
+// 放到帧末递减会让「刚治完就被打」的那一下就白挂。
+//
+// ⚠ 它**不是**「只是记个数」：`dodgeGrantLeft > 0` 时 `dodgeVs` 才会把那份闪避
+// 算进去（`skill.go`）。递减漏了会让闪避一旦授出就永远不退——症状是后半场
+// 承伤莫名偏低，而看起来「闪避机制是通的」。
+func talentTick(ops []*operator, dt float64) {
+	for _, op := range ops {
+		if op.dodgeGrantLeft <= 0 {
+			continue
+		}
+		op.dodgeGrantLeft = math.Max(0, op.dodgeGrantLeft-dt)
+		if op.dodgeGrantLeft <= 0 {
+			op.dodgeGrantPhys = 0
+		}
+	}
 }
 
 // canBlock 对应 `OperatorUnit.can_block`：飞行单位挡不住，阻挡位满也挡不住。
@@ -587,8 +636,34 @@ func runSim(spec *Spec) (*Verdict, error) {
 			// 「强击瓶专家」的剩余层数也从零起：它由**本局的首次开技**点亮，
 			// 上一局的余量带过来会让这一局开场就多打几十轮加成。
 			op.powerAttackLeft = 0
+			op.dodgeGrantLeft = 0
+			op.dodgeGrantPhys = 0
 			if sk := op.spec.Skill; sk != nil && !sk.Passive {
 				op.sp = sk.InitSP
+			}
+			//: ---- 天赋「快速技能使用」（`talenteffects.go` 的 `sp`）----
+			//:
+			//: 「部署后立即获得 N 点技力」：**加在 `init_sp` 之上**，并夹在
+			//: 「开一次技能要多少」上——与 `skillTick` 里那两处夹法同一个上限
+			//: （`spCost × maxCharge`）。不夹的话，技力超过消耗会让 `sp` 这个数
+			//: 与两侧的其他读数分叉（它同时是"还差多少"的分子）。
+			if op.spec.TalentDeploySP != 0 {
+				ceiling := op.sp + op.spec.TalentDeploySP
+				if sk := op.spec.Skill; sk != nil && sk.SPCost > 0 {
+					c := sk.SPCost * float64(sk.MaxCharge)
+					if c > 0 && ceiling > c {
+						ceiling = c
+					}
+				}
+				gained := ceiling - op.sp
+				op.sp = ceiling
+				if traceOn {
+					//: ★ 行使指纹：打在**真的加了**那一刻。加 0 也打——那说明
+					//: 上限已经满了，而"加 0"与"这一条没生效"长得一样，
+					//: 只有这一行分得开。
+					trace("TALSP t=%.4f op=%s want=%.4f gained=%.4f sp=%.4f",
+						t, op.spec.Name, op.spec.TalentDeploySP, gained, op.sp)
+				}
 			}
 			// ---- 层数护盾（原版 `_attach_talent_shield`，`sim.py:3157-3182`，
 			// 在 `_do_deploy` 里、紧随部署时技能/天赋效果之后）
@@ -953,6 +1028,12 @@ func runSim(spec *Spec) (*Verdict, error) {
 		// 位置是定的：排在**技能之后**（本帧刚上场的干员当帧就能吃到），
 		// 又在**我方出手之前**（这一帧治回来的血，出手前就已经在身上）。
 		regenAuraTick(ops, dt)
+
+		// ---- 5.6 天赋授出的**限时**效果递减（`talenteffects.go`）
+		//
+		// 位置是定的：排在**我方出手之前**——本帧刚授出的那一份，本帧敌方出手
+		// （帧序 7）就该吃得上；放到帧末递减会让「刚治完就被打」的那一下白挂。
+		talentTick(ops, dt)
 
 		// ---- 6. 我方出手（1870 → 2687）
 		operatorsAttack(ops, enemies, dt, t, spec, verdict)
@@ -1851,16 +1932,16 @@ func updateBlocking(ops []*operator, enemies []*enemy) {
 //
 // 逐条复刻原版那四行：
 //
-//	for op in self.operators:
-//	    if op.hp_drain_per_sec <= 0.0 or not op.alive: continue
-//	    op.hp = max(0.0, op.hp - op.max_hp * op.hp_drain_per_sec * dt)
+//		for op in self.operators:
+//		    if op.hp_drain_per_sec <= 0.0 or not op.alive: continue
+//		    op.hp = max(0.0, op.hp - op.max_hp * op.hp_drain_per_sec * dt)
 //
-//   * `rate <= 0` 或**已经倒下/已撤退**的干员直接跳过（原版判 `not op.alive`，
-//     Go 的同名读法是 `alive()`：`hp > 0 && !retreated`）；
-//   * 扣的是**生命上限**的比例，不是当前血量的比例；
-//   * **封底到 0**，不在这里做撤退——原版写得很清楚：「扣到 0 之后 `alive` 就是
-//     False，后面几段都会跳过她，不必在这里做撤退」。额外的撤退会多记一笔
-//     离场，那是判决级的偏差。
+//	  * `rate <= 0` 或**已经倒下/已撤退**的干员直接跳过（原版判 `not op.alive`，
+//	    Go 的同名读法是 `alive()`：`hp > 0 && !retreated`）；
+//	  * 扣的是**生命上限**的比例，不是当前血量的比例；
+//	  * **封底到 0**，不在这里做撤退——原版写得很清楚：「扣到 0 之后 `alive` 就是
+//	    False，后面几段都会跳过她，不必在这里做撤退」。额外的撤退会多记一笔
+//	    离场，那是判决级的偏差。
 //
 // ⚠ 上限走 `o.maxHP()` 而**不是** `o.spec.MaxHP`：技能可以改生命上限
 // （原版 `apply_max_hp_bonus`，见 `wire.go::Profile.MaxHP`），全仓取上限
@@ -1931,11 +2012,38 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 		// 范围里没有敌人，而"没有伤害目标"在原版那里就等于"没得治"——
 		// 把顺序写反会让医疗一次都不出手。
 		scaleNow := op.atkScale()
-		deals := !op.spec.Heals || math.Abs(scaleNow-1.0) > 1e-9
+		//: ---- 「平A 是不是治疗」：**两族互补**，不是一条的强弱 ----
+		//:
+		//:   · `spec.Heals`（医疗，特性「恢复友方单位生命」）：平A 恒为治疗；
+		//:   · `spec.HealsOnSkill`（守护者，特性「技能可以治疗友方单位」）：
+		//:     平A 恒为伤害，**技能开启期间**才改成治疗（斑点「次级治疗模式」，
+		//:     黑板只有 `atk` 与 `base_attack_time`——那个 `atk` 抬的是**治疗量**）。
+		//:
+		//: ⚠ 下面那条 `scaleNow != 1.0 ⇒ 改成伤害` 的判据**只对医疗那一族成立**
+		//: （凯尔希·思衡托技2「攻击变为射出医疗单元」）。把它也套到守护者身上会
+		//: 正好反过来：斑点的技能本来就带 `atk`，于是「一开技能就改打人」，
+		//: 一整场治不出一次——症状与「技能可以治疗友方单位没接」一模一样。
+		skillHeals := op.spec.HealsOnSkill && op.skillActive
+		healsNow := op.spec.Heals || skillHeals
+		turnedToDamage := op.spec.Heals && !skillHeals && math.Abs(scaleNow-1.0) > 1e-9
+		deals := !healsNow || turnedToDamage
 		var heals []*operator
+		var extraHeal *operator
 		if !deals {
 			targets = nil
 			heals = pickHeals(op, ops, 1)
+			//: 天赋「附加治疗」（安赛尔，`talenteffects.go` 的 `attack@prob`）：
+			//: 有 p 的几率**额外**再治一名友方。这里乘的同样是**期望值**（`p × 治疗量`）。
+			//:
+			//: ⚠ 第二名**必须在这一刻就挑出来**：治疗第一个人的循环跑完之后，
+			//: 那个人的血已经涨上去了，可能满血而被 `pickHeals` 排除——池子变了，
+			//: 挑到的会是另一个人。写成「先治再挑」的症状是「额外治疗永远治在一个
+			//: 更健康的人身上」，判决上只表现为治疗量偏低，查起来要命。
+			if op.spec.TalentExtraHealProb > 0 {
+				if two := pickHeals(op, ops, 2); len(two) >= 2 {
+					extraHeal = two[1]
+				}
+			}
 		}
 		if traceOn {
 			//: ⚠ 这一行**必须是自描述的 `key=value`**：它是"这次出手计时到了，
@@ -1984,6 +2092,22 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 			comboDmgScale = op.spec.ComboDamageScale
 		}
 		power := op.atk()
+		//: ---- 天赋「要害瞄准·初级」（`talenteffects.go` 的 `atk_scale` ＋ `prob`）----
+		//:
+		//: 正文：「攻击时，N% 几率当次攻击的攻击力提升至 M%」。这里乘的是**期望倍率**
+		//: `1 + p·(M − 1)`，不掷骰子——与既有的闪避同一条口径（`resolveDamage` 把
+		//: `dodge` 当期望值削掉）：掷骰子会让同一条时间线两次跑出两个数，
+		//: 而判决比对靠的就是可重复。
+		//:
+		//: ⚠ 乘在 `power` 上（与「强击瓶专家」同一处），所以它**先于**防御/法抗生效
+		//: ——正文说的是"当次攻击的攻击力"，不是"最终伤害"。
+		if op.spec.TalentProcFactor != 0 && op.spec.TalentProcFactor != 1.0 {
+			if traceOn {
+				trace("TALPROC t=%.4f op=%s factor=%.6f power=%.4f",
+					t, op.spec.Name, op.spec.TalentProcFactor, power)
+			}
+			power *= op.spec.TalentProcFactor
+		}
 		// 天赋「强击瓶专家」：接下来 N **轮**攻击的攻击力倍率提升。备注写明
 		// "于弹道脱手前对当次连击的所有弹道生效" ⇒ 乘在这一轮的全部箭矢上，
 		// 整轮只扣一层（原版 `sim.py:4088-4101`）。
@@ -2009,6 +2133,30 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 				if traceOn && got > 0 {
 					trace("%8.4f %s 治疗 %s +%.0f（%.0f/%.0f）",
 						t, op.spec.Name, ally.spec.Name, got, ally.hp, ally.spec.MaxHP)
+				}
+				//: 天赋「烟雾加装」（斑点）：治疗友方单位后，**为它**挂一份限时物理闪避。
+				if op.spec.TalentDodgeOnHeal > 0 {
+					ally.grantTalentDodge(op.spec.TalentDodgeOnHeal,
+						op.spec.TalentDodgeSeconds)
+					if traceOn {
+						trace("TALDODGE t=%.4f op=%s target=%s prob=%.6f sec=%.4f",
+							t, op.spec.Name, ally.spec.Name,
+							op.spec.TalentDodgeOnHeal, op.spec.TalentDodgeSeconds)
+					}
+				}
+			}
+			//: 额外那一名：期望值口径，所以**每次都治、每次只治 `p × 治疗量`**。
+			if extraHeal != nil {
+				amount := power * op.spec.TalentExtraHealProb
+				got := extraHeal.heal(amount)
+				if traceOn {
+					trace("TALXHEAL t=%.4f op=%s target=%s prob=%.6f amount=%.4f got=%.4f",
+						t, op.spec.Name, extraHeal.spec.Name,
+						op.spec.TalentExtraHealProb, amount, got)
+				}
+				if op.spec.TalentDodgeOnHeal > 0 {
+					extraHeal.grantTalentDodge(op.spec.TalentDodgeOnHeal,
+						op.spec.TalentDodgeSeconds)
 				}
 			}
 			// 出手回报照算（原版把这一句放在出手之后、与打伤害同路）。

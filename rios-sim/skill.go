@@ -329,7 +329,10 @@ func (o *operator) res() float64 {
 // 两项来源不同、生命周期也不同，所以规格里分开送：
 //
 //   - **技能给的**（`dodge_phys/arts`）只在技能开启期间有效，随 `Active` 那套走；
-//   - **天赋给的常驻抵挡**（星熊「战术装甲」）跟着人走，整场不变。
+//   - **天赋给的常驻抵挡**（星熊「战术装甲」）跟着人走，整场不变；
+//   - **天赋授出的限时闪避**（斑点「烟雾加装」）由**治疗**那一刻挂上、按秒递减
+//     （`grantTalentDodge` / `talentTick`）。**只对物理伤害有效**——正文写的是
+//     「物理闪避」，所以它不分伤害类型地都算进去是错的。
 //
 // 真实伤害两类都不吃闪避（原版 `damage.py:144`）。
 func (o *operator) dodgeVs(damageType string) float64 {
@@ -345,7 +348,11 @@ func (o *operator) dodgeVs(damageType string) float64 {
 	if damageType == "MAGIC" {
 		talent = o.spec.TalentDodgeArts
 	}
-	return skillDodge + talent
+	granted := 0.0
+	if o.dodgeGrantLeft > 0 && damageType != "MAGIC" {
+		granted = o.dodgeGrantPhys
+	}
+	return skillDodge + talent + granted
 }
 
 func (o *operator) interval() float64 {

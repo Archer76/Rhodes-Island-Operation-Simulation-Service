@@ -169,11 +169,17 @@ GO_ONLY = ("hp_drain_per_sec",)
 #:   * `EXTRA_OPS` —— Python **有条件**不送：博士 2026-09-24 口径「计划里的 `skill: 0`
 #:     等于默认技能＝技 1」之后，Go 为每一名有技能槽的干员都绑技能并送出
 #:     `skill`/`active`；而 Python 那条路在槽号 0 上**不绑** ⇒ 它没有这两个键。
+#:     ★ 2026-09-25 又收进来六个：天赋的**非面板效果**（`talenteffects.go`）与
+#:     `heals_on_skill`。它们与 `talent_panel_mods` 同一性质——**博士的 Go 侧口径**，
+#:     Python 那一版根本没有这条机制（它连天赋面板倍率都不折），所以 Python 侧
+#:     一个都不送。同样：摘掉再比 ＋ 两条现算守卫。
 #:
 #: ⇒ 逐人次键集比对里把这两个键**从 Go 的键集里摘掉**再比（不摘会造一条永久假红），
 #: 并另配两条现算守卫：**Go 真的送出过它**（0 人次＝死登记）、**Python 一次都没送过**
 #: （送过 ⇒ 口径变了，这条登记要重做）。
-EXTRA_OPS = ("skill", "active", "talent_panel_mods")
+EXTRA_OPS = ("skill", "active", "talent_panel_mods",
+             "talent_deploy_sp", "talent_proc_factor", "talent_extra_heal_prob",
+             "talent_dodge_on_heal", "talent_dodge_seconds", "heals_on_skill")
 EXTRA_OPS_SEEN: dict = {}
 EXTRA_OPS_FROM_PY: dict = {}
 
@@ -193,6 +199,36 @@ GO_ONLY_COUNTERS_ZERO_OK = {
     "skill_none": "一二星／预备干员才没有技能槽，而两个名册夹具（20 位 6★ ＋ 460 位"
                   "char_ 段）里一位都没有 ⇒ 这一档在当前夹具集上**必然为 0**。"
                   "要真行使它，得另造一份含一二星的名册夹具（不在本批范围）。",
+    #: ---- 2026-09-25：天赋非面板效果 ＋ `heals_on_skill` ----
+    #:
+    #: ★ 为什么这五档在本套判据里必然是 0：**这四条天赋与那条特性住在三星干员身上**
+    #: （炎熔 快速技能使用／克洛丝·月见夜 要害瞄准·初级／安赛尔 附加治疗／
+    #: 斑点 烟雾加装＋技能可以治疗友方单位），而本套的 24 份夹具部署的是**高星阵容**
+    #: （20 位 6★ 名册 ＋ `hsex8*`／`plan-main-*` 那几关的计划）。
+    #: 「计数器为 0」在这里是**夹具集的性质**，不是这套会计没接上。
+    #:
+    #: ★ 行使见证**不在本套**，在 `tools/three_star_check.py`（逐位三星 ＋ 一趟
+    #: 「带一名会掉血的队友」的配对局），实测：部署给技力 1 次、概率强化 26 次（克洛丝）
+    #: 与 13 次（月见夜）、附加治疗 11 次、治疗授闪避 19 次；那一趟里
+    #: 「送出了但零行使 0 处」。
+    #:
+    #: ⚠ 登记不等于放宽：这一栏每次都会**印出来**，而且它一旦变成非 0，
+    #: 下面那条 `⊘ 已登记` 分支就不会走，也就不会被当成「已经解释过」。
+    "talent_deploy_sp": "天赋「快速技能使用」（炎熔，三星）。本套夹具不部署三星 ⇒ 必然为 0；"
+                        "行使见证在 tools/three_star_check.py（1 次）。",
+    "talent_proc": "天赋「要害瞄准·初级」（克洛丝／月见夜，三星）。同上；"
+                   "行使见证在 tools/three_star_check.py（26 次／13 次）。",
+    "talent_extra_heal": "天赋「附加治疗」（安赛尔，三星）。同上；"
+                         "行使见证在 tools/three_star_check.py 的配对局（11 次）。",
+    "talent_dodge_on_heal": "天赋「烟雾加装」（斑点，三星）。同上；"
+                            "行使见证在 tools/three_star_check.py 的配对局（19 次）。",
+    "heals_on_skill_true": "特性「技能可以治疗友方单位」（斑点，三星）。同上；"
+                           "行使见证在 tools/three_star_check.py 的配对局。",
+    "talent_unknown_key_instances": "三星 17 位的天赋键**全部落在首发表内**（`ApplyBlackboard` "
+                                    "的返回清单逐位为空，见 tools/three_star_check.py 的"
+                                    "「未识别键（无）」那一栏）⇒ 在当前夹具集上必然为 0。"
+                                    "这个 0 是**有意义**的读数（没有落在表外的键），"
+                                    "不是会计没接上；表外的新键要从更大范围的干员里找。",
 }
 
 #: **Go 独有**的 `covered` 计数器：它们量的是 Go 自己那条**技能绑定链**的账，
@@ -207,6 +243,16 @@ GO_ONLY_COUNTERS = {
     "skill_bound": "绑上技能的部署人次（Go 自己的绑定链）",
     "skill_none": "没有技能槽的部署人次（一二星／预备干员）",
     "skill_unknown_key_instances": "技能黑板里落在首发表之外的键的**实例数**（覆盖账）",
+    #: ---- 2026-09-25：天赋的非面板效果（`talenteffects.go`）----
+    #: 四个**行使计数器** ＋ 一个未识别键实例数。与技能那一族同一姿势：
+    #: Python 侧没有独立来源（它没有这条机制），所以具名进这一栏 ＋ 配死账守卫。
+    "talent_deploy_sp": "天赋给了「部署后立即获得技力」的人次（炎熔 快速技能使用）",
+    "talent_proc": "天赋给了「概率强化当次攻击」的人次（克洛丝／月见夜 要害瞄准·初级）",
+    "talent_extra_heal": "天赋给了「附加治疗」的人次（安赛尔 附加治疗）",
+    "talent_dodge_on_heal": "天赋给了「治疗授闪避」的人次（斑点 烟雾加装）",
+    "talent_unknown_key_instances": "天赋黑板里落在首发表之外的键的**实例数**（覆盖账）",
+    #: 特性那一族新收的一支：`heals_on_skill`（守护者「技能可以治疗友方单位」）。
+    "heals_on_skill_true": "特性正文含「技能可以治疗友方单位」的人次（斑点）",
 }
 GO_ONLY_FROM_PY: dict = {}
 
@@ -229,7 +275,7 @@ COVERED_KEYS = (
     "highland_splash_sluggish_nonzero",
     "combo_hits_gt1", "power_attack_count_gt0",
     #: ---- 段 B 第一批（天赋派生）----
-    "heals_true", "blessing_nonzero", "regen_aura_nonzero",
+    "heals_true", "heals_on_skill_true", "blessing_nonzero", "regen_aura_nonzero",
     "team_auras_nonzero", "talent_dodge_nonzero",
     "regen_strict_true", "regen_strict_false",
     #: ---- 段 B 第二批 ----
@@ -238,6 +284,9 @@ COVERED_KEYS = (
     #: 与 `rios-sim/operators.go::OperatorsCoveredKeys` **同名同数**。
     #: 第三个是**覆盖账**：这一批技能里有几个黑板键落在首发表之外。
     "skill_bound", "skill_none", "skill_unknown_key_instances",
+    #: ---- 天赋的非面板效果（`talenteffects.go`，2026-09-25）----
+    "talent_deploy_sp", "talent_proc", "talent_extra_heal",
+    "talent_dodge_on_heal", "talent_unknown_key_instances",
 )
 
 MUT_ATK = "atk 加 1 ulp"
@@ -1148,7 +1197,8 @@ def main() -> int:
     #:   段 A 33（Go 产出、Python 也产出）
     #: ＋ 段 B 0（Python 产出、Go 不产出——2026-09-24 起清空：`skill`/`active` 已由 Go 产出）
     #: ＋ GO_ONLY 1（Go 产出、Python **从来**不产出）
-    #: ＋ EXTRA_OPS 2（Go 产出、Python **有条件**不产出：槽号 0 上 Python 不绑技能）
+    #: ＋ EXTRA_OPS 9（Go 产出、Python **有条件**不产出：技能两键 ＋ 天赋非面板四键
+    #:   ＋ `talent_panel_mods` ＋ `heals_on_skill`）
     #: 四类**两两不交**（下面各配一条），否则一个键会被两边同时认领。
     three_way = set(PORTED) | set(UNPORTED) | set(GO_ONLY) | set(EXTRA_OPS)
     if three_way != set(wire_keys):

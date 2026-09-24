@@ -420,6 +420,25 @@ REGISTERED_EXTRA: tuple[tuple[str, str], ...] = (
     (r"^\.operators\[\d+\]\.talent_panel_mods$",
      "**天赋折进面板的那三个比例**，Go 自己报出来的；判据靠它把两边还原到同一个量。"
      "Python 不折天赋，所以它没有这个键"),
+    #: ---- 2026-09-25：天赋的**非面板**效果 ＋ `heals_on_skill` ----
+    #:
+    #: 与上面 `talent_panel_mods` 同一性质：**博士的 Go 侧口径**，Python 那一版
+    #: 根本没有这条机制（`talenteffects.go` 是 2026-09-25 新写的，Python 侧不存在
+    #: 对应实现），所以它一个都不送。四个量各自对应一条运行期痕迹
+    #: （`TALSP` / `TALPROC` / `TALXHEAL` / `TALDODGE`，见 `tools/three_star_check.py`）。
+    (r"^\.operators\[\d+\]\.talent_deploy_sp$",
+     "天赋「快速技能使用」：部署后立即获得的技力。Python 无此机制"),
+    (r"^\.operators\[\d+\]\.talent_proc_factor$",
+     "天赋「要害瞄准·初级」：概率强化当次攻击的**期望倍率**。Python 无此机制"),
+    (r"^\.operators\[\d+\]\.talent_extra_heal_prob$",
+     "天赋「附加治疗」：额外治疗一名的概率。Python 无此机制"),
+    (r"^\.operators\[\d+\]\.talent_dodge_on_heal$",
+     "天赋「烟雾加装」：治疗友方后授出的物理闪避比例。Python 无此机制"),
+    (r"^\.operators\[\d+\]\.talent_dodge_seconds$",
+     "同上那条闪避的持续秒数（与上一条同来同去）"),
+    (r"^\.operators\[\d+\]\.heals_on_skill$",
+     "特性「技能可以治疗友方单位」（守护者那一族）：技能开启期间平A 变治疗。"
+     "Python 只认「恢复友方单位生命」那一条，没有这一支"),
 )
 REGISTERED_EXTRA_RX = tuple((re.compile(p), src) for p, src in REGISTERED_EXTRA)
 

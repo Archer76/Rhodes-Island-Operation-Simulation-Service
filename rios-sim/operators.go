@@ -198,6 +198,19 @@ type OperatorOut struct {
 	//: 而那是把「已登记的口径差」当成缺陷。判据**不猜、不手抄**——这一栏由 Go 自己报。
 	TalentPanelMods map[string]float64 `json:"talent_panel_mods,omitempty"`
 
+	//: ---- 天赋的**非面板**效果（2026-09-25，`talenteffects.go`）----
+	//:
+	//: 每个键以**指针 ＋ omitempty** 出去：「没有这一条」与「有这一条、值是 0」
+	//: 必须分得开（本仓记过：用带 `omitempty` 的裸值会让两者长得一样）。
+	TalentDeploySP      *float64 `json:"talent_deploy_sp,omitempty"`
+	TalentProcFactor    *float64 `json:"talent_proc_factor,omitempty"`
+	TalentExtraHealProb *float64 `json:"talent_extra_heal_prob,omitempty"`
+	TalentDodgeOnHeal   *float64 `json:"talent_dodge_on_heal,omitempty"`
+	TalentDodgeSeconds  *float64 `json:"talent_dodge_seconds,omitempty"`
+	//: 这一位的天赋黑板里、**键表之外**的键（排序去重）。与 `SkillUnknownKeys`
+	//: 同一个姿势：逐位的这一份只在本进程内用，汇总去重的在 bundle 上。
+	TalentUnknownKeys []string `json:"-"`
+
 	SplashRadius           *float64 `json:"splash_radius,omitempty"`
 	SplashScale            *float64 `json:"splash_scale,omitempty"`
 	SplashDamageScale      *float64 `json:"splash_damage_scale,omitempty"`
@@ -218,7 +231,10 @@ type OperatorOut struct {
 	//: `def_pct` / `nation_mult` 是**每次都送**的（值可以是 0）。用它们会让
 	//: 「Go 少一个键」与「Python 送了个 0」长得一样，而**数值本身对得上**
 	//: ——判据只比值就抓不到这一类。所以这里用裸 map／指针，键完全由我们写。
-	Heals              *bool            `json:"heals,omitempty"`
+	Heals *bool `json:"heals,omitempty"`
+	//: 特性正文含「技能可以治疗友方单位」（守护者那一族）：**技能开启期间**平A 变成治疗。
+	//: 与 `Heals` 互补，两个键可以同时不出（普通输出手）。
+	HealsOnSkill       *bool            `json:"heals_on_skill,omitempty"`
 	BlessingSave       *float64         `json:"blessing_save,omitempty"`
 	BlessingSelfFreeze *float64         `json:"blessing_self_freeze,omitempty"`
 	RegenAura          map[string]any   `json:"regen_aura,omitempty"`
@@ -264,6 +280,9 @@ type OperatorsBundle struct {
 	//: ★ 为什么单独一栏而不是只留一个计数：博士给的验收标准是「落在表外的新键要**具名**
 	//: 出现在覆盖账上」。**计数说不出是哪个键**，而「是哪个键」正是下一步要补的东西。
 	SkillUnknownKeys []string
+	//: **天赋黑板里落在首发表之外的键**（同一套汇总/去重/排序，与技能那一栏分账）。
+	//: 空＝这一批天赋恰好都在表里；非空要能**指名**——博士给的验收标准就是这一条。
+	TalentUnknownKeys []string
 }
 
 // OperatorsCoveredKeys 是 `covered` 的**全部**计数器。
@@ -278,7 +297,7 @@ var OperatorsCoveredKeys = []string{
 	"highland_splash_sluggish_nonzero",
 	"combo_hits_gt1", "power_attack_count_gt0",
 	//: ---- 段 B 第一批（天赋派生）----
-	"heals_true", "blessing_nonzero", "regen_aura_nonzero",
+	"heals_true", "heals_on_skill_true", "blessing_nonzero", "regen_aura_nonzero",
 	"team_auras_nonzero", "talent_dodge_nonzero",
 	"regen_strict_true", "regen_strict_false",
 	//: ---- 段 B 第二批 ----
@@ -292,6 +311,12 @@ var OperatorsCoveredKeys = []string{
 	//: 零要有理由（这一批恰好都在表里），非零要能指名——名字走
 	//: `OperatorsBundle.SkillUnknownKeys`（同一个响应里）。
 	"skill_bound", "skill_none", "skill_unknown_key_instances",
+	//: ---- 天赋的非面板效果（`talenteffects.go`，2026-09-25）----
+	//: 四个**行使计数器**（不是「字段非空」：每一位都要它这一项真的非零才 +1）＋
+	//: 一个**未识别键实例数**。零要有理由，非零要能指名——名字走
+	//: `OperatorsBundle.TalentUnknownKeys`（同一个响应里）。
+	"talent_deploy_sp", "talent_proc", "talent_extra_heal",
+	"talent_dodge_on_heal", "talent_unknown_key_instances",
 }
 
 // newOperatorsCovered 造一张**每个键都在、值为 0** 的计数表。
@@ -650,6 +675,14 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		b := true
 		out.Heals = &b
 	}
+	//: `heals_on_skill`：特性正文含「技能可以治疗友方单位」（守护者那一族）。
+	//: 与上面的 `heals` **互补**、不是同一条的强弱——两族的判据在 `sim.go` 里
+	//: 分两路走（见 `operator_traits.go::TextDerived.HealsOnSkill` 的注释）。
+	if st.TextDerived.HealsOnSkill {
+		covered["heals_on_skill_true"]++
+		b := true
+		out.HealsOnSkill = &b
+	}
 	//: `blessing_save` / `blessing_self_freeze`：判据是 `find_blessing` 的两个
 	//: 黑板键**同时**在（`c2e_freeze` / `freeze`），只在 `c2e_freeze > 0` 时送。
 	if tb, ok := tfFindBlessing(talents); ok {
@@ -751,6 +784,38 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		if nonzero {
 			out.TalentPanelMods = st.TalentPanelMods
 		}
+	}
+	//: ---- 天赋的**非面板**效果（`talenteffects.go`，2026-09-25）----
+	//:
+	//: 与上面那三个比例同一个理由透出：这些量**发生在场上**（部署给技力、出手判概率、
+	//: 治疗授闪避），判据要能看见「Go 到底送了什么」，否则只能靠判决反推。
+	//:
+	//: ⚠ 四项各自 `omitempty`：**「没有这一条」与「有这一条、值是 0」必须分得开**
+	//: ——后者在语义上等于没有，但把它送出去会让判据以为这一位带了机制。
+	te := st.TalentEffects
+	if te.DeploySP != 0 {
+		covered["talent_deploy_sp"]++
+		v := te.DeploySP
+		out.TalentDeploySP = &v
+	}
+	if te.ProcFactor != 1.0 {
+		covered["talent_proc"]++
+		v := te.ProcFactor
+		out.TalentProcFactor = &v
+	}
+	if te.ExtraHealProb != 0 {
+		covered["talent_extra_heal"]++
+		v := te.ExtraHealProb
+		out.TalentExtraHealProb = &v
+	}
+	if te.DodgeOnHeal != 0 {
+		covered["talent_dodge_on_heal"]++
+		v, d := te.DodgeOnHeal, te.DodgeSeconds
+		out.TalentDodgeOnHeal, out.TalentDodgeSeconds = &v, &d
+	}
+	if len(st.TalentUnknownKeys) > 0 {
+		covered["talent_unknown_key_instances"] += len(st.TalentUnknownKeys)
+		out.TalentUnknownKeys = append([]string{}, st.TalentUnknownKeys...)
 	}
 	return out, nil
 }
@@ -932,32 +997,49 @@ func BuildOperators(plan PlayPlan, roster RosterRead,
 	}
 	//: 技能未识别键：**汇总 ＋ 去重 ＋ 排序**。逐人一份会把同一个键重复报很多遍，
 	//: 读的人反而看不出「一共缺哪几个键」——而那正是要补的东西。
-	unknownSet := map[string]bool{}
-	var unknownKeys []string
-	for _, o := range out {
-		for _, k := range o.SkillUnknownKeys {
-			if !unknownSet[k] {
-				unknownSet[k] = true
-				unknownKeys = append(unknownKeys, k)
-			}
-		}
-	}
-	sort.Strings(unknownKeys)
-	if unknownKeys == nil {
-		unknownKeys = []string{}
-	}
+	unknownKeys := collectUnknownKeys(out, func(o OperatorOut) []string {
+		return o.SkillUnknownKeys
+	})
+	//: 天赋未识别键：同一套**汇总 ＋ 去重 ＋ 排序**（两族各记一份账，不合并——
+	//: 合并之后「技能缺哪个键」与「天赋缺哪个键」就分不开了，而那两族是分开补的）。
+	talentUnknownKeys := collectUnknownKeys(out, func(o OperatorOut) []string {
+		return o.TalentUnknownKeys
+	})
 	return &OperatorsBundle{
 		Operators: out,
 		Unported:  append([]string{}, OperatorUnported...),
 		Covered:   covered,
 		//: `scanned` 与 `len(Operators)` **同源**（不是第二次计数）：一个量只能
 		//: 有一个口径来源，两处各数一遍迟早印出两个数。
-		Scanned:          len(out),
-		Params:           params,
-		ViewFields:       append([]string{}, OperatorViewFields...),
-		DeployFields:     append([]string{}, OperatorDeployFields...),
-		SkillUnknownKeys: unknownKeys,
+		Scanned:           len(out),
+		Params:            params,
+		ViewFields:        append([]string{}, OperatorViewFields...),
+		DeployFields:      append([]string{}, OperatorDeployFields...),
+		SkillUnknownKeys:  unknownKeys,
+		TalentUnknownKeys: talentUnknownKeys,
 	}, nil
+}
+
+// collectUnknownKeys 把逐位干员身上的某一份未识别键清单**汇总 ＋ 去重 ＋ 排序**。
+//
+// ★ 抽出来是因为现在有**两族**（技能／天赋）要同一套动作：写在两处的复制品迟早
+// 只改一处。`pick` 是「从这个人身上取哪一份清单」。
+func collectUnknownKeys(ops []OperatorOut, pick func(OperatorOut) []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, o := range ops {
+		for _, k := range pick(o) {
+			if !seen[k] {
+				seen[k] = true
+				out = append(out, k)
+			}
+		}
+	}
+	sort.Strings(out)
+	if out == nil {
+		out = []string{}
+	}
+	return out
 }
 
 // BuildOperatorsFor 从两条路径读入，造 `operators`（命令用）。

@@ -52,7 +52,7 @@ func readComboAttack(talents []json.RawMessage) ComboAttack {
 	for _, tRaw := range talents {
 		var group struct {
 			Candidates []struct {
-				Name      *string             `json:"name"`
+				Name       *string           `json:"name"`
 				Blackboard []json.RawMessage `json:"blackboard"`
 			} `json:"candidates"`
 		}
@@ -352,9 +352,25 @@ type TextDerived struct {
 	DamageType string `json:"damage_type_text"`
 	//: 特性正文含「恢复友方单位生命」= 这个人的平A 是治疗。
 	Heals bool `json:"heals"`
+	//: 特性正文含「技能可以治疗友方单位」= 这个人**技能开启期间**的平A 是治疗
+	//: （守护者那一族：斑点 `char_284_spot`）。
+	//:
+	//: ★ 为什么要与 `Heals` **分开两个字段**：它们是**互补**的两条，不是同一条的强弱：
+	//:   · `Heals`（医疗）平A 恒为治疗，技能写明攻击倍率时**改成伤害**（凯尔希·思衡托）；
+	//:   · `HealsOnSkill`（守护者）平A 恒为伤害，技能开启期间**改成治疗**
+	//:     （斑点「次级治疗模式」，黑板只有 `atk` 与 `base_attack_time`——
+	//:     那个 `atk` 抬的是**治疗量**，不是伤害）。
+	//: 压成一个字段会让这两族的判据互相打架：压成 `Heals=true` 就再没有
+	//: 「技能期间才治」这条信息，斑点会在没开技能时也去治人。
+	HealsOnSkill bool `json:"heals_on_skill"`
 	//: **全部天赋候选**的正文里含「弱点伤害」（不是只看生效的那几条）。
 	WeaknessDamage bool `json:"weakness_damage"`
 }
+
+// healsOnSkillTrait 是「技能可以治疗友方单位」这条特性的判据词。
+// 与 `Heals` 一样是**整串短语**匹配——差一个字就会静默变成「从不开技能治疗」，
+// 而那个症状（斑点一整场打不出一次治疗）看起来像「治疗没接」。
+const healsOnSkillTrait = "技能可以治疗友方单位"
 
 // textDerived 复刻 `verify.py:305-308` 与 `:329-331`。
 //
@@ -366,6 +382,7 @@ func textDerived(traitDesc string, talents []json.RawMessage) TextDerived {
 		out.DamageType = "MAGIC"
 	}
 	out.Heals = strings.Contains(traitDesc, "恢复友方单位生命")
+	out.HealsOnSkill = strings.Contains(traitDesc, healsOnSkillTrait)
 	out.WeaknessDamage = strings.Contains(talentText(talents), "弱点伤害")
 	return out
 }

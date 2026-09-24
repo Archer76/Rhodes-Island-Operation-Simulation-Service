@@ -124,6 +124,12 @@ type OperatorStats struct {
 	Profession string `json:"profession"`
 	//: 天赋「翔虫机动」（`operator_traits.go`）。**没有这条时全取零值**。
 	Glider
+	//: 天赋的**非面板**效果（`talenteffects.go`）：部署给技力／概率强化攻击／
+	//: 附加治疗／治疗授闪避。**只有 `ProcFactor` 的「没有这条」是 1.0，其余是 0。**
+	TalentEffects talentEffects `json:"talent_effects"`
+	//: 这一位的天赋黑板里、**键表之外**的键（已排序去重）。空 ≠ 这里没问题，
+	//: 只表示「这一位的键都在已支持的键表里」；表外的族由覆盖账另行计数。
+	TalentUnknownKeys []string `json:"talent_unknown_keys,omitempty"`
 }
 
 // ---------------------------------------------------------------- 数据源
@@ -551,6 +557,12 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 	st.Profession = char.Profession
 	//: 「翔虫机动」：一个天赋两个平面（落位放宽 ＋ 限时攻击力加成）。
 	st.Glider = readGlider(char.Talents, cfg.Elite, cfg.Level, cfg.Potential)
+	//: 天赋的**非面板**效果（`talenteffects.go`）：走**同一张键表**与同一个解析器
+	//: （`ApplyBlackboard`），所以「加一名新干员不必改判定逻辑」这条在这里也成立。
+	//: ⚠ 未识别键**原样上抛**，由调用方落进覆盖账——静默丢掉＝把「没建」伪装成「没有」。
+	te, teUnknown := talentEffectsFrom(char.Talents, cfg.Elite, cfg.Level, cfg.Potential)
+	st.TalentEffects = te
+	st.TalentUnknownKeys = teUnknown
 	return st, nil
 }
 

@@ -208,6 +208,10 @@ type OperatorSpec struct {
 	//: 但技能可以把这一击改成伤害（凯尔希·思衡托技2「攻击变为射出医疗单元」）——
 	//: 判据是技能自己有没有写攻击倍率，见 `operatorsAttack`。
 	Heals bool `json:"heals,omitempty"`
+	//: 特性正文含「技能可以治疗友方单位」（守护者那一族，如斑点）：**技能开启期间**
+	//: 平A 变成治疗。与 `heals` 互补——两族的判据在 `sim.go::operatorsAttack`
+	//: 里分两路（`heals` 恒为治疗、`heals_on_skill` 只在技能期间治疗）。
+	HealsOnSkill bool `json:"heals_on_skill,omitempty"`
 	//: 普攻连击（焰狐龙梓兰的**隐藏天赋**）：一次普攻打 `ComboHits` 击，每击倍率
 	//: `ComboHitScale`，**计算防御/法抗之后**再整笔乘 `ComboDamageScale`。
 	//:
@@ -265,6 +269,22 @@ type OperatorSpec struct {
 	//: Go 折、Python 不折。判据要比「两边一致」就得知道 Go 乘了多少，
 	//: 才能把两边还原到同一个量；这一栏由 Go 自己报，判据不猜也不手抄。
 	TalentPanelMods map[string]float64 `json:"talent_panel_mods,omitempty"`
+
+	//: ---- 天赋的**非面板**效果（`talenteffects.go`，2026-09-25）----
+	//:
+	//: 四项都带 `omitempty`：**「没有这一条」与「有这一条、值是 0」必须分得开**。
+	//: 各自的语义与消费者：
+	//:   · `talent_deploy_sp`  —— 部署那一刻加进 `op.sp`（炎熔 快速技能使用）；
+	//:   · `talent_proc_factor`—— 每次出手乘在攻击力上的**期望倍率**
+	//:     `1 + p·(s − 1)`（克洛丝／月见夜 要害瞄准·初级）；
+	//:   · `talent_extra_heal_prob` —— 治疗时**额外**治一名的概率（安赛尔 附加治疗）；
+	//:   · `talent_dodge_on_heal` ＋ `talent_dodge_seconds` —— 治疗友方后
+	//:     授出的物理闪避比例与秒数（斑点 烟雾加装）。
+	TalentDeploySP      float64 `json:"talent_deploy_sp,omitempty"`
+	TalentProcFactor    float64 `json:"talent_proc_factor,omitempty"`
+	TalentExtraHealProb float64 `json:"talent_extra_heal_prob,omitempty"`
+	TalentDodgeOnHeal   float64 `json:"talent_dodge_on_heal,omitempty"`
+	TalentDodgeSeconds  float64 `json:"talent_dodge_seconds,omitempty"`
 
 	Skill *SkillSpec `json:"skill,omitempty"`
 	//: **技能开启期间**的那一套数值。`Skill != nil` 时必须有。
