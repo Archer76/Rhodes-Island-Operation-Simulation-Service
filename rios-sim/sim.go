@@ -924,6 +924,17 @@ func runSim(spec *Spec) (*Verdict, error) {
 		// ---- 4. 阻挡（1846 → 2289）
 		updateBlocking(ops, enemies)
 
+		// ---- 4.9 职业特性「**自身生命会不断流失**」（怪杰那一族；原版 `_trait_tick`）
+		//
+		// 位置照原版（`sim.py:2772-2774`）：**阻挡之后、技能之前**。原版那句注释
+		// 就是理由——「与技能无关，所以排在技能之前」；它不能塞进 `skillTick`，
+		// 那个函数在没有技能的干员上会 `continue`（`spec.Skill == nil`），
+		// 而这条特性与有没有技能毫无关系。
+		//
+		// 它与阻挡同属「我方出手之前」这一簇：本帧掉的血本帧就见效
+		// （掉到 0 的干员本帧的选敌/阻挡/结算都已按 `alive()` 排除她）。
+		traitDrainTick(ops, dt, t)
+
 		// ---- 5. 技能（原版 2156，**阻挡之后、我方出手之前**）
 		//
 		// 位置是定的：刚攒满技力的那一帧就得算数，晚一帧会让每次开技都慢一个 dt。
@@ -1831,6 +1842,45 @@ func updateBlocking(ops []*operator, enemies []*enemy) {
 	for _, e := range enemies {
 		if b := e.blockedBy; b != nil && !b.alive() {
 			e.blockedBy = nil
+		}
+	}
+}
+
+// traitDrainTick 是原版 `_trait_tick`（`sim.py:1975`）：每帧扣一次职业特性
+// 「**自身生命会不断流失**」（怪杰那一族，如新约能天使）的血。
+//
+// 逐条复刻原版那四行：
+//
+//	for op in self.operators:
+//	    if op.hp_drain_per_sec <= 0.0 or not op.alive: continue
+//	    op.hp = max(0.0, op.hp - op.max_hp * op.hp_drain_per_sec * dt)
+//
+//   * `rate <= 0` 或**已经倒下/已撤退**的干员直接跳过（原版判 `not op.alive`，
+//     Go 的同名读法是 `alive()`：`hp > 0 && !retreated`）；
+//   * 扣的是**生命上限**的比例，不是当前血量的比例；
+//   * **封底到 0**，不在这里做撤退——原版写得很清楚：「扣到 0 之后 `alive` 就是
+//     False，后面几段都会跳过她，不必在这里做撤退」。额外的撤退会多记一笔
+//     离场，那是判决级的偏差。
+//
+// ⚠ 上限走 `o.maxHP()` 而**不是** `o.spec.MaxHP`：技能可以改生命上限
+// （原版 `apply_max_hp_bonus`，见 `wire.go::Profile.MaxHP`），全仓取上限
+// 只有 `maxHP()` 这一个入口。这里再写一遍公式，就是本仓记过的
+// 「同一个公式两处各写一份，一改就对不上」。
+//
+// ★ `DRAIN` 是这条机制**唯一**的行使判据：它在判决面上**看不见**——以
+// main_00-01 为例，76.43 秒 × 1%/s 只掉掉约 76% 生命上限，不足以致死，
+// 判决四数可以逐位不变（那种「绿」是零信息量的）。没有痕迹就没有证据
+// 说明这一段真的跑过，所以每次**真的扣了血**都打一行。
+func traitDrainTick(ops []*operator, dt, t float64) {
+	for _, op := range ops {
+		rate := op.spec.HPDrainPerSec
+		if rate <= 0 || !op.alive() {
+			continue
+		}
+		op.hp = math.Max(0.0, op.hp-op.maxHP()*rate*dt)
+		if traceOn {
+			trace("DRAIN t=%.4f who=%s rate=%.6f hp=%.4f max=%.4f",
+				t, op.spec.Name, rate, op.hp, op.maxHP())
 		}
 	}
 }

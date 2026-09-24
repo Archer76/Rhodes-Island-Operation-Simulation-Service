@@ -28,6 +28,12 @@ package main
 // ★ **是 33 不是 34**：`_operator_spec` 一共产出 **35** 个键（13 ＋ 22），
 // 段 A 33 ＋ 段 B 2 ＝ 35。这一行是现数的，不是抄来的。
 //
+// ★ 另有 **1 个「Go 独有键」**（判据那一侧的 `GO_ONLY`）：`hp_drain_per_sec`
+// ——职业特性「自身生命会不断流失」（怪杰）的速率。Python 的 `_operator_spec`
+// **不送**它（它不是「Python 有、Go 没有」的 `unported`，方向正相反），
+// 而 `wire.go::OperatorSpec` 里要有它、`sim.go::traitDrainTick` 要读它。
+// ⇒ 判据的身份等式是 **段 A 33 ＋ 段 B 2 ＋ GO_ONLY 1 ＝ wire 的 36 个键**。
+//
 // ★ 标着「段 B」的那个数字是**判据那一侧的**分段（`check_operators_go.py` 的
 // `PORTED` / `UNPORTED`），不是本文件的分段——本文件只负责「产出」。
 //
@@ -128,7 +134,8 @@ var OperatorDeployFields = []string{"direction", "position", "talents"}
 // 「送、且值可以是 `0.0`」：`omitempty` 会把它静默吃掉，症状是 Python 有键、
 // Go 没有，而两边的**数值**对得上（判据只看值就抓不到）。
 // 所以这里用**指针**表达存在性，键名与 `OperatorSpec` 逐个相同；
-// 判据比对「Go 实际送出的键集 ∪ unported ＝ `OperatorSpec` 的 35 个键」。
+// 判据比对「（Go 实际送出的键集 − GO_ONLY）∪ unported ＝ `OperatorSpec`
+// 的 36 个键减去 GO_ONLY 的 1 个」——三分类的等式见 `check_operators_go.py` §7。
 type OperatorOut struct {
 	CharID string `json:"char_id"`
 	Name   string `json:"name"`
@@ -147,6 +154,22 @@ type OperatorOut struct {
 
 	NationID   *string `json:"nation_id,omitempty"`
 	Profession *string `json:"profession,omitempty"`
+
+	//: ---- 职业特性：生命流失（怪杰那一族）----
+	//:
+	//: 与上面那两条_条件键_**同一姿势**：用**指针**表达存在性，`> 0` 才送。
+	//: 为什么 0 就不送（而不是像 `splash_scale` 那样「送、且值可以是 0」）：
+	//: `readHPDrain` 的「没有这条特性」**本来就返回 0.0**（特性正文不含那句话
+	//: ⇒ 直接 0），而 Python 那侧**根本不送这个键**（`GO_ONLY`）。也就是说
+	//: 「送一个 0」在这条通道里没有任何对应的含义——它只会让「这位没有这条特性」
+	//: 与「这位有、速率是 0」长得一样，而后者不存在。
+	//:
+	//: ⚠ `omitempty` 在这里是**语义的一部分**：它让「没有这条特性」表现为
+	//: **键缺席**，与 `wire.go::OperatorSpec.HPDrainPerSec` 的 0 同义
+	//: （`sim.go::traitDrainTick` 判的就是 `rate <= 0`）。
+	//: ⚠ 别拿 `frontend/operator_view.py:179` 的 `self.hp_drain_per_sec = 0.0`
+	//: 当反例：那是**另一条路**的视图，不是模拟器读的这份规格。
+	HPDrainPerSec *float64 `json:"hp_drain_per_sec,omitempty"`
 
 	SplashRadius           *float64 `json:"splash_radius,omitempty"`
 	SplashScale            *float64 `json:"splash_scale,omitempty"`
@@ -529,6 +552,13 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		out.Profession = &v
 	} else {
 		covered["profession_empty"]++
+	}
+	//: 职业特性「自身生命会不断流失」（怪杰）：`> 0` 才送，与 `splash_*` 同族。
+	//: ★ 这是**段 A 之外的键**（Python 的 `_operator_spec` 不产出它）——
+	//: 判据那一侧具名进 `GO_ONLY`，见 `wire.go` 上那一段的说明。
+	if st.HPDrainPerSec > 0.0 {
+		v := st.HPDrainPerSec
+		out.HPDrainPerSec = &v
 	}
 	//: 职业特性溅射：`radius > 0` 才整族送出去。
 	if st.SplashRadius > 0.0 {

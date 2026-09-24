@@ -43,6 +43,17 @@ Go 送的是 `OperatorStats.Total[...]` 那一套。**两者是不是同一个�
 与 Go 应答里的 `unported` 做**双向集合比对**，并每次运行重量「Python 那一侧
 实际送出了其中几个」＋「Go 是不是偷偷送了一个」。
 
+## 具名 GO_ONLY（1 个键，**方向与 unported 相反**）
+
+`hp_drain_per_sec`（职业特性「自身生命会不断流失」／怪杰那一族的速率）。
+
+`_operator_spec` **不送**它，所以它既不是段 A 也不是段 B：§7 的身份等式因此是
+**段 A ＋ 段 B ＋ GO_ONLY ＝ wire 的键数**（三类两两不交，各配一条断言）。
+§2 的逐人次键集比对各处都要**先从 Go 的键集里摘掉它**再比——不摘会报成
+「Go 多送了」（假红），塞进 `PORTED` 又会把「Python 没有」当成「Python 该有」。
+§7 另配两条**现算**断言：Go 真的送出过它（0 人次＝死登记）、Python 一次都没送过
+（送过＝这一分类要重做）。
+
 ★ `shield` **已经从这张表里移出**（段 B → 段 A）：它现在**逐位比**（`_shield_of`
 的五个字段），并额外配了一条**双向对照**——判据自己数一遍
 「shield 非空的人次」（`live_counters`），与 Go 的 `covered.shield_nonzero` 比。
@@ -50,11 +61,12 @@ Go 送的是 `OperatorStats.Total[...]` 那一套。**两者是不是同一个�
 
 ## 反向守卫（`--mutate`）
 
-九处**互相独立**的注入，每处都要「注入过 ＋ 判红过」，落在**不同字段、不同代码路径**：
+十处**互相独立**的注入，每处都要「注入过 ＋ 判红过」，落在**不同字段、不同代码路径**：
 ① `atk` 加 1 ulp（浮点面板那条读法）；② `splash_damage_scale` 加 1 ulp
 （条件块的浮点，且**必须落在真有这条特性的人次上**）；③ `cell` 的 x+1（整数坐标）；
-④ 删掉一条 operator（分母由 N 变 N−1）；⑤~⑨ 段 B 那五个键各一处。
-每处各自拒绝「已被别处占用的夹具」，所以是九条独立的路，不是同一条 elif 链上的九个分支。
+④ 删掉一条 operator（分母由 N 变 N−1）；⑤~⑨ 段 B 那五个键各一处；
+⑩ **删掉 `GO_ONLY` 的 `hp_drain_per_sec`**（验 §7 那条「Go 真的送出过它」**红得起来**）。
+每处各自拒绝「已被别处占用的夹具」，所以是十条独立的路，不是同一条 elif 链上的十个分支。
 
 ## 期望值从哪来（**两种模式**）
 
@@ -107,9 +119,9 @@ GO_BIN = os.environ.get(
 DATA = ROOT / "data" / "gamedata"
 ROSTER_FIX = ROOT / "fixtures" / "roster_max_modelled.json"
 
-#: Go **产出**的 33 个键（13 无条件 ＋ 12 条件 ＋ 8 天赋派生）。
-#: ★ 33 ＋ 2 ＝ **35** ＝ `wire.go::OperatorSpec` 的 json 键数，
-#: §7 每次运行现数这三者并断言相等（不写死「35」这几个字）。
+#: Go **产出的** 33 个键（13 无条件 ＋ 12 条件 ＋ 8 天赋派生）。
+#: ★ 33 ＋ 2 ＋ 1 ＝ **36** ＝ `wire.go::OperatorSpec` 的 json 键数，
+#: §7 每次运行现数这三者并断言相等（不写死「36」这几个字）。
 PORTED = (
     "char_id", "name", "cell", "max_hp", "atk", "def", "res", "interval",
     "damage_type", "block_cnt", "deploy_cost", "redeploy_time", "range",
@@ -127,6 +139,32 @@ PORTED = (
 
 #: 仍**不产出**的 2 个键。与 `rios-sim/operators.go::OperatorUnported` 同源。
 UNPORTED = ("skill", "active")
+
+#: **Go 独有**的 1 个键：`_operator_spec` **不送**它，而 Go 送、模拟器也读它。
+#:
+#: ⚠ 它与 `UNPORTED` **方向相反**，别混：
+#:   * `UNPORTED` ＝ 「Python 有、Go 没有」（`skill` / `active`）；
+#:   * `GO_ONLY`  ＝ 「Go 有、Python 没有」。
+#: 把 `hp_drain_per_sec` 塞进 `UNPORTED` 会让 §5 的双向比对当场红（Go 应答里的
+#: `unported` 里没有它），而且语义全错。
+#:
+#: 为什么它是 Go 独有而不是两边都有：`ak_tactic/simgo/spec.py::_operator_spec`
+#: 逐行可查，**不读也不写** `hp_drain_per_sec`。
+#: ⚠ `ak_tactic/frontend/operator_view.py:179` 里那句 `self.hp_drain_per_sec = 0.0`
+#: **不是**反例——那是 `OperatorView`（前端视图）的字段，`_operator_spec` 读的是
+#: `op.<属性>` 那 29 个，其中没有它；而且就算有，写死的 0.0 也带不出真速率。
+#:
+#: 它为什么必须进 Go 的规格：干员特性「自身生命会不断流失」（怪杰那一族）在 Go 里
+#: 原来**只有取数、没有消费**——`OperatorStats.HPDrainPerSec` 算出来了
+#: （`operator.go:473` 的 `readHPDrain`），但值到不了模拟器读的那份规格、
+#: `sim.go` 也没有按秒扣血的那一步。修法就是这一个键 ＋ `sim.go::traitDrainTick`。
+GO_ONLY = ("hp_drain_per_sec",)
+
+#: `GO_ONLY` 两个方向的现算计数（§7 印出来并各自配断言）：
+#:   · `SEEN`    —— Go 真的把这个键送出去过几次（0 ⇒ 这是一张**死的登记**）；
+#:   · `FROM_PY` —— Python 那一侧送出过几次（>0 ⇒ 它不是 Go 独有，分类要重做）。
+GO_ONLY_SEEN: dict = {}
+GO_ONLY_FROM_PY: dict = {}
 
 #: `unported` 里**其实已经能搬**的那些 → 为什么。★ 现已**清空**：
 #: `heals` 这一批已经产出（`TextDerived.Heals`），所以这份表必须为空——
@@ -164,8 +202,14 @@ MUT_AURA = "team_auras[0].atk_pct 加 1 ulp"
 MUT_REGEN = "regen_aura.hp_per_sec 加 1 ulp"
 MUT_DODGE = "talent_dodge_phys 加 1 ulp"
 MUT_SHIELD = "shield.max_layers 加 1"
+#: ★ 第九处（本批新增）：**删掉 `GO_ONLY` 的那个键**。它验的是 §7 那条
+#: 「Go 真的送出过它」的断言**红得起来**——不装这条，SEEN>0 只是一句自我声明
+#: （本项目记过：「守卫看不见＝没有守卫」）。
+#: ⚠ 它是**候选面最小**的一处（全部 24 份夹具里只有 plan-main-00-01 有），
+#: 所以注入顺序排在**最前**（与 MUT_DODGE／MUT_SHIELD 同一条纪律）。
+MUT_DRAIN = "删掉 hp_drain_per_sec（GO_ONLY 键）"
 MUT_KEYS = (MUT_ATK, MUT_SPLASH, MUT_CELL, MUT_DROP,
-            MUT_HEALS, MUT_AURA, MUT_REGEN, MUT_DODGE, MUT_SHIELD)
+            MUT_HEALS, MUT_AURA, MUT_REGEN, MUT_DODGE, MUT_SHIELD, MUT_DRAIN)
 
 MIN_INTERVAL = 0.05
 ASPD_MIN = 20.0
@@ -642,7 +686,7 @@ def operator_reads() -> tuple[set, set]:
 
 
 def wire_operator_keys() -> list:
-    """从 `wire.go::OperatorSpec` 现抽顶层 json 键（那份 35 键的契约）。"""
+    """从 `wire.go::OperatorSpec` 现抽顶层 json 键（那份 36 键的契约）。"""
     text = (ROOT / "rios-sim" / "wire.go").read_text(encoding="utf-8")
     m = re.search(r"type OperatorSpec struct \{(.*?)\n\}", text, re.S)
     if not m:
@@ -760,8 +804,17 @@ def main() -> int:
         resp = go_operators(str(ROOT / "fixtures" / f.name), str(ROSTER_FIX))
         got = resp["operators"]
 
-        # ---- 八处独立变异（各自拒绝已被占用的夹具 ⇒ 八条独立的路；
+        # ---- 十处独立变异（各自拒绝已被占用的夹具 ⇒ 十条独立的路；
         #      候选面小的先挑，见下面 MUT_DODGE 那一段的说明）
+        #: ★ `MUT_DRAIN` **排在最前**：它的候选面最小（全部夹具里只有 1 个人次带
+        #: 这个键）。排到后面时那一位所在的夹具可能已被前面某条占走，
+        #: 它会一次都注入不上（反向守卫直接不成立）。
+        if guard.want(MUT_DRAIN) and guard.free(f.name):
+            for i, o in enumerate(got):
+                if o.get("hp_drain_per_sec"):
+                    o.pop("hp_drain_per_sec")
+                    guard.put(MUT_DRAIN, (f.name, i))
+                    break
         if guard.want(MUT_ATK) and guard.free(f.name) and got:
             got[0]["atk"] = math.nextafter(float(got[0]["atk"]), math.inf)
             guard.put(MUT_ATK, (f.name, 0))
@@ -835,24 +888,41 @@ def main() -> int:
         for i, (wt, gt) in enumerate(zip(want_ops, got)):
             n_compared += 1
             slot_bad = False
-            #: ★ 键集三方对账：Python ＝ Go ∪ （Python 送的段 B 键）。
+            #: ★ 键集对账：Python ＝ （Go − GO_ONLY）∪（Python 送的段 B 键）。
+            #: `GO_ONLY` 那一类**先从 Go 的键集里摘掉**再比——它是「Go 独有」，
+            #: 不是「Go 多送了」；不摘的话这里会报成实现错（假红），
+            #: 而把它塞进 `PORTED` 又会把「Python 没有」当成「Python 该有」。
             py_keys, go_keys = set(wt), set(gt)
             b_present = py_keys & set(UNPORTED)
-            if go_keys - set(PORTED):
+            go_only = go_keys & set(GO_ONLY)
+            if go_keys - set(PORTED) - set(GO_ONLY):
                 slot_bad = True
-                printed.append("✗ %s[%d] Go 送了段 A 之外的键：%r"
-                               % (f.name, i, sorted(go_keys - set(PORTED))))
+                printed.append("✗ %s[%d] Go 送了段 A／GO_ONLY 之外的键：%r"
+                               % (f.name, i,
+                                  sorted(go_keys - set(PORTED) - set(GO_ONLY))))
             if go_keys & set(UNPORTED):
                 slot_bad = True
                 printed.append("✗ %s[%d] Go 送了 `unported` 里的键 %r"
                                " —— 那份清单要跟着改（有人得回头看）"
                                % (f.name, i, sorted(go_keys & set(UNPORTED))))
-            if py_keys != (go_keys | b_present):
+            if py_keys != ((go_keys - set(GO_ONLY)) | b_present):
                 slot_bad = True
                 printed.append("✗ %s[%d] 键集对不上：Python 有而两边都没给的 %r；"
                                "Go 有而 Python 没有的 %r"
-                               % (f.name, i, sorted(py_keys - go_keys - b_present),
-                                  sorted(go_keys - py_keys)))
+                               % (f.name, i,
+                                  sorted(py_keys - (go_keys - set(GO_ONLY))
+                                         - b_present),
+                                  sorted(go_keys - py_keys - set(GO_ONLY))))
+            #: ★ `GO_ONLY` 的**两个方向**逐人次累加（§7 拿它们配断言）：
+            #: ① Go 真的送过它；② Python 一次都没送过。
+            #: ⚠ 这里的 `seen_here` 同时是 `MUT_DRAIN` 的判红点：注入把这一位
+            #: 的键删掉之后，它必须变 False（§7 那条「Go 送出过它」于是判红）。
+            seen_here = bool(go_only)
+            guard.note(MUT_DRAIN, (f.name, i), seen_here)
+            for k in sorted(go_only):
+                GO_ONLY_SEEN[k] = GO_ONLY_SEEN.get(k, 0) + 1
+            for k in sorted(py_keys & set(GO_ONLY)):
+                GO_ONLY_FROM_PY[k] = GO_ONLY_FROM_PY.get(k, 0) + 1
             #: 25 个键逐个比（**含存在性**——条件键「该不该出现」也是内容）。
             for k in PORTED:
                 g_same = (k in gt) == (k in wt) and same(wt.get(k), gt.get(k))
@@ -973,24 +1043,49 @@ def main() -> int:
 
     # ============================================================ 7 · 键集总账
     print()
-    print("§7 键集总账（段 A ＋ 段 B ＝ wire 的契约）")
+    print("§7 键集总账（段 A ＋ 段 B ＋ GO_ONLY ＝ wire 的契约）")
     ops_fields, ds_fields = operator_reads()
     wire_keys = wire_operator_keys()
     print("    _operator_spec 读 op %d 个 / d %d 个；wire.OperatorSpec %d 个 json 键"
           % (len(ops_fields), len(ds_fields), len(wire_keys)))
-    if len(set(PORTED) | set(UNPORTED)) != len(wire_keys) \
-            or set(PORTED) | set(UNPORTED) != set(wire_keys):
+    #: ★ 三分类的并集必须**逐名**等于 wire 的键集：段 A 33（Go 产出、Python 也产出）
+    #: ＋ 段 B 2（Python 产出、Go 不产出）＋ GO_ONLY 1（Go 产出、Python 不产出）。
+    #: 三类**两两不交**（下面各配一条），否则一个键会被两边同时认领。
+    three_way = set(PORTED) | set(UNPORTED) | set(GO_ONLY)
+    if three_way != set(wire_keys):
         bad += 1
-        printed.append("✗ 段 A(%d) ∪ 段 B(%d) ≠ wire 的 %d 个键；差：多 %r / 少 %r"
-                       % (len(PORTED), len(UNPORTED), len(wire_keys),
-                          sorted((set(PORTED) | set(UNPORTED)) - set(wire_keys)),
-                          sorted(set(wire_keys) - set(PORTED) - set(UNPORTED))))
+        printed.append("✗ 段 A(%d) ∪ 段 B(%d) ∪ GO_ONLY(%d) ≠ wire 的 %d 个键；"
+                       "差：多 %r / 少 %r"
+                       % (len(PORTED), len(UNPORTED), len(GO_ONLY), len(wire_keys),
+                          sorted(three_way - set(wire_keys)),
+                          sorted(set(wire_keys) - three_way)))
     else:
-        print("    段 A %d ＋ 段 B %d ＝ %d ＝ wire 的键数，**逐名相等** ✓"
-              % (len(PORTED), len(UNPORTED), len(wire_keys)))
-    if set(PORTED) & set(UNPORTED):
-        bad += 1
-        printed.append("✗ 段 A 与段 B 相交：%r" % sorted(set(PORTED) & set(UNPORTED)))
+        print("    段 A %d ＋ 段 B %d ＋ GO_ONLY %d ＝ %d ＝ wire 的键数，**逐名相等** ✓"
+              % (len(PORTED), len(UNPORTED), len(GO_ONLY), len(wire_keys)))
+    for a, b in ((set(PORTED), set(UNPORTED)), (set(PORTED), set(GO_ONLY)),
+                 (set(UNPORTED), set(GO_ONLY))):
+        if a & b:
+            bad += 1
+            printed.append("✗ 三分类有两类相交：%r" % sorted(a & b))
+    #: ★ `GO_ONLY` 的两条**现算**断言（这一分类不能只靠声明）：
+    #:   ① Go 真的送过它（0 人次 ⇒ 这张表是死的登记，与「功能没做」长得一样）；
+    #:   ② Python **一次都没送过**（送过 ⇒ 它不是 Go 独有，分类要重做）。
+    #: 数的是**人次**，不是「字段非空」——本项目记过：行使＝运行期计数，
+    #: 不是「结构体里有这个字段」。
+    for k in GO_ONLY:
+        seen, from_py = GO_ONLY_SEEN.get(k, 0), GO_ONLY_FROM_PY.get(k, 0)
+        print("    GO_ONLY %-18s Go 送出 %d 人次；Python 送出 %d 人次"
+              % (k, seen, from_py))
+        if seen <= 0:
+            bad += 1
+            printed.append("✗ GO_ONLY 的 `%s` 在 %d 人次里**一次都没被 Go 送出**"
+                           " —— 这张登记是死的（要么取数断了，要么发送那一段没接上）"
+                           % (k, n_compared))
+        if from_py:
+            bad += 1
+            printed.append("✗ `%s` 被 Python 送出了 %d 人次 —— 它不是 Go 独有，"
+                           "这一分类要重做（先看 `_operator_spec` 为什么开始送它）"
+                           % (k, from_py))
     #: 两张读取面字段表**双向**比（Go 自报 vs ast 现抽）。
     if first:
         r0 = go_operators(str(ROOT / "fixtures" / first), str(ROSTER_FIX))

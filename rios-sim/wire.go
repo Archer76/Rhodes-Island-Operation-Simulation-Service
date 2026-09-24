@@ -228,6 +228,21 @@ type OperatorSpec struct {
 	//: 攻击、每次三技能的龙之箭均消耗 1 次"。所以一轮只扣一层。
 	PowerAttackCount int     `json:"power_attack_count,omitempty"`
 	PowerAttackScale float64 `json:"power_attack_scale,omitempty"`
+	//: 职业特性「**自身生命会不断流失**」（怪杰那一族，如新约能天使）：**每秒**
+	//: 流失**生命上限**的这个比例（三位怪杰都是 0.01）。
+	//:
+	//: 键**缺席**（＝ 0）就是没有这条特性——判据见 `operator_traits.go::readHPDrain`
+	//: （特性正文含「自身生命会不断流失」**且** 黑板里有正的 `hp_ratio`，两段缺一不可），
+	//: 数值由 `operator.go` 的 `OperatorStats.HPDrainPerSec` 算好送来。消费者是
+	//: `sim.go::traitDrainTick`，位置照原版 `_trait_tick`（`sim.py:1975`）：
+	//: 阻挡之后、技能之前。
+	//:
+	//: ★ 这是**Go 独有键**：`ak_tactic/simgo/spec.py::_operator_spec` **不送**它。
+	//: （`frontend/operator_view.py:179` 把同名属性写死 0.0——那走的是**另一条路**，
+	//: 不是模拟器读的这一条，别拿它当「Python 送了 0」的证据。）
+	//: ⇒ 判据那一侧把它具名进 `GO_ONLY`（`tools/check_operators_go.py`），
+	//: 而不是塞进 `unported`（那个的意思是「Python 有、Go 没有」）。
+	HPDrainPerSec float64 `json:"hp_drain_per_sec,omitempty"`
 	//: 职业特性溅射（撼地者那四位共用的一条特性；判据是特性黑板上同时有
 	//: `attack@ability_range_radius` 与 `attack@atk_scale_2`，已由 Python 解好）。
 	//:

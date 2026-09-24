@@ -390,6 +390,31 @@ def _fsd_snapshot() -> dict:
 REGISTERED_MISSING: tuple[tuple[str, str], ...] = ()
 REGISTERED_RX = tuple((re.compile(p), src) for p, src in REGISTERED_MISSING)
 
+#: **已登记的「Go 侧多出这个键」** —— 与 `REGISTERED_MISSING` **方向相反**：
+#: 上面那类是「权威有、Go 缺」，这一类是「Go 有、权威不产出」。
+#:
+#: ⚠ 两类的方向**不许合并成一张表**：判词、守卫、以及「这意味着什么」都不同
+#: （缺键＝Go 少了一条路；多键＝这条通道是 Go 独有的，权威那侧压根不产出它）。
+#:
+#: `operators[].hp_drain_per_sec`：职业特性「自身生命会不断流失」（怪杰那一族，
+#: 如新约能天使 `char_1041_angel2`）的每秒流失比例。**它是 Go 独有键**：
+#: `ak_tactic/simgo/spec.py::_operator_spec` 逐行可查，既不读也不写它
+#: （`frontend/operator_view.py:179` 那个同名属性属于**另一条路**的视图）。
+#: ⇒ 权威那侧永远 `<缺>`，而 Go 送 0.01。**这不是缺陷，是这条通道的形状**。
+#:
+#: 它落地的是哪一处缺失：Go 侧原来只有**取数**（`operator.go` 的
+#: `OperatorStats.HPDrainPerSec`）没有**消费**——值到不了模拟器读的那份规格
+#: （`wire.go::OperatorSpec`），`sim.go` 里也没有按秒扣干员血的那一步。
+#: 现修成三段：`operators.go` 送键 → `traitDrainTick` 逐帧扣 → `DRAIN` 痕迹见证。
+#:
+#: ★ 反向守卫与它成对（见 `allowance_guards`）：**没登记的多键必须判红**，
+#: 且这一行必须在真用例里**真的被多出来过**——否则它就是真回归的藏身处。
+REGISTERED_EXTRA: tuple[tuple[str, str], ...] = (
+    (r"^\.operators\[\d+\]\.hp_drain_per_sec$",
+     "干员职业特性「自身生命会不断流失」的速率；Python 的 `_operator_spec` 不产出它"),
+)
+REGISTERED_EXTRA_RX = tuple((re.compile(p), src) for p, src in REGISTERED_EXTRA)
+
 MISSING = "<缺>"
 
 
@@ -443,7 +468,7 @@ def canon_groups(spec: dict) -> list:
 def diff_one(py: dict, go: dict, name: str) -> tuple[list[str], dict, bool]:
     """逐**路径**比一份规格。返回 `(问题, 计数, 是否有雪)`。"""
     bad: list[str] = []
-    cnt = {"registered_missing": 0, "compared_paths": 0}
+    cnt = {"registered_missing": 0, "registered_extra": 0, "compared_paths": 0}
     snow = SNOW_ID in (py.get("mechanisms") or [])
     if sorted(py) != sorted(go):
         bad.append("%s：键集不同\n      期望 %s\n      Go   %s"
@@ -457,10 +482,18 @@ def diff_one(py: dict, go: dict, name: str) -> tuple[list[str], dict, bool]:
     #: 免得「没有一份带雪」这种零行使的绿蒙混过去（见第五节）。
     for path, pv, gv in diff_paths(py, go):
         cnt["compared_paths"] += 1
+        #: ★ 缺键与多键**分两栏**判：`gv is MISSING` ＝ Go 少了一个键；
+        #: `pv is MISSING` ＝ Go 多了一个键。两张表各自要具名，且**各自配守卫**
+        #: （`allowance_guards`），否则「已经有登记了」与「本来就登记过」长得一样。
         if gv is MISSING:
             hit = [src for rx, src in REGISTERED_RX if rx.match(path)]
             if hit:
                 cnt["registered_missing"] += 1
+                continue
+        elif pv is MISSING:
+            hit = [src for rx, src in REGISTERED_EXTRA_RX if rx.match(path)]
+            if hit:
+                cnt["registered_extra"] += 1
                 continue
         bad.append("%s：路径 %s\n      期望 %s\n      Go   %s"
                    % (name, path, repr(pv)[:220], repr(gv)[:220]))
@@ -666,6 +699,7 @@ def compare(cases: list[dict]) -> tuple[list[str], dict]:
     cov["_cases"] = 0
     cov["_snow_cases"] = 0
     cov["_registered_missing"] = 0
+    cov["_registered_extra"] = 0
     cov["_groups_order_diff"] = 0
     for c in cases:
         cov["_cases"] += 1
@@ -673,6 +707,7 @@ def compare(cases: list[dict]) -> tuple[list[str], dict]:
         problems += bad
         cov["_snow_cases"] += snow
         cov["_registered_missing"] += cnt["registered_missing"]
+        cov["_registered_extra"] += cnt["registered_extra"]
         cov["_groups_order_diff"] += c.get("groups_order_diff", False)
         problems += check_slots(c["go"], c["name"], expect_plan=c["expect_plan"])
         for k in SPEC_KEYS:
@@ -702,10 +737,13 @@ def allowance_guards(cases: list[dict]) -> tuple[list[str], dict]:
     （空表要么是过期了、要么是没人走 —— 两种都该看，不该绿）。
     """
     problems: list[str] = []
-    cnt = {"registered_paths": {}, "unregistered_red": 0, "registered_green": 0,
-           "registered_vacuous": 0}
+    cnt = {"registered_paths": {}, "registered_extra_paths": {},
+           "unregistered_red": 0, "registered_green": 0,
+           "registered_vacuous": 0, "registered_extra": 0,
+           "unregistered_extra_red": 0, "registered_extra_green": 0}
     #: ① 报告：登记缺键**按路径分组**印出来（不让它变成看不见的一坨）。
     #: 条数**现算**，不写死（上一版这里的注释写着 86，那是 child 75 ＋ shield 11）。
+    #: ★ 多键那一栏**同口径**再数一遍（两张表的方向不同，不许并成一个数）。
     for c in cases:
         py, go = c["py"], c["go"]["spec"]
         _, one, _snow = diff_one(py, go, c["name"])
@@ -713,6 +751,11 @@ def allowance_guards(cases: list[dict]) -> tuple[list[str], dict]:
             if gv is MISSING and any(rx.match(path) for rx, _s in REGISTERED_RX):
                 key = re.sub(r"\[\d+\]", "[]", path)
                 cnt["registered_paths"][key] = cnt["registered_paths"].get(key, 0) + 1
+            elif pv is MISSING and any(rx.match(path)
+                                       for rx, _s in REGISTERED_EXTRA_RX):
+                key = re.sub(r"\[\d+\]", "[]", path)
+                cnt["registered_extra_paths"][key] = \
+                    cnt["registered_extra_paths"].get(key, 0) + 1
     if not cases:
         return ["allowance 守卫：没有可比用例，无从取证"], cnt
     base = cases[0]
@@ -743,6 +786,33 @@ def allowance_guards(cases: list[dict]) -> tuple[list[str], dict]:
                         % (len(REGISTERED_MISSING), sorted(cnt["registered_paths"]) or "无"))
     else:
         cnt["registered_green"] = 1
+
+    #: ---- ② `REGISTERED_EXTRA`（**方向相反**：Go 多出来的键）的两侧守卫 ----
+    #: 与缺键那张表同一条纪律，但**不能共用**：一类是「Go 少了一条路」，
+    #: 一类是「这条通道是 Go 独有」，判词与守卫都不是同一件事。
+    #:   · 反向：往**活 Go 的规格**里塞一条**没登记**的多键（`operators[0]` 上
+    #:     一个不存在的字段）⇒ 必须判红。红不了，这张表就是万能挡板。
+    #:   · 正向：这一行必须在真用例里**真的被多出来过**（`registered_extra > 0`），
+    #:     否则它是一张没人走的放行表——真回归最好的藏身处。
+    probe = "operators[0].__unregistered_extra_probe__"
+    injected = _deepput(base["go"]["spec"], probe, 1)
+    if injected == base["go"]["spec"]:
+        problems.append("extra 反向守卫：注入**没落到对象上**（那条路径不存在？）")
+    elif bool(diff_one(base["py"], injected, base["name"])[0]):
+        cnt["unregistered_extra_red"] = 1
+    else:
+        problems.append("extra 反向守卫不成立：造了一条**没登记**的 Go 多键"
+                        "（%s）却没判红 —— 这张表成了万能挡板" % probe)
+    if REGISTERED_EXTRA:
+        cnt["registered_extra"] = sum(cnt["registered_extra_paths"].values())
+        if cnt["registered_extra"] <= 0:
+            problems.append("EXTRA 表非空（%d 条），但 %d 个用例里**一次都没被走到**"
+                            "（分组计数 %s）—— 每一行都必须能指着「它真被多出来的"
+                            "那一例」，否则它就是真回归的藏身处"
+                            % (len(REGISTERED_EXTRA), len(cases),
+                               sorted(cnt["registered_extra_paths"]) or "无"))
+        else:
+            cnt["registered_extra_green"] = 1
     return problems, cnt
 
 
@@ -759,6 +829,26 @@ def _deepdrop(obj, path: str):
         del cur[int(last[1:-1])]
     else:
         cur.pop(last, None)
+    return node
+
+
+def _deepput(obj, path: str, value):
+    """按 `a.b[0].c` 这种路径**深拷后**写入末尾那个键（不动原对象）。
+
+    与 `_deepdrop` 同族、同路径语法：一个删一个写。反向守卫要用它造一条
+    **没登记的多键**（`REGISTERED_EXTRA` 的反向那一侧）。
+    """
+    import copy as _copy
+    node = _copy.deepcopy(obj)
+    cur = node
+    parts = re.findall(r"[^.\[\]]+|\[\d+\]", path)
+    for step in parts[:-1]:
+        cur = cur[int(step[1:-1])] if step.startswith("[") else cur[step]
+    last = parts[-1]
+    if last.startswith("["):
+        cur[int(last[1:-1])] = value
+    else:
+        cur[last] = value
     return node
 
 
@@ -911,9 +1001,10 @@ def main() -> int:
     print("二 · 逐用例逐路径对拍（%d 例）" % len(cases))
     problems, cov = compare(cases)
     problems = problems_early + problems
-    print("  带雪（**已逐字段比**）%d 例；已登记缺键 %d 处；"
+    print("  带雪（**已逐字段比**）%d 例；已登记缺键 %d 处；已登记多键 %d 处；"
           "groups 原始次序不同的用例 %d 例（那一处已按格集合口径规范化，见 canon_groups）"
-          % (cov["_snow_cases"], cov["_registered_missing"], cov["_groups_order_diff"]))
+          % (cov["_snow_cases"], cov["_registered_missing"], cov["_registered_extra"],
+             cov["_groups_order_diff"]))
     #: ★ Python 侧那处静默默认值的**规模与样例**（现算）——不印出来，下一个人
     #: 会以为 B 口径测的就是生产路径。
     print("  ⚠ `SpecInputs.from_stage` 的 fps／speed_scale／ranged_enemies／enemy_windup"
@@ -930,6 +1021,15 @@ def main() -> int:
     print("    两侧守卫：没登记的缺键判红=%s、登记过的缺键不判红=%s"
           % ("✓" if acnt["unregistered_red"] else "✗",
              "✓" if acnt["registered_green"] else "✗"))
+    #: ★ 多键那一栏**分开印**（方向不同，不许并成一个数）：
+    #: 它是「这条通道 Go 独有」，不是「Go 缺了一条路」。
+    print("  REGISTERED_EXTRA（**Go 多出来的键**）逐路径分组（%d 条）:"
+          % len(acnt["registered_extra_paths"]))
+    for path, n in sorted(acnt["registered_extra_paths"].items()):
+        print("    %-52s %d 处" % (path, n))
+    print("    两侧守卫：没登记的多键判红=%s、登记过的多键真被多出来过=%s"
+          % ("✓" if acnt["unregistered_extra_red"] else "✗",
+             "✓" if acnt["registered_extra_green"] else "✗"))
     print()
 
     print("三 · 覆盖率（19 个键逐个：有几例非空）")
@@ -1073,10 +1173,11 @@ def main() -> int:
     #: ★ **结论行带上覆盖面**：读这一行的人当场就知道这一档没覆盖哪几段，
     #: 不用另外去跑 `--status`。
     print("结论：%d 例逐路径一致（A 计划 %d ＋ B 空计划 %d ＋ C 合成 %d）；"
-          "带雪 %d 例已逐字段比；已登记缺键 %d 处；19 键全部造齐"
+          "带雪 %d 例已逐字段比；已登记缺键 %d 处；已登记多键 %d 处；19 键全部造齐"
           "（missing_keys 空、gated_keys 空）；具名拒跑 %d 关（不计入可比分母）%s"
           % (len(cases), len(rows), len(b_levels) - n_refused, len(c_q),
-             cov["_snow_cases"], cov["_registered_missing"], n_refused,
+             cov["_snow_cases"], cov["_registered_missing"],
+             cov["_registered_extra"], n_refused,
              G.uncovered_sections_text()))
     if G.mode == GB.CHECK and not (cov_a.ok and cov_b.ok):
         #: 比过的部分一致，但**对象集/内容变了** ⇒ 读数不可用（rc=6），不是判据红。
