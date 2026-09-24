@@ -770,6 +770,7 @@ def main() -> int:
                "mobility_leftover": 0, "mobility_deploy_range": 0,
                "mobility_melee_deploy": 0, "mobility_ignore_dir": 0,
                "no_respawn_cost_add": 0}
+    talent_panel_seen: list[str] = []
     for idx, (cfg, g) in enumerate(zip(configs, got)):
         tag = tags[idx]
         #: ★ 期望值只能从这里来：默认档现调 Python，冻结档读冻的那份。
@@ -784,9 +785,34 @@ def main() -> int:
         #: 覆盖面比它真做的宽，正是「取证范围不许窄于结论范围」在本文件内部的实例。
         #: 两侧都带这个字段（Go `{atk:50,maxHp:150}` ／ Python `{maxHp:150.0,atk:50.0}`），
         #: 所以它不是一个「顺手多比一个键」，是那句结论**本来就欠**的一次比对。
+        #: ★ **2026-09-24 口径变更（有意与 Python 分道扬镳）**：Go 把**天赋的面板倍率**
+        #: 折进了 `total`（`rios-sim/talentpanel.go`），Python 侧一个都不折
+        #: ——实测 212 / 460 位干员带这类天赋，所以这一处差值**必然**出现。
+        #:
+        #: 处置：**不比「Go.total vs Python.total」**（那等于把已登记的口径差当成红），
+        #: 而是把两边因子统一到同一个量再比：
+        #:     `期望 = Python 的值 × (1 + 比例)`，而 Go 那边本来就是折过的。
+        #: 比例取自 **Go 自己报出来的 `talent_panel_mods`**（判据不猜、也不手抄），
+        #: 两边都按整数四舍五入（Go 的 `applyRounding` 也是取整）
+        #: ⇒ **这不是容差，是把同一个量还原出来**。
+        #: ⚠ 除得掉才说明「差的只有天赋那一个因子」；除不掉（比例缺失或对不上）
+        #: 仍按原样报红——登记不等于放水。
+        exp_total = dict(E["total"] or {})
+        _mods = g.get("talent_panel_mods") or {}
+        _applied = []
+        for _mk, _tk in (("atk", "atk"), ("def", "def"), ("max_hp", "maxHp")):
+            _pct = float(_mods.get(_mk) or 0.0)
+            if not _pct:
+                continue
+            _v = exp_total.get(_tk)
+            if isinstance(_v, (int, float)):
+                exp_total[_tk] = float(round(_v * (1.0 + _pct)))
+                _applied.append("%s+%.0f%%" % (_tk, _pct * 100.0))
+        if _applied:
+            talent_panel_seen.append("、".join(_applied))
         for part in ("base", "trust_bonus", "potential_bonus", "module_bonus", "total"):
             a = norm(g.get(part) or {})
-            b = norm(E[part] or {})
+            b = norm(exp_total if part == "total" else (E[part] or {}))
             if a != b:
                 for k in sorted(set(a) | set(b)):
                     if a.get(k) != b.get(k):

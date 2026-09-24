@@ -91,6 +91,12 @@ type OperatorStats struct {
 	PotentialBonus map[string]any `json:"potential_bonus"`
 	ModuleBonus    map[string]any `json:"module_bonus"`
 	Total          map[string]any `json:"total"`
+	//: **天赋折进面板的那三个比例**（见 `talentpanel.go`）。没有天赋给面板加成时是 nil。
+	//:
+	//: 为什么要单独留一栏而不是让调用方去比 `total` 与 `base`：`total` 里同时还叠着
+	//: 信赖／潜能／模组，**从 `total` 反推不出「天赋改了多少」**——而那正是本仓反复
+	//: 要的那个「哪一件事真的发生了」。
+	TalentPanelMods map[string]float64 `json:"talent_panel_mods,omitempty"`
 	//: 攻速加成（天赋常驻 ＋ 模组特性改写，见 `operator_aspd.go`）。
 	//: 匿名嵌入把 `aspd_flat` / `aspd_when_free` / `aspd_high_ground` 平铺出来——
 	//: 与 `verify.py:326` 那三行同名，对拍要同形。
@@ -481,6 +487,38 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 			acc *= mul
 		}
 		total[k] = applyRounding(acc, k, rounding)
+	}
+	//: ---- ★ 天赋的**面板倍率**（博士 2026-09-24 新口径：Go 要折进去）----
+	//:
+	//: 为什么现在才做：`akdb` 现算，**212 / 460 位**干员的天赋带这类面板键
+	//: （`atk`×383 ／ `def`×157 ／ `max_hp`×78 …），而**两台引擎原来都一个都不折**
+	//: ——`OperatorCalculator` 的 `total` 只由「基底 ＋ 信赖 ＋ 潜能 ＋ 模组」四项相加，
+	//: 实测：玫兰莎 E1L55／信100／潜6 的 `atk` 两边都是 828，而乘上天赋（＋4%）应是 861.1。
+	//:
+	//: ⚠ **只折 `atk`／`def`／`max_hp` 三个键**，理由逐条：
+	//:   · `attack_speed` **已经**由 `attackSpeedBonus`（`operator_aspd.go`）那条具名 finder
+	//:     管着，再折一遍＝同一个量两处各算一次（本仓记过：一改就对不上）；
+	//:   · `cost`（轻量化那一族）改的是**部署费用**，那是另一条路（`deploycost.go`），
+	//:     不是面板；
+	//:   · 其余键（`prob`／`atk_scale`／`duration` …）不是面板量。
+	//:
+	//: ★ 这是**有意与冻结的 Python 分道扬镳**：Python 侧不折，因此所有「与 Python 逐字段
+	//: 一致」的面板类判据会看见差值。**must 具名登记**，别处不许当它没发生。
+	talentMods := talentPanelMods(char.Talents, cfg.Elite, cfg.Level, cfg.Potential)
+	if talentMods.ATKPct != 0 || talentMods.DEFPct != 0 || talentMods.MaxHPPct != 0 {
+		for key, pct := range map[string]float64{
+			"atk": talentMods.ATKPct, "def": talentMods.DEFPct, "maxHp": talentMods.MaxHPPct,
+		} {
+			if pct == 0 {
+				continue
+			}
+			if cur, ok := toFloat(total[key]); ok {
+				total[key] = applyRounding(cur*(1+pct), key, rounding)
+			}
+		}
+		st.TalentPanelMods = map[string]float64{
+			"atk": talentMods.ATKPct, "def": talentMods.DEFPct, "max_hp": talentMods.MaxHPPct,
+		}
 	}
 	st.Total = total
 	//: 攻速加成：天赋（常驻/高台条件）＋ 模组特性改写（未阻挡条件）。
