@@ -373,8 +373,12 @@ def problems_endtoend(rows: list[dict]) -> tuple[list[str], dict]:
                 detail = "；".join("%s: 基线=%r 现在=%r" % (k, b.get(k), cur.get(k))
                                    for k in bad)
                 problems.append("%s：端到端判决与冻结基线不同 —— %s\n"
-                                "      本批的两个键（`devices[].child`、`operators[].shield`）"
-                                "都该已经搬进来了；除此之外每一份都该逐键相同"
+                                "      判决本该与冻结基线逐键相同。若差异是某次**已裁定的口径变更**"
+                                "造成的，\n"
+                                "      正解是 `golden_go.py --rebless --why <理由>` 重录，"
+                                "并在 `docs/golden-baseline.md` §10\n"
+                                "      逐份登记它与哪次变更的归属——只写几个数不算登记"
+                                "（见该节节点十）"
                                 % (name, detail))
         else:
             if name in SNOW_CAUSE:

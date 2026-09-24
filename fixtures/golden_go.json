@@ -1,57 +1,57 @@
 {
   "hsex8.json": {
-    "damage": 12810.4,
-    "elapsed": 57.4667,
+    "damage": 15145.4,
+    "elapsed": 57.5333,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
     "go_runs": 1,
-    "kills": 2,
+    "kills": 3,
     "leaks": 3,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "72a9cad4f12f4d501153d9eb02a09b21cb1790a277128f77b195343e1b78ed18"
+    "spec_sha": "1b553ea831c16f55df504f49a840372de5673f724181da41ba13a84a2fa5bac8"
   },
   "hsex8_max.json": {
-    "damage": 282276.8,
-    "elapsed": 221.6667,
+    "damage": 481800.0,
+    "elapsed": 376.3,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
     "go_runs": 1,
-    "kills": 48,
-    "leaks": 3,
+    "kills": 72,
+    "leaks": 0,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "464a9dc2f94b1428c8569a36f3b00d1211b6de2c902b481c5f0fa97cae607564"
+    "spec_sha": "50dc4d35542a2297cc825b7e3fdf5b34faf01d756a6f1aaa35b398f68fecfe2d"
   },
   "plan-hs01.json": {
     "damage": 89100.0,
-    "elapsed": 134.9333,
+    "elapsed": 133.1333,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
@@ -60,19 +60,19 @@
     "leaks": 0,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "19822902fa0de86d49f251a23b92b293a23d1503ef11ac0bde39d92c2577f400"
+    "spec_sha": "3ebf174c2eee1ba6fab500d738aa650fa501b4b781d3ffefdce2cae03ec3f72c"
   },
   "plan-hs02.json": {
     "damage": 100500.0,
-    "elapsed": 195.7333,
+    "elapsed": 194.9333,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
@@ -81,19 +81,19 @@
     "leaks": 0,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "58f01224ab17332cb56e4d72cad6e268359827f9d15583f6feaeb1d6c5d445de"
+    "spec_sha": "8a30322cb95035ec00ca34e620d72850ce3d7e48f5a251b2c37cc9b1eb033bc1"
   },
   "plan-hs03.json": {
     "damage": 91100.0,
-    "elapsed": 366.8,
+    "elapsed": 334.8,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
@@ -102,19 +102,19 @@
     "leaks": 0,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "0594d55f916b0db390ce707451c84af6d4032319fbd23065d17862a5744031ca"
+    "spec_sha": "40a438bcaa477d60ae79303a81d0b84ee2da9ac6f7a66f84602b55f23d23f7c4"
   },
   "plan-hs04.json": {
     "damage": 95400.0,
-    "elapsed": 182.6667,
+    "elapsed": 181.0667,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
@@ -123,19 +123,19 @@
     "leaks": 0,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "212e179a0018710416b48b646dafe041ade3aec59b2d33ff8db693b821405052"
+    "spec_sha": "80689faa24f50d5adf7654fbe722d2662da2f1b690f985611ccd48465b6c23d6"
   },
   "plan-hs05.json": {
     "damage": 131700.0,
-    "elapsed": 228.0333,
+    "elapsed": 224.6333,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
@@ -144,19 +144,19 @@
     "leaks": 0,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "55e2d4d617120a3603d42fcc19ef232adf079d799d4740f9cff88a926af6978d"
+    "spec_sha": "5b0b33ff11711f5c69e2f3bb802647f191bb66fd1082619fe43673254240f669"
   },
   "plan-hs06.json": {
     "damage": 165500.0,
-    "elapsed": 284.4,
+    "elapsed": 280.2,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
@@ -165,82 +165,82 @@
     "leaks": 0,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "64b0d0ea11253475aed72b8a4cd352735ffc4a7b184ffd3eb179b31fb35d8f59"
+    "spec_sha": "c08f76f9df6cad64407ce034f59d532cbf1be9e6f76f61539b1254b73b8a50cd"
   },
   "plan-hs07.json": {
-    "damage": 135518.5,
+    "damage": 144591.7,
     "elapsed": 299.0,
     "engine": "go",
-    "engine_bin": "rios-sim-4f47539b.exe",
-    "engine_bin_mtime": "2026-09-20 03:28:22",
-    "engine_bin_sha16": "6ab41e7de224017f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
     "go_runs": 1,
-    "kills": 96,
+    "kills": 33,
     "leaks": 3,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "11fab1199ed28a72afeaad1229b2c8145a49f3beb9ca7c73d87384563aad666d"
+    "spec_sha": "02bd206bc3ede957b6a2bc84b1e59d022051e08ceedce75fad3fea1f9585ec30"
   },
   "plan-hs09.json": {
-    "damage": 44241.0,
-    "elapsed": 120.4333,
+    "damage": 74309.5,
+    "elapsed": 127.8667,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
     "go_runs": 1,
-    "kills": 82,
+    "kills": 103,
     "leaks": 3,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "d5033b2fd6d9b8df81dfd840269ac8baf36514d5fd66306fa0ff69b820c6f034"
+    "spec_sha": "71347ab5c6042492eb9291b59af8a9d246438d281de87c1cde094bd9d66fb0bb"
   },
   "plan-hsex01.json": {
-    "damage": 220155.2,
-    "elapsed": 219.9333,
+    "damage": 264203.0,
+    "elapsed": 249.9333,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
     "go_runs": 1,
-    "kills": 54,
+    "kills": 66,
     "leaks": 3,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "39b1b02f3b5e4820728c65e2654c801ca12a67e89323ded38e76bf611fafdbcb"
+    "spec_sha": "7ac28e9d2ba6dfc8befc8b467f3c6a3e90e547644699e9554dc30ce744b29b68"
   },
   "plan-hsex02.json": {
     "damage": 278200.0,
     "elapsed": 228.6333,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
@@ -249,19 +249,19 @@
     "leaks": 0,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "9d1d58dac176dd29c208c03e79bccdbb26e565e8fd9e03980caa7ee0acad0c71"
+    "spec_sha": "0ca3424601a5acf76340d6dba8d697ea0d56b36054c30fee22e4616eccd592b7"
   },
   "plan-hsex03.json": {
-    "damage": 21338.0,
+    "damage": 23280.1,
     "elapsed": 94.8667,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
@@ -270,61 +270,19 @@
     "leaks": 3,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "e1ece69ce222c9391de92607d6f66e68ef03f57ef7d36de68cf407518b6d0475"
+    "spec_sha": "714969032da23ffa2527e1fc361913f76de6bc807c9043eb2c3972a851d14cad"
   },
   "plan-hsex04.json": {
-    "damage": 101725.0,
-    "elapsed": 183.0667,
+    "damage": 108797.7,
+    "elapsed": 183.1667,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
-      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
-    },
-    "go_fallbacks": 0,
-    "go_runs": 1,
-    "kills": 22,
-    "leaks": 3,
-    "roster_sha16": "21d3045f119a5d04",
-    "spec_error": null,
-    "spec_sha": "c666f09356fc2b0406ca3b396fc95988074a993626dcff4cec865a1a441fd440"
-  },
-  "plan-hsex05.json": {
-    "damage": 68463.6,
-    "elapsed": 145.3333,
-    "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
-    "gate": {
-      "allow_devices": true,
-      "allow_skills": false,
-      "provenance": "backfill",
-      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
-    },
-    "go_fallbacks": 0,
-    "go_runs": 1,
-    "kills": 8,
-    "leaks": 3,
-    "roster_sha16": "21d3045f119a5d04",
-    "spec_error": null,
-    "spec_sha": "75ece345bc2443a817fb3f3570ef2c0a6283e691b28525775b37fa1bdcf3bb5d"
-  },
-  "plan-hsex06.json": {
-    "damage": 108847.3,
-    "elapsed": 240.0,
-    "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
-    "gate": {
-      "allow_devices": true,
-      "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
@@ -333,40 +291,82 @@
     "leaks": 3,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "9dc795a8d9c5870dabbeef615b3c4aabe5123f03d952d33b126bca1faff62c0c"
+    "spec_sha": "1972832bbc90f892dba0ff653325e08ff4a0575e04106389e7142238b44eafad"
   },
-  "plan-hsex07.json": {
-    "damage": 50627.6,
-    "elapsed": 121.3,
+  "plan-hsex05.json": {
+    "damage": 77681.6,
+    "elapsed": 155.6,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
     "go_runs": 1,
-    "kills": 42,
+    "kills": 12,
     "leaks": 3,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "f899f95f74fb8971cebba2a82ba234468f4931abd2c6bf56a4f1effd39d28a54"
+    "spec_sha": "f8464ca382e083227bd4b59479f9f8b741714133b84e86b9792b3a3a98ff1947"
+  },
+  "plan-hsex06.json": {
+    "damage": 124177.9,
+    "elapsed": 276.0,
+    "engine": "go",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "run",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
+    "go_fallbacks": 0,
+    "go_runs": 1,
+    "kills": 28,
+    "leaks": 2,
+    "roster_sha16": "21d3045f119a5d04",
+    "spec_error": null,
+    "spec_sha": "a3051c657581d516751ff42eec6f1669fe395f71e69d048d83bd9cd3941cd8aa"
+  },
+  "plan-hsex07.json": {
+    "damage": 61652.7,
+    "elapsed": 134.0,
+    "engine": "go",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
+    "gate": {
+      "allow_devices": true,
+      "allow_skills": false,
+      "provenance": "run",
+      "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
+    },
+    "go_fallbacks": 0,
+    "go_runs": 1,
+    "kills": 43,
+    "leaks": 3,
+    "roster_sha16": "21d3045f119a5d04",
+    "spec_error": null,
+    "spec_sha": "0de3ba5b31f210a62c2ced7aa2e105b36342f6ebf746c16e542bfe9c529a1ecb"
   },
   "plan-hsex08.json": {
     "damage": 8800.0,
     "elapsed": 46.5333,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
@@ -375,19 +375,19 @@
     "leaks": 3,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "62c775dd9ec777a6fe88209bc95386f401c9dbac3e403e029a004dcc0f470617"
+    "spec_sha": "8af8fe766560bb2352e28c35bfcf13deda13577d02db83bff936901463f5c684"
   },
   "plan-hsex08f.json": {
     "damage": 4212.0,
     "elapsed": 34.9,
     "engine": "go",
-    "engine_bin": "rios-sim-12f35f7.exe",
-    "engine_bin_mtime": "2026-09-20 12:05:59",
-    "engine_bin_sha16": "1dd24575475ecb07",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
@@ -396,40 +396,40 @@
     "leaks": 1,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "bcd5606b11d78360d07e212ef42995982a5fc8726e371eeb863777b593e266fa"
+    "spec_sha": "d1a0a9e4059fc0e98f824fd596731050202d507421c9e26f6bf6cc8bd7171bec"
   },
   "plan-hstr01.json": {
-    "damage": 65700.0,
-    "elapsed": 85.9333,
+    "damage": 65727.0,
+    "elapsed": 168.0333,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
     "go_runs": 1,
-    "kills": 27,
+    "kills": 55,
     "leaks": 0,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "4ae2140cd53c35762553013f263c6eeb4bba0b4b398878f2e010d71c57416dff"
+    "spec_sha": "75fe54698d9932f5df059a99f8cde3a61c8f4d6d06ac5580b42008435b1094df"
   },
   "plan-hstr02.json": {
     "damage": 28000.0,
     "elapsed": 430.1333,
     "engine": "go",
-    "engine_bin": "rios-sim-2c68f2c6.exe",
-    "engine_bin_mtime": "2026-09-19 22:13:25",
-    "engine_bin_sha16": "b88b28ce6d0ca14f",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
@@ -438,19 +438,19 @@
     "leaks": 0,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "575b375a270c88f931e7d4897d52c33573839b46425ca494ae320457d74534a3"
+    "spec_sha": "983ab30d3a3dcfbe65a0d2a70d416f66847e3692ca7c8a94faee6a44d6cbb708"
   },
   "plan-main-00-01.json": {
     "damage": 7150.0,
-    "elapsed": 76.4333,
+    "elapsed": 75.1333,
     "engine": "go",
-    "engine_bin": "rios-sim-12f35f7.exe",
-    "engine_bin_mtime": "2026-09-20 12:05:59",
-    "engine_bin_sha16": "1dd24575475ecb07",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
@@ -459,19 +459,19 @@
     "leaks": 0,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "ec3467f1412eea292242627dee24aa6ea01bc291e2037bd369b0e9d3ac6995b6"
+    "spec_sha": "17bd7e04d722a063a618bff30e9036e0f8315b209f9ccd0724796b0f3cca3f7c"
   },
   "plan-main-01-07.json": {
     "damage": 60750.0,
-    "elapsed": 135.7667,
+    "elapsed": 135.2667,
     "engine": "go",
-    "engine_bin": "rios-sim-12f35f7.exe",
-    "engine_bin_mtime": "2026-09-20 12:05:59",
-    "engine_bin_sha16": "1dd24575475ecb07",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
@@ -480,19 +480,19 @@
     "leaks": 0,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "1d98054b704daaeb40da32c6d218d252cc0c84bd7ea6ae632ee6bb22bae73e3e"
+    "spec_sha": "01267d17596282c6ca551a339f8facfc251a5430e2b0fc6cbd075c805be33858"
   },
   "plan-main-02-01.json": {
     "damage": 78040.0,
-    "elapsed": 206.1,
+    "elapsed": 189.7,
     "engine": "go",
-    "engine_bin": "rios-sim-12f35f7.exe",
-    "engine_bin_mtime": "2026-09-20 12:05:59",
-    "engine_bin_sha16": "1dd24575475ecb07",
+    "engine_bin": "rios-sim-stage3.exe",
+    "engine_bin_mtime": "2026-09-25 02:14:37",
+    "engine_bin_sha16": "b90bc7b95009129c",
     "gate": {
       "allow_devices": true,
       "allow_skills": false,
-      "provenance": "backfill",
+      "provenance": "run",
       "ruling_ref": "PM 裁定④ 2026-09-20 走乙（docs/mainline-stages.md §九；甲方前提＝196 关建模）"
     },
     "go_fallbacks": 0,
@@ -501,6 +501,6 @@
     "leaks": 0,
     "roster_sha16": "21d3045f119a5d04",
     "spec_error": null,
-    "spec_sha": "552afa739064f3d063d8cbbcd6f8f3306fc43ff07dd507a9be829c2b5bebf8d5"
+    "spec_sha": "32f04c3bb5835bbeb54aaaec443b205e139048489d6eec104f6f00d5ce1b8f04"
   }
 }
