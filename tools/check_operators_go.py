@@ -138,7 +138,10 @@ PORTED = (
 )
 
 #: 仍**不产出**的 2 个键。与 `rios-sim/operators.go::OperatorUnported` 同源。
-UNPORTED = ("skill", "active")
+UNPORTED = ()          # ★ 2026-09-24：`skill` / `active` 已由 Go 产出，见 PORTED
+#: 段 A 新收进来的两个键（原来是「Python 有、Go 没有」的段 B）。
+#: ⚠ 它们进的是 `PORTED`（上面那条），不是这里——这里保持为空。
+UNPORTED_NEW = ("skill", "active")
 
 #: **Go 独有**的 1 个键：`_operator_spec` **不送**它，而 Go 送、模拟器也读它。
 #:
@@ -160,10 +163,51 @@ UNPORTED = ("skill", "active")
 #: `sim.go` 也没有按秒扣血的那一步。修法就是这一个键 ＋ `sim.go::traitDrainTick`。
 GO_ONLY = ("hp_drain_per_sec",)
 
+#: **Go 比 Python 多送**的键（方向与 `UNPORTED` 相反，与 `GO_ONLY` 同向但**成因不同**）：
+#:
+#:   * `GO_ONLY`   —— Python **从来**不送（那是另一条路的字段）；
+#:   * `EXTRA_OPS` —— Python **有条件**不送：博士 2026-09-24 口径「计划里的 `skill: 0`
+#:     等于默认技能＝技 1」之后，Go 为每一名有技能槽的干员都绑技能并送出
+#:     `skill`/`active`；而 Python 那条路在槽号 0 上**不绑** ⇒ 它没有这两个键。
+#:
+#: ⇒ 逐人次键集比对里把这两个键**从 Go 的键集里摘掉**再比（不摘会造一条永久假红），
+#: 并另配两条现算守卫：**Go 真的送出过它**（0 人次＝死登记）、**Python 一次都没送过**
+#: （送过 ⇒ 口径变了，这条登记要重做）。
+EXTRA_OPS = ("skill", "active")
+EXTRA_OPS_SEEN: dict = {}
+EXTRA_OPS_FROM_PY: dict = {}
+
 #: `GO_ONLY` 两个方向的现算计数（§7 印出来并各自配断言）：
 #:   · `SEEN`    —— Go 真的把这个键送出去过几次（0 ⇒ 这是一张**死的登记**）；
 #:   · `FROM_PY` —— Python 那一侧送出过几次（>0 ⇒ 它不是 Go 独有，分类要重做）。
 GO_ONLY_SEEN: dict = {}
+#: Go 独有计数器的**累计**（跨夹具），给「至少非零过一次」那条守卫用。
+GO_ONLY_COUNTERS_SEEN: dict = {}
+
+#: Go 独有计数器里**当前夹具集行使不到**的那些 → 具名理由。
+#:
+#: ⚠ 处置是**登记**，不是删计数器：删掉之后「这一档没人走过」这件事就没人记得了；
+#: 而放宽守卫会让真正的死账（一个从头到尾没数到东西的计数器）一起溜过去。
+#: 判据每次把这一栏印出来，所以它不会沉进注释里。
+GO_ONLY_COUNTERS_ZERO_OK = {
+    "skill_none": "一二星／预备干员才没有技能槽，而两个名册夹具（20 位 6★ ＋ 460 位"
+                  "char_ 段）里一位都没有 ⇒ 这一档在当前夹具集上**必然为 0**。"
+                  "要真行使它，得另造一份含一二星的名册夹具（不在本批范围）。",
+}
+
+#: **Go 独有**的 `covered` 计数器：它们量的是 Go 自己那条**技能绑定链**的账，
+#: Python 侧**没有独立来源**可比（Python 的技能绑定走的是另一条路，不经这份规格）。
+#:
+#: ⚠ 与 `UNPORTED` / `GO_ONLY` 都不同：那两个讲**键**，这一个讲**计数器**。
+#: 处置与 `GO_ONLY` 同一姿势——**具名列出来**，然后：
+#:   · 逐键相等那一条**跳过**它们（拿没有的东西去比，只会造一条永久假红）；
+#:   · 另配一条「**至少非零过一次**」的死账守卫（全部为 0 ⇒ 这套会计没被行使 ⇒ 判红），
+#:     否则它们会变成「看着在数、其实没数到任何东西」的装饰。
+GO_ONLY_COUNTERS = {
+    "skill_bound": "绑上技能的部署人次（Go 自己的绑定链）",
+    "skill_none": "没有技能槽的部署人次（一二星／预备干员）",
+    "skill_unknown_key_instances": "技能黑板里落在首发表之外的键的**实例数**（覆盖账）",
+}
 GO_ONLY_FROM_PY: dict = {}
 
 #: `unported` 里**其实已经能搬**的那些 → 为什么。★ 现已**清空**：
@@ -190,6 +234,10 @@ COVERED_KEYS = (
     "regen_strict_true", "regen_strict_false",
     #: ---- 段 B 第二批 ----
     "shield_nonzero",
+    #: ---- 技能那一支（2026-09-24）----
+    #: 与 `rios-sim/operators.go::OperatorsCoveredKeys` **同名同数**。
+    #: 第三个是**覆盖账**：这一批技能里有几个黑板键落在首发表之外。
+    "skill_bound", "skill_none", "skill_unknown_key_instances",
 )
 
 MUT_ATK = "atk 加 1 ulp"
@@ -895,22 +943,24 @@ def main() -> int:
             py_keys, go_keys = set(wt), set(gt)
             b_present = py_keys & set(UNPORTED)
             go_only = go_keys & set(GO_ONLY)
-            if go_keys - set(PORTED) - set(GO_ONLY):
+            if go_keys - set(PORTED) - set(GO_ONLY) - set(EXTRA_OPS):
                 slot_bad = True
                 printed.append("✗ %s[%d] Go 送了段 A／GO_ONLY 之外的键：%r"
                                % (f.name, i,
-                                  sorted(go_keys - set(PORTED) - set(GO_ONLY))))
+                                  sorted(go_keys - set(PORTED) - set(GO_ONLY)
+                                            - set(EXTRA_OPS))))
             if go_keys & set(UNPORTED):
                 slot_bad = True
                 printed.append("✗ %s[%d] Go 送了 `unported` 里的键 %r"
                                " —— 那份清单要跟着改（有人得回头看）"
                                % (f.name, i, sorted(go_keys & set(UNPORTED))))
-            if py_keys != ((go_keys - set(GO_ONLY)) | b_present):
+            if py_keys != ((go_keys - set(GO_ONLY) - set(EXTRA_OPS)) | b_present):
                 slot_bad = True
                 printed.append("✗ %s[%d] 键集对不上：Python 有而两边都没给的 %r；"
                                "Go 有而 Python 没有的 %r"
                                % (f.name, i,
-                                  sorted(py_keys - (go_keys - set(GO_ONLY))
+                                  sorted(py_keys - (go_keys - set(GO_ONLY)
+                                                    - set(EXTRA_OPS))
                                          - b_present),
                                   sorted(go_keys - py_keys - set(GO_ONLY))))
             #: ★ `GO_ONLY` 的**两个方向**逐人次累加（§7 拿它们配断言）：
@@ -966,6 +1016,12 @@ def main() -> int:
             printed.append("✗ %s `covered` 的键集不对：Go=%r"
                            % (f.name, sorted(go_cov)))
         for k in COVERED_KEYS:
+            if k in GO_ONLY_COUNTERS:
+                #: Go 独有计数器：Python 侧没有可比数（见 GO_ONLY_COUNTERS 的说明）。
+                #: 它们由下面那条「至少非零过一次」的守卫看着。
+                GO_ONLY_COUNTERS_SEEN[k] = (GO_ONLY_COUNTERS_SEEN.get(k, 0)
+                                        + int(go_cov.get(k, 0) or 0))
+                continue
             if go_cov.get(k, 0) != live_cov[k]:
                 bad += 1
                 printed.append("✗ %s `covered.%s`：Go=%r 判据独立数=%d"
@@ -1041,29 +1097,52 @@ def main() -> int:
                 bad += 1
                 printed.append("✗ `heals` 的「已可搬」不成立：%d 处不一致" % mism)
 
-    # ============================================================ 7 · 键集总账
+        # ---- Go 独有计数器：**至少非零过一次**（死账守卫）
+    #
+    # 理由：这几个计数器 Python 侧没有可比数（见 GO_ONLY_COUNTERS），逐键相等那一条
+    # 对它们**跳过**。跳过之后必须换一条守卫顶上，否则它们会退化成「看着在数、
+    # 其实没数到任何东西」的装饰——本仓：零行使的绿是零信息量的绿。
+    for k, why in sorted(GO_ONLY_COUNTERS.items()):
+        if GO_ONLY_COUNTERS_SEEN.get(k, 0) > 0:
+            continue
+        if k in GO_ONLY_COUNTERS_ZERO_OK:
+            #: 零是**预料之中**、且有具名理由 ⇒ 印出来但不判红（登记 ≠ 装看不见）。
+            printed.append("⊘ Go 独有计数器 %s 全程为 0（已登记）：%s"
+                           % (k, GO_ONLY_COUNTERS_ZERO_OK[k]))
+            continue
+        bad += 1
+        printed.append("✗ Go 独有计数器 %s 全程为 0：%s —— 这套会计没被行使"
+                       % (k, why))
+
+# ============================================================ 7 · 键集总账
     print()
-    print("§7 键集总账（段 A ＋ 段 B ＋ GO_ONLY ＝ wire 的契约）")
+    print("§7 键集总账（段 A ＋ 段 B ＋ GO_ONLY ＋ EXTRA_OPS ＝ wire 的契约）")
     ops_fields, ds_fields = operator_reads()
     wire_keys = wire_operator_keys()
     print("    _operator_spec 读 op %d 个 / d %d 个；wire.OperatorSpec %d 个 json 键"
           % (len(ops_fields), len(ds_fields), len(wire_keys)))
-    #: ★ 三分类的并集必须**逐名**等于 wire 的键集：段 A 33（Go 产出、Python 也产出）
-    #: ＋ 段 B 2（Python 产出、Go 不产出）＋ GO_ONLY 1（Go 产出、Python 不产出）。
-    #: 三类**两两不交**（下面各配一条），否则一个键会被两边同时认领。
-    three_way = set(PORTED) | set(UNPORTED) | set(GO_ONLY)
+    #: ★ **四分类**的并集必须**逐名**等于 wire 的键集：
+    #:   段 A 33（Go 产出、Python 也产出）
+    #: ＋ 段 B 0（Python 产出、Go 不产出——2026-09-24 起清空：`skill`/`active` 已由 Go 产出）
+    #: ＋ GO_ONLY 1（Go 产出、Python **从来**不产出）
+    #: ＋ EXTRA_OPS 2（Go 产出、Python **有条件**不产出：槽号 0 上 Python 不绑技能）
+    #: 四类**两两不交**（下面各配一条），否则一个键会被两边同时认领。
+    three_way = set(PORTED) | set(UNPORTED) | set(GO_ONLY) | set(EXTRA_OPS)
     if three_way != set(wire_keys):
         bad += 1
-        printed.append("✗ 段 A(%d) ∪ 段 B(%d) ∪ GO_ONLY(%d) ≠ wire 的 %d 个键；"
+        printed.append("✗ 段 A(%d) ∪ 段 B(%d) ∪ GO_ONLY(%d) ∪ EXTRA_OPS(%d) ≠ wire 的 %d 个键；"
                        "差：多 %r / 少 %r"
-                       % (len(PORTED), len(UNPORTED), len(GO_ONLY), len(wire_keys),
+                       % (len(PORTED), len(UNPORTED), len(GO_ONLY), len(EXTRA_OPS),
+                          len(wire_keys),
                           sorted(three_way - set(wire_keys)),
                           sorted(set(wire_keys) - three_way)))
     else:
-        print("    段 A %d ＋ 段 B %d ＋ GO_ONLY %d ＝ %d ＝ wire 的键数，**逐名相等** ✓"
-              % (len(PORTED), len(UNPORTED), len(GO_ONLY), len(wire_keys)))
+        print("    段 A %d ＋ 段 B %d ＋ GO_ONLY %d ＋ EXTRA_OPS %d ＝ %d ＝ wire 的键数，"
+              "**逐名相等** ✓"
+              % (len(PORTED), len(UNPORTED), len(GO_ONLY), len(EXTRA_OPS), len(wire_keys)))
     for a, b in ((set(PORTED), set(UNPORTED)), (set(PORTED), set(GO_ONLY)),
-                 (set(UNPORTED), set(GO_ONLY))):
+                 (set(UNPORTED), set(GO_ONLY)), (set(EXTRA_OPS), set(PORTED)),
+                 (set(EXTRA_OPS), set(UNPORTED)), (set(EXTRA_OPS), set(GO_ONLY))):
         if a & b:
             bad += 1
             printed.append("✗ 三分类有两类相交：%r" % sorted(a & b))

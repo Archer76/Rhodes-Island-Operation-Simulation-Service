@@ -97,9 +97,15 @@ const (
 // ★ 这一份是**具名的**：判据会把它与 Go 应答里的 `unported` 做**双向集合比对**
 // （像 `check_spawns_go.py` 那样），并每次运行重量一次「Python 那一侧实际送出了
 // 其中几个」——哪天 Go 接上了，这里会先红，而不是等到某次对拍少送一个键。
-var OperatorUnported = []string{
-	"skill", "active",
-}
+var OperatorUnported = []string{}
+
+// ★ **2026-09-24 起这份清单为空**：`skill` / `active` 两个键 Go 自己产出了
+// （`skillbind.go`：槽号 0⇒技 1、等级取 7、黑板走键表算 active 快照）。
+// 上面那整段"为什么先不接"的理由因此**整段作废**——尤其是「24 份夹具的
+// `deploys[*].skill` 全是 0 ⇒ 这一支零行使」那句：按博士 2026-09-24 的口径，
+// `skill: 0` 是**默认技能＝技 1**，那不是零行使，是 **64 / 64 人次都在用**。
+// ★ 留一个空切片而不是删掉这个变量：判据那一侧靠它做**双向集合比对**
+// （「Go 的 unported 与判据的清单逐名相等」），删掉变量会让那条比对失去对象。
 
 // OperatorUnportedReady 已**清空**（原来只有 `heals`）。
 //
@@ -171,6 +177,19 @@ type OperatorOut struct {
 	//: 当反例：那是**另一条路**的视图，不是模拟器读的这份规格。
 	HPDrainPerSec *float64 `json:"hp_drain_per_sec,omitempty"`
 
+	//: ---- 技能那一支（2026-09-24 起由 Go 自己产出）----
+	//:
+	//: 与 `wire.go::OperatorSpec` 的 `Skill` / `Active` 同名同形。在那之前，
+	//: 这两个键在 `OperatorUnported` 里（「Python 有、Go 没有」）——现在是 Go 自己算。
+	//: 口径见 `skillbind.go` 的文件头：槽号 `0` ⇒ 技 1；等级取 7。
+	Skill  *SkillSpec `json:"skill,omitempty"`
+	Active *Profile   `json:"active,omitempty"`
+
+	//: **只在本进程内用**：这一位干员的技能黑板里落在首发表之外的键。
+	//: 不出去（`json:"-"`）——出去的那一份是 bundle 上汇总+去重的 `SkillUnknownKeys`，
+	//: 逐人一份会把同一个键重复报很多遍，读的人反而看不出「一共缺哪几个键」。
+	SkillUnknownKeys []string `json:"-"`
+
 	SplashRadius           *float64 `json:"splash_radius,omitempty"`
 	SplashScale            *float64 `json:"splash_scale,omitempty"`
 	SplashDamageScale      *float64 `json:"splash_damage_scale,omitempty"`
@@ -232,6 +251,11 @@ type OperatorsBundle struct {
 	Params       OperatorsParams
 	ViewFields   []string
 	DeployFields []string
+	//: **技能黑板里落在首发表之外的键**（排序去重）。空＝这一批技能恰好都在表里。
+	//:
+	//: ★ 为什么单独一栏而不是只留一个计数：博士给的验收标准是「落在表外的新键要**具名**
+	//: 出现在覆盖账上」。**计数说不出是哪个键**，而「是哪个键」正是下一步要补的东西。
+	SkillUnknownKeys []string
 }
 
 // OperatorsCoveredKeys 是 `covered` 的**全部**计数器。
@@ -254,6 +278,12 @@ var OperatorsCoveredKeys = []string{
 	//: `_shield_of` 真的返回了一份配置的那些人次）。判据那一侧**独立**再数一遍
 	//: （`check_operators_go.py::live_counters`），两数不等即红。
 	"shield_nonzero",
+	//: ---- 技能那一支（2026-09-24）----
+	//: 三名会计：绑上的部署人次／没有技能槽的人次／**未识别黑板键的实例数**。
+	//: ⚠ 第三个数是**覆盖账**：它回答「这一批技能里有多少个键落在首发表之外」。
+	//: 零要有理由（这一批恰好都在表里），非零要能指名——名字走
+	//: `OperatorsBundle.SkillUnknownKeys`（同一个响应里）。
+	"skill_bound", "skill_none", "skill_unknown_key_instances",
 }
 
 // newOperatorsCovered 造一张**每个键都在、值为 0** 的计数表。
@@ -672,6 +702,36 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		covered["shield_nonzero"]++
 		out.Shield = sh
 	}
+	//: ---- 技能那一支（槽号 → 技能 id → 状态机 ＋ active 快照）----
+	//:
+	//: 口径见 `skillbind.go` 的文件头：计划里的槽号 `0` **不等于「不用技能」**
+	//: （博士 2026-09-24），除一二星外 0 即默认技能＝技 1；技能等级取 7。
+	//:
+	//: ★ 未识别的黑板键**不许静默丢**：计数进 `covered`，名字进 bundle 的
+	//: `SkillUnknownKeys`（调用方在 `BuildOperators` 里汇总）。
+	if sk, act, unknown, err := bindSkillTo(e.CharID, r.Skill, atk, def, res,
+		maxHP, spd, interval); err != nil {
+		return OperatorOut{}, fmt.Errorf("%s（%s）的技能绑定：%v", r.Operator, e.CharID, err)
+	} else if sk != nil {
+		covered["skill_bound"]++
+		//: ⚠ `Profile.DamageType` 必须填**这名干员基准的伤害类型**（与顶层那份同源，
+		//: 见上面 `DamageType: st.TextDerived.DamageType`）。留空字符串会让技能期间的
+		//: 每一次出手都带着一个空类型往下走——`sim.go` 的伤害分派按它选物理/法术，
+		//: 空串既不是物理也不是法术，**不报错**，只是伤害算错。
+		//: （技能把伤害类型改成法术那一支本批未接：三星里只有月见夜的 `skchr_midn_1`
+		//: 是这种，它的改写写在**正文**里、不在黑板上——具名在覆盖账，不猜。）
+		act.DamageType = st.TextDerived.DamageType
+		out.Skill, out.Active = sk, act
+		if len(unknown) > 0 {
+			covered["skill_unknown_key_instances"] += len(unknown)
+			if out.SkillUnknownKeys == nil {
+				out.SkillUnknownKeys = []string{}
+			}
+			out.SkillUnknownKeys = append(out.SkillUnknownKeys, unknown...)
+		}
+	} else {
+		covered["skill_none"]++
+	}
 	return out, nil
 }
 
@@ -850,16 +910,33 @@ func BuildOperators(plan PlayPlan, roster RosterRead,
 		}
 		out = append(out, o)
 	}
+	//: 技能未识别键：**汇总 ＋ 去重 ＋ 排序**。逐人一份会把同一个键重复报很多遍，
+	//: 读的人反而看不出「一共缺哪几个键」——而那正是要补的东西。
+	unknownSet := map[string]bool{}
+	var unknownKeys []string
+	for _, o := range out {
+		for _, k := range o.SkillUnknownKeys {
+			if !unknownSet[k] {
+				unknownSet[k] = true
+				unknownKeys = append(unknownKeys, k)
+			}
+		}
+	}
+	sort.Strings(unknownKeys)
+	if unknownKeys == nil {
+		unknownKeys = []string{}
+	}
 	return &OperatorsBundle{
 		Operators: out,
 		Unported:  append([]string{}, OperatorUnported...),
 		Covered:   covered,
 		//: `scanned` 与 `len(Operators)` **同源**（不是第二次计数）：一个量只能
 		//: 有一个口径来源，两处各数一遍迟早印出两个数。
-		Scanned:      len(out),
-		Params:       params,
-		ViewFields:   append([]string{}, OperatorViewFields...),
-		DeployFields: append([]string{}, OperatorDeployFields...),
+		Scanned:          len(out),
+		Params:           params,
+		ViewFields:       append([]string{}, OperatorViewFields...),
+		DeployFields:     append([]string{}, OperatorDeployFields...),
+		SkillUnknownKeys: unknownKeys,
 	}, nil
 }
 
