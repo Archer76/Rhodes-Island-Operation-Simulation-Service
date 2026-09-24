@@ -155,7 +155,7 @@ python -X utf8 tools\freeze_baseline.py --status
 | 22 | 单一入口 | `check_buildspec_go.py` | **未转** | `build_spec` 一族 / `battle.sim.make_total_attack` | 乙 |
 | 23 | 干员规格 | `check_operators_go.py` | **已转**（**归另一个会话**，25 值；键形＝`["operators", 夹具名, **夹具 sha16**, **名册 sha16**]` 一份夹具一条；`input_identity=True`／`batch_consumed=False`；本会话只读不碰） | `build_spec` / `talent_finders` / `OperatorCalculator` / `Verifier` | 乙 |
 | 24 | 自造规格 | `check_sim_selfspec_go.py` | **◐ 部分覆盖**（26 值 ＝ **1 查询集** ＋ 25 判决快照；**4 段里 2 段可冻**，2 段 `live_both` 不适用；控制组 P1/P2/P2b/P3 成立，P3b ⊘、**P4 成立**；**永不进「跑通」的分子**） | **无 `ak_tactic` import**：判据是 Go 两种入参形式的**差分** ＋ 「现读 Go ↔ **冻结的 Go**」的漂移检测 | 丙 · **已核** |
-| 25 | 调用链 | `check_sim_via_python_go.py` | **未转**（**口径已裁定**，见 §4 第 25 行） | `Plan` / `Roster` / `ensure_go_engine` / `Verifier`；「以前」取自 `git show d4ddc4c:` 的**原文** | 丙 · 口径已定 |
+| 25 | 调用链 | `check_sim_via_python_go.py` | **不适用于冻结**（具名理由由 `NOT_APPLICABLE` 现算；**不等于「未转」**） | **被测方就是 Python 自己**：静态四条 AST 读 `ak_tactic/verify.py`＋`simgo/*.py` 源码文本；端到端与三态跑真的 Python `Verifier`。它**已经有自己的冻结**：`fixtures/golden_go.json`（在库）＋ `git show d4ddc4c:` 原文 | 丙 · **具名不转** |
 | 26 | 命令面 | `check_cli_go.py` | **不适用于冻结**（具名理由由 `NOT_APPLICABLE` 现算） | **被测方就是 Python CLI**（`python -m ak_tactic stage …`，子进程） | 丙 · **具名不转** |
 | 27 | 敌方机制 | `check_enemy_mech_go.py` | **不适用于冻结**（**本轮裁定＝甲**，理由见 §4 第 27 行；**归第三个会话，本会话只读不碰**） | 「数据侧现算键空间」与「**两台引擎的源码文本**现算消费面」两面求差 | 丙 · **具名不转** |
 
@@ -180,13 +180,26 @@ python -X utf8 tools\freeze_baseline.py --status
 * **第 2~23 行剩下的（甲/乙类）**：**未核——可冻性尚未逐套验证**。初判只从各自
   `ak_tactic` 的 import 面得出。它们要在各自的节点上被**真录一遍**才算数。
   可能真冻不住的情形只有两类，遇到就具名登记：① 期望值由运行期非确定来源产生
-  （时间戳 / 随机 / 文件系统状态）；② 期望值不可 JSON 化。* **第 24 行 自造规格**：**已落地**（2026-09-24，见 §10 节点八）。裁定落地成：**26 值**
+  （时间戳 / 随机 / 文件系统状态）；② 期望值不可 JSON 化。
+* **第 24 行 自造规格**：**已落地**（2026-09-24，见 §10 节点八）。裁定落地成：**26 值**
   ＝ 一条 `("query", "fixtures")`（**查询集**：夹具名 → 关卡号 ＋ 夹具内容 sha16）
   ＋ 25 条 `("snapshot", 夹具名, 关卡号)`（**判决四数（除墙钟）＋ `unsupported` 逐位**）。
   冻的是 **Go 自己的产物**（三次提问全是 Go），差分那一路**原样保留**；
   这一套自己是 **◐ 部分覆盖**（4 段里 2 段 `live_both`），**不进「跑通」的分子**。
-* **第 25 行 调用链**：**上级会话已裁定**：**固化 `git show d4ddc4c:` 的原文**
-  （把原文落成入库的夹具），而不是冻 Python 现场输出。**未落地。**
+* **第 25 行 调用链**：**不适用于冻结**（第四条，2026-09-24）。
+  理由（按证据）：**被测方就是 Python 自己**，两半都如此——
+  ① 静态四条是 **AST 读源码文本**（`ak_tactic/verify.py` ＋ `simgo/*.py`，除权威
+  `spec.py`），断言「这条路一个 `build_spec(` 调用点都没有」⇒ 期望值随源码变，
+  冻了是**永久假红**（`source_coupled`）；
+  ② 端到端 24 份与三态分离那两半**跑真的 Python `Verifier`**
+  （`from ak_tactic.verify import Verifier`）⇒ 被测方是 Python 的**运行行为**，
+  `RIOS_GOLDEN=check` 的拦截器会让它一步都走不了（**那正是那条防线的用途**）。
+  ★ 它**已经有自己的冻结**，且在版本控制里：端到端那一路的期望值取自
+  `fixtures/golden_go.json`（`git ls-files --error-unmatch` 在库），旧分支原文取自
+  `git show d4ddc4c:<路径>`（**不可变对象**，不是现场输出）⇒ 再冻第二份只会是
+  同一个东西的第二个副本。原裁定的意图（「不要冻 Python 现场输出」）**已经满足**，
+  只是满足它的不是这条通道。
+  ⇒ 与「命令面」同一形状：**判据的对象是 Python 自身**，冻的只能是**原文或行为**。
 * **第 26 行 命令面**：**不适用于冻结**（**这不等于「未转」**——第三种状态）。
   理由：这套的**被测方就是 Python CLI**，它 spawn `python -m ak_tactic stage …`
   并断言「缺值输入下不崩」；spawn 它**不算违规**（它测的是 Python，

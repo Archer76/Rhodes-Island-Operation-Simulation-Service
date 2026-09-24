@@ -691,6 +691,20 @@ NOT_APPLICABLE: dict[str, str] = {
                 "那是另一种工具形状。"
                 "⚠ 附带一条：它**读** Python 源码文本（不调它），所以 `ak_tactic/` 删掉之后"
                 "它「Python 侧有落点」那条腿的定义要重估。",
+    "调用链": "**被测方就是 Python 自己**——两半都如此，所以没有「Python 侧的期望值」可冻：\n"
+              "    ① 静态四条（`check_sim_via_python_go.py` 的「一」）是 **AST 读源码文本**："
+              "`ak_tactic/verify.py` ＋ `ak_tactic/simgo/*.py`（除权威 `spec.py`），"
+              "断言「这条路一个 `build_spec(` 调用点都没有」。期望值随源码变 ⇒ 冻了是"
+              "**永久假红**（`source_coupled`）；\n"
+              "    ② 端到端 24 份与三态分离那两半**跑真的 Python `Verifier`**"
+              "（`from ak_tactic.verify import Verifier`）——被测方是 Python 的**运行行为**，"
+              "`RIOS_GOLDEN=check` 的拦截器会让它一步都走不了（这正是那条防线的用途）；\n"
+              "    ③ 它**已经有自己的冻结**，且在版本控制里：端到端那一路的期望值取自"
+              "`fixtures/golden_go.json`（`git ls-files` 在库），旧分支的原文取自"
+              "`git show d4ddc4c:<路径>`（不可变对象，不是现场输出）——"
+              "再冻第二份只会是同一个东西的第二个副本。\n"
+              "  ⇒ 与「命令面」同一形状：**判据的对象是 Python 自身**（源码文本 ＋ 运行行为），"
+              "冻的只能是**原文或行为**，不是等值基线。",
 }
 
 
