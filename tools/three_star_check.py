@@ -66,6 +66,69 @@ TALENT_MECHS = [
     ("talent_dodge_on_heal", "TALDODGE", "治疗授闪避"),
 ]
 
+#: ② 特性那两条**只在正文里**的（黑板是空的）——同样是「规格键 → 运行期痕迹」。
+#:
+#: ⚠ 两条的痕迹都带了**判别条件**，不是「发生了就算」：
+#:   · `TRAITAIR` 只在「选中的是飞行单位」**且**「范围里同时有地面候选」时打——
+#:     只判「选中了飞行」在满屏飞行单位的关卡里会恒真，那是零信息量的绿。
+#:   · `TRAITMULTI` 只在**一次出手真的命中 ≥2 个**时打——「她挡住了三个」不是见证。
+TRAIT_MECHS = [
+    ("air_priority", "TRAITAIR", "优先攻击空中单位"),
+    ("attacks_all_blocked", "TRAITMULTI", "同时攻击阻挡的所有敌人"),
+]
+
+#: ② 那两条在默认关卡上**行使不了**（`main_00-01` 一只飞行单位都没有、也挡不住两个），
+#: 所以各配一层专属夹具。两处选择都**按证据**、不手挑：
+#:
+#:   · 关卡：`main_02-09` 是缓存里飞行单位最多的早期主线之一（52 项出怪里 36 只是飞行），
+#:     `main_01-07` 是地面密集的样板关（41 项出怪、全地面）。
+#:   · 站位：取该关**地面路线出现次数最多**的那一格（主路径的咽喉）。
+#:     ⚠ 写死一个坐标（例如 [4,3]）会让下一个人问「为什么是它」而无从复算——
+#:     实测 [4,3] 在 `main_01-07` 上根本不在任何路线格里，泡普卡**一次都没挡住过人**，
+#:     于是那条机制的痕迹恒为 0，看起来像「没接」。
+TRAIT_LEVELS = {
+    "air_priority": "main_02-09",
+    "attacks_all_blocked": "main_01-07",
+}
+
+
+def ground_route_cell(level: str) -> list[int] | None:
+    """该关**地面路线**上出现次数最多的那一格（复算：从出怪规格现读，不写坐标）。"""
+    b, _ = call([{"id": 1, "cmd": "buildspec", "level": level, "spec": {}}])
+    b = b[0]
+    if not b.get("ok"):
+        return None
+    cnt: dict[tuple[int, int], int] = {}
+    for s in b["build_spec"]["spec"].get("spawns") or []:
+        if s.get("is_flying"):
+            continue
+        for leg in s.get("legs") or []:
+            for pt in leg.get("points") or []:
+                if isinstance(pt, list) and len(pt) >= 2:
+                    cell = (int(round(pt[0])), int(round(pt[1])))
+                    cnt[cell] = cnt.get(cell, 0) + 1
+    if not cnt:
+        return None
+    best = max(sorted(cnt), key=lambda c: cnt[c])
+    return [best[0], best[1]]
+
+
+def trait_probe(op: dict, level: str, cell: list[int]) -> str | None:
+    """单人在指定关卡、指定格位上跑一趟，返回 trace 文本（跑不动就返回 None）。"""
+    roster = [{"id": op["char_id"], "name": op["name"], "elite": ELITE, "level": LEVEL,
+               "own": True, "potential": POTENTIAL, "rarity": 3}]
+    plan = {"stage": level, "deploys": [
+        {"operator": op["name"], "position": cell, "direction": "Left",
+         "skill": 0, "elite": ELITE, "level": LEVEL, "potential": POTENTIAL,
+         "module_level": 0}]}
+    b, _ = call([{"id": 1, "cmd": "buildspec", "level": level,
+                  "spec": {"plan": plan, "roster": roster}}])
+    b = b[0]
+    if not b.get("ok") or b["build_spec"].get("unsupported"):
+        return None
+    _, err = call([{"id": 2, "cmd": "sim", "spec": b["build_spec"]["spec"]}], trace=True)
+    return err
+
 
 def three_stars() -> list[dict]:
     c = sqlite3.connect("file:%s?mode=ro" % AKDB.as_posix(), uri=True)
@@ -157,6 +220,7 @@ def main() -> int:
     #: ★ 用 dict 而不是 list：两位干员可能带同一条机制，逐条删时 list 会删错那一条。
     zero_exercise: dict[str, str] = {}
     paired: list[str] = []
+    trait_pass: list[str] = []
     for o in ops:
         roster = [{"id": o["char_id"], "name": o["name"], "elite": ELITE,
                    "level": LEVEL, "own": True, "potential": POTENTIAL, "rarity": 3}]
@@ -180,7 +244,7 @@ def main() -> int:
 
         lines = []
         heal_family: list[tuple[str, str, str]] = []
-        for key, tag, label in TALENT_MECHS:
+        for key, tag, label in TALENT_MECHS + TRAIT_MECHS:
             if op0.get(key) is None:
                 continue
             n = trace_count(err, tag)
@@ -223,6 +287,30 @@ def main() -> int:
                                             % (a.level, a.pair_level))
                 paired.append("%s（%s 带 %s）：%s"
                               % (o["name"], a.pair_level, PARTNER_NAME, "、".join(fired)))
+
+        #: ---- 第三趟：② 那两条**只在正文里**的特性，各配一个专属夹具 ----
+        for key, tag, lbl in TRAIT_MECHS:
+            if op0.get(key) is None:
+                continue
+            lv = TRAIT_LEVELS.get(key)
+            if not lv:
+                continue
+            cell = ground_route_cell(lv)
+            if cell is None:
+                trait_pass.append("%s 的「%s」：%s 取不到路线格" % (o["name"], lbl, lv))
+                continue
+            tr = trait_probe(o, lv, cell)
+            if tr is None:
+                trait_pass.append("%s 的「%s」：%s 跑不动" % (o["name"], lbl, lv))
+                continue
+            n = trace_count(tr, tag)
+            trait_pass.append("%s（%s @%s）：%s→%d"
+                              % (o["name"], lv, cell, lbl, n))
+            k = "%s 的「%s」" % (o["name"], lbl)
+            if n > 0:
+                zero_exercise.pop(k, None)
+            else:
+                zero_exercise[k] = "三趟都零行使（含专属夹具 %s @%s）" % (lv, cell)
     print()
     print("⇒ 绑定失败 %d 位（有技能槽却没绑上）" % bad)
     print("★ 判据口径：`SKILL` 与四个 `TAL*` 都是**运行期痕迹**，不是「键非空」。")
@@ -234,6 +322,13 @@ def main() -> int:
             print("  · %s" % line)
     else:
         print("  （17 位里没有带治疗族天赋的）")
+    print()
+    print("三 · ② 特性那两条的专属夹具（关卡按证据选、站位现算＝该关地面路线最密的一格）")
+    if trait_pass:
+        for line in trait_pass:
+            print("  · %s" % line)
+    else:
+        print("  （17 位里没有带这两条特性的）")
     print()
     if zero_exercise:
         print("⇒ 送出了但**零行使** %d 处（要解释，不并进红）：%s"

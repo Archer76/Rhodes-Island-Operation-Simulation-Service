@@ -365,7 +365,42 @@ type TextDerived struct {
 	HealsOnSkill bool `json:"heals_on_skill"`
 	//: **全部天赋候选**的正文里含「弱点伤害」（不是只看生效的那几条）。
 	WeaknessDamage bool `json:"weakness_damage"`
+	//: 特性正文含「优先攻击空中单位」⇒ 选目标时**飞行单位优先**（狙击·速射手那一族）。
+	//:
+	//: ⚠ 「优先」不是「只能」：范围里只有地面单位时她照打。把它实现成过滤器
+	//: （只打飞行）会让速射手在**没有空中单位**的关卡里一次都不出手——
+	//: 那是把「优先」读成了「只能」，症状是整关零输出。
+	AirPriority bool `json:"air_priority"`
+	//: 特性正文含「同时攻击阻挡的所有敌人」⇒ 一次出手打**她自己挡住的全部**敌人
+	//: （泡普卡）。**不是**「打范围内所有人」——范围里路过而没被挡住的敌人不算。
+	AttacksAllBlocked bool `json:"attacks_all_blocked"`
 }
+
+// airPriorityTrait / allBlockedTrait 是特性那两条的判据词。
+//
+// ★ 为什么不按键：这两条**黑板是空的**（实测：克洛丝／安德切尔／泡普卡的
+// `operator_trait.blackboard` 都是 `{}`），机制只写在正文里。
+// 「黑板里没有」不等于「没有这条机制」——本仓写明的盲区之一。
+const (
+	airPriorityTrait = "优先攻击空中单位"
+	allBlockedTrait  = "同时攻击阻挡的所有敌人"
+)
+
+// stripTraitTags 把特性正文里的**排版标签**剥掉再判词。
+//
+// ★ 为什么必须剥（2026-09-25 实测）：泡普卡的 `trait_text` 原文是
+//
+//	同时攻击阻挡的<@ba.kw>所有敌人</>
+//
+// 标签**插在词中间**——整串短语一个字都不差地去扫是**扫不到**的。
+// 本仓为这件事单独留过注释（`skillmeta.go:94-98`：`skill.py:134` 那两行，
+// 「伤害类型变为<@ba.vup>真实</>」原样扫「真实伤害」扫不到）。
+// ⚠ 这一次是**特性**侧第一次真被它咬到，代价是那条特性整条静默不生效。
+//
+// ⚠ 剥标签只会让命中**变多**（严格放宽），不会把原来命中的变成不命中；
+// 但「变多」本身是一次行为变更，所以它必须出现在判据里（`check_operator_go.py`
+// 的行使计数会跟着动）——这正是本次跑判据的原因。
+func stripTraitTags(s string) string { return tagRE.ReplaceAllString(s, "") }
 
 // healsOnSkillTrait 是「技能可以治疗友方单位」这条特性的判据词。
 // 与 `Heals` 一样是**整串短语**匹配——差一个字就会静默变成「从不开技能治疗」，
@@ -378,11 +413,17 @@ const healsOnSkillTrait = "技能可以治疗友方单位"
 // 不是「这个练度下生效的那几条」——照解析后的天赋判会漏掉高档位才解锁的那条。
 func textDerived(traitDesc string, talents []json.RawMessage) TextDerived {
 	out := TextDerived{DamageType: "PHYSICAL"}
-	if strings.Contains(traitDesc, "法术伤害") {
+	//: ★ 四条判词都扫**剥过标签**的正文，不是原文——`stripTraitTags` 的注释里
+	//: 记了实测（泡普卡那条标签插在词中间）。这一处是**共用**的：
+	//: 只给新加的判词剥、把老的两条留在原文上，等于把同一个 bug 留一半。
+	plain := stripTraitTags(traitDesc)
+	if strings.Contains(plain, "法术伤害") {
 		out.DamageType = "MAGIC"
 	}
-	out.Heals = strings.Contains(traitDesc, "恢复友方单位生命")
-	out.HealsOnSkill = strings.Contains(traitDesc, healsOnSkillTrait)
+	out.Heals = strings.Contains(plain, "恢复友方单位生命")
+	out.HealsOnSkill = strings.Contains(plain, healsOnSkillTrait)
+	out.AirPriority = strings.Contains(plain, airPriorityTrait)
+	out.AttacksAllBlocked = strings.Contains(plain, allBlockedTrait)
 	out.WeaknessDamage = strings.Contains(talentText(talents), "弱点伤害")
 	return out
 }

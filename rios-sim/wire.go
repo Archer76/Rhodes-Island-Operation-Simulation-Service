@@ -212,6 +212,12 @@ type OperatorSpec struct {
 	//: 平A 变成治疗。与 `heals` 互补——两族的判据在 `sim.go::operatorsAttack`
 	//: 里分两路（`heals` 恒为治疗、`heals_on_skill` 只在技能期间治疗）。
 	HealsOnSkill bool `json:"heals_on_skill,omitempty"`
+	//: 特性「优先攻击空中单位」（狙击·速射手那一族）：选目标时**飞行单位优先**。
+	//: 「优先」不是「只能」——范围里只有地面单位时照打（`sim.go::pickTargets`）。
+	AirPriority bool `json:"air_priority,omitempty"`
+	//: 特性「同时攻击阻挡的所有敌人」（泡普卡）：一次出手打**她自己挡住的全部**。
+	//: 落点在 `operator.maxTarget()`（`skill.go`）——它**不改**「范围内所有人」。
+	AttacksAllBlocked bool `json:"attacks_all_blocked,omitempty"`
 	//: 普攻连击（焰狐龙梓兰的**隐藏天赋**）：一次普攻打 `ComboHits` 击，每击倍率
 	//: `ComboHitScale`，**计算防御/法抗之后**再整笔乘 `ComboDamageScale`。
 	//:

@@ -179,7 +179,9 @@ GO_ONLY = ("hp_drain_per_sec",)
 #: （送过 ⇒ 口径变了，这条登记要重做）。
 EXTRA_OPS = ("skill", "active", "talent_panel_mods",
              "talent_deploy_sp", "talent_proc_factor", "talent_extra_heal_prob",
-             "talent_dodge_on_heal", "talent_dodge_seconds", "heals_on_skill")
+             "talent_dodge_on_heal", "talent_dodge_seconds", "heals_on_skill",
+             #: ★ 2026-09-25 第二批：② 特性那两条**只在正文里**的（黑板是空的）。
+             "air_priority", "attacks_all_blocked")
 EXTRA_OPS_SEEN: dict = {}
 EXTRA_OPS_FROM_PY: dict = {}
 
@@ -229,6 +231,15 @@ GO_ONLY_COUNTERS_ZERO_OK = {
                                     "「未识别键（无）」那一栏）⇒ 在当前夹具集上必然为 0。"
                                     "这个 0 是**有意义**的读数（没有落在表外的键），"
                                     "不是会计没接上；表外的新键要从更大范围的干员里找。",
+    #: ---- 2026-09-25 第二批：② 那两条只在正文里的特性 ----
+    #: 同一条理由：这两条住在**三星**身上（克洛丝／安德切尔／泡普卡），而本套夹具
+    #: 部署的是高星阵容 ⇒ 必然为 0。行使见证在 `tools/three_star_check.py` 的第三趟。
+    "air_priority_true": "特性「优先攻击空中单位」（克洛丝／安德切尔，三星）。本套夹具不部署三星"
+                         " ⇒ 必然为 0；行使见证在 tools/three_star_check.py 的第三趟"
+                         "（main_02-09 @[5,3]，各 2 次）。",
+    "attacks_all_blocked_true": "特性「同时攻击阻挡的所有敌人」（泡普卡，三星）。同上；"
+                                "行使见证在 tools/three_star_check.py 的第三趟"
+                                "（main_01-07，25 次）。",
 }
 
 #: **Go 独有**的 `covered` 计数器：它们量的是 Go 自己那条**技能绑定链**的账，
@@ -253,6 +264,9 @@ GO_ONLY_COUNTERS = {
     "talent_unknown_key_instances": "天赋黑板里落在首发表之外的键的**实例数**（覆盖账）",
     #: 特性那一族新收的一支：`heals_on_skill`（守护者「技能可以治疗友方单位」）。
     "heals_on_skill_true": "特性正文含「技能可以治疗友方单位」的人次（斑点）",
+    #: ---- 2026-09-25 第二批：② 特性那两条只在正文里的 ----
+    "air_priority_true": "特性正文含「优先攻击空中单位」的人次（克洛丝／安德切尔）",
+    "attacks_all_blocked_true": "特性正文含「同时攻击阻挡的所有敌人」的人次（泡普卡）",
 }
 GO_ONLY_FROM_PY: dict = {}
 
@@ -275,7 +289,8 @@ COVERED_KEYS = (
     "highland_splash_sluggish_nonzero",
     "combo_hits_gt1", "power_attack_count_gt0",
     #: ---- 段 B 第一批（天赋派生）----
-    "heals_true", "heals_on_skill_true", "blessing_nonzero", "regen_aura_nonzero",
+    "heals_true", "heals_on_skill_true", "air_priority_true",
+    "attacks_all_blocked_true", "blessing_nonzero", "regen_aura_nonzero",
     "team_auras_nonzero", "talent_dodge_nonzero",
     "regen_strict_true", "regen_strict_false",
     #: ---- 段 B 第二批 ----

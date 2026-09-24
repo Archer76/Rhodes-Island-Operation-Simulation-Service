@@ -439,6 +439,11 @@ REGISTERED_EXTRA: tuple[tuple[str, str], ...] = (
     (r"^\.operators\[\d+\]\.heals_on_skill$",
      "特性「技能可以治疗友方单位」（守护者那一族）：技能开启期间平A 变治疗。"
      "Python 只认「恢复友方单位生命」那一条，没有这一支"),
+    #: ★ 2026-09-25 第二批：② 特性那两条**只在正文里**的（黑板是空的，Python 也没有这一支）。
+    (r"^\.operators\[\d+\]\.air_priority$",
+     "特性「优先攻击空中单位」（狙击·速射手）：选目标时飞行单位优先。Python 无此机制"),
+    (r"^\.operators\[\d+\]\.attacks_all_blocked$",
+     "特性「同时攻击阻挡的所有敌人」（泡普卡）：一次出手打挡住的全员。Python 无此机制"),
 )
 REGISTERED_EXTRA_RX = tuple((re.compile(p), src) for p, src in REGISTERED_EXTRA)
 

@@ -2001,7 +2001,7 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 		if op.attackTimer < op.interval() {
 			continue
 		}
-		targets := pickTargets(op, enemies, op.maxTarget())
+		targets := pickTargets(op, enemies, op.maxTarget(), t)
 		// ---- 医疗：平A 是**治疗**，不是伤害（原版 3994-4019）
 		//
 		// 判据两段：① 这个人是医疗（`op.heals`）；② 这一击**没被技能改成伤害**
@@ -2090,6 +2090,13 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 			hits = op.spec.ComboHits
 			scale = op.spec.ComboHitScale
 			comboDmgScale = op.spec.ComboDamageScale
+		}
+		//: ★ 行使指纹：特性「同时攻击阻挡的所有敌人」（泡普卡）**真的打到两个以上**。
+		//: 判在 `deals`（这一击是伤害还是治疗）之外、也判在目标定下来之后——
+		//: 「她挡住了三个」不是这条机制的见证，**一次出手命中 ≥2 个**才是。
+		if traceOn && op.spec.AttacksAllBlocked && len(targets) > 1 {
+			trace("TRAITMULTI t=%.4f op=%s blocked=%d picked=%d",
+				t, op.spec.Name, len(op.blocking), len(targets))
 		}
 		power := op.atk()
 		//: ---- 天赋「要害瞄准·初级」（`talenteffects.go` 的 `atk_scale` ＋ `prob`）----
@@ -2429,7 +2436,7 @@ func pickHeals(op *operator, ops []*operator, n int) []*operator {
 //
 // 先打**自己挡住的**，再打范围里"离防守点最近"的——用 `progress` 当"离防守点
 // 多远"的代理（越大越近）。嘲讽等级高的优先，负数表示非首要目标。
-func pickTargets(op *operator, enemies []*enemy, n int) []*enemy {
+func pickTargets(op *operator, enemies []*enemy, n int, t float64) []*enemy {
 	out := make([]*enemy, 0, n)
 	for _, e := range op.blocking {
 		if e.hp > 0 && !e.leaked {
@@ -2454,12 +2461,40 @@ func pickTargets(op *operator, enemies []*enemy, n int) []*enemy {
 		if inRange[i].spec.TauntLevel != inRange[j].spec.TauntLevel {
 			return inRange[i].spec.TauntLevel > inRange[j].spec.TauntLevel
 		}
+		//: ---- 特性「优先攻击空中单位」（狙击·速射手那一族）----
+		//:
+		//: 排位是**嘲讽 → 空中 → 推进度**：嘲讽是「被强制吸引」，它压过一切
+		//: 优先规则（本仓既有排序把 TauntLevel 放第一位，这里不动它）。
+		//:
+		//: ⚠ 「优先」不是「只能」：这是一条**排序键**，不是过滤器。写成过滤
+		//: （`if op.spec.AirPriority && !e.IsFlying { continue }`）会让速射手在
+		//: **没有空中单位**的关卡里一次都不出手——整关零输出，而看起来像"没接"。
+		if op.spec.AirPriority && inRange[i].spec.IsFlying != inRange[j].spec.IsFlying {
+			return inRange[i].spec.IsFlying
+		}
 		return inRange[i].progress > inRange[j].progress
 	})
 	for _, e := range inRange {
 		out = append(out, e)
 		if len(out) >= n {
 			break
+		}
+	}
+	//: ★ 行使指纹：**只有这一次选择真的被"优先"规则改变过**才打。
+	//: 判据是「选中的第一个是飞行的，且范围里同时有地面候选」——只判
+	//: 「选中了飞行的」在满屏飞行单位的关卡里会恒真，那是零信息量的绿。
+	if traceOn && op.spec.AirPriority && n > 0 {
+		air, ground := 0, 0
+		for _, e := range inRange {
+			if e.spec.IsFlying {
+				air++
+			} else {
+				ground++
+			}
+		}
+		if air > 0 && ground > 0 && len(out) > 0 && out[0].spec.IsFlying {
+			trace("TRAITAIR t=%.4f op=%s pick=%s air=%d ground=%d",
+				t, op.spec.Name, out[0].spec.Name, air, ground)
 		}
 	}
 	return out

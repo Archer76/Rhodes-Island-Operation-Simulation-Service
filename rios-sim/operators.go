@@ -234,7 +234,14 @@ type OperatorOut struct {
 	Heals *bool `json:"heals,omitempty"`
 	//: 特性正文含「技能可以治疗友方单位」（守护者那一族）：**技能开启期间**平A 变成治疗。
 	//: 与 `Heals` 互补，两个键可以同时不出（普通输出手）。
-	HealsOnSkill       *bool            `json:"heals_on_skill,omitempty"`
+	HealsOnSkill *bool `json:"heals_on_skill,omitempty"`
+	//: 特性正文含「优先攻击空中单位」（狙击·速射手那一族）：选目标时**飞行单位优先**。
+	//: 「优先」不是「只能」——范围里只有地面单位时照打（过滤掉会让速射手在无空中
+	//: 单位的关卡里一次都不出手）。
+	AirPriority *bool `json:"air_priority,omitempty"`
+	//: 特性正文含「同时攻击阻挡的所有敌人」（泡普卡）：一次出手打**她自己挡住的全部**，
+	//: 而不是「范围内所有人」。
+	AttacksAllBlocked  *bool            `json:"attacks_all_blocked,omitempty"`
 	BlessingSave       *float64         `json:"blessing_save,omitempty"`
 	BlessingSelfFreeze *float64         `json:"blessing_self_freeze,omitempty"`
 	RegenAura          map[string]any   `json:"regen_aura,omitempty"`
@@ -297,7 +304,9 @@ var OperatorsCoveredKeys = []string{
 	"highland_splash_sluggish_nonzero",
 	"combo_hits_gt1", "power_attack_count_gt0",
 	//: ---- 段 B 第一批（天赋派生）----
-	"heals_true", "heals_on_skill_true", "blessing_nonzero", "regen_aura_nonzero",
+	"heals_true", "heals_on_skill_true", "air_priority_true",
+	"attacks_all_blocked_true",
+	"blessing_nonzero", "regen_aura_nonzero",
 	"team_auras_nonzero", "talent_dodge_nonzero",
 	"regen_strict_true", "regen_strict_false",
 	//: ---- 段 B 第二批 ----
@@ -682,6 +691,18 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		covered["heals_on_skill_true"]++
 		b := true
 		out.HealsOnSkill = &b
+	}
+	//: 特性那两条**只在正文里**的（黑板是空的，见 `operator_traits.go` 的常量注释）：
+	//: 「优先攻击空中单位」与「同时攻击阻挡的所有敌人」。
+	if st.TextDerived.AirPriority {
+		covered["air_priority_true"]++
+		b := true
+		out.AirPriority = &b
+	}
+	if st.TextDerived.AttacksAllBlocked {
+		covered["attacks_all_blocked_true"]++
+		b := true
+		out.AttacksAllBlocked = &b
 	}
 	//: `blessing_save` / `blessing_self_freeze`：判据是 `find_blessing` 的两个
 	//: 黑板键**同时**在（`c2e_freeze` / `freeze`），只在 `c2e_freeze > 0` 时送。

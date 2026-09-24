@@ -370,8 +370,21 @@ func (o *operator) damageType() string {
 }
 
 func (o *operator) maxTarget() int {
-	if p := o.profile(); p != nil {
+	if p := o.profile(); p != nil && p.MaxTarget > 0 {
 		return p.MaxTarget
+	}
+	//: ---- 特性「同时攻击阻挡的所有敌人」（泡普卡）----
+	//:
+	//: 一次出手打**她自己挡住的全部**敌人。⚠ 不是「范围内所有人」：
+	//: 从范围里挑（`pickTargets` 的第二个循环）会让没被挡住的过路敌人也挨一发。
+	//:
+	//: ⚠ 只在她**真的挡住两个以上**时才放宽（`n > 1`）：`n` 取 0 会让
+	//: `pickTargets` 空手而归 ⇒ 这位干员在没挡住人的时候**一次都不出手**；
+	//: 而「没挡住人的近战打不到人」看起来与「机制没接」一模一样。
+	if o.spec.AttacksAllBlocked {
+		if n := len(o.blocking); n > 1 {
+			return n
+		}
 	}
 	return 1
 }
