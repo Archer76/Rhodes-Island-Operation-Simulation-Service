@@ -98,8 +98,9 @@ python tools\closeout_selfsufficiency.py
 ### 当前读数
 
 ★ **这一张表在 2026-09-24 晚按「缓存 562 个关卡键（286 份不同内容）」整体刷新过一次**，
-读数逐行取当次整闸 / 冻结树真跑的结论行（留证 `out/pinned-gate-3559424.log`，
-台账见 [`gate-readings.md`](gate-readings.md) 第 5 行）。
+读数逐行取当次整闸 / 冻结树真跑的结论行（**当时**的留证是 `out/pinned-gate-3559424.log`；
+`out/` 下的临时产物已在同日晚按博士要求清掉，要复现就照 `gate-readings.md` §四 原样跑一遍），
+台账见 [`gate-readings.md`](gate-readings.md) 第 5 行。
 **在此之前写的 55 关／320 键那一批数已经作废**——分母变了，**跨批不可比**。
 
 | 判据 | 取证面 | 读数 |
