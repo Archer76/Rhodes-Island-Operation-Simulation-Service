@@ -61,9 +61,10 @@ $env:RIOS_TRACE="1"
 ③ **`0 条痕迹` 先要证明那次跑成功了**（判决四数在不在），否则「没痕迹」与「没跑成」同形。
 
 ## 三 · 逐关台账（第 0 章起）
-| 关 | A 算得出 | B 跑得动（判决四数） | 引用的机制（三处分栏） | C 痕迹（实际触发的标签） | 结论 |
+
+| 关 | A 算得出 | B 跑得动（判决四数） | 引用的机制（四处分栏） | C 痕迹（实际触发的标签） | 结论 |
 | --- | --- | --- | --- | --- | --- |
-| `main_00-01` | ✓ 19 键齐；`missing_keys=0`／`gated_keys=0`；闸门 `reasons=0`、`spawn=7`、`spawn_skipped=0` | ✓ `won=true`／`life=20`／`kills=11`／`leaks=0`／`elapsed=76.43s`；`spawns_placed=11/11` | ① 敌人黑板键 **0**（本章 8 只敌人一个机制键都没有）② 关卡机制层 **空**（无田地／无雪／无装置）③ 干员侧：**特性「自身生命会不断流失」**（`hp_ratio=0.01`）＋ 技能 `skchr_angel2_1`（计划写 `skill:0`，按博士口径 **0 即默认技能＝技 1**）＋ 两条天赋（`火力电台`／`铳弹协约`） | `OPATK ×1769`／`ATKSCALE ×13`／`DMGENEMY ×13`／`SPEED ×11`／`DEPLOYDMG ×1` | **★ 有缺失**：特性「生命流失」**Go 未模拟**（见下）；两条天赋的触发条件取决于技 1 是不是弹药类，**待核** |
+| `main_00-01` | ✓ 19 键齐；`missing_keys=0`／`gated_keys=0`；闸门 `reasons=0`、`spawn=7`、`spawn_skipped=0` | ✓ `won=true`／`life=20`／`kills=11`／`leaks=0`／`elapsed=76.43s`；`spawns_placed=11/11` | ① 敌人黑板键 **0**、敌方技能 **0**（本章 8 只敌人一个机制键都没有）② 关卡机制层 **空** ③ 干员侧：**特性「自身生命会不断流失」**（`hp_ratio=0.01`）＋ **技能 `skchr_angel2_1`**（计划写 `skill:0`，按博士口径 **0 即默认技能＝技 1**）＋ 两条天赋（`火力电台`／`铳弹协约`）④ 关卡 `options` **22 键**（值都是骨架：`maxLifePoint:20`／`moveMultiplier:0.5`／`functionDisableMask:NONE`…） | 修前：`OPATK×1769`／`ATKSCALE×13`／`DMGENEMY×13`／`SPEED×11`／`DEPLOYDMG×1`（**无 DRAIN**）<br>修后：**`DRAIN×2263`** ＋ 上面五种 | **★ 两处缺失**：① 特性「生命流失」Go 未模拟（**已修，见下**）② **技能那一支整个没跑**（Go 不产出 `skill`／`active`，且闸门不报 ⇒ **静默**，见下） |
 
 ### ★ `main_00-01` 的缺失项：特性「自身生命会不断流失」
 
@@ -128,3 +129,33 @@ git grep -n "Drain" -- rios-sim/sim.go
 
 ★ 一条**已见证**的读数：`main_00-01` 的判决 `life=20` **＝** 该关 `maxLifePoint: 20`
 ⇒ 「生命点上限」这一条真的被用上了（不是「算得出」，是「用上了」）。
+
+### ★ `main_00-01` 的第二处缺失（**静默**的那一种）：技能那一支整个没跑
+
+**读数（现算）**：由 Go 自造的规格里 `operators[0].skill` 是 **`null`**、`skill_uses` 是 **0**，
+而 `deploys[0].auto_skill` 是 **`true`**（计划里没写这个字段 ⇒ 默认 true，`plan.go:318`）。
+
+**三处代码证据**：
+
+1. `rios-sim/operators.go:100` 的 `OperatorUnported = []string{"skill", "active"}`
+   ⇒ **Go 压根不产出**这两个键（Python 的 `_operator_spec` 产出）；
+2. `rios-sim/skill.go:83`：`sk := op.spec.Skill; if sk == nil { continue }`
+   ⇒ 技能那一整套装配对这名干员**一步都不走**；
+3. `rios-sim/skill.go:122`：`want := op.skillReq || sk.AutoTrigger || op.autoSkill`
+   ⇒ `auto_skill: true` 是**有对象的**（它要 `sk` 存在），`sk == nil` 时这句永远到不了。
+
+**为什么这是最坏的一类**：**规格里看不出**（`skill: null` 在 Go 的键集里是合法的）、
+**判决里看不出**（`main_00-01` 照样三星）、**闸门也不报**——闸门那条「技能槽号 N」的判据
+写的是 `if d.Skill != 0`（`unsupported.go:185`），而夹具里 `skill` **恰好全是 0**
+⇒ 它按「0 ＝ 没技能」放过去了。**按博士 2026-09-24 的口径（0 ⇒ 默认技能＝技 1），这里应该报。**
+
+★ **更要紧的一条**：`OperatorUnported` 那条登记的**理由**写的是
+「**24 份夹具的 64 人次里 `deploys[*].skill` 全是 0 …⇒ 这一支在真夹具上零行使**」。
+**这个理由在博士口径下不成立**：`skill: 0` 不是「不用技能」，是「用技 1」
+⇒ 这一支不是零行使，是 **64 / 64 人次都在用**。
+⇒ 也就是说，这条缺口的**实际严重程度远高于登记表自己说的**，
+而登记表当初是**照着一个错的口径**把它降级成「可以先不接」的。
+
+**结论**：这一关「完整模拟」**不成立**——玩家的默认技能（技 1）在 Go 这条路上从来没有被激活过。
+补法（另开节点）：接 `_operator_spec` 的 `skill`／`active`（`skills.py:277-317` 那一整套技能效果装配），
+并把闸门那条判据从「`d.Skill != 0`」改成按新口径判（0 也要绑）；**登记理由同时改对**。
