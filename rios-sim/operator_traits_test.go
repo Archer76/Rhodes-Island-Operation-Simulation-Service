@@ -5,6 +5,22 @@ import (
 	"testing"
 )
 
+// traitWithBlackboard 造一份**特性**（`{candidates:[{blackboard:[…]}]}`）。
+// 特性那一族的判据（溅射半径、生命流失、停顿秒数）读的都是这个形状。
+func traitWithBlackboard(pairs []any) json.RawMessage {
+	bb := make([]map[string]any, 0, len(pairs)/2)
+	for i := 0; i+1 < len(pairs); i += 2 {
+		bb = append(bb, map[string]any{"key": pairs[i].(string), "value": pairs[i+1]})
+	}
+	raw, err := json.Marshal(map[string]any{
+		"candidates": []any{map[string]any{"blackboard": bb}},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+
 // talentWithDesc 造一条**带正文**的天赋组（`talentJSON` 的 description 是空的，
 // 而这一组判据恰恰**只看正文**）。
 func talentWithDesc(desc string) json.RawMessage {

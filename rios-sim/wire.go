@@ -259,6 +259,13 @@ type OperatorSpec struct {
 	//: ⇒ 判据那一侧把它具名进 `GO_ONLY`（`tools/check_operators_go.py`），
 	//: 而不是塞进 `unported`（那个的意思是「Python 有、Go 没有」）。
 	HPDrainPerSec float64 `json:"hp_drain_per_sec,omitempty"`
+	//: 特性「攻击附带停顿」的**秒数**（梓兰 凝滞师，特性黑板 `sluggish`）。
+	//: 消费者是 `sim.go::operatorsAttack`：命中一个目标就把它挂成 `sluggishTimer`。
+	//:
+	//: ⚠ 减速比例**不在这里**——那是全局常数 `sluggishSlowPct`＝80%
+	//: （博士 2026-09-25 裁定：「梓兰特性的停顿与其他的相同，都是减速 80%」）。
+	//: 也**不是** `attack@sluggish`（怒潮凛冬高台溅射那 0.5 秒）——两个键、两族来源。
+	SlowOnHitSec float64 `json:"slow_on_hit_sec,omitempty"`
 	//: 职业特性溅射（撼地者那四位共用的一条特性；判据是特性黑板上同时有
 	//: `attack@ability_range_radius` 与 `attack@atk_scale_2`，已由 Python 解好）。
 	//:

@@ -166,11 +166,16 @@ type enemy struct {
 	traceSpeed float64
 	//: 【停顿】剩余秒数（原版 `sluggish_timer`）。
 	//:
-	//: ⚠ 它**不是**"只是记个数"：原版 `EnemyUnit.advance` 在 `sluggish_timer > 0`
-	//: 时**整帧不移动**（与晕眩/束缚/待机并列的那一串 early return）。所以每中
-	//: 一次挂停顿的攻击，敌人就少走 `秒数 × 移速` 格。怒潮凛冬的天赋让每一次
-	//: 高台溅射都给 0.5 秒停顿——漏掉这一路，敌人每次多吃一发就多走 0.2 格，
-	//: 累积到判决层面就是"漏怪"。
+	//: ★★ **2026-09-25 博士裁定：停顿＝减速 80%**（「梓兰特性的停顿与其他的相同，
+	//: 都是减速 80%」）。落点因此从「整帧不移动」改成**乘在 `advance` 的速度式上**
+	//: （`sluggishFactor`）——见 `sluggishSlowPct`。
+	//:
+	//: ⚠ 这一条**推翻了本文件此前的读法**：原来 `sluggishTimer > 0` 与晕眩/束缚并列在
+	//: 推进门控那一串 early return 里（照抄 `unit.py:1533` 的写法），等于按 −100% 算。
+	//: 而同一份参照实现的两处注释写的是 −80%（`unit.py:1065`「停顿 = 不能移动」／
+	//: `unit.py:1085-1087`「停顿降 80%：该不该乘 0.2」——三处互相打架）。
+	//: 裁定之后以 −80% 为准，**这不只改梓兰**：怒潮凛冬的高台溅射停顿
+	//: （`attack@sluggish`，0.5 秒）与技能里的 `sluggish` 走的是同一个计时器。
 	sluggishTimer float64
 	//: 冻结剩余秒数（原版 `freeze_timer` / `frozen`，unit.py:1015-1023）。
 	//: 冻结与停顿**不是**一回事：停顿只是走得慢，冻结是**这一帧既不走也不出手**
@@ -832,8 +837,11 @@ func runSim(spec *Spec) (*Verdict, error) {
 			// 关卡上"上一帧留下的 true"就永远没人清，而它会同时挡住推进与出手
 			// ——症状是"敌人莫名停住"，且只在挂过雪的那一局里出现。
 			e.frozenSnow = false
+			//: ⚠ `e.sluggishTimer <= 0` **曾经在这里**（照抄 `unit.py:1533`，等于 −100%）。
+			//: 博士 2026-09-25 裁定停顿＝减速 80% ⇒ 它不再拦推进，改成在
+			//: `advance` 的速度式上乘一个 0.2（`sluggishFactor`）。
 			if e.alive() && !e.leaked && !e.offMap && e.blockedBy == nil &&
-				e.attackPause <= 0 && e.sluggishTimer <= 0 && !e.frozenLatched {
+				e.attackPause <= 0 && !e.frozenLatched {
 				// 关卡特有机制可以改这一只的推进速度乘区（如田地/阻流阀）；
 				// 没挂机制时 `speedFor` 恒为 1.0，与最小版本逐位相同。
 				//
@@ -1755,6 +1763,28 @@ func initMechTrace() {
 
 // advance 沿分段计划推进 dt 秒（`EnemyUnit._advance_legs`，unit.py）。
 //
+// sluggishSlowPct 是【停顿】的减速比例。
+//
+// ★ 博士 2026-09-25 裁定：「梓兰特性的停顿与其他的相同，都是**减速 80%**」。
+// 依 `<@ba.…>` 无关的既有约定，这是一个**全局常数**，不是每名干员各带一个数——
+// 干员黑板里的 `sluggish`（梓兰 0.8）是**持续秒数**（出处：`formula.py:585` 的
+// note「文案未给时长，数值在黑板 sluggish」，与 `attack@sluggish` 同一条口径）。
+const sluggishSlowPct = 0.8
+
+// sluggishFactor 是推进速度上要乘的那个系数。
+//
+// ⚠ **没有停顿时必须恰好是 1.0**：调用点是左到右连乘的末尾（`advance` 的注释里
+// 写了为什么不许提前合并），乘 1.0 在 IEEE754 下是精确的 ⇒ 没中停顿的敌人在这次
+// 改动前后**逐位相同**。这正是这次改语义还能保住既有读数可比性的原因。
+func (e *enemy) sluggishFactor() float64 {
+	if e.sluggishTimer > 0 {
+		return 1.0 - sluggishSlowPct
+	}
+	return 1.0
+}
+
+// advance 把一只敌人按 `dt` 推进（原版 `EnemyUnit.advance`）。
+//
 // 三种段共用 `legU`：走段里它是已走格数，等待/离场段里是已过秒数。
 // 整个循环**以时间为预算**——按格数当预算的话，等待段会被移速缩放，
 // 3 秒的待命会被拉成好几分钟。
@@ -1767,6 +1797,10 @@ func advance(e *enemy, dt, speedScale, speedMult float64) {
 	//:                * (1 - slow_pct) * lock_slow
 	//: （后两项在本关恒为 1.0，乘 1.0 是精确的，省略无害。）
 	//:
+	//: ★ 2026-09-25 起末尾多一项 `sluggishFactor()`（【停顿】＝减速 80%，博士裁定）。
+	//: 它**必须挂在最末**、不许并进前面任何一项：没停顿的敌人乘的是精确的 1.0，
+	//: 于是这次改语义对它们**逐位无影响**——这是能用既有读数当参照的前提。
+	//:
 	//: 这里曾经写成 `MoveSpeed * haste * (SpeedScale * speedFor(idx))`——
 	//: 把 `speed_scale * speed_multiplier` **先乘成一个数**再参与。
 	//: 浮点乘法**不满足结合律**，`(mv*h)*(ss*sm)` 与 `((mv*ss)*sm)*h`
@@ -1776,7 +1810,7 @@ func advance(e *enemy, dt, speedScale, speedMult float64) {
 	//: Go 算成 `7.5000000`（落格 8、不在范围、只能当溅射受害者），
 	//: 判决因此差出 杀 +1 / 用时 +12.7s。排查全过程见
 	//: `AK-TACTIC-进度.md` §3.12–§3.15。
-	speed := e.spec.MoveSpeed * speedScale * speedMult * e.haste
+	speed := e.spec.MoveSpeed * speedScale * speedMult * e.haste * e.sluggishFactor()
 	if speed <= 0 {
 		return
 	}
@@ -2213,6 +2247,22 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 			if op.spec.SplashRadius > 0 {
 				traitSplash(op, spec, enemies, target, power, t, verdict)
 			}
+			//: 特性「攻击附带停顿」（梓兰 凝滞师）：**每个主目标各一次**，与溅射同一处。
+			//:
+			//: ★ 减速比例是全局常数 80%（`sluggishSlowPct`，博士 2026-09-25 裁定），
+			//: 规格里送来的只有**秒数**。取 max 续期，与全仓的时限状态一致。
+			//:
+			//: ⚠ 位置在主目标循环里、**连击循环外**：一次出手只挂一次，不是每一击
+			//: 挂一次。写成每一击会让三连击的干员把停顿续到三倍时长（本仓记过
+			//: 「时限状态写成 `=` 还是 `max`」是两件不同的事）。
+			if op.spec.SlowOnHitSec > 0 {
+				target.sluggishTimer = math.Max(target.sluggishTimer, op.spec.SlowOnHitSec)
+				if traceOn {
+					trace("TRAITSLOW t=%.4f op=%s target=%s sec=%.4f slow=%.2f timer=%.4f",
+						t, op.spec.Name, target.spec.Name, op.spec.SlowOnHitSec,
+						sluggishSlowPct, target.sluggishTimer)
+				}
+			}
 		}
 		// 出手回报：攻击回复的技力与弹药消耗（原版 3187-3205，在整次出手之后）
 		spOnAttack(op)
@@ -2359,6 +2409,15 @@ func splashHit(op *operator, e *enemy, power, scale, t float64, verdict *Verdict
 		// （天赋 `attack@sluggish` = 0.5 秒）。取 max 而不是覆盖，与
 		// `sluggish_timer` 全仓一致的写法。
 		e.sluggishTimer = math.Max(e.sluggishTimer, op.spec.HighlandSplashSluggish)
+		if traceOn {
+			//: ★ 行使指纹。这一支此前**一句痕迹都没有**——它只经由 `POS` 那一行
+			//: 的 `sluggish=` 字段侧面可见，而 `POS` 是按名字门控的（得先知道盯谁）。
+			//: 2026-09-25 换停顿语义时要回答「哪几份夹具真的挂着停顿」，
+			//: 没有这一行就只能靠猜。
+			trace("SPLASHSLOW t=%.4f op=%s victim=%s sec=%.4f slow=%.2f timer=%.4f",
+				t, op.spec.Name, e.spec.Name, op.spec.HighlandSplashSluggish,
+				sluggishSlowPct, e.sluggishTimer)
+		}
 	}
 	if traceOn {
 		trace("SPLASH t=%.4f op=%s kind=%s from=%s victim=%s scale=%.4f dmg=%.3f dealt=%.3f hp=%.3f",
@@ -2514,15 +2573,21 @@ func pickTargets(op *operator, enemies []*enemy, n int, t float64) []*enemy {
 			}
 		}
 		if def != nil && def != out[0] {
+			//: ⚠ 归因**必须逐条判「这条规则是不是真的偏好选中者」**，不能只看
+			//: 「这个干员带不带这条规则」。写成 `switch { case op.spec.AirPriority: … }`
+			//: 会把**任何**重排都记到空中那条头上——安德切尔同时带特性与天赋两条，
+			//: 于是他的「优先攻击使用远程武器」永远拿不到自己的痕迹（实测：
+			//: 合成夹具上规则明明生效了、选中的就是远程那只，痕迹却是 0）。
+			//: 那种"0"与"规则没接"长得一模一样。
 			switch {
-			case op.spec.AirPriority:
+			case op.spec.AirPriority && preferFlying(out[0], def):
 				trace("TRAITAIR t=%.4f op=%s pick=%s def=%s",
 					t, op.spec.Name, out[0].spec.Name, def.spec.Name)
-			case op.spec.PreferHighestDef:
+			case op.spec.PreferHighestDef && out[0].spec.DEF > def.spec.DEF:
 				trace("TRAITDEF t=%.4f op=%s pick=%s(def=%.1f) def=%s(def=%.1f)",
 					t, op.spec.Name, out[0].spec.Name, out[0].spec.DEF,
 					def.spec.Name, def.spec.DEF)
-			case op.spec.PreferRanged:
+			case op.spec.PreferRanged && preferRangedWay(out[0], def):
 				trace("TRAITRANGE t=%.4f op=%s pick=%s(%s) def=%s(%s)",
 					t, op.spec.Name, out[0].spec.Name, out[0].spec.ApplyWay,
 					def.spec.Name, def.spec.ApplyWay)
@@ -2530,6 +2595,18 @@ func pickTargets(op *operator, enemies []*enemy, n int, t float64) []*enemy {
 		}
 	}
 	return out
+}
+
+// preferFlying / preferRangedWay 是两条优先规则的**偏好谓词**，只给痕迹归因用。
+//
+// ★ 为什么归因要判"这条规则偏不偏好选中者"，而不是"这个干员带不带这条规则"：
+// 安德切尔**同时**带特性「优先攻击空中单位」与天赋「优先攻击使用远程武器」。
+// 按后者的写法，只要他这一击重排过，痕迹就一律记到空中那条头上，天赋那条的
+// 运行期计数**永远是 0**——而那个 0 与「规则没接」判不出来。
+func preferFlying(a, b *enemy) bool { return a.spec.IsFlying && !b.spec.IsFlying }
+
+func preferRangedWay(a, b *enemy) bool {
+	return a.spec.ApplyWay == "RANGED" && b.spec.ApplyWay != "RANGED"
 }
 
 // names / inRangeOf 只给跟踪用（`RIOS_TRACE=1`）。放在这里而不是单独文件，

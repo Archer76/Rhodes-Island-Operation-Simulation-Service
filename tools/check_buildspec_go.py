@@ -449,6 +449,10 @@ REGISTERED_EXTRA: tuple[tuple[str, str], ...] = (
      "天赋「铠甲突破」（史都华德）：选目标时防御力最高的优先。Python 无此机制"),
     (r"^\.operators\[\d+\]\.prefer_ranged$",
      "天赋「短板突破」（安德切尔）：选目标时使用远程武器的敌人优先。Python 无此机制"),
+    #: ★ 2026-09-25 第四批：特性「攻击附带停顿」的**秒数**（梓兰）。
+    (r"^\.operators\[\d+\]\.slow_on_hit_sec$",
+     "特性「攻击附带停顿」的秒数（梓兰 凝滞师，特性黑板 sluggish）。"
+     "减速比例是全局常数 80%（博士 2026-09-25 裁定），不随这一栏走；Python 无此机制"),
 )
 REGISTERED_EXTRA_RX = tuple((re.compile(p), src) for p, src in REGISTERED_EXTRA)
 

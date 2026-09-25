@@ -176,6 +176,9 @@ type OperatorOut struct {
 	//: ⚠ 别拿 `frontend/operator_view.py:179` 的 `self.hp_drain_per_sec = 0.0`
 	//: 当反例：那是**另一条路**的视图，不是模拟器读的这份规格。
 	HPDrainPerSec *float64 `json:"hp_drain_per_sec,omitempty"`
+	//: 特性「攻击附带停顿」的**秒数**（梓兰 凝滞师，特性黑板 `sluggish`）。
+	//: 减速比例**不在这里**——那是全局常数 80%（博士 2026-09-25 裁定）。
+	SlowOnHitSec *float64 `json:"slow_on_hit_sec,omitempty"`
 
 	//: ---- 技能那一支（2026-09-24 起由 Go 自己产出）----
 	//:
@@ -310,6 +313,7 @@ var OperatorsCoveredKeys = []string{
 	//: ---- 段 B 第一批（天赋派生）----
 	"heals_true", "heals_on_skill_true", "air_priority_true",
 	"attacks_all_blocked_true", "prefer_highest_def_true", "prefer_ranged_true",
+	"slow_on_hit_nonzero",
 	"blessing_nonzero", "regen_aura_nonzero",
 	"team_auras_nonzero", "talent_dodge_nonzero",
 	"regen_strict_true", "regen_strict_false",
@@ -635,6 +639,12 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 	if st.HPDrainPerSec > 0.0 {
 		v := st.HPDrainPerSec
 		out.HPDrainPerSec = &v
+	}
+	//: 特性「攻击附带停顿」（梓兰）：**秒数**透出，减速比例是全局常数 80%。
+	if st.TraitSlowSec > 0.0 {
+		covered["slow_on_hit_nonzero"]++
+		v := st.TraitSlowSec
+		out.SlowOnHitSec = &v
 	}
 	//: 职业特性溅射：`radius > 0` 才整族送出去。
 	if st.SplashRadius > 0.0 {

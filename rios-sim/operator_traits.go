@@ -139,6 +139,36 @@ func readPowerAttack(talents []json.RawMessage, elite, level, potential int) Pow
 
 // ---- 特性：生命流失 与 特性溅射（几何那一半）----
 
+// traitSlowKey 是特性黑板里「攻击附带停顿多少秒」那个键。
+//
+// ⚠ 它**不在** `skillKeyTable` 里，也不该在：那张表的意思是「已经实现的键」，
+// 而技能侧的 `sluggish`（凯尔希·保护性拒止 `sluggish 5.0`、换形态的 `stand_sluggish`）
+// **还没实现**。表外 ⇒ 它会出现在覆盖账上，这正是本仓要的形态。
+//
+// ⚠ 与 `attack@sluggish` 是**两个键**（怒潮凛冬的高台溅射那 0.5 秒），本仓记过
+// 「同名不同义」的坑，所以这里分开读、不合并。
+const traitSlowKey = "sluggish"
+
+// readTraitSlow 复刻「特性：攻击造成停顿」那一支（梓兰 凝滞师）。
+//
+// 判据只有一条：**特性黑板里有 `sluggish` 且为正**。不按子职业名、不按干员名——
+// 与 `readTraitSplash` / `readHPDrain` 同一个姿势。
+//
+// ★ 值是**秒数**，不是减速比例（减速比例是全局常数 `sluggishSlowPct`＝80%，
+// 博士 2026-09-25 裁定）。出处：`formula.py:585` 的 note
+// 「文案未给时长，数值在黑板 sluggish」；与 `attack@sluggish` 同一条口径。
+//
+// 没有这条就返回 0.0——调用侧不用判空（这个量「没有」就是 0）。
+func readTraitSlow(traitRaw json.RawMessage) float64 {
+	for _, cand := range traitCandidates(traitRaw) {
+		bb := pairsToDict(cand)
+		if secs, ok := bb[traitSlowKey]; ok && secs > 0.0 {
+			return secs
+		}
+	}
+	return 0.0
+}
+
 // hpDrainTrait 复刻 `HP_DRAIN_TRAIT`（`traits.py:108`）。
 const hpDrainTrait = "自身生命会不断流失"
 

@@ -115,6 +115,9 @@ type OperatorStats struct {
 	HighlandSplashScale    float64 `json:"highland_splash_scale"`
 	HighlandSplashSluggish float64 `json:"highland_splash_sluggish"`
 	HPDrainPerSec          float64 `json:"hp_drain_per_sec"`
+	//: 特性「攻击附带停顿」的**秒数**（梓兰 凝滞师，特性黑板 `sluggish`）。
+	//: ⚠ 减速比例不在这里——那是**全局常数** `sluggishSlowPct`＝80%（博士 2026-09-25 裁定）。
+	TraitSlowSec float64 `json:"trait_slow_sec"`
 	//: 三个纯文本判据（`operator_traits.go`）。
 	TextDerived
 	//: 身份两字段：势力与主职业代号。**消费者是两个不同的东西**——
@@ -550,6 +553,8 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 		st.SplashDamageScale = 1.0
 	}
 	st.HPDrainPerSec = readHPDrain(char.Description, char.Trait)
+	//: 特性「攻击附带停顿」（梓兰）——**秒数**走这里，减速比例是全局常数。
+	st.TraitSlowSec = readTraitSlow(char.Trait)
 	//: 三个纯文本判据（攻击类型 / 平A 是否治疗 / 弱点伤害）。
 	st.TextDerived = textDerived(char.Description, char.Talents)
 	//: 身份两字段：直接取自 character_table，不做任何推断。

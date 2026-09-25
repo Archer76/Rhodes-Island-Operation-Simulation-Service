@@ -183,7 +183,10 @@ EXTRA_OPS = ("skill", "active", "talent_panel_mods",
              #: ★ 2026-09-25 第二批：② 特性那两条**只在正文里**的（黑板是空的）。
              "air_priority", "attacks_all_blocked",
              #: ★ 2026-09-25 第三批：**天赋**正文里的选目标优先（史都华德／安德切尔）。
-             "prefer_highest_def", "prefer_ranged")
+             "prefer_highest_def", "prefer_ranged",
+             #: ★ 2026-09-25 第四批：特性「攻击附带停顿」的**秒数**（梓兰）。
+             #: 减速比例不在这里（那是全局常数 80%，博士裁定）。
+             "slow_on_hit_sec")
 EXTRA_OPS_SEEN: dict = {}
 EXTRA_OPS_FROM_PY: dict = {}
 
@@ -246,9 +249,14 @@ GO_ONLY_COUNTERS_ZERO_OK = {
     "prefer_highest_def_true": "天赋「铠甲突破」（史都华德，三星）。本套夹具不部署三星 ⇒ 必然为 0；"
                                "行使见证在 tools/three_star_check.py 的第三趟（main_02-09，1 次）。",
     "prefer_ranged_true": "天赋「短板突破」（安德切尔，三星）。同上 ⇒ 本套必然为 0；"
-                          "★ **而它在专属夹具上也是 0**：三趟合起来试过 12 个路线格 + 另做的一轮"
-                          "穷举（5 个无飞行关卡 × 全部路线格共 143 格）都不为 0。"
-                          "这是**欠账不是通过**——见 docs/three-star-modelling.md §十一·11.5。",
+                          "★ **而它在专属夹具与合成夹具上也都是 0**：路线格试过 12 个，"
+                          "另做一轮穷举（5 个无飞行关卡 × 全部路线格共 143 格），"
+                          "再按博士指示造了「一个近战 + 一个远程」的合成夹具——仍是 0。"
+                          "原因已定位：合成夹具上默认规则与优先规则**选的是同一个人**。"
+                          "这是**欠账不是通过**——见 docs/three-star-modelling.md §十三·13.5。",
+    #: ---- 2026-09-25 第四批：特性「攻击附带停顿」（梓兰）----
+    "slow_on_hit_nonzero": "特性「攻击附带停顿」（梓兰，三星）。本套夹具不部署三星 ⇒ 必然为 0；"
+                           "行使见证在 tools/three_star_check.py 的第三趟（main_00-01，24 次）。",
 }
 
 #: **Go 独有**的 `covered` 计数器：它们量的是 Go 自己那条**技能绑定链**的账，
@@ -279,6 +287,8 @@ GO_ONLY_COUNTERS = {
     #: ---- 2026-09-25 第三批：**天赋**正文里的选目标优先 ----
     "prefer_highest_def_true": "天赋正文含「优先攻击防御力最高的敌人」的人次（史都华德）",
     "prefer_ranged_true": "天赋正文含「优先攻击使用远程武器的敌人」的人次（安德切尔）",
+    #: ---- 2026-09-25 第四批：特性「攻击附带停顿」 ----
+    "slow_on_hit_nonzero": "特性黑板 `sluggish` 为正的人次（梓兰 凝滞师）",
 }
 GO_ONLY_FROM_PY: dict = {}
 
@@ -303,6 +313,7 @@ COVERED_KEYS = (
     #: ---- 段 B 第一批（天赋派生）----
     "heals_true", "heals_on_skill_true", "air_priority_true",
     "attacks_all_blocked_true", "prefer_highest_def_true", "prefer_ranged_true",
+    "slow_on_hit_nonzero",
     "blessing_nonzero", "regen_aura_nonzero",
     "team_auras_nonzero", "talent_dodge_nonzero",
     "regen_strict_true", "regen_strict_false",

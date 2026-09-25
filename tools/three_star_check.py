@@ -79,6 +79,9 @@ TRAIT_MECHS = [
     #: 一个字都没写选目标，所以它们与上面两条同一个取证口（`talentText`）。
     ("prefer_highest_def", "TRAITDEF", "优先攻击防御力最高"),
     ("prefer_ranged", "TRAITRANGE", "优先攻击使用远程武器"),
+    #: ★ 2026-09-25：特性「攻击附带停顿」（梓兰 凝滞师）。这条**不是选目标**，
+    #: 是命中效果；判据词在特性黑板的 `sluggish`（**秒数**，减速比例是全局常数 80%）。
+    ("slow_on_hit_sec", "TRAITSLOW", "攻击附带停顿"),
 ]
 
 #: ② 那两条在默认关卡上**行使不了**（`main_00-01` 一只飞行单位都没有、也挡不住两个），
@@ -99,7 +102,73 @@ TRAIT_LEVELS = {
     #: 就换关重试，并把「为什么是这一关」写进文档，不许挑到绿为止。
     "prefer_highest_def": "main_02-09",
     "prefer_ranged": "main_02-09",
+    #: 梓兰那条与关卡无关（她**每次攻击命中**都挂停顿），用默认那关即可。
+    "slow_on_hit_sec": "main_00-01",
 }
+
+
+def synth_ranged_probe(op: dict, level: str, cell: list[int]) -> int:
+    """**合成夹具**：手造两个敌人（一个近战、一个使用远程武器）同局，专测那条优先规则。
+
+    ★ 为什么必须造（而不是继续换关卡）：博士 2026-09-25 的指示是「你可以自己修改一个
+    关卡，放一个近战和一个远程进行测试」。此前已经穷举过 5 个无飞行关卡的全部路线格
+    （143 格）与 `main_02-09` 的 12 格，**一个行使时刻都没有**——那说明"自然发生的
+    时刻"在这些关卡里不存在，而不是规则没接。
+
+    判据（先说清，免得变成"造到绿为止"）：
+      · **近战**那只走一段路（`progress` > 0），**远程武器**那只先站在原地等
+        （`progress` = 0）；
+      · 两只**同时**在干员范围内；
+      · ⇒ 默认规则（嘲讽, 推进度）会选**近战**那只，而「优先攻击使用远程武器」
+        这条规则会选**远程**那只。两者不同，那次选择才是这条规则的见证。
+
+    返回 `TRAITRANGE` 的出现次数（0 = 合成夹具上都没行使 ⇒ 那才是真没接）。
+    """
+    b, _ = call([{"id": 1, "cmd": "buildspec", "level": level,
+                  "spec": {"plan": {"stage": level, "deploys": [
+                      {"operator": op["name"], "position": cell, "direction": "Left",
+                       "skill": 0, "elite": ELITE, "level": LEVEL, "potential": POTENTIAL,
+                       "module_level": 0}]},
+                      "roster": [{"id": op["char_id"], "name": op["name"], "elite": ELITE,
+                                  "level": LEVEL, "own": True, "potential": POTENTIAL,
+                                  "rarity": 3}]}}])
+    b = b[0]
+    if not b.get("ok"):
+        return -1
+    spec = b["build_spec"]["spec"]
+    spawns = spec.get("spawns") or []
+    melee = next((s for s in spawns if s.get("apply_way") != "RANGED"), None)
+    ranged = next((s for s in spawns if s.get("apply_way") == "RANGED"), None)
+    if melee is None or ranged is None:
+        return -1
+    x, y = cell[0], cell[1]
+    #: 干员朝左 ⇒ 范围在左侧（实测该位狙击的范围格是 x∈[cell−3, cell]、同一行含 y）。
+    #:
+    #: ⚠ **走完必须在原地停住**（walk 之后接一条 wait）：只给一条 walk 的话，
+    #: 走完那一段就没腿了、敌人当场离场，而「离场」在 `pickTargets` 里是**被过滤掉**的
+    #: ⇒ 那一刻范围内只剩远程那一只，默认规则与优先规则**选的是同一个人**，
+    #: 于是痕迹恒为 0——那看起来与「规则没接」一模一样。第一版就是这么写的。
+    #: ⚠ 第二版写成「远程那只先站着不动 ⇒ progress 更低」，**判据不成立**：
+    #: `wait` 那一段的 `progress` **照样在涨**（与 `static` 自缚同一条口径），
+    #: 两只一起涨 ⇒ 默认规则选的就是远程那一只 ⇒ 痕迹恒为 0。
+    #: 真正能把两者的 `progress` 拉开的是**入场时刻**：让远程那只晚 3 秒进场，
+    #: 那时近战那只已经走了两个多格。
+    melee = dict(melee)
+    ranged = dict(ranged)
+    melee["time"] = 0.0
+    #: ⚠ 近战那只**必须活着等到远程那只进场**：用原关卡的 HP 时它三秒就被打死了
+    #: （实测 800 血、每轮约 338），而那一刻远程那只才刚出场 ⇒ 两只**从不同时在范围内**
+    #: ⇒ 默认规则与优先规则选的是同一个人 ⇒ 痕迹恒为 0。
+    #: 这是合成夹具的**构造参数**，不是判据——所以直接把它调到打不死。
+    melee["hp"] = max(float(melee.get("hp") or 0), 20000.0)
+    melee["legs"] = [{"kind": "walk", "points": [[x - 3, y], [x - 1, y]]},
+                     {"kind": "wait", "seconds": 600.0, "points": [[x - 1, y]]}]
+    ranged["time"] = 3.0
+    ranged["legs"] = [{"kind": "wait", "seconds": 600.0, "points": [[x - 2, y]]}]
+    spec = dict(spec)
+    spec["spawns"] = [melee, ranged]
+    _, err = call([{"id": 2, "cmd": "sim", "spec": spec}], trace=True)
+    return trace_count(err, "TRAITRANGE")
 
 
 def route_cells(level: str) -> list[list[int]]:
@@ -323,6 +392,20 @@ def main() -> int:
             if not lv:
                 continue
             cell, n, tried = trait_probe(o, lv, tag)
+            if cell is None and key == "prefer_ranged":
+                #: 自然发生的时刻找不到 ⇒ 换**合成夹具**（博士 2026-09-25 指示）。
+                sc = synth_ranged_probe(o, lv, [5, 3])
+                if sc > 0:
+                    trait_pass.append("%s（%s 的**合成**夹具：近战 + 远程各一只）：%s→%d"
+                                      % (o["name"], lv, lbl, sc))
+                    zero_exercise.pop("%s 的「%s」" % (o["name"], lbl), None)
+                    continue
+                trait_pass.append("%s（%s，路线格试过 %d + 合成夹具 %s）：%s→**0**"
+                                  % (o["name"], lv, tried,
+                                     "跑不动" if sc < 0 else "也是 0", lbl))
+                zero_exercise["%s 的「%s」" % (o["name"], lbl)] = (
+                    "专属夹具 %s 上试遍 %d 个路线格、**外加合成夹具**仍为 0" % (lv, tried))
+                continue
             if cell is None:
                 trait_pass.append("%s（%s，试过 %d 格）：%s→**0**"
                                   % (o["name"], lv, tried, lbl))
