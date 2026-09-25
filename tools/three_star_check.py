@@ -410,14 +410,28 @@ def main() -> int:
             if n == 0:
                 zero_exercise["%s 的「%s」" % (o["name"], label)] = (
                     "主关卡 %s 零行使" % a.level)
-        unknown = b["build_spec"].get("skill_unknown_keys") or []
-        t_unknown = b["build_spec"].get("talent_unknown_keys") or []
+        #: ★★ 2026-09-25 独立复核抓到的**零信息量的绿**，这里改掉：
+        #: `build_spec` 的应答里**根本没有** `skill_unknown_keys` / `talent_unknown_keys`
+        #: 这两个字段（实测应答键只有 gated_keys／missing_keys／params／scanned／
+        #: spec／unported）⇒ 旧写法恒取到 `[]` ⇒ 那一列**恒印「（无）」**，
+        #: 读起来像「17 位全都没有未识别键」，其实是「我读的字段不存在」。
+        #: 真实生产者在 `operators` 命令的 `OperatorsBundle` 上（逐位那两份还是
+        #: `json:"-"`）。⇒ 认不出的**具名印出来**，承认取不到就写取不到，
+        #: 不许拿一个恒空的字段冒充「查过了」。
+        bs = b["build_spec"]
+        unknown: list[str] = []
+        if "skill_unknown_keys" in bs or "talent_unknown_keys" in bs:
+            unknown = list(bs.get("skill_unknown_keys") or []) + \
+                list(bs.get("talent_unknown_keys") or [])
+            unk_cell = "、".join(unknown) if unknown else "（无）"
+        else:
+            unk_cell = "⊘ 本入口取不到（见 tools/three_star_check.py 的注释）"
         print("%-18s %-6s %-6s %-7s %-9s %-24s %s"
               % (o["name"], ("有" if sk else "无"),
                  "✓" if sk else "✗", n_skill,
                  ("%.0f" % act["atk"]) if act else "—",
                  "、".join(lines) if lines else "（无）",
-                 "、".join(unknown + t_unknown) if (unknown or t_unknown) else "（无）"))
+                 unk_cell))
         if not sk:
             bad += 1
 
