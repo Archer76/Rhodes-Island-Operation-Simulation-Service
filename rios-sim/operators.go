@@ -185,6 +185,8 @@ type OperatorOut struct {
 	RangedAtkScale *float64 `json:"ranged_atk_scale,omitempty"`
 	//: 特性「击杀敌人后获得 N 点部署费用」（翎羽 冲锋手）。**「没有这条」是 0。**
 	KillCostOnKill *int `json:"kill_cost_on_kill,omitempty"`
+	//: 同一条特性的后半句「撤退时返还初始部署费用」。消费者是撤退动作。
+	RetreatRefund *bool `json:"retreat_refund,omitempty"`
 
 	//: ---- 技能那一支（2026-09-24 起由 Go 自己产出）----
 	//:
@@ -320,6 +322,7 @@ var OperatorsCoveredKeys = []string{
 	"heals_true", "heals_on_skill_true", "air_priority_true",
 	"attacks_all_blocked_true", "prefer_highest_def_true", "prefer_ranged_true",
 	"slow_on_hit_nonzero", "ranged_atk_scale_nonzero", "kill_cost_on_kill_nonzero",
+	"retreat_refund_true",
 	"blessing_nonzero", "regen_aura_nonzero",
 	"team_auras_nonzero", "talent_dodge_nonzero",
 	"regen_strict_true", "regen_strict_false",
@@ -663,6 +666,12 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		covered["kill_cost_on_kill_nonzero"]++
 		v := st.KillCostOnKill
 		out.KillCostOnKill = &v
+	}
+	//: 特性后半句「撤退时返还初始部署费用」（翎羽那一族）。
+	if st.RetreatRefund {
+		covered["retreat_refund_true"]++
+		b := true
+		out.RetreatRefund = &b
 	}
 	//: 职业特性溅射：`radius > 0` 才整族送出去。
 	if st.SplashRadius > 0.0 {

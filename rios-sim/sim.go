@@ -371,9 +371,13 @@ type operator struct {
 	//: 的贡献 = `self.atk × aura_atk_pct`，其中 `self.atk` 是**底子**（不含技能
 	//: 增益）。Go 侧 `spec.ATK` 正是那个底子——所以加成是**加上去**、
 	//: 不是在技能面板上**乘上去**（两者在有技能时不等价）。
-	auraAtkPct  float64
-	auraDefPct  float64
-	retreated   bool
+	auraAtkPct float64
+	auraDefPct float64
+	retreated  bool
+	//: 这一次部署**实际付出的**费用（`_do_deploy` 里扣多少就记多少）。
+	//: 只给特性「撤退时返还初始部署费用」那一族用（翎羽）——退的是**付出去的**，
+	//: 不是面板上的 `DeployCost`（潜能/信赖/天赋都会改它，两处取法迟早分叉）。
+	paidCost    int
 	leftAt      float64
 	deathTime   float64
 	damageTaken float64
@@ -535,6 +539,10 @@ func runSim(spec *Spec) (*Verdict, error) {
 	sort.SliceStable(deploys, func(i, j int) bool { return deploys[i].Time < deploys[j].Time })
 	skillUses := append([]SkillUseSpec(nil), spec.SkillUses...)
 	sort.SliceStable(skillUses, func(i, j int) bool { return skillUses[i].Time < skillUses[j].Time })
+	//: 撤退请求：与部署／开技能同一套「按时刻排序的队列」。**排序是必须的**：
+	//: 计划里的撤退顺序不保证按时间写，而下面那个循环只吃队首。
+	retreats := append([]RetreatSpec(nil), spec.Retreats...)
+	sort.SliceStable(retreats, func(i, j int) bool { return retreats[i].Time < retreats[j].Time })
 
 	var ops []*operator
 	var enemies []*enemy
@@ -736,6 +744,7 @@ func runSim(spec *Spec) (*Verdict, error) {
 					T: t, Kind: "env", Who: op.spec.Name})
 			}
 			cost = math.Max(0, cost-float64(d.Cost))
+			op.paidCost = d.Cost
 			verdict.Events = append(verdict.Events,
 				Event{T: t, Kind: "deploy", Who: op.spec.Name})
 		}
@@ -754,6 +763,45 @@ func runSim(spec *Spec) (*Verdict, error) {
 			if math.Abs(u.Time-t) < dt/2 {
 				useSkill(ops, u.Cell)
 			}
+		}
+
+		// ---- 1c. 撤退请求（博士 2026-09-25：「你现在把撤退机制做了吧」）----
+		//
+		// 位置：与部署同一族（都是「到点对某个人做一件事」），排在部署与手动开技
+		// 之后、出怪之前——**这一帧刚撤走的人，这一帧就不该再出手**。
+		//
+		// ⚠ 这一支**必须存在**：`unsupported.go` 原来把带撤退的计划整条拒跑，
+		// 那条理由撤掉之后，如果模拟器不执行撤退，带撤退的计划就会**静默地
+		// 不撤退**——判决看上去「跑完了」，而少了一整条指令。本仓把这种叫
+		// 「没有消费点的字段就是假完成」。
+		for len(retreats) > 0 && retreats[0].Time <= t {
+			r := retreats[0]
+			retreats = retreats[1:]
+			op := findOpByName(objs, r.Operator)
+			if op == nil {
+				//: 找不到人（名字写错／这一关没这人）**什么也不发生**——
+				//: 撤退请求不是命令，与 `SkillUseSpec` 同一口径；但要记一笔，
+				//: 否则「请求发了没人接」与「没发请求」长得一样。
+				verdict.DeployRejected = append(verdict.DeployRejected,
+					[3]any{t, r.Operator, "撤退请求找不到人"})
+				continue
+			}
+			if !op.alive() {
+				//: 已倒下/已撤退的人再撤一次：无事发生（不重复记 `leftAt`、不重复退费）。
+				continue
+			}
+			refund := 0
+			if op.spec.RetreatRefund {
+				refund = op.paidCost
+			}
+			op.retreat()
+			if refund > 0 {
+				cost += float64(refund)
+			}
+			verdict.Events = append(verdict.Events,
+				Event{T: t, Kind: "retreat", Who: op.spec.Name})
+			ctx.Trace("RETREAT t=%.4f op=%s refund=%d cost=%.1f",
+				t, op.spec.Name, refund, cost)
 		}
 
 		// ---- 2. 出怪（1753-1760）
@@ -2571,7 +2619,8 @@ func pickTargets(op *operator, enemies []*enemy, n int, t float64) []*enemy {
 			return a.spec.DEF > b.spec.DEF
 		}
 		if op.spec.PreferRanged {
-			ar, br := a.spec.ApplyWay == "RANGED", b.spec.ApplyWay == "RANGED"
+			//: 口径见 `isRangedWeaponTarget`：**有远程攻击范围的地面敌人**（博士裁定）。
+			ar, br := isRangedWeaponTarget(a), isRangedWeaponTarget(b)
 			if ar != br {
 				return ar
 			}
@@ -2599,12 +2648,8 @@ func pickTargets(op *operator, enemies []*enemy, n int, t float64) []*enemy {
 			}
 		}
 		if def != nil && def != out[0] {
-			//: ⚠ 归因**必须逐条判「这条规则是不是真的偏好选中者」**，不能只看
-			//: 「这个干员带不带这条规则」。写成 `switch { case op.spec.AirPriority: … }`
-			//: 会把**任何**重排都记到空中那条头上——安德切尔同时带特性与天赋两条，
-			//: 于是他的「优先攻击使用远程武器」永远拿不到自己的痕迹（实测：
-			//: 合成夹具上规则明明生效了、选中的就是远程那只，痕迹却是 0）。
-			//: 那种"0"与"规则没接"长得一模一样。
+			//: ⚠⚠ 归因**必须逐条判「这条规则是不是真的偏好选中者」**，不能只看
+			//: 「这个干员带不带这条规则」。
 			switch {
 			case op.spec.AirPriority && preferFlying(out[0], def):
 				trace("TRAITAIR t=%.4f op=%s pick=%s def=%s",
@@ -2614,25 +2659,43 @@ func pickTargets(op *operator, enemies []*enemy, n int, t float64) []*enemy {
 					t, op.spec.Name, out[0].spec.Name, out[0].spec.DEF,
 					def.spec.Name, def.spec.DEF)
 			case op.spec.PreferRanged && preferRangedWay(out[0], def):
-				trace("TRAITRANGE t=%.4f op=%s pick=%s(%s) def=%s(%s)",
-					t, op.spec.Name, out[0].spec.Name, out[0].spec.ApplyWay,
-					def.spec.Name, def.spec.ApplyWay)
+				//: 打出来的两个量是**判据本身**（是不是地面 ＋ 远程攻击范围），
+				//: 不是 `ApplyWay`——后者只是旁证，写成它会让读的人以为判据是那个。
+				trace("TRAITRANGE t=%.4f op=%s pick=%s(fly=%t rng=%.2f) def=%s(fly=%t rng=%.2f)",
+					t, op.spec.Name, out[0].spec.Name, out[0].spec.IsFlying,
+					out[0].spec.AttackRange,
+					def.spec.Name, def.spec.IsFlying, def.spec.AttackRange)
 			}
 		}
 	}
 	return out
 }
 
+// isRangedWeaponTarget 判「这一只算不算『使用远程武器的敌人』」（安德切尔 短板突破）。
+//
+// ★★ 口径由博士 2026-09-25 给定：「**有远程攻击范围的地面敌人**」——
+// **不是**飞行敌人。两条判据缺一不可：
+//
+//	!e.spec.IsFlying          地面（飞行的一律不算）
+//	e.spec.AttackRange > 0    有远程攻击范围
+//
+// ⚠ 与 `sim.go` 里**敌人出手**用的那条（`ApplyWay == "RANGED"`）不是同一件事：
+// 那一条问的是「它会不会从远处打我们」，这一条问的是「它是不是带远程武器的**地面**单位」。
+// 本实现按博士给的两条走；`ApplyWay` 只当旁证，两者的差异已在文档里量过。
+func isRangedWeaponTarget(e *enemy) bool {
+	return !e.spec.IsFlying && e.spec.AttackRange > 0
+}
+
 // preferFlying / preferRangedWay 是两条优先规则的**偏好谓词**，只给痕迹归因用。
 //
-// ★ 为什么归因要判"这条规则偏不偏好选中者"，而不是"这个干员带不带这条规则"：
+// ★ 为什么归因要判「这条规则偏不偏好选中者」，而不是「这个干员带不带这条规则」：
 // 安德切尔**同时**带特性「优先攻击空中单位」与天赋「优先攻击使用远程武器」。
 // 按后者的写法，只要他这一击重排过，痕迹就一律记到空中那条头上，天赋那条的
 // 运行期计数**永远是 0**——而那个 0 与「规则没接」判不出来。
 func preferFlying(a, b *enemy) bool { return a.spec.IsFlying && !b.spec.IsFlying }
 
 func preferRangedWay(a, b *enemy) bool {
-	return a.spec.ApplyWay == "RANGED" && b.spec.ApplyWay != "RANGED"
+	return isRangedWeaponTarget(a) && !isRangedWeaponTarget(b)
 }
 
 // names / inRangeOf 只给跟踪用（`RIOS_TRACE=1`）。放在这里而不是单独文件，
@@ -3165,6 +3228,32 @@ func (e *enemy) take(amount float64, src *operator) float64 {
 		e.sim.onEnemyHit(e, src)
 	}
 	return dealt
+}
+
+// retreat 让这名干员**主动离场**（原版 `_retreat`）。
+//
+// 做的只有两件：打上 `retreated` 标记、清掉她的阻挡。
+//   - `leftAt`（再部署冷却的起点）由帧循环里那段「离场时刻」统一记——死亡与撤退
+//     走**同一条**，不在这里重复记（重复记会让两种离场的口径各写一遍，迟早分叉）。
+//   - 清 `blocking` 是**立即**的：她这一帧就不该再挡人。敌方的 `blockedBy` 不用在这里
+//     遍历清理——`updateBlocking` 的第二段本来就有一条 `!b.alive() ⇒ blockedBy = nil`
+//     （`sim.go:2013`），本帧稍后会走到。两处都做会在"谁负责清"上留下第二份实现。
+func (o *operator) retreat() {
+	o.retreated = true
+	o.blocking = nil
+}
+
+// findOpByName 按**干员名**在这一次出场的干员里找人（撤退请求按名字指人）。
+//
+// ⚠ 找不到返回 `nil`，由调用方决定怎么办——本仓的规矩是「请求不是命令」，
+// 但**必须记一笔**，否则「请求发了没人接」与「没发请求」长得一样。
+func findOpByName(objs []*operator, name string) *operator {
+	for _, o := range objs {
+		if o.spec.Name == name {
+			return o
+		}
+	}
+	return nil
 }
 
 // nextDeploySeq 发一个"这一次部署"的身份号（见 `operator.deploySeq`）。

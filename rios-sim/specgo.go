@@ -45,18 +45,32 @@ var specKeysAll = []string{
 	"unsupported", "mechanisms", "mech_config",
 }
 
+// specKeysGoOnly 是 **Go 自己有、Python 没有**的顶层键。
+//
+// ★ 为什么要**单开一张表**而不是往 `specKeysAll` 里加一行：`specKeysAll` 是
+// 「`build_spec` 的契约」，判据拿 ast 从 `ak_tactic` 的源文件里核对它——
+// 往它里面塞 Go 自己的键，等于把「与 Python 的契约」偷偷改成「Go 的单方面声明」，
+// 那条核对的判据就再也发现不了真正的协议漂移。
+//
+// 现有一族一条：
+//
+//	· `retreats` —— 撤退请求（博士 2026-09-25：「你现在把撤退机制做了吧」）。
+//	  Python 侧**也拒撤退**（`spec.py:146-151` 把它报成 `撤退 ×N` 的理由），
+//	  所以这是 Go **先走一步**，不是「把 Python 有的补上」。
+var specKeysGoOnly = []string{"retreats"}
+
 // gatedKeys 是**已经产出、但原版那道门还没接**的键。
 var gatedKeys = []string{"highland_cells", "goal_cells"}
 
 // SpecPart 是 Go 现在能造出的那部分规格。
 type SpecPart struct {
-	Stage     string     `json:"stage"`
-	FPS       int        `json:"fps"`
-	MaxTime   float64    `json:"max_time"`
-	Life      int        `json:"life"`
-	CostInit  float64    `json:"cost_init"`
-	CostMax   float64    `json:"cost_max"`
-	CostTime  float64    `json:"cost_time"`
+	Stage         string  `json:"stage"`
+	FPS           int     `json:"fps"`
+	MaxTime       float64 `json:"max_time"`
+	Life          int     `json:"life"`
+	CostInit      float64 `json:"cost_init"`
+	CostMax       float64 `json:"cost_max"`
+	CostTime      float64 `json:"cost_time"`
 	EnemyWindup   float64 `json:"enemy_windup"`
 	RangedEnemies bool    `json:"ranged_enemies"`
 	SpeedScale    float64 `json:"speed_scale"`

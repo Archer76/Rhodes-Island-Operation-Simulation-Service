@@ -106,7 +106,11 @@ TRAIT_LEVELS = {
     #: ⚠ 与上面两条同一条纪律：关卡与站位都按证据取、不手挑坐标；实测读数为 0
     #: 就换关重试，并把「为什么是这一关」写进文档，不许挑到绿为止。
     "prefer_highest_def": "main_02-09",
-    "prefer_ranged": "main_02-09",
+    #: ⚠ 这一关的**模板**必须同时给出两族：地面且 `attack_range > 0` 的、与地面近战的。
+    #: `main_02-09` **不满足**——它地面的全是近战、带远程攻击范围的全是飞行
+    #: （实测 441/562 关两族都有，`main_02-09` 不在其中）。选 `main_13-10` 是因为
+    #: 它两族都多（地面远程 43／地面近战 3），不是因为它「能出绿」。
+    "prefer_ranged": "main_13-10",
     #: 梓兰那条与关卡无关（她**每次攻击命中**都挂停顿），用默认那关即可。
     "slow_on_hit_sec": "main_00-01",
     #: 月见夜那条要**一个她没挡住的靶子**（挡住了就算近战、不降攻），
@@ -147,11 +151,27 @@ def synth_ranged_probe(op: dict, level: str, cell: list[int]) -> int:
         return -1
     spec = b["build_spec"]["spec"]
     spawns = spec.get("spawns") or []
-    melee = next((s for s in spawns if s.get("apply_way") != "RANGED"), None)
-    ranged = next((s for s in spawns if s.get("apply_way") == "RANGED"), None)
+    #: ★★ 口径由博士 2026-09-25 给定：「使用远程武器的敌人」＝
+    #: **有远程攻击范围的地面敌人**（不是飞行敌人）。
+    #: ⇒ 被偏好的那一只 = `!is_flying and attack_range > 0`；
+    #:    对照组那一只 = 地面但 `attack_range == 0`（近战）。
+    melee = next((s for s in spawns if not s.get("is_flying")
+                  and float(s.get("attack_range") or 0) <= 0), None)
+    ranged = next((s for s in spawns if not s.get("is_flying")
+                   and float(s.get("attack_range") or 0) > 0), None)
     if melee is None or ranged is None:
         return -1
     x, y = cell[0], cell[1]
+    #: ★★ 站位**从干员自己的 `range` 里取**（那一栏是**绝对格**，含她脚下那一格）——
+    #: 写死 `x−1`/`x−2` 只对「干员朝左、且那两格不是墙」成立，换一关就可能全落空，
+    #: 而症状是「痕迹恒 0」，与「规则没接」长得一样。
+    rng = [c for c in ((spec.get("operators") or [{}])[0].get("range") or [])
+           if isinstance(c, list) and len(c) == 2]
+    if len(rng) < 2:
+        return -1
+    rng.sort(key=lambda c: (abs(c[0] - x) + abs(c[1] - y)))
+    melee_cell = rng[-1]        # 最外侧那一格当近战位
+    ranged_cell = rng[len(rng) // 2]
     #: 干员朝左 ⇒ 范围在左侧（实测该位狙击的范围格是 x∈[cell−3, cell]、同一行含 y）。
     #:
     #: ⚠ **走完必须在原地停住**（walk 之后接一条 wait）：只给一条 walk 的话，
@@ -165,16 +185,46 @@ def synth_ranged_probe(op: dict, level: str, cell: list[int]) -> int:
     #: 那时近战那只已经走了两个多格。
     melee = dict(melee)
     ranged = dict(ranged)
+    #: ★★ **两只的嘲讽等级都必须压平成 0**——这是这一轮最后才找出来的那一处：
+    #: 排序链里**嘲讽排在一切优先规则之前**（「被强制吸引」压过它们），
+    #: 而 `main_13-10` 的近战模板 `萨卡兹骸骨卫士` 自带嘲讽 ⇒ 它永远排在前面，
+    #: 优先规则**根本没机会参与比较**。症状与「规则没接」一模一样：
+    #: 候选两只的 `rng` 一真一假、`progress` 一 2.0 一 0.0，选中却始终是近战那只。
+    melee["taunt_level"] = 0
+    ranged["taunt_level"] = 0
     melee["time"] = 0.0
     #: ⚠ 近战那只**必须活着等到远程那只进场**：用原关卡的 HP 时它三秒就被打死了
     #: （实测 800 血、每轮约 338），而那一刻远程那只才刚出场 ⇒ 两只**从不同时在范围内**
     #: ⇒ 默认规则与优先规则选的是同一个人 ⇒ 痕迹恒为 0。
     #: 这是合成夹具的**构造参数**，不是判据——所以直接把它调到打不死。
     melee["hp"] = max(float(melee.get("hp") or 0), 20000.0)
-    melee["legs"] = [{"kind": "walk", "points": [[x - 3, y], [x - 1, y]]},
-                     {"kind": "wait", "seconds": 600.0, "points": [[x - 1, y]]}]
-    ranged["time"] = 3.0
-    ranged["legs"] = [{"kind": "wait", "seconds": 600.0, "points": [[x - 2, y]]}]
+    ranged["hp"] = max(float(ranged.get("hp") or 0), 20000.0)
+    #: ★★ **两只都必须是地面**（2026-09-25 博士口径 ＋ 独立探针实测）：
+    #: 安德切尔同时带特性「优先攻击空中单位」与天赋「优先攻击使用远程武器」，
+    #: 而归因是**逐条判「这条规则是不是真的偏好选中者」**、空中那条在前。
+    #: 只要两只的飞行性不一样，这一次选择就会被记到**空中**那条头上。
+    #: 而新口径本来就把飞行排除在外 ⇒ 两只都设成地面。
+    melee["is_flying"] = False
+    ranged["is_flying"] = False
+    #: 被偏好那只**必须真的是**「地面 ＋ 有远程攻击范围」；对照组必须是近战。
+    #: 不写这一句、只靠选出来的模板，会让夹具悄悄退回旧口径而看不出来。
+    ranged = dict(ranged)
+    ranged["attack_range"] = max(float(ranged.get("attack_range") or 0), 1.0)
+    melee = dict(melee)
+    melee["attack_range"] = 0.0
+    #: 走段的两个点**取同一格**（原地「走」）：位置不动、`legU` 照涨到 `length`，
+    #: 而 `progress += step` 于是涨满 2 格。这样既拿到「近战 progress 更大」，
+    #: 又**不必**让路线穿过地图（写死一条向外走的折线，换一关就可能撞墙）。
+    walk_len = 2.0
+    melee["legs"] = [{"kind": "walk", "points": [melee_cell, melee_cell],
+                      "length": walk_len},
+                     {"kind": "wait", "seconds": 600.0, "points": [melee_cell]}]
+    #: 远程那只**晚进场**：它一进场 `progress` 是 0，而近战那只已经涨满 2 格。
+    #: ⚠ 「让远程先站着等 ⇒ 它的 progress 更低」这个设计**不成立**：
+    #: 独立探针把定义钉死了——`wait`/`vanish` 段**一个字都不写 `progress`**
+    #: （`sim.go:1882-1896`），但**进场时刻**才是唯一可控的抓手。
+    ranged["time"] = 8.0
+    ranged["legs"] = [{"kind": "wait", "seconds": 600.0, "points": [ranged_cell]}]
     spec = dict(spec)
     spec["spawns"] = [melee, ranged]
     _, err = call([{"id": 2, "cmd": "sim", "spec": spec}], trace=True)

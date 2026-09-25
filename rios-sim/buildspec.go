@@ -25,6 +25,7 @@
 //
 //   - `highland_cells`：只有**某个干员带 `highland_splash_scale`（> 0）**时才送。
 //     输入在 `operators` 那一份里（`OperatorOut.HighlandSplashScale`）⇒ 门接得上。
+//
 //   - `goal_cells`：只有**积雪机制在场**时才送。门写成 `mechanisms 含 snow.field`
 //     —— 与权威同一句表达式，**在 Go 自己的 mechanisms 上求值**。
 //
@@ -219,6 +220,12 @@ type FullSpec struct {
 	//: （`spawns.go` 那份是权威，抄一遍就是第二份实现）。
 	Spawns    []map[string]any `json:"spawns"`
 	SkillUses []SpecSkillUse   `json:"skill_uses"`
+	//: 撤退请求（时刻 ＋ 干员名）。**第 20 个顶层键**——见 `wire.go::Spec.Retreats`
+	//: 的注释：这是 Go 单方面扩的协议，按规矩另立 `specKeysGoOnly` 并具名登记，
+	//: 不动那张手抄自 Python 的 19 键表。
+	//: ⚠ 与同族的 `deploys`／`skill_uses` 一样**不带 `omitempty`**：
+	//: 没有撤退请求时它必须是 `[]`，不是缺键（缺键会让键集账把它记成「没造」）。
+	Retreats []RetreatSpec `json:"retreats"`
 
 	Unsupported []string `json:"unsupported"`
 
@@ -390,7 +397,7 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 		Params: map[string]any{
 			"level": level, "path": path, "plan": q.Plan, "roster": q.Roster,
 			"difficulty": q.Difficulty, "max_time": q.MaxTime,
-			"heal_mode": q.HealMode,
+			"heal_mode":     q.HealMode,
 			"allow_devices": q.AllowDevices, "allow_skills": q.AllowSkills,
 		},
 	}
@@ -472,6 +479,14 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 		}
 		out.Spec.Deploys = rows
 		out.Spec.SkillUses = BuildSkillUses(plan)
+		//: 撤退请求：**照计划原样搬**（时刻 ＋ 干员名）。这里不做任何解释——
+		//: 「到点该撤谁」是模拟器的事，规格只负责把请求送到。
+		//: ⚠ 与 `deploys` 一样是**有输入才有**的键（`omitempty` 承担语义）。
+		for _, r := range plan.Retreats {
+			out.Spec.Retreats = append(out.Spec.Retreats,
+				RetreatSpec{Time: r.Time, Operator: r.Operator})
+		}
+		out.Scanned["retreats"] = len(out.Spec.Retreats)
 		out.Scanned["deploys"] = len(rows)
 		out.Scanned["skill_uses"] = len(out.Spec.SkillUses)
 	}
@@ -586,8 +601,17 @@ func fullSpecMissingKeys(s FullSpec) ([]string, error) {
 		}
 	}
 	//: 反向也要查：**多出来的键**同样是改了协议（原版没有这个键）。
+	//:
+	//: ★ 2026-09-25 起多了一张 `specKeysGoOnly`：那一族是 **Go 单方面扩的协议**
+	//: （`retreats`——Python 侧把撤退整条报成拒绝理由，Go 先走一步）。
+	//: 它**不算「改了协议」**，但必须**具名登记**在这里，否则下面那条反向守卫
+	//: 会把它当成非法多键。⚠ 两张表**分开**：`specKeysAll` 是手抄自 `spec.py`
+	//: 的契约（判据拿 ast 从源文件核对），往它里面加 Go 自己的键就是把契约改掉。
 	known := map[string]bool{}
 	for _, k := range specKeysAll {
+		known[k] = true
+	}
+	for _, k := range specKeysGoOnly {
 		known[k] = true
 	}
 	extra := []string{}

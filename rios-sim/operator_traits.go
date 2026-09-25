@@ -469,6 +469,12 @@ type TextDerived struct {
 	//: 特性正文含「同时攻击阻挡的所有敌人」⇒ 一次出手打**她自己挡住的全部**敌人
 	//: （泡普卡）。**不是**「打范围内所有人」——范围里路过而没被挡住的敌人不算。
 	AttacksAllBlocked bool `json:"attacks_all_blocked"`
+	//: 特性正文含「撤退时返还初始部署费用」（先锋·冲锋手那一族，翎羽）。
+	//:
+	//: ★ 现算的影响面：全表**恰好 7 位**带这句（翎羽 3★／红豆 4★／苇草·野鬃·历阵锐枪芬·
+	//: 格拉尼 5★／风笛 6★），且这 7 位**同时**都带 `{"cost": 1.0}`（击杀得费）
+	//: ⇒ 两句是**同一条特性的前后两半**，判据可以各判各的。
+	RetreatRefund bool `json:"retreat_refund"`
 	//: **天赋**正文含「优先攻击防御力最高的敌人」（史都华德 铠甲突破）⇒ 选目标时
 	//: 防御力高的优先。
 	//:
@@ -494,6 +500,8 @@ type TextDerived struct {
 const (
 	airPriorityTrait = "优先攻击空中单位"
 	allBlockedTrait  = "同时攻击阻挡的所有敌人"
+	//: 「撤退时返还初始部署费用」——先锋·冲锋手那一族的特性后半句（翎羽）。
+	retreatRefundTrait = "撤退时返还初始部署费用"
 )
 
 // preferHighestDefTalent / preferRangedTalent 是那两条**天赋**正文的判据词。
@@ -541,6 +549,7 @@ func textDerived(traitDesc string, talents []json.RawMessage) TextDerived {
 	out.HealsOnSkill = strings.Contains(plain, healsOnSkillTrait)
 	out.AirPriority = strings.Contains(plain, airPriorityTrait)
 	out.AttacksAllBlocked = strings.Contains(plain, allBlockedTrait)
+	out.RetreatRefund = strings.Contains(plain, retreatRefundTrait)
 	//: 这两条走**天赋**正文（`talents`），不是特性正文——史都华德／安德切尔的
 	//: 黑板里一个字都没写它们。取数口与 `weakness_damage` 同一个（`talentText`）。
 	tal := talentText(talents)

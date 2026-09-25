@@ -50,6 +50,18 @@ type Spec struct {
 	//: 手动开技能的请求（时刻 + 格子），见 `SkillUseSpec`
 	SkillUses []SkillUseSpec `json:"skill_uses,omitempty"`
 
+	//: **撤退请求**（时刻 + 干员名）。博士 2026-09-25：「你现在把撤退机制做了吧」。
+	//:
+	//: ⚠ 这是**第 20 个顶层键**——`build_spec` 的键集原先只有 19 个，那是与
+	//: Python 侧的契约（`specgo.go::specKeysAll` 手抄自 `spec.py:1255-1291`）。
+	//: 加它等于**单方面扩协议**，所以按本仓的规矩：Go 侧另立一张「自己有、
+	//: Python 没有」的键表（`specKeysGoOnly`）并**具名登记**，不动那张 19 键的表。
+	//:
+	//: ⚠ Python 侧**也拒撤退**（`spec.py:146-151` 把它报成 `撤退 ×N` 的理由），
+	//: 所以这不是「把 Python 有的补上」，是**Go 先走一步**。
+	//: 与同族的 `deploys` 一样**不带 `omitempty`**：没有请求时是 `[]`，不是缺键。
+	Retreats []RetreatSpec `json:"retreats"`
+
 	//: 这一局用到了最小版本没覆盖的机制时，Python 侧在这里逐条写明。
 	//: 非空即拒跑——见文件头。
 	Unsupported []string `json:"unsupported,omitempty"`
@@ -279,6 +291,9 @@ type OperatorSpec struct {
 	//: ⚠ 与敌人自己的 `kill_cost`（`enemy_derive.go` 读敌方天赋 `Talent1.cost`）
 	//: **是两笔账**，都要加。
 	KillCostOnKill int `json:"kill_cost_on_kill,omitempty"`
+	//: 同一条特性的**后半句**「撤退时返还初始部署费用」（同族 7 位都带，含翎羽）。
+	//: 消费者是 `sim.go` 的撤退动作：撤退时**退还实际付出的部署费用**。
+	RetreatRefund bool `json:"retreat_refund,omitempty"`
 	//: 职业特性溅射（撼地者那四位共用的一条特性；判据是特性黑板上同时有
 	//: `attack@ability_range_radius` 与 `attack@atk_scale_2`，已由 Python 解好）。
 	//:
@@ -418,6 +433,16 @@ type SkillSpec struct {
 type SkillUseSpec struct {
 	Time float64 `json:"time"`
 	Cell [2]int  `json:"cell"`
+}
+
+// RetreatSpec 是一条**撤退请求**：时刻 ＋ 干员。
+//
+// 为什么按**干员名**而不是下标／格子：原版 `plan.retreats` 就是这么写的
+// （`unit.py` 的 `_retreat(name)` 按名字找人），与本仓 `RetreatOrder` 同形。
+// 按格子找（像 `SkillUseSpec` 那样）会在「同一格换过人」时撤错人。
+type RetreatSpec struct {
+	Time     float64 `json:"time"`
+	Operator string  `json:"operator"`
 }
 
 // DeploySpec 是一次排定的部署。

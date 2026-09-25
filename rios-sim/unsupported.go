@@ -70,7 +70,7 @@ type GateQuery struct {
 	//: 判别与解析都走 `loadPlanTwoForms`（**只此一份实现**）。闸门要读计划里的
 	//: `retreats` 与每位干员的 `skill`，而 `sim` 的查询形式手上是**计划对象**、
 	//: 没有路径 —— 只收路径会让查询形式那条路在这里断掉。
-	Plan         json.RawMessage `json:"plan,omitempty"`
+	Plan json.RawMessage `json:"plan,omitempty"`
 	//: ⚠⚠ **路径形态必须一起带过来**（2026-09-23 实测踩到）：`BuildSpecQuery` 的
 	//: 解析器会把字符串形态的 `plan` 拆成 `(Plan=nil, PlanPath=路径)`，所以
 	//: `BuildSpecFull` 只把 `Plan` 递进来的话，闸门拿到的是**空 raw** ⇒
@@ -79,10 +79,10 @@ type GateQuery struct {
 	//: 症状**不是**报错，而是 `unsupported` 少几条 —— `check_buildspec_go.py`
 	//: 的 C 口径（合成计划，走**路径**形态）正好盯着这一处，实测红 2 例。
 	//: 这也是本文件上面那句「计划少读一条部署在下游只表现为某一手没下」的又一例。
-	PlanPath     string          `json:"-"`
-	Difficulty   string          `json:"difficulty,omitempty"`
-	AllowDevices bool            `json:"allow_devices,omitempty"`
-	AllowSkills  bool            `json:"allow_skills,omitempty"`
+	PlanPath     string `json:"-"`
+	Difficulty   string `json:"difficulty,omitempty"`
+	AllowDevices bool   `json:"allow_devices,omitempty"`
+	AllowSkills  bool   `json:"allow_skills,omitempty"`
 }
 
 // planEcho 回显这一趟的计划来源（路径原样；内联给一个读得懂的标签）。
@@ -161,10 +161,13 @@ func UnsupportedGate(level, path string, q GateQuery) (GateOut, error) {
 	out.Scanned["retreat"] = 0
 	if plan != nil {
 		out.Scanned["retreat"] = len(plan.Retreats)
-		if n := len(plan.Retreats); n > 0 {
-			out.Covered["retreat"]++
-			out.Reasons = append(out.Reasons, fmt.Sprintf("撤退 ×%d", n))
-		}
+		//: ★ 2026-09-25：**这里原来会报一条拒绝理由**（`撤退 ×N`），因为撤退整条没实现。
+		//: 博士「你现在把撤退机制做了吧」之后，撤退在 Go 侧**已经实现**
+		//: （规格多一个 `retreats` 键、`sim.go` 按时刻执行、特性「撤退时返还初始部署费用」
+		//: 跟着兑现）⇒ 这一条理由**必须撤掉**，否则新做的机制永远走不到。
+		//:
+		//: ⚠ 计数（`Scanned[「retreat」]`）**留着**：它是「这一局有几条撤退请求」的账，
+		//: 与「拒不拒」是两件事。撤掉计数会让「没人提撤退」与「提了但没数」同形。
 	}
 
 	// `inp.snow_fields`：**运行期才 append** 的列表，规格取的是开局态 ⇒ 恒空。

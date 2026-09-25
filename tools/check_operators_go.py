@@ -188,7 +188,10 @@ EXTRA_OPS = ("skill", "active", "talent_panel_mods",
              #: 减速比例不在这里（那是全局常数 80%，博士裁定）。
              "slow_on_hit_sec",
              #: ★ 2026-09-25 第五批：两条特性——「远程攻击降攻」（领主）与「击杀得费」（冲锋手）。
-             "ranged_atk_scale", "kill_cost_on_kill")
+             "ranged_atk_scale", "kill_cost_on_kill",
+             #: ★ 2026-09-25 第六批：**撤退动作**。同一条特性的后半句
+             #: 「撤退时返还初始部署费用」——Python 侧连撤退都没有（整条被拒跑）。
+             "retreat_refund")
 EXTRA_OPS_SEEN: dict = {}
 EXTRA_OPS_FROM_PY: dict = {}
 
@@ -250,12 +253,12 @@ GO_ONLY_COUNTERS_ZERO_OK = {
     #: ---- 2026-09-25 第三批：天赋正文里的选目标优先 ----
     "prefer_highest_def_true": "天赋「铠甲突破」（史都华德，三星）。本套夹具不部署三星 ⇒ 必然为 0；"
                                "行使见证在 tools/three_star_check.py 的第三趟（main_02-09，1 次）。",
-    "prefer_ranged_true": "天赋「短板突破」（安德切尔，三星）。同上 ⇒ 本套必然为 0；"
-                          "★ **而它在专属夹具与合成夹具上也都是 0**：路线格试过 12 个，"
-                          "另做一轮穷举（5 个无飞行关卡 × 全部路线格共 143 格），"
-                          "再按博士指示造了「一个近战 + 一个远程」的合成夹具——仍是 0。"
-                          "原因已定位：合成夹具上默认规则与优先规则**选的是同一个人**。"
-                          "这是**欠账不是通过**——见 docs/three-star-modelling.md §十三·13.5。",
+    "prefer_ranged_true": "天赋「短板突破」（安德切尔，三星）。本套夹具不部署三星 ⇒ 本套必然为 0；"
+                          "★ 它的**运行期见证在别处**：tools/three_star_check.py 的第三趟，"
+                          "合成夹具上 **85 次**（口径已按博士 2026-09-25 的更正改成"
+                          "「**有远程攻击范围的地面敌人**」，不是飞行敌人；"
+                          "根因是旧合成夹具的近战模板自带**嘲讽等级**，而嘲讽排在一切优先规则之前"
+                          "⇒ 那条规则根本没机会参与比较）。",
     #: ---- 2026-09-25 第四批：特性「攻击附带停顿」（梓兰）----
     "slow_on_hit_nonzero": "特性「攻击附带停顿」（梓兰，三星）。本套夹具不部署三星 ⇒ 必然为 0；"
                            "行使见证在 tools/three_star_check.py 的第三趟（main_00-01，24 次）。",
@@ -266,6 +269,10 @@ GO_ONLY_COUNTERS_ZERO_OK = {
     #:   · `kill_cost_on_kill_nonzero` 才是 0（24 份里没有一名冲锋手）。
     "kill_cost_on_kill_nonzero": "特性「击杀得费」（翎羽，三星）。本套夹具不部署三星 ⇒ 必然为 0；"
                                  "行使见证在 tools/three_star_check.py 的第三趟（main_00-01，11 次）。",
+    #: ---- 2026-09-25 第六批：撤退动作 ----
+    "retreat_refund_true": "特性「撤退时返还初始部署费用」（翎羽，三星）。本套夹具不部署三星 ⇒ 必然为 0；"
+                           "行使见证要一份**带 retreats 的计划**（本仓现成夹具里一份都没有）——"
+                           "见 docs/three-star-modelling.md。",
 }
 
 #: **Go 独有**的 `covered` 计数器：它们量的是 Go 自己那条**技能绑定链**的账，
@@ -298,6 +305,8 @@ GO_ONLY_COUNTERS = {
     "prefer_ranged_true": "天赋正文含「优先攻击使用远程武器的敌人」的人次（安德切尔）",
     #: ---- 2026-09-25 第四批：特性「攻击附带停顿」 ----
     "slow_on_hit_nonzero": "特性黑板 `sluggish` 为正的人次（梓兰 凝滞师）",
+    #: ---- 2026-09-25 第六批：撤退动作 ----
+    "retreat_refund_true": "特性「撤退时返还初始部署费用」的人次（冲锋手那一族，翎羽）",
     #: ---- 2026-09-25 第五批：两条特性 ----
     "ranged_atk_scale_nonzero": "特性「远程攻击降攻」命中的人次（领主那一族，月见夜）",
     "kill_cost_on_kill_nonzero": "特性「击杀得费」命中的人次（冲锋手那一族，翎羽）",
@@ -326,6 +335,7 @@ COVERED_KEYS = (
     "heals_true", "heals_on_skill_true", "air_priority_true",
     "attacks_all_blocked_true", "prefer_highest_def_true", "prefer_ranged_true",
     "slow_on_hit_nonzero", "ranged_atk_scale_nonzero", "kill_cost_on_kill_nonzero",
+    "retreat_refund_true",
     "blessing_nonzero", "regen_aura_nonzero",
     "team_auras_nonzero", "talent_dodge_nonzero",
     "regen_strict_true", "regen_strict_false",
