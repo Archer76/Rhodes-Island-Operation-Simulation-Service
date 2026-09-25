@@ -241,7 +241,11 @@ type OperatorOut struct {
 	AirPriority *bool `json:"air_priority,omitempty"`
 	//: 特性正文含「同时攻击阻挡的所有敌人」（泡普卡）：一次出手打**她自己挡住的全部**，
 	//: 而不是「范围内所有人」。
-	AttacksAllBlocked  *bool            `json:"attacks_all_blocked,omitempty"`
+	AttacksAllBlocked *bool `json:"attacks_all_blocked,omitempty"`
+	//: **天赋**正文含「优先攻击防御力最高的敌人」（史都华德）：选目标时防御力高的优先。
+	PreferHighestDef *bool `json:"prefer_highest_def,omitempty"`
+	//: **天赋**正文含「优先攻击使用远程武器的敌人」（安德切尔）：`ApplyWay == RANGED` 优先。
+	PreferRanged       *bool            `json:"prefer_ranged,omitempty"`
 	BlessingSave       *float64         `json:"blessing_save,omitempty"`
 	BlessingSelfFreeze *float64         `json:"blessing_self_freeze,omitempty"`
 	RegenAura          map[string]any   `json:"regen_aura,omitempty"`
@@ -305,7 +309,7 @@ var OperatorsCoveredKeys = []string{
 	"combo_hits_gt1", "power_attack_count_gt0",
 	//: ---- 段 B 第一批（天赋派生）----
 	"heals_true", "heals_on_skill_true", "air_priority_true",
-	"attacks_all_blocked_true",
+	"attacks_all_blocked_true", "prefer_highest_def_true", "prefer_ranged_true",
 	"blessing_nonzero", "regen_aura_nonzero",
 	"team_auras_nonzero", "talent_dodge_nonzero",
 	"regen_strict_true", "regen_strict_false",
@@ -703,6 +707,18 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		covered["attacks_all_blocked_true"]++
 		b := true
 		out.AttacksAllBlocked = &b
+	}
+	//: 两条**天赋**正文里的选目标优先（史都华德 铠甲突破／安德切尔 短板突破）——
+	//: 与上面两条同族，只是出处是**天赋**正文（黑板里一个字都没写）。
+	if st.TextDerived.PreferHighestDef {
+		covered["prefer_highest_def_true"]++
+		b := true
+		out.PreferHighestDef = &b
+	}
+	if st.TextDerived.PreferRanged {
+		covered["prefer_ranged_true"]++
+		b := true
+		out.PreferRanged = &b
 	}
 	//: `blessing_save` / `blessing_self_freeze`：判据是 `find_blessing` 的两个
 	//: 黑板键**同时**在（`c2e_freeze` / `freeze`），只在 `c2e_freeze > 0` 时送。

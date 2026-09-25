@@ -444,6 +444,11 @@ REGISTERED_EXTRA: tuple[tuple[str, str], ...] = (
      "特性「优先攻击空中单位」（狙击·速射手）：选目标时飞行单位优先。Python 无此机制"),
     (r"^\.operators\[\d+\]\.attacks_all_blocked$",
      "特性「同时攻击阻挡的所有敌人」（泡普卡）：一次出手打挡住的全员。Python 无此机制"),
+    #: ★ 2026-09-25 第三批：**天赋**正文里的选目标优先（史都华德／安德切尔）。
+    (r"^\.operators\[\d+\]\.prefer_highest_def$",
+     "天赋「铠甲突破」（史都华德）：选目标时防御力最高的优先。Python 无此机制"),
+    (r"^\.operators\[\d+\]\.prefer_ranged$",
+     "天赋「短板突破」（安德切尔）：选目标时使用远程武器的敌人优先。Python 无此机制"),
 )
 REGISTERED_EXTRA_RX = tuple((re.compile(p), src) for p, src in REGISTERED_EXTRA)
 

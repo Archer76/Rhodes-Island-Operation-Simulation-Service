@@ -218,7 +218,13 @@ type OperatorSpec struct {
 	//: 特性「同时攻击阻挡的所有敌人」（泡普卡）：一次出手打**她自己挡住的全部**。
 	//: 落点在 `operator.maxTarget()`（`skill.go`）——它**不改**「范围内所有人」。
 	AttacksAllBlocked bool `json:"attacks_all_blocked,omitempty"`
-	//: 普攻连击（焰狐龙梓兰的**隐藏天赋**）：一次普攻打 `ComboHits` 击，每击倍率
+	//: **天赋**正文「优先攻击防御力最高的敌人」（史都华德）：选目标时防御力高的优先。
+	//: 与 `air_priority` 同一条排序链，见 `sim.go::pickTargets`。
+	PreferHighestDef bool `json:"prefer_highest_def,omitempty"`
+	//: **天赋**正文「优先攻击使用远程武器的敌人」（安德切尔）：`ApplyWay == RANGED` 优先。
+	//: ⚠ 安德切尔同时带特性「优先攻击空中单位」，两条同时命中时谁先谁后**未取证**，
+	//: 本实现排在空中之后并具名登记。
+	PreferRanged bool `json:"prefer_ranged,omitempty"` //: 普攻连击（焰狐龙梓兰的**隐藏天赋**）：一次普攻打 `ComboHits` 击，每击倍率
 	//: `ComboHitScale`，**计算防御/法抗之后**再整笔乘 `ComboDamageScale`。
 	//:
 	//: ⚠ 两个"不是 1"的判据必须按原版抄：`ComboHits` 的"没有这条"是 **1**

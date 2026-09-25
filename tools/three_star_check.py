@@ -75,6 +75,10 @@ TALENT_MECHS = [
 TRAIT_MECHS = [
     ("air_priority", "TRAITAIR", "优先攻击空中单位"),
     ("attacks_all_blocked", "TRAITMULTI", "同时攻击阻挡的所有敌人"),
+    #: ★ 这两条的出处是**天赋**正文（不是特性正文）——史都华德／安德切尔的黑板里
+    #: 一个字都没写选目标，所以它们与上面两条同一个取证口（`talentText`）。
+    ("prefer_highest_def", "TRAITDEF", "优先攻击防御力最高"),
+    ("prefer_ranged", "TRAITRANGE", "优先攻击使用远程武器"),
 ]
 
 #: ② 那两条在默认关卡上**行使不了**（`main_00-01` 一只飞行单位都没有、也挡不住两个），
@@ -89,15 +93,21 @@ TRAIT_MECHS = [
 TRAIT_LEVELS = {
     "air_priority": "main_02-09",
     "attacks_all_blocked": "main_01-07",
+    #: 这两条先在**同一批候选关**上试：史都华德（术师）要的是「范围内同时有防御力不同的
+    #: 敌人」，安德切尔（狙击）要的是「范围内同时有使用远程武器的敌人」。
+    #: ⚠ 与上面两条同一条纪律：关卡与站位都按证据取、不手挑坐标；实测读数为 0
+    #: 就换关重试，并把「为什么是这一关」写进文档，不许挑到绿为止。
+    "prefer_highest_def": "main_02-09",
+    "prefer_ranged": "main_02-09",
 }
 
 
-def ground_route_cell(level: str) -> list[int] | None:
-    """该关**地面路线**上出现次数最多的那一格（复算：从出怪规格现读，不写坐标）。"""
+def route_cells(level: str) -> list[list[int]]:
+    """该关**地面路线**上出现过的格，按出现次数从多到少（复算：从出怪规格现读，不写坐标）。"""
     b, _ = call([{"id": 1, "cmd": "buildspec", "level": level, "spec": {}}])
     b = b[0]
     if not b.get("ok"):
-        return None
+        return []
     cnt: dict[tuple[int, int], int] = {}
     for s in b["build_spec"]["spec"].get("spawns") or []:
         if s.get("is_flying"):
@@ -107,14 +117,31 @@ def ground_route_cell(level: str) -> list[int] | None:
                 if isinstance(pt, list) and len(pt) >= 2:
                     cell = (int(round(pt[0])), int(round(pt[1])))
                     cnt[cell] = cnt.get(cell, 0) + 1
-    if not cnt:
-        return None
-    best = max(sorted(cnt), key=lambda c: cnt[c])
-    return [best[0], best[1]]
+    ordered = sorted(cnt, key=lambda c: (-cnt[c], c))
+    return [[c[0], c[1]] for c in ordered]
 
 
-def trait_probe(op: dict, level: str, cell: list[int]) -> str | None:
-    """单人在指定关卡、指定格位上跑一趟，返回 trace 文本（跑不动就返回 None）。"""
+#: 一个机制最多试几格。★ 站位**不是判据**，它是**夹具构造**：试路线格只是把
+#: 「这个时刻到底存不存在」找出来，不是在挑一个能变绿的读数——试遍全部仍为 0 的，
+#: 工具会**把试过的格数一起印出来**（那才是可复核的读数）。
+MAX_CELLS = 12
+
+
+def trait_probe(op: dict, level: str, tag: str) -> tuple[list[int] | None, int, int]:
+    """在指定关卡的路线格上按序试，返回 (命中的格, 该族痕迹次数, 试了几格)。"""
+    tried = 0
+    for cell in route_cells(level)[:MAX_CELLS]:
+        tried += 1
+        tr = _one_sim(op, level, cell)
+        if tr is None:
+            continue
+        n = trace_count(tr, tag)
+        if n > 0:
+            return cell, n, tried
+    return None, 0, tried
+
+
+def _one_sim(op: dict, level: str, cell: list[int]) -> str | None:
     roster = [{"id": op["char_id"], "name": op["name"], "elite": ELITE, "level": LEVEL,
                "own": True, "potential": POTENTIAL, "rarity": 3}]
     plan = {"stage": level, "deploys": [
@@ -295,22 +322,15 @@ def main() -> int:
             lv = TRAIT_LEVELS.get(key)
             if not lv:
                 continue
-            cell = ground_route_cell(lv)
+            cell, n, tried = trait_probe(o, lv, tag)
             if cell is None:
-                trait_pass.append("%s 的「%s」：%s 取不到路线格" % (o["name"], lbl, lv))
+                trait_pass.append("%s（%s，试过 %d 格）：%s→**0**"
+                                  % (o["name"], lv, tried, lbl))
+                zero_exercise["%s 的「%s」" % (o["name"], lbl)] = (
+                    "专属夹具 %s 上试遍 %d 个路线格仍为 0" % (lv, tried))
                 continue
-            tr = trait_probe(o, lv, cell)
-            if tr is None:
-                trait_pass.append("%s 的「%s」：%s 跑不动" % (o["name"], lbl, lv))
-                continue
-            n = trace_count(tr, tag)
-            trait_pass.append("%s（%s @%s）：%s→%d"
-                              % (o["name"], lv, cell, lbl, n))
-            k = "%s 的「%s」" % (o["name"], lbl)
-            if n > 0:
-                zero_exercise.pop(k, None)
-            else:
-                zero_exercise[k] = "三趟都零行使（含专属夹具 %s @%s）" % (lv, cell)
+            trait_pass.append("%s（%s @%s）：%s→%d" % (o["name"], lv, cell, lbl, n))
+            zero_exercise.pop("%s 的「%s」" % (o["name"], lbl), None)
     print()
     print("⇒ 绑定失败 %d 位（有技能槽却没绑上）" % bad)
     print("★ 判据口径：`SKILL` 与四个 `TAL*` 都是**运行期痕迹**，不是「键非空」。")

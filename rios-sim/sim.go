@@ -2457,22 +2457,41 @@ func pickTargets(op *operator, enemies []*enemy, n int, t float64) []*enemy {
 		}
 		inRange = append(inRange, e)
 	}
+	//: ---- 选目标的**优先链** ----
+	//:
+	//: 排位是**嘲讽 → 空中 → 防御最高 → 使用远程武器 → 推进度**。
+	//:
+	//:   · 嘲讽是「被强制吸引」，它压过一切优先规则（本仓既有排序把它放第一位）；
+	//:   · 空中：**特性**「优先攻击空中单位」（狙击·速射手那一族）；
+	//:   · 防御最高／远程：**天赋**正文那两条（史都华德 铠甲突破／安德切尔 短板突破）
+	//:     ——它们的黑板里**一个字都没写**选目标，只能在正文里判。
+	//:
+	//: ⚠ **每一条都是排序键，不是过滤器**。写成过滤（`if AirPriority && !e.IsFlying
+	//: { continue }`）会让速射手在**没有空中单位**的关卡里一次都不出手——整关零输出，
+	//: 而看起来像「没接」。
+	//:
+	//: ⚠ 安德切尔**同时**带特性「优先攻击空中单位」与天赋「优先攻击使用远程武器的
+	//: 敌人」——两条同时命中时谁先谁后**没有取证**（全库只有他一位这样的干员），
+	//: 本实现把空中排在前面并**具名登记**这条次序未经取证。写成别的次序会改判决，
+	//: 所以这一条不是实现细节，是欠账。
 	sort.SliceStable(inRange, func(i, j int) bool {
-		if inRange[i].spec.TauntLevel != inRange[j].spec.TauntLevel {
-			return inRange[i].spec.TauntLevel > inRange[j].spec.TauntLevel
+		a, b := inRange[i], inRange[j]
+		if a.spec.TauntLevel != b.spec.TauntLevel {
+			return a.spec.TauntLevel > b.spec.TauntLevel
 		}
-		//: ---- 特性「优先攻击空中单位」（狙击·速射手那一族）----
-		//:
-		//: 排位是**嘲讽 → 空中 → 推进度**：嘲讽是「被强制吸引」，它压过一切
-		//: 优先规则（本仓既有排序把 TauntLevel 放第一位，这里不动它）。
-		//:
-		//: ⚠ 「优先」不是「只能」：这是一条**排序键**，不是过滤器。写成过滤
-		//: （`if op.spec.AirPriority && !e.IsFlying { continue }`）会让速射手在
-		//: **没有空中单位**的关卡里一次都不出手——整关零输出，而看起来像"没接"。
-		if op.spec.AirPriority && inRange[i].spec.IsFlying != inRange[j].spec.IsFlying {
-			return inRange[i].spec.IsFlying
+		if op.spec.AirPriority && a.spec.IsFlying != b.spec.IsFlying {
+			return a.spec.IsFlying
 		}
-		return inRange[i].progress > inRange[j].progress
+		if op.spec.PreferHighestDef && a.spec.DEF != b.spec.DEF {
+			return a.spec.DEF > b.spec.DEF
+		}
+		if op.spec.PreferRanged {
+			ar, br := a.spec.ApplyWay == "RANGED", b.spec.ApplyWay == "RANGED"
+			if ar != br {
+				return ar
+			}
+		}
+		return a.progress > b.progress
 	})
 	for _, e := range inRange {
 		out = append(out, e)
@@ -2480,21 +2499,34 @@ func pickTargets(op *operator, enemies []*enemy, n int, t float64) []*enemy {
 			break
 		}
 	}
-	//: ★ 行使指纹：**只有这一次选择真的被"优先"规则改变过**才打。
-	//: 判据是「选中的第一个是飞行的，且范围里同时有地面候选」——只判
-	//: 「选中了飞行的」在满屏飞行单位的关卡里会恒真，那是零信息量的绿。
-	if traceOn && op.spec.AirPriority && n > 0 {
-		air, ground := 0, 0
+	//: ★ 行使指纹：**只有这一次选择真的被优先规则改变过**才打。
+	//:
+	//: 判据一律是同一个：**「默认规则会选的那一个」与「实际选中的那一个」不是同一个**。
+	//: 默认规则＝(嘲讽, 推进度) 那条既有排序。这一条比「选中的是飞行的」强得多——
+	//: 后者在满屏飞行单位的关卡里恒真，是零信息量的绿；而「默认会选 A、实际选了 B」
+	//: 才是"这条规则真的插进来做了事"。
+	if traceOn && n > 0 && len(out) > 0 && len(inRange) > 1 {
+		var def *enemy
 		for _, e := range inRange {
-			if e.spec.IsFlying {
-				air++
-			} else {
-				ground++
+			if def == nil || e.spec.TauntLevel > def.spec.TauntLevel ||
+				(e.spec.TauntLevel == def.spec.TauntLevel && e.progress > def.progress) {
+				def = e
 			}
 		}
-		if air > 0 && ground > 0 && len(out) > 0 && out[0].spec.IsFlying {
-			trace("TRAITAIR t=%.4f op=%s pick=%s air=%d ground=%d",
-				t, op.spec.Name, out[0].spec.Name, air, ground)
+		if def != nil && def != out[0] {
+			switch {
+			case op.spec.AirPriority:
+				trace("TRAITAIR t=%.4f op=%s pick=%s def=%s",
+					t, op.spec.Name, out[0].spec.Name, def.spec.Name)
+			case op.spec.PreferHighestDef:
+				trace("TRAITDEF t=%.4f op=%s pick=%s(def=%.1f) def=%s(def=%.1f)",
+					t, op.spec.Name, out[0].spec.Name, out[0].spec.DEF,
+					def.spec.Name, def.spec.DEF)
+			case op.spec.PreferRanged:
+				trace("TRAITRANGE t=%.4f op=%s pick=%s(%s) def=%s(%s)",
+					t, op.spec.Name, out[0].spec.Name, out[0].spec.ApplyWay,
+					def.spec.Name, def.spec.ApplyWay)
+			}
 		}
 	}
 	return out

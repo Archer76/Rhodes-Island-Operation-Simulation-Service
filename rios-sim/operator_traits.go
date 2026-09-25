@@ -374,6 +374,21 @@ type TextDerived struct {
 	//: 特性正文含「同时攻击阻挡的所有敌人」⇒ 一次出手打**她自己挡住的全部**敌人
 	//: （泡普卡）。**不是**「打范围内所有人」——范围里路过而没被挡住的敌人不算。
 	AttacksAllBlocked bool `json:"attacks_all_blocked"`
+	//: **天赋**正文含「优先攻击防御力最高的敌人」（史都华德 铠甲突破）⇒ 选目标时
+	//: 防御力高的优先。
+	//:
+	//: ⚠ 与上面三条不同：这一条的出处是**天赋**正文，不是特性正文——史都华德的黑板
+	//: 里只有 `{"atk": 0.03}`（面板那一半），**选目标这件事一个字都没写进黑板**。
+	//: 所以它走 `talentText`（与 `weakness_damage` 同一个取数口）。
+	PreferHighestDef bool `json:"prefer_highest_def"`
+	//: **天赋**正文含「优先攻击使用远程武器的敌人」（安德切尔 短板突破）⇒ 选目标时
+	//: `ApplyWay == "RANGED"` 的敌人优先。
+	//:
+	//: ⚠ 安德切尔**同时**带特性「优先攻击空中单位」与这一条天赋。两条同时命中时
+	//: 谁先谁后**没有取证**（全库只有他一位这样的干员），所以本实现把它排在
+	//: 空中之后（见 `sim.go::pickTargets` 的排序链与那里的注释），并**具名登记**
+	//: 这条次序未经取证——它不像「哪一条该生效」那样可以直接量。
+	PreferRanged bool `json:"prefer_ranged"`
 }
 
 // airPriorityTrait / allBlockedTrait 是特性那两条的判据词。
@@ -384,6 +399,13 @@ type TextDerived struct {
 const (
 	airPriorityTrait = "优先攻击空中单位"
 	allBlockedTrait  = "同时攻击阻挡的所有敌人"
+)
+
+// preferHighestDefTalent / preferRangedTalent 是那两条**天赋**正文的判据词。
+// 与上面两条同族，但出处不同（天赋正文，不是特性正文）。
+const (
+	preferHighestDefTalent = "优先攻击防御力最高的敌人"
+	preferRangedTalent     = "优先攻击使用远程武器的敌人"
 )
 
 // stripTraitTags 把特性正文里的**排版标签**剥掉再判词。
@@ -424,7 +446,12 @@ func textDerived(traitDesc string, talents []json.RawMessage) TextDerived {
 	out.HealsOnSkill = strings.Contains(plain, healsOnSkillTrait)
 	out.AirPriority = strings.Contains(plain, airPriorityTrait)
 	out.AttacksAllBlocked = strings.Contains(plain, allBlockedTrait)
-	out.WeaknessDamage = strings.Contains(talentText(talents), "弱点伤害")
+	//: 这两条走**天赋**正文（`talents`），不是特性正文——史都华德／安德切尔的
+	//: 黑板里一个字都没写它们。取数口与 `weakness_damage` 同一个（`talentText`）。
+	tal := talentText(talents)
+	out.PreferHighestDef = strings.Contains(tal, preferHighestDefTalent)
+	out.PreferRanged = strings.Contains(tal, preferRangedTalent)
+	out.WeaknessDamage = strings.Contains(tal, "弱点伤害")
 	return out
 }
 

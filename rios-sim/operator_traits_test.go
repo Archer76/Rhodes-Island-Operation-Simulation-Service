@@ -1,6 +1,50 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
+
+// talentWithDesc 造一条**带正文**的天赋组（`talentJSON` 的 description 是空的，
+// 而这一组判据恰恰**只看正文**）。
+func talentWithDesc(desc string) json.RawMessage {
+	raw, err := json.Marshal(map[string]any{
+		"candidates": []any{map[string]any{
+			"name":            "某条天赋",
+			"unlockCondition": map[string]any{"phase": "PHASE_1", "level": 1},
+			"blackboard":      []any{},
+			"description":     desc,
+		}},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+
+// TestTextDerivedTalentTargeting 盯住**天赋正文**里那两条选目标优先。
+//
+// ★ 为什么它们不在特性那条判据里：史都华德／安德切尔的黑板里**一个字都没写**
+// 选目标（史都华德只有 `{"atk": 0.03}`），正面判据只在天赋正文里。
+// 取数口与 `weakness_damage` 同一个（`talentText`，**所有候选**的正文拼接）。
+func TestTextDerivedTalentTargeting(t *testing.T) {
+	cases := []struct {
+		desc string
+		want TextDerived
+	}{
+		{"攻击力+3%，优先攻击防御力最高的敌人",
+			TextDerived{DamageType: "PHYSICAL", PreferHighestDef: true}},
+		{"攻击速度+8，优先攻击使用远程武器的敌人",
+			TextDerived{DamageType: "PHYSICAL", PreferRanged: true}},
+		{"攻击力+4%", TextDerived{DamageType: "PHYSICAL"}},
+	}
+	for _, c := range cases {
+		got := textDerived("", []json.RawMessage{talentWithDesc(c.desc)})
+		if got != c.want {
+			t.Errorf("天赋正文 %q\n  得 %+v\n  要 %+v", c.desc, got, c.want)
+		}
+	}
+}
 
 // TestTextDerivedTraitTags 盯住一条**实测踩到的坑**：特性正文里的排版标签
 // 会**插在词中间**，不剥掉的话整串短语一个字都不差地扫也扫不到。
