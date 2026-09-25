@@ -106,7 +106,8 @@ type RegenAuraSpec struct {
 	Strict bool `json:"strict,omitempty"`
 }
 
-// TeamAuraSpec 是一条**全场光环**（原版 `talents.TeamAura`，`talents.py:646`）。
+// TeamAuraSpec 是一条**全场光环**（原版 `talents.TeamAura`，`talents.py:526`；
+// ★ 2026-09-26 更正经独立复核：原写 `talents.py:646`，那一行是 `rhodes_bonus` 的注释）。
 //
 // 与 `RegenAuraSpec` 的关键差别：那个是**射程内**才生效、要问主人的 `Range`；
 // 这个是**全场**、不看位置，所以没有"进入"那一刻的歧义，判定只需要"目标是谁"。

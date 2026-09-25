@@ -352,7 +352,9 @@ type operator struct {
 	freezeTimer float64
 	//: 【增益治疗】（天赋「医者丰碑」）剩余秒数。**从吃到那一刻起算**，
 	//: 与光环主人是否还活着**无关**——原版把这句话写在 `RegenAura.tick` 里：
-	//: 「增益已经挂在身上了，就算光环本人倒掉也照样跳完」（`talents.py:811`）。
+	//: 「增益已经挂在身上了，就算光环本人倒掉也照样跳完」（`talents.py:689`；
+	//: ★ 2026-09-26 独立复核更正：原写 `talents.py:811`，那落在
+	//: `find_summon_allowance` 的 docstring 里，与光环无关）。
 	regenLeft float64
 	//: 这份增益的**每秒回复量**（已按势力翻过倍）。与 `regenLeft` 成对：
 	//: 归零时两个一起清。
@@ -2756,9 +2758,14 @@ func inRangeOf(op *operator, enemies []*enemy) []*enemy {
 //  1. **按目标逐个算**，不能先算一份再刷给所有人——「万众巨潮」对
 //     【乌萨斯学生自治团】翻倍、对别人不翻，取值因人而异。
 //  2. 多条光环**相加**，不是连乘。
-//  3. 光环一旦建立就**不随主人阵亡而消失**（原版 `self.team_auras` 只 append、
-//     没有删除点）。主人倒了之后只有「技能期间才生效」那类会自然变 0
-//     （技能状态没了），常驻那类照旧——所以这里不判 `owner.alive()`。
+//  3. ★ **2026-09-25 博士裁定：光环主人倒下/撤退后光环消失** ⇒ 内层循环判
+//     `owner.alive()`（`alive() = hp > 0 && !o.retreated`，「阵亡」与「已撤退」
+//     由同一个判据兑现）。所以这里**不是**「主人倒了光环照旧」——
+//     那一版读法已被裁定取代，见 `docs/golden-baseline.md` 节点十三。
+//     ⚠ 旧读法的依据是**参照实现的实现细节**（原版 `self.team_auras` 只 append、
+//     没有删除点；`talents.py:580` 的 `TeamAura.current(target)` 两侧都不看主人死活），
+//     实现细节不是口径依据。★ 这段函数头曾经**忘了跟着改**，与 18 行之后的代码
+//     正相反，2026-09-26 由独立复核具名指出后改正。
 func teamAuraTick(ops []*operator) {
 	for _, op := range ops {
 		atk, def := 0.0, 0.0
@@ -3591,7 +3598,11 @@ func (o *operator) hurt(dealt float64) {
 	// 是"少了一道闸门"，所以只会表现为"某一门干员比原版多打了几次"。
 	// HS-EX-8 第 3 手实测：圣聆初雪在 t=63.3 免死并自冻 4 秒，正好吃掉
 	// 65.0 / 67.0 两次出手；Go 多打 2 笔 696 = 1,392 点，正好是总伤害残差。
-	if o.hp <= 0 && !o.blessingUsed && o.spec.BlessingSave > 0 {
+	//: ⚠ 判据必须带 `!o.retreated`：`retreat()` 会把 `hp` 清零（见它自己的注释），
+	//: 于是「`hp <= 0`」同时覆盖了**阵亡**与**主动撤退**两件事，
+	//: 而免死只该救阵亡的人。口径与 `sim.go` 里那条**权威计数**
+	//: （`if !o.alive() && !o.retreated { OperatorDeaths++ }`）同形。
+	if !o.alive() && !o.retreated && !o.blessingUsed && o.spec.BlessingSave > 0 {
 		o.blessingUsed = true
 		o.hp = o.maxHP()
 		// 空间查询留到**下一帧**兑现：掉血那一刻够不着地图（原版同理由，
@@ -3608,7 +3619,8 @@ func (o *operator) hurt(dealt float64) {
 				o.spec.BlessingSelfFreeze)
 		}
 	}
-	if o.hp <= 0 && !o.deathLogged && o.sim != nil {
+	//: 同上：撤退过的人**不许被记成阵亡**（`retreat()` 把 `hp` 清零了）。
+	if !o.alive() && !o.retreated && !o.deathLogged && o.sim != nil {
 		o.deathLogged = true
 		// 措辞照原版日志那一行：`阵亡（承受 N 伤害）`。
 		o.sim.verdict.Events = append(o.sim.verdict.Events, Event{

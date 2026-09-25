@@ -778,18 +778,56 @@ MUTATIONS = ("丢一条期望理由", "期望理由顺序对调", "篡改 Go 自
              "清单漂移：Go 的 unported 少一条")
 
 
+def _ported_idx(r: "Reading") -> list[int]:
+    """`r.expected` 里**属于已搬线**的那些下标。
+
+    ★ 为什么注入必须按这个挑目标（2026-09-26 的一处真事故）：
+    `compare` 只比 `exp_ported` —— 期望里属于 `PORTED` 的那一半
+    （Go 本来就只报已搬线；未搬线由 `unported` 那条单独守卫）。
+    旧版 `mutate` 按 `r.expected` 的**原始长度**挑目标，于是「丢一条期望理由」
+    挑中了「计划：撤退 ×1」（它那一条期望是**未搬线**）、
+    「期望理由顺序对调」挑中了「撤退 ×2 ＋ 技能槽 3」（两条里只有一条是已搬线，
+    对调只交换了两条未搬线的位置）—— **改动被过滤器吃掉**，
+    两处注入都变成「注入了却永远不可能红」。
+    取证：`out/cu_diag.py` 打印的 `[诊断]` 行（改动落在谁身上、PORTED 那半变了没有），
+    读数 `expected 1→0 条；其中 PORTED 的 0→0 条`。
+    """
+    lines = [line_of(x) for x in r.expected]
+    return [i for i, l in enumerate(lines) if l in PORTED]
+
+
+def _bites(before: list["Reading"], after: list["Reading"]) -> bool:
+    """这次注入**有没有落到被判据比较的那一半**上。
+
+    与 `compare` 必须**同口径**：只看 `expected` 的 PORTED 投影与 `go`。
+    不满足 ⇒ 这是**判据自己的 bug**（注入与过滤器错位），必须判红，
+    否则那个「✓ 判红」是在夸一条恒不可能失败的注入。
+    """
+    for a, b in zip(before, after):
+        pa = [x for x in a.expected if line_of(x) in PORTED]
+        pb = [x for x in b.expected if line_of(x) in PORTED]
+        if pa != pb or (a.go or {}) != (b.go or {}):
+            return True
+    return False
+
+
 def mutate(readings: list[Reading], which: str) -> list[Reading]:
     out = [Reading(r.name, list(r.expected), copy.deepcopy(r.go), r.note)
            for r in readings]
     if which == "丢一条期望理由":
+        #: 目标按 **PORTED 投影**挑，不按原始长度挑（见 `_ported_idx`）。
         for r in out:
-            if r.expected:
-                r.expected.pop(0)
+            idx = _ported_idx(r)
+            if idx:
+                r.expected.pop(idx[0])
                 return out
     elif which == "期望理由顺序对调":
+        #: 对调的是**已搬线那几条的位置**；只反整串会像旧版那样被未搬线架空。
         for r in out:
-            if len(r.expected) >= 2:
-                r.expected = list(reversed(r.expected))
+            idx = _ported_idx(r)
+            if len(idx) >= 2:
+                i, j = idx[0], idx[-1]
+                r.expected[i], r.expected[j] = r.expected[j], r.expected[i]
                 return out
     elif which == "篡改 Go 自报的 covered":
         for r in out:
@@ -890,16 +928,24 @@ def main() -> int:
             return 1
         bad_guard = 0
         for which in MUTATIONS:
-            mp, _f = compare(mutate(readings, which))
-            ok = bool(mp)
+            _mut = mutate(readings, which)
+            mp, _f = compare(_mut)
+            #: ★ 两道都要过：**判红了** ＋ **注入真落在被判据比较的那一半上**。
+            #: 只看前一道，就会把「一条恒不可能失败的注入」当成守卫成立（见 `_ported_idx`）。
+            bite = _bites(readings, _mut)
+            ok = bool(mp) and bite
             if not ok:
                 bad_guard += 1
-            print("  %s 注入「%s」→ %s"
-                  % ("✓" if ok else "✗", which, "判红" if ok else "没红（守不住）"))
+            print("  %s 注入「%s」→ %s%s"
+                  % ("✓" if ok else "✗", which,
+                     "判红" if (bite and mp) else "没红（守不住）",
+                     "" if bite else "　← ★ 注入没落到被判据比较的那一半上"
+                                     "（判据自己的 bug，不是实现没红）"))
         if bad_guard:
             print("★ %d / %d 处注入没被判红" % (bad_guard, len(MUTATIONS)))
             return 1
-        print("  反向守卫成立：%d / %d 处注入都判红" % (len(MUTATIONS), len(MUTATIONS)))
+        print("  反向守卫成立：%d / %d 处注入都判红，且都落在被判据比较的那一半上"
+              % (len(MUTATIONS), len(MUTATIONS)))
         return 0
 
     if problems:

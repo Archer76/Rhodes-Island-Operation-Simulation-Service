@@ -323,3 +323,109 @@ Go 的 `request.id` 是 `int`，于是**每一条请求**都被拒成
   造成语义差（本次 6 条的取值看起来是「无限制」）。
 * 主干 262 之外的关卡 id（索引里 `main_*` 前缀共 434 个、其余活动 `#f#` 780 − 121 个）
   **未核**；本文件的所有计数只覆盖 `main_*#f#` 这 121 个。
+
+---
+
+## 8. 落地记录（2026-09-26 补齐两支；仪器 `F4D389568ED8780F`）
+
+> §1～§7 是**改动前**的调查（仪器 `603e656be5c42e10`）。本节的读数**只对本节的仪器负责**，
+> 与上面几节的数**不许相加、不许比红绿**。探针在 `out/`（不入库）：`zz_fs_probe.py`（影响面，可切 before/after）、
+> `zz_bbmul_check.py`（行使计数＋反例守卫）、`zz_0914_why.py`（§8.4 那条归因）。
+
+### 8.1 改了什么（四处）
+
+| 文件 | 改动 |
+| --- | --- |
+| `rios-sim/stagemul_bb.go`（**新增**） | `ApplyBBMuls`（talent / skill 两支）＋ `BBMulHits`（行使账）＋ `rescaleSkillBlackboard` ＋ `EmptySelectorSkillMuls` |
+| `rios-sim/spawns.go` | `statsFor` 在 `ApplyAttrMuls` **之后、同一个取数出口上**接 `ApplyBBMuls`；5 个行使计数器；**撤掉 blanket 拒跑**，换成更窄的守卫 |
+| `rios-sim/stagemul.go` | 三条 rune 的表全部改成「已搬」；`UnportedRuneMuls` **带痕迹退休**（函数删除，原位留一段说明它为什么退休、被什么顶替） |
+| `tools/check_spawns_go.py` | §3b **翻向**：从「Go 必须拒跑并点名」改成三件（见 8.3） |
+
+两条纪律的落点：`Clone()` 只在**真要改第一处**时发生（库里那份绝不写回）；有命中就调一次
+`DeriveBlackboardFields()`；技能支**重建**那一项的 `blackboard` 切片（`Clone()` 对 `Skills` 只做浅拷，
+`enemy.go:398`）⇒ 不重建就会污染全库缓存。
+
+### 8.2 读数
+
+| 项 | 改前（`2E9D706D1290D5C0`） | 改后（`F4D389568ED8780F`） |
+| --- | --- | --- |
+| `main_*#f#` 121 关 | ok **115** / 拒跑 **6** | ok **121** / 拒跑 **0** |
+| `act31side` `#f#` 12 关 | ok 6 / 拒跑 6 | ok **8** / 拒跑 **4**（剩下 4 个是**另一回事**，见 §8.4） |
+| `main_16-07#s`（SIX_STAR，本文件没覆盖的那一关） | 拒跑 | **ok**、`rune_muls=2`、`talent_mul_applied=17` |
+
+逐关**行使计数**（口径：Go `spawns` 的 `covered`／`scanned`；`bb_mul_lookup` 是 `scan` 类，
+住在 `scanned` 里，别按 `covered` 读——**我自己先按 covered 读过一次，恒印 0，是假读数**）：
+
+| 关 | rune_muls | `bb_mul_lookup`(scan) | talent 命中 | talent 缺键 | skill 命中 | 空选择器(关卡级) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `main_06-05#f#` | 2 | 42 | **13** | 0 | 0 | 0 |
+| `main_08-12#f#` | 2 | 48 | **3** | 0 | 0 | 0 |
+| `main_08-14#f#` | 2 | 66 | 0 | 0 | **1** | 0 |
+| `main_08-16#f#` | 2 | 32 | **1** | 0 | 0 | 0 |
+| `main_09-14#f#` | 2 | 47 | 0 | **47** | 0 | 0 |
+| `main_09-17#f#` | 4 | 63 | **1** | 0 | 0 | **1** |
+| `act31side_ex04#f#` | 2 | 32 | 0 | 0 | **2** | 0 |
+| `act31side_ex07#f#` | 2 | 59 | **48** | 0 | 0 | 0 |
+
+★ 「键非空 ≠ 行使过」在这里是**看得见的**：8 关里 `talent_mul_missing_key=47` 的那一关
+（`main_09-14#f#`）**一次都没命中**——见 §8.4，那是对读数，不是漏乘。
+
+### 8.3 验收三件（施工图 §6.5 要的三件，逐件给读数）
+
+**① 121 关全部 `ok=True`** —— 见 §8.2 表，拒跑 0。
+
+**② 与参照实现逐字对拍这 8 关** —— 由 `tools/check_buildspec_go.py`（「单一入口」）承担：
+它的 B 口径（空计划）里，这 8 关此前是「**具名拒跑、不计入可比分母**」的 9 关之一；
+改动后它们变成**可比**对象 ⇒ 与 Python `build_spec` **逐字段比**。
+⚠ 这一步的冻结档**必须重录**（对象集变了 ⇒ 旧记录里没有它们的期望值，通道给 `rc=6`，
+那是「该重录」不是判据红）；重录命令 `python tools\freeze_baseline.py --record 单一入口`。
+**读数见 `docs/golden-baseline.md` 的对应节点。**
+
+**③ 反例守卫（乘完有没有真重跑派生）** —— 这一条**不能**用上面那 8 关验：
+它们打的键（`periodic_damage.` / `vampire.` / `halfhp.` / `Weaken.` / `StoneSkin_2.` / 技能 `Poison` 的 `damage`）
+**一个都不喂派生字段**（§3 末尾取证过）⇒ 把 `DeriveBlackboardFields()` 那一句整个删掉，
+那 8 关照样全绿。所以另立一条**真数据真 rune** 的守卫，写在 `check_spawns_go.py` §3b-③：
+
+| 关 | 敌人 | 普通档 `passive_pollut` | 四星档 | 期望 |
+| --- | --- | ---: | ---: | ---: |
+| `act31side_ex07` ↔ `#f#` | `enemy_1390_dhsbr_2` | **5** | **10** | ×2 ✓ |
+| 同上 | `enemy_1392_dhshld_2` | **15** | **30** | ×2 ✓ |
+
+`passive_pollut` 正是从 `Passive.extra_value` 派生出来的（`rios-sim/enemy_mech.go:120`）；
+「普通 > 0」保证这条**红得起来**，「四星 == 2 × 普通」才证明乘数**落到了派生字段上**。
+（同一对值 Python 侧也在断言：`tools/check_environment.py:843-888`。）
+
+判据自身的读数：`check_spawns_go.py` **rc=0**、`--mutate` **rc=0**（五处变异各判红）。
+
+### 8.4 两条途中查实的具名事实
+
+**（甲）`act31side` 的 `#f#` 族有 6 个拒跑，两个根因。** `ex04#f#`（skill）与 `ex07#f#`（talent）
+是本文件这条缺口；`s01#f#`～`s04#f#` **换了个根因**——不是 rune 缺实现，是**关卡文件本身不在缓存里**
+（`level_act31side_sub-1-*.json` 读不到，报的是 `读关卡文件失败（…）：open …`）。
+⇒ **「索引全部键」与「缓存可达键」是两个分母**：`docs/level-sweep-activity.md` 报的「A 层红 2」
+是**缓存口径**下的数（`check_go_all.py::cached_levels()`），而按索引全键扫会多出这 4 个
+——两件事不许混，也不许拿后者说前者漏了。
+
+**（乙）`main_09-14#f#` 的 `talent_mul_missing_key=47` 为什么一次都没命中。** 该关那条 rune
+**没有 `enemy` 选择器**（作用于全场敌人），系数键是 `Weaken.atk`，而 §2 记过「全库只有
+`enemy_1177_dufrbl(_2)` 有它，而它就在这一关的 `enemyDbRefs` 里」。
+现读该关出怪表（`out/zz_0914_why.py`）：**47 条全是另外 7 个敌人家族**
+（`1165_duhond`×7、`1166_dusbr`×9、`1167_dubow`×4、`1168_dumage`×5、`1169_duphlx`×15、
+`1170_dushld`×3、`1176_dusocr`×4），**`enemy_1177_*` 一条都没被刷出来**
+——它在 `enemyDbRefs` 里，但**不在 wave 里**。
+⇒ 47 = 出怪条数，这个计数**是对的**：它正确地把「这条乘数在这一关**没有任何对象**」记了出来。
+（这正是「键非空 ≠ 行使过」要防的那种事，只不过这次的方向是「键存在、但没有能被它作用的对象」。）
+
+### 8.5 Go 与 Python 的分道扬镳：本节点**没有新增可观察分歧**（逐条登记）
+
+按 2026-09-24 的口径，Go 与 Python 分道扬镳的每一处都要具名。本节点逐条核过：
+
+| 处 | 形状差 | 判定 |
+| --- | --- | --- |
+| `clone()` 的时机 | Python 在**选择器命中**时就 clone（哪怕一个键都没改到）；Go 改成**真要改第一处**时才 clone | **不可观察**：对象身份不进规格。换来的是「`out != es`」这个「有没有真改到」的判据保持干净 |
+| `derive` 的次数 | Python 每个 `rescale_*` 各调一次；Go 只在**全部命中之后**调一次 | **不可观察**：`DeriveBlackboardFields` 是纯函数、只依赖 `TalentBlackboard` 与 `Skills`，且**不读** `Atk`/`Defense`/`MaxHP` ⇒ 中间那次必被最后一次整份覆盖 |
+| 布尔值的 `float()` | Python `float(True)==1.0`，而 Go 原有的 `toFloat` **拒收** bool | Go 侧新写了 `bbFloatFaithful` 把 bool 按 Python 的语义收下 ⇒ 这一处**改成了对齐**，不是新增分歧 |
+| **拒跑** | Python 从来不拒跑 | ★ 这一处是**分歧被消掉**：原来 Go 拒跑、Python 照算；现在两边都不拒跑 |
+
+⇒ 本节点**没有**「Go 对、Python 错」或「Python 对、Go 错」的地方需要挂红；
+`stage_mul.py` 开头那两条纪律（不改库里的对象、不重跑派生不算接上）都在 `ApplyBBMuls` 里兑现了。

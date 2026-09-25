@@ -43,7 +43,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 )
 
 // spawnsUnported 是 Go 侧**拿不到**的两样输入，具名列出、不静默当成空值。
@@ -724,10 +723,15 @@ func (c *spawnCounter) scan(k string) { c.Scanned[k]++ }
 // 实测踩过：判据报「Go 没报这个计数器（键被改名或没接？）」五处，
 // 而那些键只是这一关**恰好一次都没走到**。
 var spawnCounterKeys = []string{
-	"attr_mul_applied", "diver_false", "diver_true", "legs_empty",
+	"attr_mul_applied", "bb_mul_lookup", "diver_false", "diver_true", "legs_empty",
 	"legs_nonempty", "local_override", "mark_found", "mark_missing",
 	"p3r_armed_false", "p3r_armed_true", "reborn_row", "reborn_row_failed",
 	"reborn_row_ok", "reborn_rows_present", "route_default", "route_found",
+	//: ★ 2026-09-26 随黑板乘数两支一起加。**键非空 ≠ 行使过**：
+	//: 「乘数一次都没命中」与「乘数根本没接」在读数上长得一模一样，
+	//: 所以四种情形各占一个计数器（见 `BBMulHits`）。
+	"skill_mul_applied", "skill_mul_empty_selector", "skill_mul_no_match",
+	"talent_mul_applied", "talent_mul_missing_key",
 }
 
 func initSpawnCounters(c *spawnCounter) {
@@ -776,6 +780,39 @@ func (c *spawnCtx) statsFor(id string, level int) (*EnemyStats, error) {
 	out := ApplyAttrMuls(es, c.muls)
 	if out != es {
 		c.cnt.hit("attr_mul_applied")
+	}
+	//: ★ 黑板乘数那两支（`enemy_talent_blackb_mul` / `enemy_skill_blackb_mul`）挂在**同一个出口**上。
+	//: 权威是把 attr / talent / skill 三条**依次**作用在 `wrap_enemy_at` 这一个出口
+	//: （`stage_mul.py:173-202` 的循环），所以「先取数、后乘」这条口径对三支一视同仁。
+	//: 两项之间的先后不影响结果：`DeriveBlackboardFields` 不读 `Atk`／`Defense`／`MaxHP`。
+	c.cnt.scan("bb_mul_lookup")
+	out, hits := ApplyBBMuls(out, c.muls)
+	if hits.TalentApplied > 0 {
+		c.cnt.hit("talent_mul_applied")
+	}
+	if len(hits.TalentMissing) > 0 {
+		//: 键不在黑板上＝**数据与敌人对不上**（权威的 hits 语义）。不是错误，
+		//: 但必须能被计数看见 —— 静默忽略等于把守卫关掉。
+		c.cnt.hit("talent_mul_missing_key")
+		for _, k := range hits.TalentMissing {
+			trace("BBMUL-MISS %s %s", id, k)
+		}
+	}
+	if hits.SkillApplied > 0 {
+		c.cnt.hit("skill_mul_applied")
+	}
+	if hits.SkillEmptySelector > 0 {
+		c.cnt.hit("skill_mul_empty_selector")
+	}
+	if hits.SkillNoMatch > 0 {
+		//: 点名的 `prefabKey` 在这一只身上一个都没有（`main_09-17#f#` 的写法）。
+		c.cnt.hit("skill_mul_no_match")
+		trace("BBMUL-SKILLNOMATCH %s", id)
+	}
+	if hits.Hit() {
+		//: 具名痕迹：改到了哪些键。★ 判据要的是「键非空 ≠ 行使过」，
+		//: 所以这里连**键名**一起打出来，读数才追得到底。
+		trace("BBMUL %s talent=%v skill=%v", id, hits.TalentKeys, hits.SkillKeys)
 	}
 	return out, nil
 }
@@ -829,20 +866,28 @@ func SpawnsOf(level, path, difficulty string, p3rArmed bool) (SpawnsOut, error) 
 	muls := ParseRuneMuls(st.Runes, defs2)
 	out.Params["stage_difficulty"] = defs2
 	out.Params["rune_muls"] = len(muls)
-	if bad := UnportedRuneMuls(muls); len(bad) > 0 {
-		//: ★ **具名拒跑**：天赋/技能黑板乘数在 Go 里没有实现，
-		//: 而它们乘完还必须重跑派生字段（少了那一步，乘数落在没人再读的表上）。
-		//: 静默按普通档算会得到一份「看着对」的规格 —— 那正是这一层要防的事。
-		names := make([]string, 0, len(bad))
-		for _, m := range bad {
-			names = append(names, m.Kind)
+	//: ★★ 2026-09-26：**blanket 拒跑撤掉了** —— 这两支现在已经实现（`stagemul_bb.go`）。
+	//:
+	//: 历史要记清楚，否则下一个人会把「撤掉拒跑」读成「把关掉」：在此之前 Go
+	//: 一条黑板乘数都没实现，所以这里**宁可具名拒跑**也不按普通档算
+	//: （「静默少乘系数会造出一份看着对的规格」）。现在乘数真的会被应用，拒跑失去了对象；
+	//: **但那道闸的价值没有丢，它换了个形状留下**，三件一起才顶得住原来那一条：
+	//:   ① `statsFor` 上的两个乘区（`ApplyAttrMuls` ＋ `ApplyBBMuls`）；
+	//:   ② 五个行使计数器（四种情形各一个，见 `BBMulHits`）；
+	//:   ③ `check_spawns_go.py` 的**反例守卫**——Go 必须真的把键乘上、
+	//:      且**派生字段跟着变**（只乘不改派生是这一层最阴的失败形态）。
+	if empty := EmptySelectorSkillMuls(muls); len(empty) > 0 {
+		//: 「skill 类但没有 `skill` 选择器」＝权威侧的**空操作**
+		//: （`rescale_skill_blackboard` 头一句就是 `if not prefab_key: return []`）
+		//: ⇒ **不拒跑**，但**必须具名可见**：数量进 `scanned`，系数键名走痕迹通道。
+		//: 实测命中一关：`main_09-17#f#`（系数键 `PetrifiedRay.atk_scale`）。
+		out.Scanned["rune_mul_empty_selector"] = len(empty)
+		for _, m := range empty {
+			//: `%v` 打印 map 时 Go 会**按键名排序**输出 ⇒ 读数可复核、不抖。
+			trace("BBMUL-EMPTYSEL %v", m.Factors)
 		}
-		return out, fmt.Errorf(
-			"这一关在难度 %s 下有 Go 未实现的敌人修饰层（%s）："+
-				"`enemy_talent_blackb_mul` / `enemy_skill_blackb_mul` 要改黑板并重跑派生，"+
-				"Go 侧一行都没有。**拒跑**而不是按普通档算——"+
-				"静默少乘系数会造出一份看着对的规格",
-			defs2, strings.Join(names, "、"))
+	} else {
+		out.Scanned["rune_mul_empty_selector"] = 0
 	}
 	locals := localEnemies(defs)
 	cnt.Scanned["enemy_db_refs"] = len(defs)

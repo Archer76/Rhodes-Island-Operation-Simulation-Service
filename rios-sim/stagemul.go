@@ -14,17 +14,19 @@ package main
 // `Stage.difficulty='FOUR_STAR'`）的 `spawns[i].{atk,def,hp}` 每一处**少乘一个 ×1.2**。
 // 这条是 `frontend/inputs.py:264-287` 自己写下来的教训。
 //
-// ## 三条 rune，Go 只搬了一条
+// ## 三条 rune，Go 现在三条都搬了（2026-09-26 补齐后两条）
 //
 // | rune | 作用 | Go |
 // |---|---|---|
-// | `enemy_attribute_mul` | 属性乘数（`atk` / `def` / `max_hp`），可点名敌人 | **已搬**（本文件） |
-// | `enemy_talent_blackb_mul` | 天赋黑板乘数，乘完还要**重跑派生**（`derive_blackboard_fields`） | 未搬 ⇒ **拒跑** |
-// | `enemy_skill_blackb_mul` | 技能黑板乘数，同上，另按 `prefabKey` 点名技能 | 未搬 ⇒ **拒跑** |
+// | `enemy_attribute_mul` | 属性乘数（`atk` / `def` / `max_hp`），可点名敌人 | **已搬**（本文件 `ApplyAttrMuls`） |
+// | `enemy_talent_blackb_mul` | 天赋黑板乘数，乘完还要**重跑派生**（`derive_blackboard_fields`） | **已搬**（`stagemul_bb.go` `ApplyBBMuls`） |
+// | `enemy_skill_blackb_mul` | 技能黑板乘数，同上，另按 `prefabKey` 点名技能 | **已搬**（同上，技能支） |
 //
 // ★ 后两条**不是**「忽略就好」：黑板乘完不重跑派生，乘数会落在**一张没人再读的表**上
-// （`stage_mul.py` 开头第 2 条写的就是这个）。所以这里的选择是**具名拒跑**，
+// （`stage_mul.py` 开头第 2 条写的就是这个）。在补齐之前，本文件的选择是**具名拒跑**
 // 而不是静默按普通档算——「静默跑出另一场战斗」正是这一层存在的理由。
+// 补齐之后拒跑撤销，但那条守卫**换了形状留下**（行使计数器 ＋ 反例守卫），
+// 详见 `stagemul_bb.go` 的文件头与本目录 `spawns.go::statsFor`。
 //
 // ⚠ 老键名（`ebuff_attribute`）要认：`main_01-07`（1-7）的四星档用的就是那一套，
 // 结构与新名一模一样。
@@ -189,19 +191,15 @@ func ParseRuneMuls(runes []Rune, difficulty string) []RuneMul {
 	return out
 }
 
-// UnportedRuneMuls 挑出**Go 算不了**的那两类乘数（天赋/技能黑板）。
+// ★ 2026-09-26：`UnportedRuneMuls` 已**退休**（函数删除，不是注释掉）。
 //
-// 调用方据此**具名拒跑**：`spawns` 宁可造不出来，也不按普通档算出一份
-// 「看着对、其实少乘了系数」的规格。
-func UnportedRuneMuls(muls []RuneMul) []RuneMul {
-	out := []RuneMul{}
-	for _, m := range muls {
-		if m.Kind != "attr" {
-			out = append(out, m)
-		}
-	}
-	return out
-}
+// 它当初只有一个用途：挑出 talent / skill 两类乘数，让 `spawns` 据此**具名拒跑**。
+// 那两支现在已在 `stagemul_bb.go` 实现（`ApplyBBMuls`），拒跑失去对象。
+// **留一条痕迹在这里**，是为了让「`spawns.go` 里那段拒跑代码哪去了」这个问题
+// 有一个可查的答案——撤掉的是**守卫的实现方式**，不是**守卫本身**：
+// 顶替它的是行使计数器 ＋ `check_spawns_go.py` 的反例守卫（Go 必须真的乘上、
+// 且派生字段必须跟着变）。两者的差别写清了：拒跑是**静态**的「我做不到」，
+// 计数器与反例守卫是**运行期**的「我做了没有、做对了没有」。
 
 // ApplyAttrMuls 复刻 `apply_rune_muls` 的 **attr 那一支**。
 //

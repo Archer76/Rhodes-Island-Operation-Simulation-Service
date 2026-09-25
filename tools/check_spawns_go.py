@@ -83,8 +83,12 @@ SECTIONS = [
             "冻住就是让同一份冻值跟自己比（恒等假绿）"},
     {"id": "§3 合成关卡 syn A/B", "class": "frozen",
      "why": "harness()（Python）↔ Go go_spawns（合成关卡走真夹具零行使的两条支）"},
-    {"id": "§3b 拒跑 syn C", "class": "frozen",
-     "why": "Go 必须拒跑并点名 ↔ Python 侧现推的乘数证人"},
+    {"id": "§3b 修饰层 syn C/C2/C3", "class": "frozen",
+     "why": "★ 2026-09-26 翻向：从「Go 必须拒跑并点名」改成三件——"
+            "① `enemy_talent_blackb_mul` 必须回 ok 且被解析进来；"
+            "② `skill` 类空选择器不拒跑 ＋ 具名计数；"
+            "③ 反例守卫：`act31side_ex07` 普通档 ↔ 四星档的**派生字段**必须成倍"
+            "（只乘黑板不重跑派生 ⇒ 两档逐位相同 ⇒ 判红）"},
     {"id": "§4 species_provider 敏感性", "class": "python_both",
      "why": "a = harness(...) ↔ b = harness(...)，两侧都是 Python——"
             "冻住等于把「这个 provider 到底有没有消费者」这条控制组删掉"},
@@ -376,11 +380,19 @@ def write_syn(root: Path, raw: dict) -> str:
 
 
 def syn_bad_rune(real_key: str) -> dict:
-    """syn C：这一关挂着 Go **未实现**的敌人修饰层。
+    """syn C：这一关挂着**天赋黑板乘数**（`enemy_talent_blackb_mul`）。
 
-    期望是 Go **具名拒跑**——不是静默按普通档算出一份「看着对」的规格。
-    这一条判的是「拒跑这件事本身」：把 `UnportedRuneMuls` 那道闸拆掉，
-    判据会看到 Go 回了 ok 而不是 error。
+    ⚠ **2026-09-26 起这条判据的方向反了，这是有意的**：在此之前 Go 一条黑板乘数
+    都没实现，所以这里的期望是「**具名拒跑**」；那一版判据的价值在于「把
+    `UnportedRuneMuls` 那道闸拆掉，判据会看到 Go 回了 ok 而不是 error」。
+    两支实现之后（`rios-sim/stagemul_bb.go`），拒跑失去对象 ⇒ 期望翻成
+    「**必须回 ok，而且乘数真的被吃下去**」。
+
+    ★ 但「换了方向」不等于「把关掉」：**拒跑那条闸拆掉之后，必须有别的东西顶上来**。
+    顶上来的是两条，都在本节：
+      · §3b-② `act31side_ex07` 普通档 ↔ 四星档的**派生字段**必须成倍（真数据、真 rune）；
+      · §3b-③ 「skill 类但没有 `skill` 选择器」必须**不拒跑 ＋ 具名计数**。
+    没有这两条，本节就退化成「把一条判据删掉」。
     """
     raw = syn_dangling(real_key)
     raw["_levelId"] = "syn_spawns_badrune"
@@ -388,6 +400,26 @@ def syn_bad_rune(real_key: str) -> dict:
         "key": "enemy_talent_blackb_mul", "difficultyMask": "ALL",
         "blackboard": [{"key": "enemy", "valueStr": real_key},
                        {"key": "Passive.extra_value", "value": 2.0}],
+    }]
+    return raw
+
+
+def syn_empty_sel_rune(real_key: str) -> dict:
+    """syn D：`enemy_skill_blackb_mul` 挂着，但**没有** `skill` 选择器。
+
+    这类写法在权威侧是**空操作**（`rescale_skill_blackboard` 头一句就是
+    `if not prefab_key: return []`）⇒ Go **不该拒跑**；
+    但它**也什么都没做** ⇒ 必须**具名计数**（`scanned.rune_mul_empty_selector`），
+    否则「写了但空转」会被读成「已生效」。
+
+    这不是造的靶子：实测主干里就有一关同形 —— `main_09-17#f#`
+    （系数键 `PetrifiedRay.atk_scale`，`scanned.rune_mul_empty_selector = 1`）。
+    """
+    raw = syn_dangling(real_key)
+    raw["_levelId"] = "syn_spawns_emptysel"
+    raw["runes"] = [{
+        "key": "enemy_skill_blackb_mul", "difficultyMask": "ALL",
+        "blackboard": [{"key": "damage", "value": 2.0}],
     }]
     return raw
 
@@ -719,8 +751,10 @@ def main() -> int:
                         for d in first_diffs(w, g, "", [], 4):
                             printed.append("      %s" % d)
 
-        # ======================================================== 4 · 拒跑
-        #: syn C：关卡挂着 Go 未实现的敌人修饰层（天赋黑板乘数）⇒ 必须**拒跑**。
+        # ======================================================== 4 · 修饰层
+        #: syn C：关卡挂着**天赋黑板乘数**。★ 期望已于 2026-09-26 翻向
+        #: （理由与「不是把关删掉」的论证见 `syn_bad_rune` 的 docstring）：
+        #: Go **必须回 ok**，而且这条 rune **真的被解析进来**。
         bad_raw = syn_bad_rune(real_key)
         path_c = write_syn(tmp, bad_raw)
         #: ★ 证人（Python 现推的乘数）也要冻：它从**源码文本**之外的 `parse_rune_muls`
@@ -733,25 +767,83 @@ def main() -> int:
                         if m.kind != "attr")
             witness = G.expect(("consts", "bad_rune_witness"), lambda: _w)
         resp_c = go_spawns_raw(path=path_c)
+        sp_c = resp_c.get("spawns") or {}
+        n_mul_c = (sp_c.get("params") or {}).get("rune_muls")
         print()
-        print("§3b Go 未实现的敌人修饰层：Python 侧现推的乘数 %d 条（%s）；"
-              "Go 应答 ok=%r"
-              % (len(witness), "、".join(sorted(witness)),
-                 resp_c.get("ok")))
+        print("§3b 敌人修饰层·天赋黑板乘数：Python 侧现推的乘数 %d 条（%s）；"
+              "Go 应答 ok=%r、params.rune_muls=%r"
+              % (len(witness), "、".join(sorted(witness)), resp_c.get("ok"), n_mul_c))
         if not witness:
             bad += 1
             printed.append("✗ syn C 的证人①不成立：Python 侧没解析出非 attr 乘数")
-        elif resp_c.get("ok"):
+        elif not resp_c.get("ok"):
             bad += 1
-            printed.append("✗ syn C：Go **没有拒跑**（回了 ok）——"
-                           "静默按普通档算会造出一份看着对的规格")
-        elif "enemy_talent_blackb_mul" not in str(resp_c.get("error", "")):
+            printed.append("✗ syn C：Go 拒跑了（%r）—— 这一支**已经实现**，"
+                           "拒跑意味着乘区没挂到取数出口上"
+                           % str(resp_c.get("error"))[:120])
+        elif n_mul_c != 1:
             bad += 1
-            printed.append("✗ syn C：Go 拒跑了，但错误里没点名是哪一条修饰层：%r"
-                           % resp_c.get("error"))
+            printed.append("✗ syn C：Go 回了 ok，但 `params.rune_muls`=%r（期望 1）⇒ "
+                           "这条 rune 根本没被解析进来" % (n_mul_c,))
         else:
-            print("   Go 拒跑并点名了那一条：%s…"
-                  % str(resp_c["error"])[:80])
+            print("   Go 收下了这条乘数（ok=True、rune_muls=1）")
+
+        #: ---- syn C2：`skill` 类但**没有** `skill` 选择器 ⇒ 不拒跑 ＋ 具名计数。
+        resp_d = go_spawns_raw(path=write_syn(tmp, syn_empty_sel_rune(real_key)))
+        sp_d = resp_d.get("spawns") or {}
+        n_es = (sp_d.get("scanned") or {}).get("rune_mul_empty_selector")
+        cov_es = (sp_d.get("covered") or {}).get("skill_mul_empty_selector")
+        print("§3b-② skill 类空选择器：Go 应答 ok=%r；"
+              "`scanned.rune_mul_empty_selector`=%r、`covered.skill_mul_empty_selector`=%r"
+              % (resp_d.get("ok"), n_es, cov_es))
+        if not resp_d.get("ok"):
+            bad += 1
+            printed.append("✗ syn C2：Go 对「skill 类空选择器」拒跑了 —— "
+                           "权威侧那是**空操作**，拒跑会平白砍掉一整关")
+        elif n_es != 1:
+            bad += 1
+            printed.append("✗ syn C2：`scanned.rune_mul_empty_selector`=%r（期望 1）⇒ "
+                           "「写了但空转」没有被计数看见" % (n_es,))
+        else:
+            print("   空转被具名计数看见了（关卡级 1 条）")
+
+        #: ---- syn C3：**反例守卫**——乘完有没有真重跑派生。
+        #: ★ 为什么非另立一条不可：主干那 6 关（`main_*#f#`）打的键**一个都不喂派生字段**
+        #: （`docs/four-star-gap.md` §3 末尾取证过）。只用它们，把
+        #: `DeriveBlackboardFields()` 那一句整个删掉也照样全绿 —— 而那才是这一层最阴的失败形态
+        #: （「乘数落在没人再读的表上」）。取材是**真数据真 rune**：`act31side_ex07` 的四星档
+        #: 把 `enemy_1390_dhsbr_2` 的 `Passive.extra_value` 5 乘成 10、
+        #: `enemy_1392_dhshld_2` 的 15 乘成 30（Python 侧 `tools/check_environment.py:843-888`
+        #: 断言过同一对），而 `passive_pollut` 正是从那个键派生出来的（`rios-sim/enemy_mech.go:120`）。
+        pair = {}
+        for lid in ("act31side_ex07", "act31side_ex07#f#"):
+            r = go_spawns_raw(level=lid)
+            pair[lid] = ({row.get("enemy_id"): row.get("passive_pollut")
+                          for row in ((r.get("spawns") or {}).get("spawns") or [])}
+                         if r.get("ok") else None)
+        norm, four = pair.get("act31side_ex07"), pair.get("act31side_ex07#f#")
+        print("§3b-③ 反例守卫（乘完重跑派生）：普通档的非零 `passive_pollut` %r；"
+              "四星档 %r"
+              % (norm and {k: v for k, v in norm.items() if v},
+                 four and {k: v for k, v in four.items() if v}))
+        if not norm or not four:
+            bad += 1
+            printed.append("✗ syn C3：`act31side_ex07` 的两档没能都跑通")
+        else:
+            for eid in ("enemy_1390_dhsbr_2", "enemy_1392_dhshld_2"):
+                a, b = norm.get(eid), four.get(eid)
+                if a is None or b is None:
+                    bad += 1
+                    printed.append("✗ syn C3：%s 不在这两份出怪表里（a=%r b=%r）"
+                                   % (eid, a, b))
+                elif not (a > 0 and abs(b - 2 * a) < 1e-9):
+                    bad += 1
+                    printed.append("✗ syn C3：%s 的 `passive_pollut` 普通档 %r、四星档 %r"
+                                   "（期望 %r）—— 乘数没落到派生字段上？"
+                                   % (eid, a, b, 2 * a))
+            print("   逐敌对照：%s"
+                  % "；".join("%s 普通=%r→四星=%r" % (e, norm.get(e), four.get(e))
+                             for e in ("enemy_1390_dhsbr_2", "enemy_1392_dhshld_2")))
 
         # ======================================================== 5 · species
         #: 证人①：provider 真的被调、它的返回值真的落进 `e.species`。
@@ -963,7 +1055,8 @@ def main() -> int:
     #: 这一档没覆盖哪几段，不用另外去跑 `--status`。
     print("结论：出怪规格 %d / %d 条逐字段一致（24 份夹具的生产规格，"
           "含 diver / mark / legs / reborn_summons 全部 65 个键）；"
-          "合成夹具 3 份覆盖真夹具零行使的两个分支 ＋ 判「未实现的修饰层拒跑」%s"
+          "合成夹具 3 份覆盖真夹具零行使的两个分支 ＋ 敌人修饰层三件"
+          "（乘数被收下 ／ 空选择器不拒跑且具名计数 ／ 反例守卫：派生字段成倍）%s"
           % (n_spawn - n_bad_spawn, n_spawn, G.uncovered_sections_text()))
     if bad:
         #: 覆盖段**真的不一致** ⇒ 判据红，优先于「基线该重录」。
