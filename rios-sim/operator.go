@@ -118,6 +118,13 @@ type OperatorStats struct {
 	//: 特性「攻击附带停顿」的**秒数**（梓兰 凝滞师，特性黑板 `sluggish`）。
 	//: ⚠ 减速比例不在这里——那是**全局常数** `sluggishSlowPct`＝80%（博士 2026-09-25 裁定）。
 	TraitSlowSec float64 `json:"trait_slow_sec"`
+	//: 特性「可以进行远程攻击，但攻击力降低至 v」的 **v**（领主那一族，月见夜）。
+	//: ⚠ 判据是**目标有没有被她挡住**（博士 2026-09-25 裁定），不是格子几何。
+	//: **「没有这条」是 1.0**（它是乘数，给 0 会让这位干员打不出伤害）。
+	RangedAtkScale float64 `json:"ranged_atk_scale"`
+	//: 特性「击杀敌人后获得 N 点部署费用」（先锋·冲锋手那一族，翎羽）。
+	//: **「没有这条」是 0。**
+	KillCostOnKill int `json:"kill_cost_on_kill"`
 	//: 三个纯文本判据（`operator_traits.go`）。
 	TextDerived
 	//: 身份两字段：势力与主职业代号。**消费者是两个不同的东西**——
@@ -555,6 +562,13 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 	st.HPDrainPerSec = readHPDrain(char.Description, char.Trait)
 	//: 特性「攻击附带停顿」（梓兰）——**秒数**走这里，减速比例是全局常数。
 	st.TraitSlowSec = readTraitSlow(char.Trait)
+	//: 特性「可以进行远程攻击，但攻击力降低至 v」（月见夜 领主）——**两段判据**
+	//: （正文含「远程攻击」＋「攻击力降低至」，且黑板 `atk_scale` 落在 (0,1)）。
+	//: 只按键名认会误中 39 条里那 20 多条 `1.5`／`1.2` 的别的机制。
+	st.RangedAtkScale = readTraitRangedScale(char.Description, char.Trait)
+	//: 特性「击杀敌人后获得 N 点部署费用」（翎羽 冲锋手）——取 `cost > 0`，
+	//: 行商那一族（`cost: -3` + `interval: 3`）自然落在外面。
+	st.KillCostOnKill = readTraitKillCost(char.Trait)
 	//: 三个纯文本判据（攻击类型 / 平A 是否治疗 / 弱点伤害）。
 	st.TextDerived = textDerived(char.Description, char.Talents)
 	//: 身份两字段：直接取自 character_table，不做任何推断。

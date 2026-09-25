@@ -266,6 +266,19 @@ type OperatorSpec struct {
 	//: （博士 2026-09-25 裁定：「梓兰特性的停顿与其他的相同，都是减速 80%」）。
 	//: 也**不是** `attack@sluggish`（怒潮凛冬高台溅射那 0.5 秒）——两个键、两族来源。
 	SlowOnHitSec float64 `json:"slow_on_hit_sec,omitempty"`
+	//: 特性「可以进行远程攻击，但攻击力降低至 v」（领主那一族，月见夜）的 **v**。
+	//:
+	//: ★ 判据**不是格子几何**：博士 2026-09-25 裁定——「只要被攻击的敌人在攻击范围内
+	//: **并且未被月见夜阻挡**，这个时候对这名敌人的攻击就是远程攻击；如果是被阻挡的
+	//: 敌人那么无论是前后左右都算近战攻击」。⇒ 消费者 `sim.go::operatorsAttack`
+	//: 每打一个目标现读 `target.blockedBy != op`。
+	//: **「没有这条」是 1.0**（乘数）。
+	RangedAtkScale float64 `json:"ranged_atk_scale,omitempty"`
+	//: 特性「击杀敌人后获得 N 点部署费用」（先锋·冲锋手那一族，翎羽）。
+	//: 消费者 `sim.go::resolve`：敌人倒下时看**最后打它的那一名干员**是不是她。
+	//: ⚠ 与敌人自己的 `kill_cost`（`enemy_derive.go` 读敌方天赋 `Talent1.cost`）
+	//: **是两笔账**，都要加。
+	KillCostOnKill int `json:"kill_cost_on_kill,omitempty"`
 	//: 职业特性溅射（撼地者那四位共用的一条特性；判据是特性黑板上同时有
 	//: `attack@ability_range_radius` 与 `attack@atk_scale_2`，已由 Python 解好）。
 	//:

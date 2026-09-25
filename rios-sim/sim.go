@@ -111,6 +111,13 @@ type enemy struct {
 	leakTime    float64
 	deathTime   float64
 	costAwarded bool
+	//: **最后打中它的那一名干员**（`take` 里记）。用途只有一个：特性
+	//: 「击杀敌人后获得 N 点部署费用」（翎羽）要问「**这一只是不是她杀的**」。
+	//:
+	//: ⚠ 机制伤害（`src == nil`）会把这里**置空**——「被田地/病害打死」不该算作
+	//: 哪一名干员的击杀。写成"保留上一次的 src"会让一笔机制伤害替前一位干员
+	//: 领赏，而那笔费用只会表现为"回费比预期多一点"。
+	lastHitBy *operator
 
 	//: 积雪写的那一半冻结（原版 `sim.py:1156` 由 `_snow_tick` 置位；
 	//: 每帧先被重置成 false）。与 `freezeTimer` 合成原版的 `frozen`——
@@ -2205,6 +2212,25 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 			continue
 		}
 		for _, target := range targets {
+			//: ---- 特性「可以进行远程攻击，但攻击力降低至 v」（领主那一族，月见夜）----
+			//:
+			//: ★ 判据**不是格子几何**——博士 2026-09-25 裁定：「只要被攻击的敌人在攻击
+			//: 范围内**并且未被月见夜阻挡**，这个时候对这名敌人的攻击就是远程攻击；
+			//: 如果是被阻挡的敌人那么无论是前后左右都算近战攻击」。
+			//: ⇒ 现读 `target.blockedBy != op`。写成按格距/按前后排判都会与这条不符。
+			//:
+			//: ⚠ 逐**目标**算，不是每次出手算一次：同一次出手可能打到"被挡的那个"
+			//: 与"没被挡的那个"，两个倍率不同。写在出手那一层会让其中一个用错倍率。
+			atkBase := power
+			if op.spec.RangedAtkScale > 0 && op.spec.RangedAtkScale != 1.0 &&
+				target.blockedBy != op {
+				atkBase = power * op.spec.RangedAtkScale
+				if traceOn {
+					trace("TRAITRANGED t=%.4f op=%s target=%s scale=%.4f atk=%.3f→%.3f",
+						t, op.spec.Name, target.spec.Name, op.spec.RangedAtkScale,
+						power, atkBase)
+				}
+			}
 			for i := 0; i < hits; i++ {
 				if !target.alive() {
 					break
@@ -2217,7 +2243,7 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 				// 的 `dodge_phys + talent_dodge_phys`（`sim.py:3921`）。那个值恒为 0
 				// （原因写在 `enemy.dodgeVs` 上），所以这里不是"先不管"，
 				// 而是"与原版同值、并且有名字"。
-				dmg := resolveDamage(power, dmgType, hitScale,
+				dmg := resolveDamage(atkBase, dmgType, hitScale,
 					target.spec.DEF, target.res(), target.dodgeVs(dmgType))
 				// 连击的 `ComboDamageScale` **乘在这里**：原版是
 				// `self._damage_enemy(target, dmg.final * combo_dmg_scale, ...)`
@@ -2227,7 +2253,7 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 				dmg *= comboDmgScale
 				dealt := target.take(dmg, op)
 				trace("        打 %s 攻=%.1f 类型=%s 倍率=%.3f 防=%.1f 抗=%.1f 伤害=%.3f 实扣=%.3f 剩=%.3f",
-					target.spec.Name, power, dmgType, hitScale, target.spec.DEF,
+					target.spec.Name, atkBase, dmgType, hitScale, target.spec.DEF,
 					target.res(), dmg, dealt, target.hp)
 				if dealt <= 0 {
 					continue
@@ -2952,9 +2978,24 @@ func enemyTarget(e *enemy, ops []*operator, ranged bool) *operator {
 func resolve(enemies []*enemy, cost *float64, life *int, t float64,
 	verdict *Verdict) {
 	for _, e := range enemies {
-		if e.hp <= 0 && !e.leaked && e.spec.KillCost != 0 && !e.costAwarded {
-			e.costAwarded = true
-			*cost += float64(e.spec.KillCost)
+		if e.hp <= 0 && !e.leaked && !e.costAwarded {
+			//: 两笔账**分开算、都要加**：
+			//:   ① 敌人自己的 `kill_cost`（敌方天赋 `Talent1.cost`，`enemy_derive.go` 读的）；
+			//:   ② **击杀者**的特性「击杀敌人后获得 N 点部署费用」（翎羽，博士新增的落点）。
+			//: 合并成一笔会让"谁给的费"不可分——判决上只表现为回费多/少一点。
+			bonus := 0
+			if e.lastHitBy != nil && e.lastHitBy.spec.KillCostOnKill > 0 {
+				bonus = e.lastHitBy.spec.KillCostOnKill
+			}
+			if e.spec.KillCost != 0 || bonus != 0 {
+				e.costAwarded = true
+				*cost += float64(e.spec.KillCost + bonus)
+				if traceOn && bonus != 0 {
+					//: ★ 行使指纹：**击杀者是这一名干员**才打。
+					trace("TRAITKILLCOST t=%.4f op=%s enemy=%s gain=%d cost=%.1f",
+						t, e.lastHitBy.spec.Name, e.spec.Name, bonus, *cost)
+				}
+			}
 		}
 		if e.hp > 0 && !e.leaked && !e.offMap && e.reachedEnd() {
 			e.leaked = true
@@ -3093,6 +3134,13 @@ func (e *enemy) take(amount float64, src *operator) float64 {
 	}
 	dealt := math.Min(e.hp, math.Max(0, amount))
 	e.hp -= dealt
+	//: 记「最后打中它的是谁」——只给「击杀得费」那一族用（见 `enemy.lastHitBy`）。
+	//: ⚠ 只在 `dealt > 0` 时记：0 伤害（免疫/无敌窗口）不是一次"打中"。
+	//: ⚠ 机制伤害 `src == nil` 要**置空**，不是跳过：被机制打死的那一只不该
+	//: 让上一位干员领赏。
+	if dealt > 0 {
+		e.lastHitBy = src
+	}
 	//: 敌人**受伤的唯一汇点**留痕（原版对应 `Combatant.take`，`unit.py:104`）。
 	//:
 	//: 为什么要有这一条：`HITENEMY`（机制直伤）、`SPLASH`（溅射）、普攻各有各的

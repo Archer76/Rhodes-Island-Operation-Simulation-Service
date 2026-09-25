@@ -186,7 +186,9 @@ EXTRA_OPS = ("skill", "active", "talent_panel_mods",
              "prefer_highest_def", "prefer_ranged",
              #: ★ 2026-09-25 第四批：特性「攻击附带停顿」的**秒数**（梓兰）。
              #: 减速比例不在这里（那是全局常数 80%，博士裁定）。
-             "slow_on_hit_sec")
+             "slow_on_hit_sec",
+             #: ★ 2026-09-25 第五批：两条特性——「远程攻击降攻」（领主）与「击杀得费」（冲锋手）。
+             "ranged_atk_scale", "kill_cost_on_kill")
 EXTRA_OPS_SEEN: dict = {}
 EXTRA_OPS_FROM_PY: dict = {}
 
@@ -257,6 +259,13 @@ GO_ONLY_COUNTERS_ZERO_OK = {
     #: ---- 2026-09-25 第四批：特性「攻击附带停顿」（梓兰）----
     "slow_on_hit_nonzero": "特性「攻击附带停顿」（梓兰，三星）。本套夹具不部署三星 ⇒ 必然为 0；"
                            "行使见证在 tools/three_star_check.py 的第三趟（main_00-01，24 次）。",
+    #: ---- 2026-09-25 第五批：两条特性 ----
+    #: ⚠ 这两条的处境**不同**，必须分开说：
+    #:   · `ranged_atk_scale_nonzero` 在本套夹具里**其实不是 0**（hsex8 的银灰、
+    #:     plan-main-01-07 的拉普兰德都带这条），所以它不该进这一栏——见下面 §7 的实测；
+    #:   · `kill_cost_on_kill_nonzero` 才是 0（24 份里没有一名冲锋手）。
+    "kill_cost_on_kill_nonzero": "特性「击杀得费」（翎羽，三星）。本套夹具不部署三星 ⇒ 必然为 0；"
+                                 "行使见证在 tools/three_star_check.py 的第三趟（main_00-01，11 次）。",
 }
 
 #: **Go 独有**的 `covered` 计数器：它们量的是 Go 自己那条**技能绑定链**的账，
@@ -289,6 +298,9 @@ GO_ONLY_COUNTERS = {
     "prefer_ranged_true": "天赋正文含「优先攻击使用远程武器的敌人」的人次（安德切尔）",
     #: ---- 2026-09-25 第四批：特性「攻击附带停顿」 ----
     "slow_on_hit_nonzero": "特性黑板 `sluggish` 为正的人次（梓兰 凝滞师）",
+    #: ---- 2026-09-25 第五批：两条特性 ----
+    "ranged_atk_scale_nonzero": "特性「远程攻击降攻」命中的人次（领主那一族，月见夜）",
+    "kill_cost_on_kill_nonzero": "特性「击杀得费」命中的人次（冲锋手那一族，翎羽）",
 }
 GO_ONLY_FROM_PY: dict = {}
 
@@ -313,7 +325,7 @@ COVERED_KEYS = (
     #: ---- 段 B 第一批（天赋派生）----
     "heals_true", "heals_on_skill_true", "air_priority_true",
     "attacks_all_blocked_true", "prefer_highest_def_true", "prefer_ranged_true",
-    "slow_on_hit_nonzero",
+    "slow_on_hit_nonzero", "ranged_atk_scale_nonzero", "kill_cost_on_kill_nonzero",
     "blessing_nonzero", "regen_aura_nonzero",
     "team_auras_nonzero", "talent_dodge_nonzero",
     "regen_strict_true", "regen_strict_false",

@@ -453,6 +453,12 @@ REGISTERED_EXTRA: tuple[tuple[str, str], ...] = (
     (r"^\.operators\[\d+\]\.slow_on_hit_sec$",
      "特性「攻击附带停顿」的秒数（梓兰 凝滞师，特性黑板 sluggish）。"
      "减速比例是全局常数 80%（博士 2026-09-25 裁定），不随这一栏走；Python 无此机制"),
+    #: ★ 2026-09-25 第五批：两条特性。
+    (r"^\.operators\[\d+\]\.ranged_atk_scale$",
+     "特性「可以进行远程攻击，但攻击力降低至 v」（领主那一族，月见夜）。"
+     "判据是目标有没有被她挡住（博士 2026-09-25 裁定），不是格子几何；Python 无此机制"),
+    (r"^\.operators\[\d+\]\.kill_cost_on_kill$",
+     "特性「击杀敌人后获得 N 点部署费用」（冲锋手那一族，翎羽）。Python 无此机制"),
 )
 REGISTERED_EXTRA_RX = tuple((re.compile(p), src) for p, src in REGISTERED_EXTRA)
 

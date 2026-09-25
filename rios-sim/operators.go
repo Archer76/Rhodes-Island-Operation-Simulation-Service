@@ -179,6 +179,12 @@ type OperatorOut struct {
 	//: 特性「攻击附带停顿」的**秒数**（梓兰 凝滞师，特性黑板 `sluggish`）。
 	//: 减速比例**不在这里**——那是全局常数 80%（博士 2026-09-25 裁定）。
 	SlowOnHitSec *float64 `json:"slow_on_hit_sec,omitempty"`
+	//: 特性「可以进行远程攻击，但攻击力降低至 v」的 v（月见夜 领主）。
+	//: ⚠ 判据是**目标有没有被她挡住**（博士 2026-09-25 裁定），不是格子几何。
+	//: **「没有这条」是 1.0**（乘数），所以只在 v ≠ 1 时才送。
+	RangedAtkScale *float64 `json:"ranged_atk_scale,omitempty"`
+	//: 特性「击杀敌人后获得 N 点部署费用」（翎羽 冲锋手）。**「没有这条」是 0。**
+	KillCostOnKill *int `json:"kill_cost_on_kill,omitempty"`
 
 	//: ---- 技能那一支（2026-09-24 起由 Go 自己产出）----
 	//:
@@ -313,7 +319,7 @@ var OperatorsCoveredKeys = []string{
 	//: ---- 段 B 第一批（天赋派生）----
 	"heals_true", "heals_on_skill_true", "air_priority_true",
 	"attacks_all_blocked_true", "prefer_highest_def_true", "prefer_ranged_true",
-	"slow_on_hit_nonzero",
+	"slow_on_hit_nonzero", "ranged_atk_scale_nonzero", "kill_cost_on_kill_nonzero",
 	"blessing_nonzero", "regen_aura_nonzero",
 	"team_auras_nonzero", "talent_dodge_nonzero",
 	"regen_strict_true", "regen_strict_false",
@@ -645,6 +651,18 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		covered["slow_on_hit_nonzero"]++
 		v := st.TraitSlowSec
 		out.SlowOnHitSec = &v
+	}
+	//: 特性「远程攻击降攻」（月见夜）：v ≠ 1 才送（1 是「没有这条」）。
+	if st.RangedAtkScale > 0.0 && st.RangedAtkScale != 1.0 {
+		covered["ranged_atk_scale_nonzero"]++
+		v := st.RangedAtkScale
+		out.RangedAtkScale = &v
+	}
+	//: 特性「击杀得费」（翎羽）。
+	if st.KillCostOnKill > 0 {
+		covered["kill_cost_on_kill_nonzero"]++
+		v := st.KillCostOnKill
+		out.KillCostOnKill = &v
 	}
 	//: 职业特性溅射：`radius > 0` 才整族送出去。
 	if st.SplashRadius > 0.0 {

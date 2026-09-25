@@ -25,6 +25,7 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 )
 
@@ -138,6 +139,70 @@ func readPowerAttack(talents []json.RawMessage, elite, level, potential int) Pow
 }
 
 // ---- 特性：生命流失 与 特性溅射（几何那一半）----
+
+// ---- 特性「可以进行远程攻击，但攻击力降低至 v」（领主那一族）----
+
+// rangedAttackTrait / rangedLowerPhrase 是这条特性的**两段判据**。
+//
+// ★ 为什么必须两段（现算的影响面，`akdb` 全表）：特性黑板里带 `atk_scale` 的有
+// **39 条**，而其中 `0.8` 那一族（银灰／棘刺／仇白／丰川祥子／月见夜…）才是
+// 「远程降攻」；另有 `1.5`／`1.2` 的一族（假日威龙陈／缪尔赛思／伺夜／帕拉斯／莱伊）
+// 是**别的东西**。只按键名认会把那 20 多条一起误中。
+//
+// 与 `readHPDrain` 同一个姿势：**正文 ＋ 黑板值**两段缺一不可。
+const (
+	rangedAttackTrait = "远程攻击"
+	rangedLowerPhrase = "攻击力降低至"
+)
+
+// readTraitRangedScale 读「远程攻击时攻击力降低至 v」的 v。
+//
+// ★ 这个 v 用的是**哪一格**为判据、不是几何：博士 2026-09-25 裁定——
+// 「只要被攻击的敌人在攻击范围内**并且未被月见夜阻挡**，这个时候对这名敌人的攻击
+// 就是远程攻击；如果是被阻挡的敌人那么无论是前后左右都算近战攻击」。
+// ⇒ 判据是「**目标有没有被她挡住**」（`sim.go` 里读 `target.blockedBy != op`），
+// 与格子几何无关。落点写在 `sim.go::operatorsAttack`。
+//
+// 没有这条就返回 1.0——调用侧不用判空（这个量「没有」就是 1.0，它是乘数）。
+func readTraitRangedScale(description string, traitRaw json.RawMessage) float64 {
+	if !strings.Contains(stripTraitTags(description), rangedAttackTrait) ||
+		!strings.Contains(stripTraitTags(description), rangedLowerPhrase) {
+		return 1.0
+	}
+	for _, cand := range traitCandidates(traitRaw) {
+		bb := pairsToDict(cand)
+		if v, ok := bb["atk_scale"]; ok && v > 0.0 && v < 1.0 {
+			return v
+		}
+	}
+	return 1.0
+}
+
+// ---- 特性「击杀敌人后获得 N 点部署费用」（先锋·冲锋手那一族）----
+
+// traitKillCostKey 是这条特性在黑板上的键。
+//
+// ★ 影响面（现算，`akdb` 全表）：特性黑板里带 `cost` 的有 **13 条**，分两族——
+//
+//	{"cost": 1.0}                  → **击杀得费**（翎羽／红豆／苇草／风笛／格拉尼／野鬃／历阵锐枪芬）
+//	{"cost": -3.0, "interval": 3.0} → **行商**那一族（琳琅诗怀雅／老鲤／裁度／乌有／孑）：每 interval 秒扣 3 费
+//
+// ⇒ 判据取 **`cost > 0`**，行商那一族自然落在外面（它是负数）。
+// 行商那一支**未实现**，登记在文档里。
+const traitKillCostKey = "cost"
+
+// readTraitKillCost 读「击杀敌人后获得 N 点部署费用」的 N（整数）。
+//
+// 没有这条就返回 0——调用侧不用判空。
+func readTraitKillCost(traitRaw json.RawMessage) int {
+	for _, cand := range traitCandidates(traitRaw) {
+		bb := pairsToDict(cand)
+		if v, ok := bb[traitKillCostKey]; ok && v > 0.0 {
+			return int(math.Round(v))
+		}
+	}
+	return 0
+}
 
 // traitSlowKey 是特性黑板里「攻击附带停顿多少秒」那个键。
 //
