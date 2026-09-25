@@ -2766,15 +2766,19 @@ func teamAuraTick(ops []*operator) {
 		//: 只打「吃到了多少」而不打「谁给的」，出分歧时归因不到人。
 		from := make([]string, 0, len(ops))
 		for _, owner := range ops {
-			//: ⚠⚠ **这里不判 `owner.alive()`——这是「口径待裁定」，不是漏写**
-			//: （2026-09-25 独立复核 F5）：同族的另一条路（下方的 `give := owner.alive()`）
-			//: **判了**，于是 Go 内部两处不一致；而**参照实现两侧都没过滤**
-			//: （`talents.py:702` 的 `TeamAura.current(target)` 不看主人死活）
-			//: ⇒ 「光环主人倒下/撤退后还发不发」**没有权威**。
-			//: 我试过在这里加一句 `if !owner.alive() { continue }` 让内部自洽，
-			//: 结果 `plan-hsex03` 的伤害从 23280.1 掉到 23086.6 ⇒ 它**会改判决**，
-			//: 而这一条没有裁定依据 ⇒ **先撤回来，等一句口径**，不把没裁定的选择
-			//: 烙进冻结基线。要落地时**两条路一起改**，并配一次重录与登记。
+			//: ★★ **光环主人倒下/撤退之后，光环消失**——博士 2026-09-25 裁定。
+			//:
+			//: 这一句是「口径落地」，不是"顺手补一个判据"：它**会改判决**
+			//: （实测 `plan-hsex03` 的伤害 23280.1 → 23086.6），所以它配了一次
+			//: 冻结基线重录与具名登记（见 `docs/golden-baseline.md` 节点十三）。
+			//:
+			//: ⚠ 另一条同族的路（下方的 `give := owner.alive()`）**本来就判了**
+			//: ⇒ 这一句同时把 Go 内部两处对上口径。参照实现两侧都没过滤
+			//: （`talents.py:702` 的 `TeamAura.current(target)` 不看主人死活），
+			//: 所以这是**博士裁定的口径**，不是"与 Python 对齐"。
+			if !owner.alive() {
+				continue
+			}
 			for i := range owner.spec.TeamAuras {
 				x, y := owner.spec.TeamAuras[i].current(owner, op)
 				atk += x
