@@ -90,10 +90,24 @@ def identity() -> dict:
             "source_sig": sig, "n_go": len(go_src)}
 
 
+def synthetic_plan(level: str) -> dict:
+    """一份**明确标成合成**的单干员计划（只给「这关能不能算/能不能跑」用）。
+
+    ⚠ 它**不是**这一关的基线作业：B 层的判决四数在它身上只说明「这一关跑得动」，
+    不说明「这一关有人能过」。读数里必须带着这个限定，否则会被当成关卡结论。
+    """
+    return {"stage": level, "_synthetic": True,
+            "deploys": [{"operator": "克洛丝", "position": [1, 1], "direction": "Right",
+                         "skill": 0, "elite": 1, "level": 55, "potential": 6,
+                         "module_level": 0}]}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="一关三层读数的同一入口")
     ap.add_argument("level")
     ap.add_argument("--json", help="把这一行写到文件（机器可读）")
+    ap.add_argument("--synthetic-plan", action="store_true",
+                    help="没有作业夹具时，造一份**合成**单干员计划硬跑（读数按合成计划读）")
     a = ap.parse_args()
 
     import level_mech_inventory as MI                          # noqa: PLC0415
@@ -111,7 +125,26 @@ def main() -> int:
     print()
 
     #: ---- A 算得出 ----------------------------------------------------------
-    body = {"plan": str(plan) if plan else {}, "roster": ROSTER}
+    #: ⚠⚠ **没有作业夹具的关卡，A/B/C 三层都取不到**——这不是 bug，是入口的性质：
+    #: `buildspec` 要求计划里有 `stage`（报错「打法必须有关卡号（stage）」）
+    #: **并且至少一个部署**（报错「打法里一个部署都没有」）。
+    #: 旧写法在没夹具时传 `{}`，于是 10 关一律 A 层失败，而那个失败看起来像
+    #: 「这一关算不出来」，不是「这个入口需要一份计划」。
+    #:
+    #: 处置：**默认大声拒跑**，并说清缺什么；要硬跑就用 `--synthetic-plan`
+    #: （它造一份**明确标成合成**的单干员计划，读数必须按合成计划读）。
+    if plan is None and not a.synthetic_plan:
+        print("A 算得出：⊘ **不适用于本入口**——这一关没有作业夹具，而 A/B/C 三层")
+        print("           都要求一份计划（`buildspec` 需要 `stage` ＋ 至少一个部署）。")
+        print("           ⇒ 量它要么先产出计划（搜索器那一支），要么用 --synthetic-plan")
+        print("             造一份**合成**单干员计划（读数按合成计划读，不是这一关的基线）。")
+        row["A"] = {"ok": False, "not_applicable": "no_plan_fixture"}
+        if a.json:
+            Path(a.json).write_text(json.dumps(row, ensure_ascii=False, indent=1),
+                                    encoding="utf-8")
+        return 3
+    plan_arg = str(plan) if plan else synthetic_plan(a.level)
+    body = {"plan": plan_arg, "roster": ROSTER}
     req = {"id": 1, "cmd": "buildspec", "level": a.level, "spec": body}
     b, _ = call([req])
     b = b[0]
