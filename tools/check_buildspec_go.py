@@ -459,8 +459,32 @@ REGISTERED_EXTRA: tuple[tuple[str, str], ...] = (
      "判据是目标有没有被她挡住（博士 2026-09-25 裁定），不是格子几何；Python 无此机制"),
     (r"^\.operators\[\d+\]\.kill_cost_on_kill$",
      "特性「击杀敌人后获得 N 点部署费用」（冲锋手那一族，翎羽）。Python 无此机制"),
+    #: ★★ 2026-09-25 第六批：**撤退**。它是 Go 单方面扩的**顶层**键
+    #: （见 `TOP_LEVEL_GO_ONLY`）——顶层键集那一道已经登记了，但**逐路径**这一道
+    #: 还要再登记一次：`diff_paths` 会走进 `.retreats` 并按路径报「Go 多出来」。
+    #: 独立复核 F3 抓到的正是「只改了顶层那一句、逐路径这一句没改」的后果。
+    #: ⚠ 两条登记**指向同一份事实**（`rios-sim/specgo.go::specKeysGoOnly`），
+    #: 三处都具名是**故意的**：少一处就是一条会红的判据。
+    (r"^\.retreats$",
+     "撤退请求（时刻 ＋ 干员名）。博士 2026-09-25「你现在把撤退机制做了吧」⇒ "
+     "Go 实现了撤退（`sim.go` 帧序 1c 执行），而 Python 侧仍把撤退整条拒跑"
+     "（`spec.py:146-151`）⇒ 它永远不送这个键"),
 )
 REGISTERED_EXTRA_RX = tuple((re.compile(p), src) for p, src in REGISTERED_EXTRA)
+
+#: **Go 多出来的「顶层」键**（与 `REGISTERED_EXTRA` 是两件事：那是**逐路径**的，
+#: 这是**规格顶层**的）。现有一族一条：
+#:
+#:   · `retreats` —— 撤退请求。博士 2026-09-25「你现在把撤退机制做了吧」⇒
+#:     Go 实现了撤退（规格多一个顶层键、`sim.go` 帧序 1c 执行、特性
+#:     「撤退时返还初始部署费用」跟着兑现）；而 Python 侧仍然把撤退整条拒跑
+#:     （`spec.py:146-151`）⇒ 它**永远不会**送这个键。
+#:
+#: ⚠ 与 `specgo.go::specKeysGoOnly` 是**同一份事实的两处落点**（那一侧给 Go 自己的
+#: 反键守卫用，这一侧给跨源判据用）。两处都**具名**，且都必须配两侧守卫。
+TOP_LEVEL_GO_ONLY: tuple[str, ...] = ("retreats",)
+TOP_LEVEL_SEEN: dict = {}
+TOP_LEVEL_FROM_PY: dict = {}
 
 MISSING = "<缺>"
 
@@ -505,6 +529,39 @@ def lift_talent_panel(py: dict, go: dict) -> tuple[dict, list[str]]:
     out = dict(py)
     out["operators"] = new_ops
     return out, lifted
+
+
+def lift_retreat_unsupported(py: dict, go: dict) -> tuple[dict, list[str]]:
+    """把 Python 的 `unsupported` 里那条**撤退**理由摘掉再比。
+
+    ★ 为什么：博士 2026-09-25「你现在把撤退机制做了吧」⇒ Go 侧实现了撤退
+    （规格多一个顶层键 `retreats`、`sim.go` 帧序 1c 执行、特性
+    「撤退时返还初始部署费用」跟着兑现），于是**不再把「撤退 ×N」当拒跑理由**；
+    而参照实现（`ak_tactic/simgo/spec.py:146-151`）仍然报它。
+    这不是「Go 少了什么」，是**Go 多做了一步**——判据这一侧要跟着改口径，
+    否则会把「多做了」读成红。
+
+    ⚠ **只摘这一条**：正则锚死 `^撤退 ×\\d+$`，别的理由一条都不动。
+    ⚠ 摘了几处**要报出来**（`RETREAT_LIFTED`），否则它就成了一次静默放宽。
+    """
+    if not isinstance(py, dict):
+        return py, []
+    uns = py.get("unsupported")
+    if not isinstance(uns, list):
+        return py, []
+    keep = [u for u in uns if not (isinstance(u, str) and RETREAT_RX.match(u))]
+    if len(keep) == len(uns):
+        return py, []
+    dropped = [u for u in uns if isinstance(u, str) and RETREAT_RX.match(u)]
+    out = dict(py)
+    out["unsupported"] = keep
+    return out, dropped
+
+
+RETREAT_RX = re.compile(r"^撤退 ×\d+$")
+
+#: 「这一例里 Python 报了、Go 不再报的撤退理由」——给结论行印出来用（登记不等于不说）。
+RETREAT_LIFTED: dict[str, list[str]] = {}
 
 
 def diff_paths(a, b, p: str = "") -> list[tuple[str, object, object]]:
@@ -563,9 +620,33 @@ def diff_one(py: dict, go: dict, name: str) -> tuple[list[str], dict, bool]:
     py, _lifted = lift_talent_panel(py, go)
     if _lifted:
         TALENT_LIFTED[name] = _lifted
-    if sorted(py) != sorted(go):
-        bad.append("%s：键集不同\n      期望 %s\n      Go   %s"
-                   % (name, sorted(py), sorted(go)))
+    #: ★★ 2026-09-25：**撤退**——Go 实现了它，于是不再把「撤退 ×N」当拒跑理由；
+    #: Python 侧仍然报（`spec.py:146-151`）⇒ 把 Python 那一侧的**这一条**摘掉再比。
+    #: ⚠ 只摘这一条（正则锚死 `^撤退 ×\d+$`），别的理由一条都不许跟着消失；
+    #: 摘了几处要记下来印在结论里（`RETREAT_LIFTED`），免得变成静默放宽。
+    py, _r = lift_retreat_unsupported(py, go)
+    if _r:
+        RETREAT_LIFTED[name] = _r
+    #: ★★ 2026-09-25：**顶层键集不再是「相等」**——Go 单方面多了一个 `retreats`
+    #: （博士「你现在把撤退机制做了吧」，撤退整条从拒跑变成实现）。
+    #: 这一路原来只认「相等」，所以那笔改动**没被这道闸门保护到**（独立复核 F3 抓到）。
+    #: 处置与 `REGISTERED_EXTRA` 同一个姿势：**具名**列出 Go 多出来的顶层键，
+    #: 先从 Go 的键集里摘掉再比；摘掉的每一条都要**两侧守卫**（Go 真的送过它、
+    #: Python 一次都没送过），见 `top_level_extra_guards`。
+    go_extra = set(go) - set(py)
+    unregistered = sorted(go_extra - set(TOP_LEVEL_GO_ONLY))
+    if unregistered:
+        bad.append("%s：Go 多出**没登记**的顶层键 %s\n      Go   %s\n      期望 %s"
+                   % (name, unregistered, sorted(go), sorted(py)))
+        return bad, cnt, snow
+    for k in sorted(go_extra):
+        cnt["registered_extra"] += 1
+        TOP_LEVEL_SEEN[k] = TOP_LEVEL_SEEN.get(k, 0) + 1
+        TOP_LEVEL_FROM_PY[k] = TOP_LEVEL_FROM_PY.get(k, 0) + (1 if k in py else 0)
+    py_missing = sorted(set(py) - set(go))
+    if py_missing:
+        bad.append("%s：Go 少了顶层键 %s\n      期望 %s\n      Go   %s"
+                   % (name, py_missing, sorted(py), sorted(go)))
         return bad, cnt, snow
     #: ⚠ 2026-09-23（第三十九批）：**这里原先有一段「有雪时按具名三项差放行」** ——
     #: 那时 Go 判不出雪（`mechanisms` 少一条、`mech_config` 少一个键、

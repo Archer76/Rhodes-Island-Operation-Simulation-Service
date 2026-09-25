@@ -786,8 +786,24 @@ func runSim(spec *Spec) (*Verdict, error) {
 					[3]any{t, r.Operator, "撤退请求找不到人"})
 				continue
 			}
-			if !op.alive() {
-				//: 已倒下/已撤退的人再撤一次：无事发生（不重复记 `leftAt`、不重复退费）。
+			//: ⚠⚠ **「还没部署」与「已死／已撤」必须分开**（2026-09-25 独立复核 F1）。
+			//: 原来是 `if !op.alive() { continue }` 一句话吞掉两种情形，而**未部署的人
+			//: `hp` 是零值**（`newEnemy` 之外，干员在 `runSim` 里构造时 hp 还没种）⇒
+			//: 「撤退请求排在部署之前」那一局：**既没撤退、也没记一笔**，彻底静默。
+			//: 那正是本文件自己反复记的那个形状：「请求发了没人接」与「没发请求」同形。
+			if !op.retreated && op.hp <= 0 && op.leftAt >= 0 {
+				//: 已倒下或已撤退：再撤一次确实无事发生（不重复记 `leftAt`、不重复退费），
+				//: 但仍要**留痕**——否则「重复请求」与「请求没送到」分不开。
+				verdict.DeployRejected = append(verdict.DeployRejected,
+					[3]any{t, r.Operator, "撤退请求：这个人已经不在场（阵亡或已撤退）"})
+				ctx.Trace("RETREAT-SKIP t=%.4f op=%s 已不在场", t, op.spec.Name)
+				continue
+			}
+			if onField[op.spec.CharID] != op {
+				//: 还没部署到场上（请求排在部署之前）：**具名记一笔**，不是静默。
+				verdict.DeployRejected = append(verdict.DeployRejected,
+					[3]any{t, r.Operator, "撤退请求：这个人此刻还没部署"})
+				ctx.Trace("RETREAT-SKIP t=%.4f op=%s 还没部署", t, op.spec.Name)
 				continue
 			}
 			refund := 0
@@ -796,7 +812,10 @@ func runSim(spec *Spec) (*Verdict, error) {
 			}
 			op.retreat()
 			if refund > 0 {
-				cost += float64(refund)
+				//: ⚠ 退费是**回费**，必须与其余回费路一样**夹在上限**（独立复核 F6：
+				//: 实测 `cost_max=99` 时撤@84 被顶到 103）。`cost_max` 是全仓唯一的
+				//: 费用上限口径（`0. 费用回复` 与 `skill.go` 的开技回费都夹它）。
+				cost = math.Min(spec.CostMax, cost+float64(refund))
 			}
 			verdict.Events = append(verdict.Events,
 				Event{T: t, Kind: "retreat", Who: op.spec.Name})
@@ -2747,6 +2766,15 @@ func teamAuraTick(ops []*operator) {
 		//: 只打「吃到了多少」而不打「谁给的」，出分歧时归因不到人。
 		from := make([]string, 0, len(ops))
 		for _, owner := range ops {
+			//: ⚠⚠ **这里不判 `owner.alive()`——这是「口径待裁定」，不是漏写**
+			//: （2026-09-25 独立复核 F5）：同族的另一条路（下方的 `give := owner.alive()`）
+			//: **判了**，于是 Go 内部两处不一致；而**参照实现两侧都没过滤**
+			//: （`talents.py:702` 的 `TeamAura.current(target)` 不看主人死活）
+			//: ⇒ 「光环主人倒下/撤退后还发不发」**没有权威**。
+			//: 我试过在这里加一句 `if !owner.alive() { continue }` 让内部自洽，
+			//: 结果 `plan-hsex03` 的伤害从 23280.1 掉到 23086.6 ⇒ 它**会改判决**，
+			//: 而这一条没有裁定依据 ⇒ **先撤回来，等一句口径**，不把没裁定的选择
+			//: 烙进冻结基线。要落地时**两条路一起改**，并配一次重录与登记。
 			for i := range owner.spec.TeamAuras {
 				x, y := owner.spec.TeamAuras[i].current(owner, op)
 				atk += x
@@ -3230,17 +3258,21 @@ func (e *enemy) take(amount float64, src *operator) float64 {
 	return dealt
 }
 
-// retreat 让这名干员**主动离场**（原版 `_retreat`）。
+// retreat 让这名干员**主动离场**（参照实现 `sim.py:2624-2635` 的 `retreat`）。
 //
-// 做的只有两件：打上 `retreated` 标记、清掉她的阻挡。
-//   - `leftAt`（再部署冷却的起点）由帧循环里那段「离场时刻」统一记——死亡与撤退
+// 做的只有三件：打上 `retreated` 标记、清掉她的阻挡、**把血清零**。
+//   - `leftAt`（离场时刻）由帧循环里那段「离场时刻」统一记——死亡与撤退
 //     走**同一条**，不在这里重复记（重复记会让两种离场的口径各写一遍，迟早分叉）。
 //   - 清 `blocking` 是**立即**的：她这一帧就不该再挡人。敌方的 `blockedBy` 不用在这里
-//     遍历清理——`updateBlocking` 的第二段本来就有一条 `!b.alive() ⇒ blockedBy = nil`
-//     （`sim.go:2013`），本帧稍后会走到。两处都做会在"谁负责清"上留下第二份实现。
+//     遍历清理——`updateBlocking` 的第二段本来就有一条 `!b.alive() ⇒ blockedBy = nil`，
+//     本帧稍后会走到。两处都做会在「谁负责清」上留下第二份实现。
+//   - 血清零**参照实现是这么做的**（`op.hp = 0`）。独立复核逐个查过 5 个候选消费者，
+//     它们都先判 `alive()` ⇒ 这一句**不是判决级**的；写它是为了与参照同形，
+//     免得将来有人写一个不判 `alive` 的消费者，在「撤退后还剩一截血」上咬一口。
 func (o *operator) retreat() {
 	o.retreated = true
 	o.blocking = nil
+	o.hp = 0
 }
 
 // findOpByName 按**干员名**在这一次出场的干员里找人（撤退请求按名字指人）。

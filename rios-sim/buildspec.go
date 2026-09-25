@@ -481,7 +481,12 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 		out.Spec.SkillUses = BuildSkillUses(plan)
 		//: 撤退请求：**照计划原样搬**（时刻 ＋ 干员名）。这里不做任何解释——
 		//: 「到点该撤谁」是模拟器的事，规格只负责把请求送到。
-		//: ⚠ 与 `deploys` 一样是**有输入才有**的键（`omitempty` 承担语义）。
+		//:
+		//: ⚠ **没有请求时必须是 `[]`，不是 `null`**（2026-09-25 独立复核 F9）：
+		//: `nil` 切片序列化成 `null`，而本字段的注释与同族的 `deploys` 都写着
+		//: 「空排程给的是 `[]`」。写成 `null` 会让「我没造这个键」与「这个键的值是空的」
+		//: 在键集账上分不开——那正是这份 `FullSpec` 文件头点名要避免的。
+		out.Spec.Retreats = []RetreatSpec{}
 		for _, r := range plan.Retreats {
 			out.Spec.Retreats = append(out.Spec.Retreats,
 				RetreatSpec{Time: r.Time, Operator: r.Operator})

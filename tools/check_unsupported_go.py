@@ -125,8 +125,17 @@ LINES: tuple[tuple[str, str], ...] = (
 
 LINE_RX = tuple((name, re.compile(rx)) for name, rx in LINES)
 
-#: Go 已搬的线。
-PORTED = ("summon_deploy", "device_deploy", "retreat", "skill_slot", "snow_fields",
+#: Go 已搬的线（＝ Go **会**把它当理由报出来的那些）。
+#:
+#: ★★ 2026-09-25：**`retreat` 从这张表里移出去了**，这是本仓第一处
+#: 「Go 比参照实现**多做了一步**」造成的分道扬镳：
+#: 博士「你现在把撤退机制做了吧」⇒ Go 侧实现了撤退（规格多一个 `retreats` 键、
+#: `sim.go` 帧序 1c 按时刻执行）⇒ **不再把「撤退 ×N」当拒跑理由**；
+#: 而参照实现（`ak_tactic/simgo/spec.py:146-151`）仍然报它。
+#: ⇒ 判据这一侧若还把 `retreat` 当「已搬的线」，就会把「Go 多做了」读成红。
+#: ⚠ 这不是放宽：`LINES` 里那条正则**留着**（尺子仍认得出它，正负对照仍跑它），
+#: 只是**不再期望 Go 报它**。若哪一天 Go 又把它报出来，`reasons` 会多一条 ⇒ 判红。
+PORTED = ("summon_deploy", "device_deploy", "skill_slot", "snow_fields",
           "awake", "modes")
 
 #: Go **算不了**的线（与 `rios-sim/unsupported.go::unportedLines` 同源，双向守卫）。

@@ -437,9 +437,12 @@ type SkillUseSpec struct {
 
 // RetreatSpec 是一条**撤退请求**：时刻 ＋ 干员。
 //
-// 为什么按**干员名**而不是下标／格子：原版 `plan.retreats` 就是这么写的
-// （`unit.py` 的 `_retreat(name)` 按名字找人），与本仓 `RetreatOrder` 同形。
-// 按格子找（像 `SkillUseSpec` 那样）会在「同一格换过人」时撤错人。
+// 为什么按**干员名**而不是下标／格子：`play plan` 的 `retreats` 就是这么写的
+// （`plan.go::RetreatOrder`：`{operator, time}`），本规格只是把它照搬过来。
+// ⚠ 与参照实现**不同**：那边的 `sim.py:636` 是 `retreat(self, position, time)`
+// ——**运行时按格子找人**。这里按名字，因为计划层本来就只有名字，
+// 而且按格子会在「同一格换过人」时撤错人。
+// （2026-09-25 独立复核 F8 更正：本注释原来引的 `unit.py` 的 `_retreat(name)` **不存在**。）
 type RetreatSpec struct {
 	Time     float64 `json:"time"`
 	Operator string  `json:"operator"`
