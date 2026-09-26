@@ -8,7 +8,8 @@
 // 把规格造出来再跑。
 //
 // ★ 旧路径**一个字都没改**：`req.Spec` 里有 `stage` 就照旧直接 Unmarshal 进 `Spec`。
-//   对拍台与历史脚本继续走它。这一批**不做删除**。
+//
+//	对拍台与历史脚本继续走它。这一批**不做删除**。
 //
 // ## 四条约束（前三条对应 `verifier.py` 里读出来的三个坑）
 //
@@ -148,16 +149,16 @@ func ParseSimQuery(raw json.RawMessage, m map[string]json.RawMessage) (BuildSpec
 // 于是「参数被原样带进去了」这件事**只能靠回显取证**。不回显的话，调用方
 // 分不出「按 dev 口径算了」与「这个参数被静默丢了」。
 type SelfSpecEcho struct {
-	Level     string   `json:"level,omitempty"`
-	Path      string   `json:"path,omitempty"`
-	Plan      string   `json:"plan,omitempty"`
-	Roster    string   `json:"roster,omitempty"`
-	AllowDevices bool  `json:"allow_devices"`
-	AllowSkills  bool  `json:"allow_skills"`
-	KeyCount  int      `json:"key_count"`
-	Missing   []string `json:"missing_keys"`
-	Gated     []string `json:"gated_keys"`
-	Mechanisms []string `json:"mechanisms"`
+	Level        string   `json:"level,omitempty"`
+	Path         string   `json:"path,omitempty"`
+	Plan         string   `json:"plan,omitempty"`
+	Roster       string   `json:"roster,omitempty"`
+	AllowDevices bool     `json:"allow_devices"`
+	AllowSkills  bool     `json:"allow_skills"`
+	KeyCount     int      `json:"key_count"`
+	Missing      []string `json:"missing_keys"`
+	Gated        []string `json:"gated_keys"`
+	Mechanisms   []string `json:"mechanisms"`
 }
 
 // BuildSimSpecFromQuery 是查询形式的完整实现：**先造规格、再跑**。

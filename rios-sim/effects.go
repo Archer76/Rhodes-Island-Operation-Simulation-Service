@@ -33,15 +33,15 @@ import (
 
 // Effects 是五个箱子的内容 ＋ 两个计数。
 type Effects struct {
-	Total        int                `json:"eff_total"`
-	Classified   int                `json:"eff_classified"`
-	Buffs        map[string]float64 `json:"eff_buffs"`
-	Units        map[string]string  `json:"eff_units"`
-	Damage       map[string]float64 `json:"eff_damage"`
-	Control      map[string]float64 `json:"eff_control"`
+	Total        int                           `json:"eff_total"`
+	Classified   int                           `json:"eff_classified"`
+	Buffs        map[string]float64            `json:"eff_buffs"`
+	Units        map[string]string             `json:"eff_units"`
+	Damage       map[string]float64            `json:"eff_damage"`
+	Control      map[string]float64            `json:"eff_control"`
 	Variants     map[string]map[string]float64 `json:"eff_variants"`
 	VariantUnits map[string]map[string]string  `json:"eff_variant_units"`
-	Other        map[string]float64 `json:"eff_other"`
+	Other        map[string]float64            `json:"eff_other"`
 	//: 演出参数（不进结算）。
 	AirborneHeight *float64 `json:"eff_airborne_height,omitempty"`
 	AirborneRise   *float64 `json:"eff_airborne_rise,omitempty"`
@@ -56,9 +56,9 @@ func ParseEffects(raw []json.RawMessage, durationType string) *Effects {
 	eff := &Effects{
 		Buffs: map[string]float64{}, Units: map[string]string{},
 		Damage: map[string]float64{}, Control: map[string]float64{},
-		Variants: map[string]map[string]float64{},
+		Variants:     map[string]map[string]float64{},
 		VariantUnits: map[string]map[string]string{},
-		Other: map[string]float64{},
+		Other:        map[string]float64{},
 	}
 	type kv struct {
 		Key string

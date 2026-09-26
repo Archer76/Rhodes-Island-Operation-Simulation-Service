@@ -43,7 +43,7 @@ type SkillMeta struct {
 	//: ⚠ 默认值是 **1**，不是 0——Python 侧写的是 `sp.get("maxChargeTime") or 1`
 	//: （`skill.py:1787`）。数据里这一项为 null 时按 1 算；按 0 算会让「每秒回一次」
 	//: 变成「永不回」。
-	MaxCharge    float64 `json:"max_charge_time"`
+	MaxCharge float64 `json:"max_charge_time"`
 	//: ⚠ **可能是 null**——`-1`（或负值）表示「无限持续」，Python 落成 None
 	//: （`skill.py:1769-1774`）。压成 0 会把「无限」变成「持续 0 秒」。
 	Duration *float64 `json:"duration"`
@@ -214,7 +214,7 @@ func SkillMetaFor(skillID string, level int) (*SkillMeta, error) {
 			DurationType string  `json:"durationType"`
 			//: ⚠ `duration` 在数据里是**数字**，且 `-1` 是「无限持续」的哨兵。
 			Duration *float64 `json:"duration"`
-			SPData       struct {
+			SPData   struct {
 				//: ⚠ **不总是字符串**——`skchr_acspec_1` 这一条里它是**数字**。
 				//: 按 string 解会让整个技能表解析失败（实测踩到）。
 				SPType        any      `json:"spType"`
@@ -240,7 +240,7 @@ func SkillMetaFor(skillID string, level int) (*SkillMeta, error) {
 		BlackboardEntries: len(lv.Blackboard),
 		//: `index` 是**0 起算**的级号；`Level` 是 1 起算的那个，两个都留。
 		Index: level - 1, RawDescription: lv.Description,
-	}	//: `duration < 0` 是「无限持续」的哨兵，落成 nil（`skill.py:1769-1774`）。
+	} //: `duration < 0` 是「无限持续」的哨兵，落成 nil（`skill.py:1769-1774`）。
 	if lv.Duration != nil && *lv.Duration >= 0 {
 		out.Duration = lv.Duration
 	}

@@ -49,8 +49,8 @@ type BlackboardEntry struct {
 
 // Rune 是一条关卡 rune。
 type Rune struct {
-	Key            string           `json:"key"`
-	DifficultyMask *string          `json:"difficulty_mask"`
+	Key            string            `json:"key"`
+	DifficultyMask *string           `json:"difficulty_mask"`
 	Blackboard     []BlackboardEntry `json:"blackboard"`
 }
 

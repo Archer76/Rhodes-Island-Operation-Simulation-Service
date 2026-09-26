@@ -61,10 +61,10 @@ import (
 // 那是展示路径；真正送进规格的 `_legs_spec`（`simgo/spec.py:851`）
 // 送的是 `float(leg.length)` 原值。
 type RouteLeg struct {
-	Kind    string     `json:"kind"`
-	Points  [][2]int   `json:"points"`
-	Length  float64    `json:"length"`
-	Seconds float64    `json:"seconds"`
+	Kind    string   `json:"kind"`
+	Points  [][2]int `json:"points"`
+	Length  float64  `json:"length"`
+	Seconds float64  `json:"seconds"`
 }
 
 // sumLikePython 复刻 CPython 3.12+ 内建 `sum()` 对浮点序列的求和：

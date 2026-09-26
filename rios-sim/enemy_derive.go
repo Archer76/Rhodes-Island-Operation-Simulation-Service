@@ -68,15 +68,15 @@ var rebornSpecs = []rebornSpec{
 //
 // 取不到就是「不重生」，一律给默认值而不是 nil——上层不必再判。
 type RebornFields struct {
-	Count       int       `json:"reborn_count"`
-	Duration    float64   `json:"reborn_duration"`
-	HPRatio     float64   `json:"reborn_hp_ratio"`
-	Prefix      string    `json:"reborn_prefix"`
-	Interval    float64   `json:"reborn_interval"`
-	Pollut      float64   `json:"reborn_pollut"`
-	DefAdd      float64   `json:"reborn_def_add"`
-	DamageMagic float64   `json:"reborn_damage_magic"`
-	Summons     [][3]any  `json:"reborn_summons"`
+	Count       int      `json:"reborn_count"`
+	Duration    float64  `json:"reborn_duration"`
+	HPRatio     float64  `json:"reborn_hp_ratio"`
+	Prefix      string   `json:"reborn_prefix"`
+	Interval    float64  `json:"reborn_interval"`
+	Pollut      float64  `json:"reborn_pollut"`
+	DefAdd      float64  `json:"reborn_def_add"`
+	DamageMagic float64  `json:"reborn_damage_magic"`
+	Summons     [][3]any `json:"reborn_summons"`
 }
 
 func emptyReborn() RebornFields {
@@ -152,18 +152,18 @@ func rebornSummons(bb map[string]any, prefix string) [][3]any {
 // 技能黑板只给得出两个数，而「打几个、打谁、怎么分摊」全在正文里。
 // 项目纪律是**不编数**：正文写了就按正文写死，并让自检去核那段正文。
 type proseSkillAttack struct {
-	ScalePhys   float64
-	Targets     int
-	Cross       int
-	GroundOnly  bool
-	NoNormal    bool
+	ScalePhys  float64
+	Targets    int
+	Cross      int
+	GroundOnly bool
+	NoNormal   bool
 }
 
 var proseSkillAttacks = map[string]proseSkillAttack{
 	"Drink": {
-		ScalePhys: 1.0, // 「攻击力100%的物理伤害」
-		Targets:   1,   // 「攻击场上1名…我方单位」
-		Cross:     1,   // 「目标及其周围4格」= 十字（曼哈顿距离 1）
+		ScalePhys:  1.0,  // 「攻击力100%的物理伤害」
+		Targets:    1,    // 「攻击场上1名…我方单位」
+		Cross:      1,    // 「目标及其周围4格」= 十字（曼哈顿距离 1）
 		GroundOnly: true, // 「部署于地面的我方单位」
 		NoNormal:   true, // 天赋「不进行远程普通攻击」
 	},

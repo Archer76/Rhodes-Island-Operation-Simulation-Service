@@ -53,16 +53,16 @@ type Mechs struct {
 	SpeedupDuration float64 `json:"speedup_duration"`
 	SpeedupCooldown float64 `json:"speedup_cooldown"`
 
-	PhitCnt        int     `json:"phit_cnt"`
-	PhitAtk        float64 `json:"phit_atk"`
-	PhitDef        float64 `json:"phit_def"`
-	PhitRes        float64 `json:"phit_res"`
-	PhitMove       float64 `json:"phit_move"`
-	PhitPollut     float64 `json:"phit_pollut"`
+	PhitCnt         int     `json:"phit_cnt"`
+	PhitAtk         float64 `json:"phit_atk"`
+	PhitDef         float64 `json:"phit_def"`
+	PhitRes         float64 `json:"phit_res"`
+	PhitMove        float64 `json:"phit_move"`
+	PhitPollut      float64 `json:"phit_pollut"`
 	PhitBlockPollut float64 `json:"phit_block_pollut"`
-	PhitExtra      float64 `json:"phit_extra"`
-	PhitMaxStack   int     `json:"phit_max_stack"`
-	PhitWeightCnt  int     `json:"phit_weight_cnt"`
+	PhitExtra       float64 `json:"phit_extra"`
+	PhitMaxStack    int     `json:"phit_max_stack"`
+	PhitWeightCnt   int     `json:"phit_weight_cnt"`
 
 	Pm2Atk             float64 `json:"pm2_atk"`
 	Pm2Def             float64 `json:"pm2_def"`
@@ -75,12 +75,12 @@ type Mechs struct {
 	Pm2Invincible      float64 `json:"pm2_invincible"`
 	Pm2PollutThreshold float64 `json:"pm2_pollut_threshold"`
 
-	AwakeHPRatio    float64 `json:"awake_hp_ratio"`
+	AwakeHPRatio     float64 `json:"awake_hp_ratio"`
 	AwakeSummonRatio float64 `json:"awake_summon_ratio"`
-	AwakeValue      float64 `json:"awake_value"`
-	AwakeValueEff   float64 `json:"awake_value_eff"`
-	AwakeEnemyKey   string  `json:"awake_enemy_key"`
-	AwakeSummonCnt  int     `json:"awake_summon_cnt"`
+	AwakeValue       float64 `json:"awake_value"`
+	AwakeValueEff    float64 `json:"awake_value_eff"`
+	AwakeEnemyKey    string  `json:"awake_enemy_key"`
+	AwakeSummonCnt   int     `json:"awake_summon_cnt"`
 }
 
 // emptyMechs 是「缺失的键一律给 0/空串」的那一份默认值（`enemy.py:324-369`）。

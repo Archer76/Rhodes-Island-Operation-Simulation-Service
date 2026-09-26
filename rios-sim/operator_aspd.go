@@ -45,7 +45,7 @@ func phaseOf(raw any) int {
 
 // resolvedTalent 是「这个练度下真正生效的一条天赋」。
 type resolvedTalent struct {
-	Name      string
+	Name       string
 	Blackboard map[string]any
 	//: **渲染后**的天赋正文（`talent.py:164-178` 的 `render_description`，
 	//: 与 `OperatorStats` 那份 `TextDerived` 同源）。
@@ -74,9 +74,9 @@ func resolveTalents(talents []json.RawMessage, elite, level, potential int) []re
 	for gi, gRaw := range talents {
 		var group struct {
 			Candidates []struct {
-				Name             string            `json:"name"`
-				UnlockCondition  struct {
-					Phase any `json:"phase"`
+				Name            string `json:"name"`
+				UnlockCondition struct {
+					Phase any  `json:"phase"`
 					Level *int `json:"level"`
 				} `json:"unlockCondition"`
 				RequiredPotentialRank *int              `json:"requiredPotentialRank"`
@@ -159,10 +159,10 @@ func blackboardOf(raws []json.RawMessage) map[string]any {
 
 // AttackSpeedBonus 是一名干员在某档配置下的攻速加成。
 type AttackSpeedBonus struct {
-	Flat          float64 `json:"aspd_flat"`
-	WhenFree      float64 `json:"aspd_when_free"`
-	WhenHighGround float64 `json:"aspd_high_ground"`
-	Sources       []string `json:"aspd_sources"`
+	Flat           float64  `json:"aspd_flat"`
+	WhenFree       float64  `json:"aspd_when_free"`
+	WhenHighGround float64  `json:"aspd_high_ground"`
+	Sources        []string `json:"aspd_sources"`
 }
 
 // attackSpeedBonus 复刻 `attack_speed_bonus`（`attack_speed.py:138-158`）。
@@ -201,7 +201,7 @@ func moduleAttackSpeed(parts []json.RawMessage, elite, level, potential int) (fl
 			Bundle struct {
 				Candidates []struct {
 					UnlockCondition struct {
-						Phase any `json:"phase"`
+						Phase any  `json:"phase"`
 						Level *int `json:"level"`
 					} `json:"unlockCondition"`
 					RequiredPotentialRank *int              `json:"requiredPotentialRank"`

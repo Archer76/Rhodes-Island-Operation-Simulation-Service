@@ -59,8 +59,8 @@ import (
 // `Position` 是**整数**格：原版 `__post_init__` 头一件事就是
 // `int(self.position[0]), int(self.position[1])`，小数会被向零截断。
 type DeployOrder struct {
-	Operator    string     `json:"operator"`
-	Position    [2]int     `json:"position"`
+	Operator    string   `json:"operator"`
+	Position    [2]int   `json:"position"`
 	Direction   string   `json:"direction"`
 	Skill       int      `json:"skill"`
 	Mastery     int      `json:"mastery"`

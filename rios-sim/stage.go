@@ -114,15 +114,15 @@ type StageOptions struct {
 
 // Stage 是一份解析好的关卡。
 type Stage struct {
-	LevelID     string                  `json:"level_id"`
-	Code        string                  `json:"code"`
-	Difficulty  string                  `json:"difficulty"`
-	Map         StageMap                `json:"map"`
-	Routes      []Route                 `json:"routes"`
-	ExtraRoutes []Route                 `json:"extra_routes"`
+	LevelID     string                    `json:"level_id"`
+	Code        string                    `json:"code"`
+	Difficulty  string                    `json:"difficulty"`
+	Map         StageMap                  `json:"map"`
+	Routes      []Route                   `json:"routes"`
+	ExtraRoutes []Route                   `json:"extra_routes"`
 	Branches    map[string][]BranchAction `json:"branches"`
-	Spawns      []EnemySpawn            `json:"spawns"`
-	Options     StageOptions            `json:"options"`
+	Spawns      []EnemySpawn              `json:"spawns"`
+	Options     StageOptions              `json:"options"`
 	//: 关卡 rune（`runes` 数组）。构建规格的静态 8 项要用它，见 `stageenv.go`。
 	//:
 	//: ⚠ 标签是 `json:"-"`：这个字段**只在 Go 内部用**，不许出门。原版
@@ -304,7 +304,7 @@ func ParseStage(raw map[string]json.RawMessage, levelID, code, difficulty string
 
 func parseMap(mdRaw json.RawMessage) (StageMap, error) {
 	var md struct {
-		Map   [][]int  `json:"map"`
+		Map   [][]int `json:"map"`
 		Tiles []struct {
 			TileKey       string `json:"tileKey"`
 			HeightType    string `json:"heightType"`
@@ -398,8 +398,8 @@ func parseRoutes(routesRaw json.RawMessage, height int) ([]Route, error) {
 		}
 		out = append(out, Route{
 			Index: i, Mode: r.MotionMode,
-			Start: flip(r.StartPosition.Col, r.StartPosition.Row),
-			End:   flip(r.EndPosition.Col, r.EndPosition.Row),
+			Start:       flip(r.StartPosition.Col, r.StartPosition.Row),
+			End:         flip(r.EndPosition.Col, r.EndPosition.Row),
 			Checkpoints: cps,
 		})
 	}

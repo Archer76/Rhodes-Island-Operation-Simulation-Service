@@ -61,8 +61,8 @@ import (
 // 与 `battle/sim.py` 都从它转出）。⚠ 搬常量先读原文件：本项目有过一次
 // 「同名不同义的两张表被合并、dict.get 静默落默认值」的教训。
 const (
-	mechBlockerKey = "trap_139_dhtl" //: 阻流阀：建成后自身地块不再算田地
-	mechPumpKey    = "trap_140_dhsb" //: 泵站：每秒在身后格与前方格之间搬病害
+	mechBlockerKey = "trap_139_dhtl"  //: 阻流阀：建成后自身地块不再算田地
+	mechPumpKey    = "trap_140_dhsb"  //: 泵站：每秒在身后格与前方格之间搬病害
 	mechPileKey    = "trap_146_dhdcr" //: 天桩：召唤链的起点
 )
 
@@ -93,9 +93,9 @@ const (
 	mechPumpRangeBonus = 2
 )
 
-//: **不是田地**的地块（`environment.py:76-79`）。原文口径是「地形标记为**默认**的
-//: 地面地块（传送门出入口／地穴除外）」——不是「高度为低地的全体」。
-//: ⚠ 原版自陈「本条待实机校正」，前两版口径都作废过。照搬。
+// : **不是田地**的地块（`environment.py:76-79`）。原文口径是「地形标记为**默认**的
+// : 地面地块（传送门出入口／地穴除外）」——不是「高度为低地的全体」。
+// : ⚠ 原版自陈「本条待实机校正」，前两版口径都作废过。照搬。
 var mechFarmlandExcluded = map[string]bool{
 	"tile_telin": true, "tile_telout": true, "tile_hole": true,
 }
@@ -137,10 +137,10 @@ type MechOut struct {
 	Params map[string]any `json:"params"`
 }
 
-//: 未搬的一条线。与判据脚本的 `UNPORTED` 同源，两边不一致时判据会红。
-//: ⚠ `farmland.devices[].child` **已搬进 Go**（2026-09-23，第三十八批）。
-//: ⚠ 雪这一条**按口径分叉**（第三十九批）：`mechspec` 不传排程 ⇒ **一直列着**；
-//: `buildspec` 传了排程且真造出雪 ⇒ `addSnow` 把它从这份清单里**摘掉**。
+// : 未搬的一条线。与判据脚本的 `UNPORTED` 同源，两边不一致时判据会红。
+// : ⚠ `farmland.devices[].child` **已搬进 Go**（2026-09-23，第三十八批）。
+// : ⚠ 雪这一条**按口径分叉**（第三十九批）：`mechspec` 不传排程 ⇒ **一直列着**；
+// : `buildspec` 传了排程且真造出雪 ⇒ `addSnow` 把它从这份清单里**摘掉**。
 var mechUnportedLines = []string{
 	//: 雪：`snow_mech_spec` 要 `snow_spec` → `d.talents` 的「无垠的雪景」
 	//: （`frontend/talent_finders.find_snow`），而且它按**排程**判——
@@ -149,7 +149,7 @@ var mechUnportedLines = []string{
 	snowUnportedLine,
 }
 
-//: 未搬线里雪那一条的**名字**（摘它/认它都只在这一个常量上，免得两处写字符串）。
+// : 未搬线里雪那一条的**名字**（摘它/认它都只在这一个常量上，免得两处写字符串）。
 const snowUnportedLine = "snow.field"
 
 // ---------------------------------------------------------------- 田地规格（生产者侧）
@@ -172,10 +172,10 @@ type mechGroupOut struct {
 }
 
 type mechDeviceOut struct {
-	Kind      string   `json:"kind"`
-	Key       string   `json:"key"`
-	Cell      [2]int   `json:"cell"`
-	Direction string   `json:"direction"`
+	Kind      string `json:"kind"`
+	Key       string `json:"key"`
+	Cell      [2]int `json:"cell"`
+	Direction string `json:"direction"`
 	//: 天桩的召唤链模板。**本版恒不填**（见 `mechUnportedLines`），故 `omitempty`
 	//: 会把它整个省掉——判据据此把「缺 child」与「child 是空对象」分开。
 	Child json.RawMessage `json:"child,omitempty"`
@@ -916,7 +916,7 @@ func buildMechFarmland(st *Stage, raw map[string]json.RawMessage, difficulty str
 		PollutMin:      mechPollutMin, PollutMax: mechPollutMax,
 		PumpRate: mechPumpRate, PumpRange: mechPumpRange,
 		PumpRangeBonus: mechPumpRangeBonus,
-		Groups: []mechGroupOut{}, Actual: [][3]float64{},
+		Groups:         []mechGroupOut{}, Actual: [][3]float64{},
 		Severed: [][2]int{}, Devices: []mechDeviceOut{},
 	}
 	for _, f := range fs.fields {

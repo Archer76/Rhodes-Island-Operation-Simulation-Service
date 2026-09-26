@@ -60,20 +60,20 @@ var immuneFields = []string{
 // ★ 每个数值都用指针：`null`（这一档没有这个量）与 `0` 是两回事，
 // 用零值会让「没有」与「是 0」塌成一个。
 type EnemyStats struct {
-	EnemyID    string `json:"enemy_id"`
-	Level      int    `json:"level"`
-	Name       string `json:"name"`
-	MaxHP      *float64 `json:"max_hp"`
-	Atk        *float64 `json:"atk"`
-	Defense    *float64 `json:"defense"`
-	MagicRes   *float64 `json:"magic_resistance"`
-	MoveSpeed  *float64 `json:"move_speed"`
-	AttackSpeed *float64 `json:"attack_speed"`
-	BaseAttackTime *float64 `json:"base_attack_time"`
-	Weight     *float64 `json:"weight"`
+	EnemyID         string   `json:"enemy_id"`
+	Level           int      `json:"level"`
+	Name            string   `json:"name"`
+	MaxHP           *float64 `json:"max_hp"`
+	Atk             *float64 `json:"atk"`
+	Defense         *float64 `json:"defense"`
+	MagicRes        *float64 `json:"magic_resistance"`
+	MoveSpeed       *float64 `json:"move_speed"`
+	AttackSpeed     *float64 `json:"attack_speed"`
+	BaseAttackTime  *float64 `json:"base_attack_time"`
+	Weight          *float64 `json:"weight"`
 	LifePointReduce *float64 `json:"life_point_reduce"`
-	RangeRadius *float64 `json:"range_radius"`
-	HPRecovery *float64 `json:"hp_recovery_per_sec"`
+	RangeRadius     *float64 `json:"range_radius"`
+	HPRecovery      *float64 `json:"hp_recovery_per_sec"`
 	//: 原样透传（可能是数字也可能是字符串代号），所以用 any。
 	LevelType  any             `json:"level_type"`
 	Immunities map[string]bool `json:"immunities"`
@@ -88,12 +88,12 @@ type EnemyStats struct {
 
 	//: ---- 由黑板/技能派生的字段（`enemy_derive.go`）----
 	//: 平铺而不是嵌一个对象：Python 侧就是平铺的，对拍要同形。
-	P3R          map[string]int            `json:"p3r"`
-	WeakMax      float64                   `json:"weak_max"`
-	FallDuration float64                   `json:"fall_duration"`
-	Modes        map[string]map[string]int `json:"modes"`
-	ShieldHPRatio float64                  `json:"shield_hp_ratio"`
-	KillCost     int                       `json:"kill_cost"`
+	P3R           map[string]int            `json:"p3r"`
+	WeakMax       float64                   `json:"weak_max"`
+	FallDuration  float64                   `json:"fall_duration"`
+	Modes         map[string]map[string]int `json:"modes"`
+	ShieldHPRatio float64                   `json:"shield_hp_ratio"`
+	KillCost      int                       `json:"kill_cost"`
 
 	RebornCount       int      `json:"reborn_count"`
 	RebornDuration    float64  `json:"reborn_duration"`
