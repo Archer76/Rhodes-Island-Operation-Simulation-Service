@@ -266,13 +266,13 @@ GO_ONLY_COUNTERS_ZERO_OK = {
     #: ⚠ 这两条的处境**不同**，必须分开说：
     #:   · `ranged_atk_scale_nonzero` 在本套夹具里**其实不是 0**（hsex8 的银灰、
     #:     plan-main-01-07 的拉普兰德都带这条），所以它不该进这一栏——见下面 §7 的实测；
-    #:   · `kill_cost_on_kill_nonzero` 才是 0（24 份里没有一名冲锋手）。
-    "kill_cost_on_kill_nonzero": "特性「击杀得费」（翎羽，三星）。本套夹具不部署三星 ⇒ 必然为 0；"
-                                 "行使见证在 tools/three_star_check.py 的第三趟（main_00-01，11 次）。",
-    #: ---- 2026-09-25 第六批：撤退动作 ----
-    "retreat_refund_true": "特性「撤退时返还初始部署费用」（翎羽，三星）。本套夹具不部署三星 ⇒ 必然为 0；"
-                           "行使见证要一份**带 retreats 的计划**（本仓现成夹具里一份都没有）——"
-                           "见 docs/three-star-modelling.md。",
+    #:   · `kill_cost_on_kill_nonzero` 与 `retreat_refund_true` **曾经**是 0（24 份里一名冲锋手都没有）
+    #:     —— **2026-09-26 起不再是 0**：新夹具 `fixtures/plan-main-01-07-refund.json` 部署了
+    #:     三星翎羽并在 `t=103` 撤退（实测痕迹 `RETREAT t=103.0333 op=翎羽 refund=8 cost=99.0`）。
+    #:     ⇒ 两条**已从本栏移出**，回到 `GO_ONLY_COUNTERS` 的「至少非零过一次」死账守卫之下
+    #:     —— 那才是它们该待的地方（有行使的计数器不该挂在「必然为 0」栏里）。
+    #:     ★ 这两条登记**自己就预定了这个见证**（原文写的是「行使见证要一份**带 retreats 的计划**
+    #:     （本仓现成夹具里一份都没有）」）⇒ **夹具一到，登记就该退场**，留着就是假话。
 }
 
 #: **Go 独有**的 `covered` 计数器：它们量的是 Go 自己那条**技能绑定链**的账，
