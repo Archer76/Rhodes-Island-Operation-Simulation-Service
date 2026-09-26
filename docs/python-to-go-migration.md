@@ -594,3 +594,68 @@ rios/
 ⚠ **未核**：`eng/` 能瘦到哪一步，还没量过 —— 登录／名册这条路径到底 import 了
 `ak_tactic/` 的哪些子包（`battle/`？`simgo/`？）未逐个查过。查清了才能说
 「`eng/` 只要这几个目录」，现在写的都是**上界**。
+
+### 12.7 实做时撞到的三件事（2026-09-27，打包脚本 + 装完自查实测）
+
+这三条都是**装出来才会炸**的形状，第 12 节前面的规划看不出来，故补在这里。
+
+**① 发布树的数据根是 `eng/data/`，不是 `<发布根>/data/`。**
+
+Python 侧的数据根是**硬编码**的 `Path(__file__).resolve().parents[2] / "data"`：
+
+| 出处 | 认的路径 |
+| --- | --- |
+| `ak_tactic/db/build.py:40`（`DEFAULT_DB_PATH`） | `parents[2]/data/akdb.sqlite` |
+| `ak_tactic/tui/data.py:239`（名册缓存） | `parents[2]/data/skland/roster_<uid>.json` |
+| `ak_tactic/tui/data.py:406`（OperBox 降级） | `parents[2]/tools/operbox_path.py` |
+
+`ak_tactic` 住在 `eng/` 下 ⇒ `parents[2]` 就是 `eng/`。**Go 侧跟着改了**：
+`dataDirCandidates()`（`cmd/rios-tui/main.go`）现在把 `eng/data` 也列进候选，
+所以两侧指向同一处，且**双击 exe 不靠环境变量也能跑**。
+⇒ 给玩家的话也要跟着改：数据放 `eng/data/gamedata/`（预检的输出里已经这么写了）。
+
+**② 两处查找**不许**从发布树往上借**（真踩到了）。
+
+`findEngineExe`／`findBridgeScript` 都会往上走若干层 —— 那是为开发形态准备的
+（exe 常建在 `out/xxx/` 里）。装完自查的**负对照**当场抓到：把发布树的 `eng/` 改名
+之后，预检**照样报「工程侧 Python 在位」**，报的还是开发树那份
+`D:\...\ak-tactic\tools\rios_bridge.py`。这正是本仓最忌讳的形状（你以为读的是 A，
+实际读的是 B），而且在"打包自查"里最危险：**少装一个目录，却因为旁边有棵开发树而判绿**。
+
+处置：新增 `isReleaseTree(dir)`（同级有 `eng/` 或有 `rios-sim.exe`）⇒ 是发布树就
+**只在这棵树里找**，一步都不往上走。开发树照旧往上走。
+⚠ 登记的代价：若哪次开发把引擎 exe 建在 `out/`（`go build -o out/rios-sim.exe`），
+`out/` 会被判成发布树、桥脚本查找在那止步并**具名**报错；处置是摆一份 `tools/`
+或用 `RIOS_BRIDGE` 指定。
+
+**③ 装完自查里 ✓ 会比开发树少 6 条，且两条差异都必须**具名**。**
+
+实测：开发树 `-selftest` 216 个 ✓，**发布树 210**。少的 6 条是：
+
+| 少的条数 | 为什么 | 具名说法（原文） |
+| --- | --- | --- |
+| 2 | 扫**本包 Go 源码**的防绕过判据 —— 发布树里没有 `.go` | `未核：读不到本包源码目录 rios-sim\cmd\rios-tui，不判红` |
+| 4 | 要**真名册**的判据 —— Python 侧认 `eng/data/skland/`，发布树里没有 | `未核：桥这次取不到名册，不判红`（下一条给出 `load_roster() 返回 None` 的原因） |
+
+⇒ 打包脚本**不盯 ✓ 总数**（盯它会把"环境不同"误判成"少跑了"），盯的是性质：
+rc=0、结论全绿、✓≥200、且那两条具名未核必须出现。**少跑而被静默吞掉**才算红。
+
+**另两件顺带记下的**：
+
+* 装完自查会真起一次桥 ⇒ Python 会往**发布树里**写 `__pycache__`。上一版就是这样：
+  自查全绿，紧接着哈希那一步判据报"树里有 6 个 .pyc"。处置：哈希前清掉
+  （可重建，§12.6 判据也认为它不该进包），并且 `启动.cmd` 里设
+  `PYTHONDONTWRITEBYTECODE=1`（装到 `Program Files` 那种没写权限的地方时，写失败
+  本身无害，但会把目录弄脏、让卸载残留与哈希清单都要多解释一句）。
+* `启动.cmd` **纯 ASCII**：cmd.exe 是按**当前代码页**逐行读批处理的，
+  `chcp 65001` 生效之前的行若含中文就会变乱码。给玩家看的中文一律由
+  `rios-tui.exe -preflight` 打印（那一步已经 chcp 过了）。
+
+**当次读数**（`python tools/build_release.py --version v0.3.0`，2026-09-27）：
+发布树 **92 个文件 / 13.8 MB**；`rios-sim.exe` 3,679,744 B、`rios-tui.exe` 8,689,152 B、
+`启动.cmd` 708 B（逐件 sha256 见树根 `SHA256SUMS.txt`）；
+装完自查三条预检读数：全新树 `rc=3`（指出 `eng/data/gamedata`）／拿走引擎 `rc=2`／
+拿走 `eng/` `rc=2`；发布树的 exe 跑全量自检 `rc=0`、✓=210、全绿。
+
+★ 与 v0.2.0 的对比：那一版引擎附件 **3,592,704 B**，现在 **3,679,744 B**（+87,040）
+—— 多出来的正是搜索层（arrivals／spots／candidates／solver）与 `maa` 包。
