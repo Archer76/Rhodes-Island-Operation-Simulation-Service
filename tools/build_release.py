@@ -66,12 +66,15 @@ LAUNCHER = "\r\n".join([
     #: 那些写失败是无害的噪音，但会把目录弄脏（哈希清单、卸载残留都要跟着解释）。
     "set PYTHONDONTWRITEBYTECODE=1",
     "rios-tui.exe -preflight",
-    "if errorlevel 2 (",
+    #: 把自检的退出码**原样**记下来再判：`if errorlevel 2` 对 2 及以上都为真，
+    #: 直接用它会让 rc=3（缺派生库）被报成 2。两个码的含义不同，别在这里压平。
+    "set RIOS_PF=%ERRORLEVEL%",
+    "if %RIOS_PF% GEQ 2 (",
     "  echo.",
-    "  echo This folder is incomplete, so the UI will not start.",
+    "  echo This folder is not ready, so the UI will not start.",
     "  echo Press any key to close.",
     "  pause >nul",
-    "  exit /b 2",
+    "  exit /b %RIOS_PF%",
     ")",
     "rios-tui.exe",
     "set RIOS_RC=%ERRORLEVEL%",
@@ -86,10 +89,18 @@ LAUNCHER = "\r\n".join([
 ])
 
 
-def sh(cmd, cwd=None, timeout=None):
-    """跑一条命令并把两条流都收回来（检查类脚本**零重定向**）。"""
+def sh(cmd, cwd=None, timeout=None, stdin_nul=False):
+    """跑一条命令并把两条流都收回来（检查类脚本**零重定向**）。
+
+    `stdin_nul` 把 stdin 接到 NUL：批处理里那句 `pause` 在无人值守时会一直等，
+    接 NUL 就立刻返回（这正是"启动器能不能被自动验"的关键）。
+    """
+    kw = {}
+    if stdin_nul:
+        kw["stdin"] = subprocess.DEVNULL
     p = subprocess.run(cmd, cwd=str(cwd) if cwd else None, capture_output=True,
-                       text=True, encoding="utf-8", errors="replace", timeout=timeout)
+                       text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                       **kw)
     return p.returncode, (p.stdout or ""), (p.stderr or "")
 
 
@@ -253,6 +264,17 @@ def smoke(tree: Path, data_dir: Path | None) -> None:
         die("负对照失败：把 eng/ 拿掉之后应当 rc=2 且点名工程侧 Python，实得 rc=%d：\n%s"
             % (rc3, out3))
     print("      实得 rc=2，报告里点名了工程侧 Python")
+
+    #: 启动器自己也要真跑一次：`-preflight` 验的是那个 exe，而玩家双击的是这个 .cmd
+    #: （chcp／cd /d %~dp0／errorlevel 这几行是 .cmd 独有的，exe 那侧验不到）。
+    #: 从 NUL 读 stdin ⇒ 里面那句 `pause` 不会把自查挂住。
+    print("  · 启动器 启动.cmd：真跑一次（stdin 接 NUL，免得 pause 挂住）")
+    rc4, out4, err4 = sh(["cmd", "/c", "启动.cmd"], cwd=tree, timeout=300,
+                         stdin_nul=True)
+    if rc4 != 3 or "启动前自检" not in out4:
+        die("启动器没按预期工作：期望 rc=3（缺派生库 ⇒ 不启动界面）且打出预检报告，"
+            "实得 rc=%d：\n%s%s" % (rc4, out4, err4))
+    print("      实得 rc=3，报告是从 启动.cmd 里出来的")
 
     if data_dir is None:
         print("  · 跳过后半段：没有可用的 data 目录（拿它才跑得动全量自检）")
