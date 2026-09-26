@@ -354,17 +354,21 @@ func (s *solveScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
 }
 
 // onMsg 处理异步回来的那一轮结果。
-func (s *solveScreen) onMsg(c *appCtx, msg tea.Msg) (screen, action) {
+//
+// 收 `*root` 而不是 `*appCtx`：跑完要把结果屏**压上去**，而"压屏"是屏栈的事
+// （见 `msgScreen` 的说明）。
+func (s *solveScreen) onMsg(r *root, msg tea.Msg) action {
+	c := r.ctx
 	m, ok := msg.(solveRoundMsg)
 	if !ok {
-		return s, action{kind: actNone}
+		return action{kind: actNone}
 	}
 	if m.err != nil {
 		s.err = m.err.Error()
 		s.running = false
 		s.done = true
-		s.log("失败：" + firstLineWith(m.err.Error(), "★"))
-		return s, action{kind: actNone}
+		s.log("失败：" + reasonOf(m.err.Error()))
+		return action{kind: actNone}
 	}
 	s.evals += m.out.Evaluated
 	for _, st := range m.out.Steps {
@@ -378,14 +382,14 @@ func (s *solveScreen) onMsg(c *appCtx, msg tea.Msg) (screen, action) {
 		s.done = true
 		s.running = false
 		s.log("找到三星方案。")
-		return s, s.finish(c, m.out)
+		return s.finish(c, m.out)
 	}
 	//: 没找到三星 ⇒ 加深再试一轮（每深一层都要重跑一遍，日志里已经写了）
 	if s.idx+1 < len(s.ladder) {
 		s.log(fmt.Sprintf("%d 人以内没找到三星，加深到 %d 人再试一轮",
 			m.depth, s.ladder[s.idx+1]))
 		s.idx++
-		return s, action{kind: actNone, cmd: runSolveRoundCmd(s.p, s.currentDepth())}
+		return action{kind: actNone, cmd: runSolveRoundCmd(s.p, s.currentDepth())}
 	}
 	s.done = true
 	s.running = false
@@ -395,7 +399,7 @@ func (s *solveScreen) onMsg(c *appCtx, msg tea.Msg) (screen, action) {
 			m.depth)
 	}
 	s.log(note)
-	return s, s.finish(c, m.out)
+	return s.finish(c, m.out)
 }
 
 // finish 把结果写进 `appCtx`（结果屏读它）。

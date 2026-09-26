@@ -62,8 +62,11 @@ func (welcomeScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
 		//: 对应 Python 的 `action_dir → push_screen(GuidesDirScreen(), self._dir_done)`。
 		return nil, action{kind: actPush, push: newGuidesDirScreen(c), done: onGuidesDirChosen}
 	case keyIs(k, "l"):
-		c.note = "登录屏尚未实现：它走 Python 子进程（§11.4 的三条约束已定），尚未接线"
-		return nil, action{kind: actNone}
+		//: 对应 Python 的 `action_login → push_screen(LoginScreen(), self._login_done)`：
+		//: 登录回来要把名册行重画一遍（登录可能刚落下一份新凭据），而登录屏还可能带回
+		//: 一句话（登的是新号还是老号）—— 那句显示在账号行上（`c.accountNote`）。
+		return nil, action{kind: actPush, push: newLoginScreen(),
+			done: onLoginDone, cmd: loginInfoCmd()}
 	case keyIs(k, "q"):
 		return nil, action{kind: actQuit}
 	}
@@ -87,9 +90,35 @@ func (c *appCtx) dirLine() string {
 	return out
 }
 
-// accountLine 对应 `_account_line`。登录态同样走 Python 子进程，尚未接线 ⇒ 具名说清。
+// accountLine 对应 `_account_line`：**当前登录的是哪个号**，以及名册有没有跟上。
+//
+// ★ 与 Python 的差距（**登记**）：那一侧有六个分支（游戏 uid 与登录账号 id 的错配、
+// 本机拉过却还没有名册缓存的那些 uid 清单……），它要读 `skland` 的缓存目录清单；而
+// Go 这边手上只有桥给的**名册摘要**（来源/条数/昵称），拿不到那份清单。所以这里给三档
+// 如实说法：有名册 ⇒ 说清是哪个号；有账号没名册 ⇒ 说清缺什么；没账号 ⇒ 给出下一步。
+// 要逐字对齐，得给桥的 `roster` 应答再补 uid/nick/缓存清单三个字段。
 func (c *appCtx) accountLine() string {
-	return styleDim.Render("（登录尚未接入：按 L 的登录屏还没做）")
+	out := ""
+	if c.accountNote != "" {
+		out += c.accountNote + "\n"
+	}
+	if c.roster == nil {
+		if c.rosterErr != "" {
+			out += styleDim.Render("（名册取不到：" + reasonOf(c.rosterErr) + "）")
+		} else {
+			out += styleDim.Render("当前没有登录的账号。可以继续，编队那一步手动输名字；或按 L 扫码登录。")
+		}
+		return out
+	}
+	who := c.roster.Source
+	if c.roster.Count > 0 {
+		who = fmt.Sprintf("%s，共 %d 名干员", who, c.roster.Count)
+	}
+	out += "名册来源：" + who
+	if c.roster.Note != "" {
+		out += "\n" + styleDim.Render(c.roster.Note)
+	}
+	return out
 }
 
 // dataLine 对应 `_data_line` 里**干员库那一半**。

@@ -564,7 +564,7 @@ func (r *root) enterSolve(picked []RosterOperator, src solveSource) solveVerdict
 		if reason == "" {
 			reason = "桥的 roster 应答里没有 path"
 		}
-		c.note = "名册没有可用路径，解算跑不起来：" + firstLineWith(reason, "★")
+		c.note = "名册没有可用路径，解算跑不起来：" + reasonOf(reason)
 		return v
 	}
 	pool, poolNote := solvePool(c)

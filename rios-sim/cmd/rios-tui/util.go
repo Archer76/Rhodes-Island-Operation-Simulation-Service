@@ -24,6 +24,33 @@ var (
 // Rich `cell_len` 在 147 条真实对象上**逐字符 0 分歧**。照它排版，新旧界面的
 // 对齐才是同一套口径。
 
+// reasonOf 从一段（可能是多行的）失败文本里取出**该给玩家看的那一行**。
+//
+// 取法：有 `★` 就取含 `★` 的第一行（本仓约定：`★` 标住的是结论那一句，后面几行是细节），
+// 否则退到**第一行非空内容**；整段都是空的才给一句具名的占位。
+//
+// ★ 为什么不用 `firstLineWith`（那个在 `selftest.go` 里）：它找不到针时返回的是
+// "（没找到含 X 的行）" —— 那是**给写判据的人看的诊断**，不是给玩家看的话。拿它去填
+// 提示就会把真正的原因整句丢掉。实测过：扫码失败时界面上写的是
+// "★ 登录失败：（没找到含 ★ 的行）"，而桥明明说了"二维码已过期"（`phase=failed` 时
+// 那句文本本来就不带 ★）。这正是本仓口径里"原因不许丢"要拦的东西。
+func reasonOf(s string) string {
+	first := ""
+	for _, ln := range strings.Split(s, "\n") {
+		t := strings.TrimSpace(ln)
+		if first == "" && t != "" {
+			first = t
+		}
+		if strings.Contains(ln, "★") {
+			return t
+		}
+	}
+	if first == "" {
+		return "（对方没有给出说明）"
+	}
+	return first
+}
+
 // sortByLevelDesc 把名册按**练度降序**排（精英、等级，同级按 char_id 定序）。
 //
 // 与 Python 的 `Roster.top()` 同向；那边还带 `potential` 参与比较，而桥给的名册没有

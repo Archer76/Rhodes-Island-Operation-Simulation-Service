@@ -65,13 +65,22 @@ type action struct {
 	match func(screen) bool
 }
 
-// msgScreen 是「会收到异步消息」的屏：根模型把非按键消息交给实现它的那一屏。
+// msgScreen 是「会收到异步消息」的屏：根模型把非按键消息交给栈里第一个实现它的屏。
 //
-// 为什么需要这个接口：一轮解算要跑几十秒到几分钟，界面线程绝不能被它卡住（卡住了
-// 连「中止」都按不动）⇒ 那活儿必须走 `tea.Cmd` 异步跑，回来是一条 `tea.Msg`。
+// 为什么需要这个接口：一轮解算／一次扫码要跑几十秒到几分钟，界面线程绝不能被它卡住
+// （卡住了连「中止」都按不动）⇒ 那活儿必须走 `tea.Cmd` 异步跑，回来是一条 `tea.Msg`。
 // 而 `screen` 接口只有 `update(…, tea.KeyMsg)`，收不到它。
+//
+// 为什么给 `*root`：处理一条异步消息时，屏有时要**连动屏栈**（登录成功那一刻：先收掉
+// 二维码那张码屏、再把自己弹回主界面并把一句话交给回调 —— 照 Python 的 `_done`）。
+// 只给 `*appCtx` 的话屏改不动栈，只能把这件事拆成几次往返，而中间态是可见的。
+//
+// ★ 这条路径**只返回 action，不许就地换屏**（对比 `update` 的 `next`）。理由是自检抓到的
+// 一次真崩溃：分派器原先照按键那条路的样子回写 `r.stack[i].scr = next`，而 `onMsg`
+// 自己就可能弹栈（登录成功正是如此）—— 栈一短，那句回写就越界 panic，症状是
+// **扫上了那一刻界面直接崩**。屏要换自己，就走压/弹栈（可见的栈操作），不要在消息里偷偷换。
 type msgScreen interface {
-	onMsg(c *appCtx, msg tea.Msg) (screen, action)
+	onMsg(r *root, msg tea.Msg) action
 }
 
 // appCtx 是整个向导共享的一份状态。照 Python 的 `State`，只留现在已经用得到的那些；
@@ -127,6 +136,9 @@ type appCtx struct {
 	solveSeconds   float64
 	//: 最近一次导出的作业路径（结果屏把它显示出来 —— 玩家要靠它找到文件）。
 	exportPath string
+	//: 登录屏带回的一句话（显示在 `[0]` 屏的**账号行**上，照 Python 的 `_login_done`）。
+	//: 它会说明"登的是新号还是登回了老号"——账号条数没变时，不说会让人以为多了个号。
+	accountNote string
 }
 
 type frame struct {
@@ -194,17 +206,25 @@ func (r *root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmd = r.apply(act)
 	default:
-		//: 异步消息（引擎回来了之类）交给**实现 `msgScreen` 的那一屏** ——
-		//: `screen` 接口只收按键，收不到它（见 `msgScreen`）。
-		if ms, ok := r.top().(msgScreen); ok {
-			next, act := ms.onMsg(r.ctx, msg)
-			if next != nil {
-				r.stack[len(r.stack)-1].scr = next
+		//: 异步消息交给**栈里第一个**实现 `msgScreen` 的屏（从栈顶往下找）。
+		//:
+		//: ★ 为什么不只看栈顶：模态屏（二维码那张）就压在登录屏上面，而登录那条链的
+		//: 消息必须送到**登录屏**去 —— 只看栈顶的话，轮询结果会被一张不处理消息的
+		//: 码屏挡掉（症状：码出来了、状态行不动、扫上了也不推进）。
+		//:
+		//: ⚠ 这里**不回写** `r.stack[i].scr`：`onMsg` 允许弹/压栈（登录成功要先收码屏
+		//: 再弹自己），回写就会在栈已经变短之后越界 —— 见 `msgScreen` 的说明。
+		for i := len(r.stack) - 1; i >= 0; i-- {
+			ms, ok := r.stack[i].scr.(msgScreen)
+			if !ok {
+				continue
 			}
+			act := ms.onMsg(r, msg)
 			if act.kind == actQuit {
 				return r, tea.Quit
 			}
 			cmd = r.apply(act)
+			break
 		}
 	}
 	if cmd == nil {

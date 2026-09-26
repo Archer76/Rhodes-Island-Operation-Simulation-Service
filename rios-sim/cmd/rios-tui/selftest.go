@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,8 +77,32 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 	check("渲染里有「登录账号」栏", strings.Contains(v, "登录账号"), "登录账号")
 	check("干员库那栏是真读数", strings.Contains(v, "干员库：已获取"),
 		firstLineWith(v, "干员库"))
-	check("还没接的登录栏是**具名**的（不留空白）",
-		strings.Contains(v, "尚未接入"), firstLineWith(v, "登录尚未接入"))
+	//: ★ 旧文案（还没接的登录栏写「尚未接入」）**已经随着登录屏落地而删除**，
+	//: 所以这条不再盯文案——盯**性质**：这一栏在任何一档状态下都不许留空白。
+	//: 三档各造一个 ctx 直接问 accountLine，比在整屏渲染里找字更准（也免得日后
+	//: 再改一次文案就红一次）。
+	{
+		accStates := []struct {
+			what string
+			ctx  *appCtx
+		}{
+			{"没账号", &appCtx{}},
+			{"有名册", &appCtx{roster: &rosterData{Source: "skland", Count: 12}}},
+			{"名册取不到", &appCtx{rosterErr: "★ 名册读不出来"}},
+		}
+		blank := ""
+		for _, s := range accStates {
+			if strings.TrimSpace(ansi.Strip(s.ctx.accountLine())) == "" {
+				blank = s.what
+			}
+		}
+		check("登录账号栏三档都有话说（不留空白）", blank == "",
+			fmt.Sprintf("空白的那一档：%q（三档：没账号／有名册／名册取不到）", blank))
+		//: 负对照：这把尺子**对已知的空**必须给得出「空」。只写纯 ANSI 转义
+		//: （肉眼看着是空白的那种）也算空——否则上面那条绿可能只是尺子眼瞎。
+		ctrl := strings.TrimSpace(ansi.Strip("\x1b[2m   \x1b[0m")) == ""
+		check("负对照：空白检测器认得纯 ANSI 的空白", ctrl, fmt.Sprintf("实得 %v", ctrl))
+	}
 
 	fmt.Println("== 三 · 矮窗口降级（优先级：数据 > 标题）==")
 	r.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
@@ -816,6 +841,267 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			fmt.Sprintf("%d 行", len(renderQR(withQuiet(liveQR, 4)))))
 	}
 
+	fmt.Println("== 十六 · 登录屏（五键／三态 Esc／成功带回的话）==")
+	{
+		isWelcome := func(s screen) bool { _, ok := s.(welcomeScreen); return ok }
+
+		//: ★ 一节里有两处会**真的写配置**（答「以后都不问」、扫码成功那一刻）。所以整节
+		//: 都把配置指向临时文件 —— 不指的话，跑一次自检就把玩家真正的
+		//: `~/.rios/tui.json` 改了（那正是 `RIOS_TUI_CONFIG` 存在的理由）。
+		//: 本节结束时显式恢复：后面的节（解算／结果屏）要按**真配置**拿导出目录。
+		cfgSave := os.Getenv("RIOS_TUI_CONFIG")
+		cfgTmp := filepath.Join(os.TempDir(), "__rios_tui_login_cfg__.json")
+		_ = os.Remove(cfgTmp)
+		_ = os.Setenv("RIOS_TUI_CONFIG", cfgTmp)
+
+		//: 初始态：三块齐、且**每一栏都有话说**（空白会让人以为程序坏了）。
+		ls := newLoginScreen()
+		v := ls.view(&appCtx{})
+		check("登录屏三块齐（登录态／本机账号／扫码）",
+			strings.Contains(v, "登录态") && strings.Contains(v, "本机登录过的账号") &&
+				strings.Contains(v, "扫码登录"), firstLineWith(v, "扫码登录"))
+		check("还没读到登录态时说的是「正在读」",
+			strings.Contains(v, "正在读登录态"), firstLineWith(v, "正在读登录态"))
+		check("没账号那栏不留空白（要说清可以跳过）",
+			strings.Contains(v, "本机还没有登录过的账号") && strings.Contains(v, "手动输名字"),
+			firstLineWith(v, "本机还没有登录过的"))
+		//: 负对照：同一把尺子对**不存在的字**必须给 false，否则上面三条绿是尺子眼瞎。
+		check("负对照：同一把尺子对不存在的字给 false",
+			!strings.Contains(v, "***这个串不可能出现***"), "实得 false")
+
+		//: 读登录态失败 ⇒ 具名（★ ＋ 原因），不许退化成一栏空白。
+		lf := newLoginScreen()
+		lf.loadErr = "★ 桥没有应答"
+		st := lf.statusText(&appCtx{})
+		check("读登录态失败时具名（★ ＋ 原因）",
+			strings.Contains(st, "★ 读登录态失败") && strings.Contains(st, "桥没有应答"), st)
+
+		//: `who()` 三态：**不知道就说不知道，并且指出按哪一键**（U）——不许留空白。
+		accs := &accountsData{Rows: []accountRow{{UID: "1", Nick: "甲", GameUID: "g1"}}}
+		known := newLoginScreen()
+		known.ping, known.accts = &pingData{UID: "1"}, accs
+		unknown := newLoginScreen()
+		unknown.ping = &pingData{UID: "9"} //: 本机账号表里没有这个 uid
+		unknown.accts = accs
+		none := newLoginScreen()
+		check("who：已知账号说昵称与游戏 uid",
+			strings.Contains(known.who("1"), "甲") && strings.Contains(known.who("1"), "g1"),
+			known.who("1"))
+		check("who：查不到的账号说「未知」并指出按 U",
+			strings.Contains(unknown.who("9"), "未知") && strings.Contains(unknown.who("9"), "按 U"),
+			unknown.who("9"))
+		check("who：一个账号都没有时也不留空白",
+			strings.TrimSpace(none.who("")) != "", none.who(""))
+
+		//: 登录成功带回主界面的那句话 —— **三档必须互不相同**。这是那句注释守的性质：
+		//: 三条并作一条（或两条并作一条）时，人会以为"账号变多了"，而条数其实没变。
+		noteOf := func(cur, uid string, wasKnown bool) (string, *loginScreen) {
+			s := newLoginScreen()
+			s.ping = &pingData{UID: uid}
+			s.accts = &accountsData{Rows: []accountRow{{UID: uid, Nick: "甲", GameUID: "g1"}}}
+			s.curBefore = cur
+			if wasKnown {
+				s.knownBefore = map[string]bool{uid: true}
+			}
+			return s.backNote(), s
+		}
+		nSame, _ := noteOf("1", "1", true)     //: 本来就登着这个号（只刷新了凭据）
+		nKnown, _ := noteOf("1", "2", true)    //: 本机登过、但不是当前号
+		nNew, _ := noteOf("1", "3", false)     //: 新号
+		check("登录成功带回的话三档互不相同",
+			nSame != nKnown && nKnown != nNew && nSame != nNew,
+			fmt.Sprintf("同号=%q｜老号=%q｜新号=%q", nSame, nKnown, nNew))
+		check("三档都说清了账号条数有没有变多",
+			strings.Contains(nSame, "没有变多") && strings.Contains(nKnown, "没有变多") &&
+				strings.Contains(nNew, "新账号"),
+			fmt.Sprintf("同号=%q｜老号=%q｜新号=%q", nSame, nKnown, nNew))
+
+		//: Esc 三态之一：**已经登着账号 ⇒ 直接退回主界面**，不再问那句荒唐的话。
+		s1 := newLoginScreen()
+		s1.ping = &pingData{UID: "1"}
+		nx, act1 := s1.update(&appCtx{}, tea.KeyMsg{Type: tea.KeyEsc})
+		check("Esc 有账号 ⇒ 直接退回（actBack，且不问）",
+			act1.kind == actBack && act1.push == nil && nx == screen(s1),
+			fmt.Sprintf("kind=%d push=%v", act1.kind, act1.push != nil))
+
+		//: Esc 三态之二：还没账号 ⇒ 问「本次／以后都不」，**两行的取值**是那条契约
+		//: （回调就是按这两个值分派的），所以盯取值不盯文案。
+		s2 := newLoginScreen()
+		_, act2 := s2.update(&appCtx{}, tea.KeyMsg{Type: tea.KeyEsc})
+		ask, isAsk := act2.push.(*askScreen)
+		vals := ""
+		if isAsk {
+			for _, rw := range ask.rows {
+				vals += rw.value + " "
+			}
+		}
+		check("Esc 没账号 ⇒ 问「本次／以后都不」（两个取值）",
+			act2.kind == actPush && isAsk && len(ask.rows) == 2 &&
+				vals == "once never ", fmt.Sprintf("kind=%d 取值=%q", act2.kind, vals))
+
+		//: Esc 三态之三：**问屏上再按 Esc ⇒ 取消这一问，留在登录屏**（不是答"不登录"）。
+		ctx3 := &appCtx{}
+		r3 := newRoot(ctx3, welcomeScreen{})
+		r3.push(s2, onLoginDone)
+		r3.apply(act2) //: 把那张问屏压上去
+		if askTop, ok := r3.top().(*askScreen); ok {
+			_, escAct := askTop.update(ctx3, tea.KeyMsg{Type: tea.KeyEsc})
+			r3.apply(escAct) //: 带 nil 弹回 ⇒ 回调什么都不做
+		}
+		check("问屏上再按 Esc ⇒ 取消（仍留在登录屏）", r3.top() == screen(s2),
+			fmt.Sprintf("实得栈顶 %T（栈深 %d）", r3.top(), len(r3.stack)))
+
+		//: 答「本次不登录」⇒ 退回主界面，且**什么都不写**（文件都不该被建出来）。
+		//: 答「以后都不问」⇒ 写进配置。这两条要一起测，因为它们共用一条 write 路径：
+		//: 只测一条的话，"写"与"不写"哪个是真行为就分不清了。
+		rOnce := newRoot(&appCtx{}, welcomeScreen{})
+		rOnce.push(newLoginScreen(), onLoginDone)
+		onLoginSkipAnswered(rOnce, "once")
+		_, statOnce := os.Stat(cfgTmp)
+		check("答「本次不登录」⇒ 退回主界面且不写配置",
+			isWelcome(rOnce.top()) && os.IsNotExist(statOnce),
+			fmt.Sprintf("栈顶=%T 配置存在=%v", rOnce.top(), statOnce == nil))
+
+		rNever := newRoot(&appCtx{}, welcomeScreen{})
+		rNever.push(newLoginScreen(), onLoginDone)
+		onLoginSkipAnswered(rNever, "never")
+		cfg := loadConfig()
+		pv, pok := cfg["login_prompt"]
+		check("答「以后都不问」⇒ 退回主界面并把 login_prompt 写成空串",
+			isWelcome(rNever.top()) && pok && pv == "",
+			fmt.Sprintf("栈顶=%T login_prompt=%#v（在=%v）", rNever.top(), pv, pok))
+		//: 正对照：同一把「文件在不在」的尺子，上面刚判过"不在"，这里必须判得出"在"。
+		_, statNever := os.Stat(cfgTmp)
+		check("正对照：同一把尺子认得刚写出来的文件", statNever == nil,
+			fmt.Sprintf("配置存在=%v", statNever == nil))
+
+		//: `L` 起扫码：**第二条命令不许再发**（一次只允许有一张码在等）。
+		//: 这条不是洁癖：真并起两次，两张码会互相把会话关掉，症状是"扫上了也不推进"。
+		s4 := newLoginScreen()
+		_, actL1 := s4.update(&appCtx{}, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+		_, actL2 := s4.update(&appCtx{}, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+		check("连按两次 L 只起一次扫码（第二次不发命令）",
+			actL1.cmd != nil && actL2.cmd == nil && s4.busy,
+			fmt.Sprintf("第一次有命令=%v 第二次有命令=%v busy=%v",
+				actL1.cmd != nil, actL2.cmd != nil, s4.busy))
+
+		//: 起扫码**失败**（桥缺件／超时）⇒ 具名，而且 `busy` 必须放掉。
+		//: 放不掉的话 `L` 从此按不动 —— 那是真的会发生的死锁，不是洁癖。
+		//: ★ 「原因不丢」是**单独判的性质**：这里刻意用一个**不带 ★** 的错误文本，
+		//: 因为带 ★ 的那种（桥自己造的错）恰好会掩盖取原因那一处的缺陷。
+		s5 := newLoginScreen()
+		s5.busy, s5.polling = true, true
+		_ = s5.onMsg(newRoot(&appCtx{}, welcomeScreen{}),
+			loginStartMsg{err: errors.New("桥超时")})
+		check("申请二维码失败 ⇒ 具名且放掉 busy（L 还能再按）",
+			!s5.busy && strings.Contains(s5.note, "★ 申请二维码失败"),
+			fmt.Sprintf("busy=%v note=%q", s5.busy, s5.note))
+		check("失败提示里**不许丢掉原因**（不带 ★ 的文本也要原样带出来）",
+			strings.Contains(s5.note, "桥超时"), fmt.Sprintf("note=%q", s5.note))
+
+		//: `reasonOf` 是本仓取原因的那一处 —— 它自己也要判，因为上面那条性质全靠它。
+		//: 三档：带 ★ 取 ★ 那行／不带 ★ 取第一行非空／全空给具名占位。
+		roStar := reasonOf("细节一\n★ 桥报错：没有应答\n细节二")
+		roPlain := reasonOf("\n  二维码已过期  \n后面还有一行")
+		roEmpty := reasonOf("   \n  ")
+		check("reasonOf：有 ★ 取 ★ 那一行", roStar == "★ 桥报错：没有应答", roStar)
+		check("reasonOf：没有 ★ 退到第一行非空（不丢原因）",
+			roPlain == "二维码已过期", roPlain)
+		check("reasonOf：整段都空时给具名占位", strings.Contains(roEmpty, "没有给出说明"), roEmpty)
+		//: 负对照：**旧的那把尺子**（判据用的显示工具）在同一份输入上会丢掉原因 ——
+		//: 这一条证明上面那条「不丢」不是在判一个恒真的命题。
+		oldRuler := firstLineWith("\n  二维码已过期  \n", "★")
+		check("负对照：判据用的 firstLineWith 在同一输入上确实会丢原因",
+			!strings.Contains(oldRuler, "二维码已过期"), oldRuler)
+
+		//: 二维码**编不出来**（桥给了原因）⇒ 说原因，且把那个会话收掉（不许挂着）。
+		s6 := newLoginScreen()
+		s6.busy, s6.polling = true, true
+		s6.sess = &bridgeSession{}
+		_ = s6.onMsg(newRoot(&appCtx{}, welcomeScreen{}),
+			loginStartMsg{st: &loginStartData{QRNote: "二维码库缺失"}})
+		check("二维码编不出来 ⇒ 说原因并收掉会话",
+			!s6.busy && s6.sess == nil && strings.Contains(s6.note, "二维码库缺失"),
+			fmt.Sprintf("busy=%v sess=%v note=%q", s6.busy, s6.sess, s6.note))
+
+		//: ★ 这一节盯的是**屏栈连动**那条架构（`msgScreen` 从栈顶往下找第一个实现它的屏）：
+		//: 二维码那张**模态屏压在登录屏上面**，而轮询消息必须送到**登录屏**去。
+		//: 只看栈顶的话，码出来了、状态行不动、扫上了也不推进。
+		mkQRStack := func(withLogin bool) (*root, *loginScreen, *qrScreen, *appCtx) {
+			c := &appCtx{w: 80, h: 30}
+			sc := newLoginScreen()
+			qr := newQrScreen([][]bool{{true, false}, {false, true}}, "等待扫码……")
+			sc.qr, sc.polling, sc.busy = qr, true, true
+			sc.ping = &pingData{UID: "1"}
+			sc.accts = &accountsData{Rows: []accountRow{{UID: "1", Nick: "甲", GameUID: "g1"}}}
+			rr := newRoot(c, welcomeScreen{})
+			if withLogin {
+				rr.push(sc, onLoginDone)
+			}
+			rr.push(qr, nil)
+			return rr, sc, qr, c
+		}
+		r7, _, qr7, _ := mkQRStack(true)
+		_, _ = r7.Update(loginPollMsg{pl: &loginPollData{Phase: "waiting", Text: "已扫码，请在手机上确认"}})
+		check("扫码进度绕过码屏送到登录屏（状态行落在码上）",
+			strings.Contains(qr7.note, "已扫码"), fmt.Sprintf("码屏提示=%q", qr7.note))
+		check("送完之后码屏仍在栈顶（没被顺手弹掉）", r7.top() == screen(qr7),
+			fmt.Sprintf("栈顶=%T（栈深 %d）", r7.top(), len(r7.stack)))
+		//: 负对照：栈里**没有**登录屏时，同一条消息进去谁都不该动那张码
+		//: ⇒ 证明上面那次变化是登录屏干的，不是别人顺手改的。
+		r8, _, qr8, _ := mkQRStack(false)
+		_, _ = r8.Update(loginPollMsg{pl: &loginPollData{Phase: "waiting", Text: "已扫码，请在手机上确认"}})
+		check("负对照：栈里没有登录屏时，那条进度改不动码屏",
+			!strings.Contains(qr8.note, "已扫码"), fmt.Sprintf("码屏提示=%q", qr8.note))
+
+		//: 扫上了（`done`）：① 码收掉 ② 整屏弹回主界面 ③ 那句话交给回调显示在账号行上。
+		r9, ls9, qr9, c9 := mkQRStack(true)
+		_, _ = r9.Update(loginPollMsg{pl: &loginPollData{Phase: "done", Text: "登录成功"}})
+		check("扫上了 ⇒ 码屏收掉、整屏弹回主界面、带回的话落到账号行",
+			isWelcome(r9.top()) && ls9.qr == nil && qr9 != nil &&
+				c9.accountNote != "" && strings.Contains(c9.accountNote, "账号") &&
+				len(r9.stack) == 1,
+			fmt.Sprintf("栈顶=%T 栈深=%d accountNote=%q", r9.top(), len(r9.stack), c9.accountNote))
+
+		//: 失败：具名 ＋ 收掉会话 ＋ 码屏也收掉（一张作废的码留在屏上只会诱人白扫）。
+		r10, ls10, _, _ := mkQRStack(true)
+		_, _ = r10.Update(loginPollMsg{pl: &loginPollData{Phase: "failed", Text: "二维码已过期"}})
+		check("登录失败 ⇒ 具名、收会话、收码屏",
+			ls10.sess == nil && !ls10.polling && ls10.qr == nil &&
+				strings.Contains(ls10.note, "二维码已过期"),
+			fmt.Sprintf("sess=%v polling=%v note=%q", ls10.sess, ls10.polling, ls10.note))
+
+		//: 收尾路径本身也要判：它是好几条错误路径的公共出口（申请失败／轮询超时／按 Esc），
+		//: 它自己炸掉就会把真正的原因盖掉（玩家看到 panic，不是"桥超时"）。
+		//: 文档声称 close「可重复调用」—— 在这之前没人测过这一句。
+		var closePanic string
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					closePanic = fmt.Sprint(r)
+				}
+			}()
+			half := &bridgeSession{} //: 只造了一半的会话（没进程、没管道）
+			half.close()
+			half.close() //: 第二次必须是空操作
+			_, cerr := half.call("ping", nil, time.Second)
+			if cerr == nil {
+				closePanic = "关了之后还肯发请求"
+			}
+		}()
+		check("close 可重复调用、空会话不炸、关了之后拒发请求", closePanic == "",
+			"实得："+closePanic)
+
+		//: 恢复现场：本节起就把配置指到了临时文件（因为本节有两处真会写配置）。后面的节
+		//: （引擎客户端／解算屏／结果屏）要按**真配置**拿导出目录，别让它们看见这份临时的。
+		if cfgSave == "" {
+			_ = os.Unsetenv("RIOS_TUI_CONFIG")
+		} else {
+			_ = os.Setenv("RIOS_TUI_CONFIG", cfgSave)
+		}
+		_ = os.Remove(cfgTmp)
+	}
+
 	fmt.Println("== 十七 · 桥的常驻会话（登录那条链的前提）==")
 	//: ★ 这一段的中心是**一件事**：`login_start` 在桥上起的那个后台线程，能不能活到
 	//: 下一次 `login_poll`。一次一进程时它活不过 —— 进程读完 stdin 就退出，线程随之
@@ -952,12 +1238,14 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		scr.log("开始解算……")
 		cSolve := &appCtx{w: 90, h: 26, deployLimit: 6,
 			stage: &data.StageRecord{Code: "1-7", LevelID: "main_01-07", Name: "测试关"}}
+		//: 屏的消息处理现在收 `*root`（它要连动屏栈）⇒ 这里造一个最小根模型。
+		rSolve := newRoot(cSolve, welcomeScreen{})
 		msg := runSolveRoundCmd(params, 1)()
 		if m, ok := msg.(solveRoundMsg); ok && m.err != nil {
 			fmt.Printf("  （未核：这一轮解算没跑成，不判红。具名原因：%s）\n",
 				firstLineWith(m.err.Error(), "★"))
 		} else {
-			_, _ = scr.onMsg(cSolve, msg)
+			_ = scr.onMsg(rSolve, msg)
 			check("真起一轮：跑完并落到 done（不是卡在 running）",
 				scr.done && scr.running == false && scr.err == "",
 				fmt.Sprintf("done=%v running=%v err=%q", scr.done, scr.running, scr.err))

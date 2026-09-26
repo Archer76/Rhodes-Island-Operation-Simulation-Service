@@ -134,15 +134,48 @@ func (s *bridgeSession) readLine(timeout time.Duration) (string, error) {
 	}
 }
 
+// loginStart 在**这个会话里**起扫码。
+//
+// ★ 这是常驻会话存在的全部理由：那个后台线程活在桥进程里，会话一关它也没了
+// （见文件头）。所以 `login_start` 与后续的每一次 `login_poll` **必须发给同一个会话**。
+func (s *bridgeSession) loginStart(timeout time.Duration) (*loginStartData, error) {
+	resp, err := s.call("login_start", nil, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return &loginStartData{Phase: resp.Phase, URL: resp.URL, QRMatrix: resp.QRMatrix,
+		QRSize: resp.QRSize, QRNote: resp.QRNote, Text: resp.Text}, nil
+}
+
+// loginPoll 在同一个会话里问一次进度。`phase` 停在 `idle` 就说明会话没在跑
+// （那正是一次一进程时会看到的症状）。
+func (s *bridgeSession) loginPoll(timeout time.Duration) (*loginPollData, error) {
+	resp, err := s.call("login_poll", nil, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return &loginPollData{Phase: resp.Phase, Status: resp.Status,
+		Text: resp.Text, URL: resp.URL}, nil
+}
+
 // close 关掉会话（杀进程、收尸）。**可重复调用**（超时路径也要关）。
+//
+// ★ 收尾必须是**彻底**的：它在好几条错误路径上被调（申请二维码失败、轮询超时、
+// 玩家按 Esc），其中任何一处炸掉都会把真正的原因盖掉（玩家看到的是 panic，不是
+// "桥超时"）。所以这里逐字段护住 —— 会话可能只造了一半（拿到 stdin 但进程没起来）。
 func (s *bridgeSession) close() {
 	if s == nil || s.closed {
 		return
 	}
 	s.closed = true
-	_ = s.stdin.Close()
-	if s.cmd != nil && s.cmd.Process != nil {
+	if s.stdin != nil {
+		_ = s.stdin.Close()
+	}
+	if s.cmd == nil {
+		return
+	}
+	if s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 	}
-	_ = s.cmd.Wait()
+	_ = s.cmd.Wait() //: 没起来过的 Cmd，Wait 返回 "exec: not started"，不炸
 }
