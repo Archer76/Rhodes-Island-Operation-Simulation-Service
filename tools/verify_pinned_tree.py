@@ -41,8 +41,11 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+import roster_path as RP                                       # noqa: E402
+
 WT = Path(os.environ.get("TEMP", "/tmp")) / "rios-pinned-tree"
-ROSTER = ROOT / "docs" / "roster-<uid>.md"
+ROSTER = RP.roster_path()
 
 
 def run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> subprocess.CompletedProcess:

@@ -17,7 +17,7 @@
 | 路 | 练度 | 数量 | 说明 |
 |---|---|---|---|
 | 深扫 | **真实**（`fixtures/roster_max_modelled.json`） | 20 位 | 底/顶/中三档等级 × 信赖{0,50,100} × 潜能{1,6}，另加模组全等级 |
-| 账号名册 | **真实**（`docs/roster-<uid>.md`） | 211 位 | 各取自己的精英/等级/潜能，信赖 0 |
+| 账号名册 | **真实**（`docs/roster-*.md`） | 211 位 | 各取自己的精英/等级/潜能，信赖 0 |
 | **全量宽扫** | **合成**（`akdb.sqlite` 的 `char_` 段） | **460 位** | 每位取**自己能到的** E0/E1/E2 的**上限等级**（`calc.max_level` 现算，到不了就跳过那一档）、信赖 100、潜能 6、模组取该干员自己的 |
 
 ★ 为什么要有第三路：README 写的是「面板层覆盖**全部 460 位**」，
@@ -47,7 +47,7 @@ Go 的应答里带 `module_bonus`，同一位干员带模组/不带模组的 `to
 | 输入 | 入库？ | 缺了会怎样 |
 |---|---|---|
 | `fixtures/roster_max_modelled.json`（20 位，深扫） | **在库** | 崩（rc=1） |
-| `docs/roster-<uid>.md`（账号名册 211 位，拉宽） | **不入库**（`.gitignore:32`：uid／昵称／完整练度＝个人数据） | **具名失败**（rc=3） |
+| `docs/roster-*.md`（账号名册 211 位，拉宽） | **不入库**（`.gitignore:32`：uid／昵称／完整练度＝个人数据） | **具名失败**（rc=3） |
 | `data/akdb.sqlite` 的 `operator` 表 `char_` 段（460 位，全量宽扫） | **在库** | 崩（`mode=ro` 只读打开；库不在就抛，不静默新建） |
 
 ★ 全量宽扫那一路**不依赖**账号名册：名册不在时它照跑照比，读数照印。
@@ -72,8 +72,8 @@ Go 的应答里带 `module_bonus`，同一位干员带模组/不带模组的 `to
 
 rc=3 时印一条**机读行**（纯 ASCII，便于机器消费）：
 
-    SUITE_INPUT_MISSING docs/roster-<uid>.md python tools/skland.py fetch && python tools/roster.py
-    SUITE_INPUT_UNUSABLE docs/roster-<uid>.md python tools/skland.py fetch && python tools/roster.py
+    SUITE_INPUT_MISSING docs/roster-*.md python tools/skland.py fetch && python tools/roster.py
+    SUITE_INPUT_UNUSABLE docs/roster-*.md python tools/skland.py fetch && python tools/roster.py
 
 ## 怎么再生这份名册（要登录态，**不能**离线重建）
 
@@ -115,7 +115,7 @@ rc=3 时印一条**机读行**（纯 ASCII，便于机器消费）：
 
 ## ★ 名册缺席时怎么判（**三态，不静默少比 211 位**）
 
-名册 `docs/roster-<uid>.md` 是**个人数据、刻意不入库**——所以干净检出上
+名册 `docs/roster-*.md` 是**个人数据、刻意不入库**——所以干净检出上
 它**本来就不在**。冻结档必须与默认档**同一套三态**（见文件头「退出码三态」）：
 
 | 现在的名册 | 冻结档怎么做 | 退出码 |
@@ -149,6 +149,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 import freeze_baseline as GB                                   # noqa: E402
+import roster_path as RP                                       # noqa: E402
 
 GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
@@ -162,7 +163,7 @@ EXIT_INPUT_MISSING = 3
 #: 账号名册（个人数据、**刻意不入库** ⇒ `.gitignore:32`）。
 #: ⚠ 它是**唯一**带真实练度三元组（精英／等级／潜能）的输入，且**不能离线重建**：
 #: 它由 `tools/skland.py fetch`（要登录态）＋ `tools/roster.py` 两步产出。
-ROSTER_DOC = ROOT / "docs" / "roster-<uid>.md"
+ROSTER_DOC = RP.roster_path()
 ROSTER_REGEN = "python tools/skland.py fetch && python tools/roster.py"
 
 TRUSTS = [0.0, 50.0, 100.0]
@@ -914,8 +915,9 @@ def main() -> int:
     print("覆盖面 · 真实练度：名册 %d 位 × (底/顶/中 三档等级) × 信赖 %s × 潜能 %s，"
           "另加**模组** %d 次（%d 位带数值模组的干员）"
           % (n_deep_ops, TRUSTS, POTENTIALS, mod_cfg, len(mod_ops)))
-    print("           ＋账号名册全量 %d 位（`docs/roster-<uid>.md`，各取自己的"
-          "精英/等级/潜能、信赖 0）" % wide)
+    print("           ＋账号名册全量 %d 位（`%s`，各取自己的"
+          "精英/等级/潜能、信赖 0）"
+          % (wide, ROSTER_DOC.relative_to(ROOT).as_posix()))
     print("覆盖面 · 合成练度：`akdb` 的 `char_` 段 %d 位**每一位都造了配置**，"
           "共 %d 次折算" % (sweep["with_cfg"], sweep["cfgs"]))
     print("    ✓ 实际比过 %d 位（造出 %d 位 − Go 侧剔掉 %d 位）；"

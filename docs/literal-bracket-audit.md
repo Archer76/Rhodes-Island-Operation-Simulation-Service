@@ -12,7 +12,7 @@
 | 所属树（量测时刻） | 提交 `12f35f7`；工作区与入库归一后**相同** ⇒ `source_dirty` ＝ 干净 |
 | 库 `data/akdb.sqlite` | sha16 `30e08f0da83b2ca9`（mtime 2026-09-20 03:44:30） |
 | 范围表 `data/ranges.json` | sha16 `63ea8a90a89ce24c`（mtime 2026-09-20 04:08:01） |
-| 名册 `docs/roster-<uid>.md` | sha16 `d8a80e8f4784e331` |
+| 名册 `docs/roster-*.md` | sha16 `d8a80e8f4784e331` |
 | 量测之后树又前进 | 提交 `bb7353d` → 提交 `9d63b05`；★ 已核：`tools/audit_coverage.py`、`ak_tactic/`、名册在这两笔之间**都未变**（`git diff --stat`）⇒ 本文读数对象仍成立 |
 
 > 全部读数可用 `out/backend2-b1/bracket_measure.py`、`bracket_denoms.py`、`bracket_guards.py` 重跑；

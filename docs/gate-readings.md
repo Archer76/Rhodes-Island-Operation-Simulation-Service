@@ -21,11 +21,11 @@
 | # | 日期 | 树 | 仪器 sha16 | 输入 | 结果 | 留证 |
 | ---: | --- | --- | --- | --- | --- | --- |
 | 1 | 2026-09-24 | `b65ac03`（detached 冻结树 `%TEMP%\gatechk`） | `2cfca5eb487b3e0b` | `data/` **复制**进去（无 junction）＋ **名册未拷** | **25 / 26 绿**，**26 / 26 守卫成立**；红的是 `干员 rc=3` | 本节第 3 条 |
-| 2 | 2026-09-24 | 同上 | 同上（**同一枚**） | 同上 ＋ **补拷 `docs/roster-<uid>.md`** | **26 / 26 绿**，**26 / 26 守卫成立** | `out/_gate_frozen_b65ac03.log` |
+| 2 | 2026-09-24 | 同上 | 同上（**同一枚**） | 同上 ＋ **补拷 `docs/roster-*.md`** | **26 / 26 绿**，**26 / 26 守卫成立** | `out/_gate_frozen_b65ac03.log` |
 | 3 | 2026-09-24 | **`5ee2707`**（detached 冻结树 `%TEMP%\gatechk`，**旧的已先断链接再摘掉**） | `2cfca5eb487b3e0b`（**与第 2 次同一枚** —— 两次之间没动 `rios-sim/`） | `data/` 复制 ＋ **名册已拷** | **27 / 27 套全绿**，**27 / 27 守卫成立** | `out/_gate_frozen_5ee2707.log` |
 | 4 | 2026-09-24 | **`39d7713`** | **`6cdfe6e2982f298b`** ★ | `data/` 复制 ＋ 名册已拷 | **27 / 27 套全绿**，**27 / 27 守卫成立** | `out/pinned-gate-39d7713.log` |
 | 5 | 2026-09-24 22:4x | **`3559424`**（同一工具第 2 次全流程真跑） | **`d26a699bb78b8ff1`** ★ | `data/` 复制 ＋ 名册已拷 | **27 / 27 套全绿**，**27 / 27 守卫成立**，rc=0 | 原 `out/pinned-gate-3559424.log`（**2026-09-24 晚按博士要求删掉了 `out/` 下的临时产物**；要复现就照 §四 原样跑一遍 `python tools\verify_pinned_tree.py --sha 3559424`） |
-| 6 | 2026-09-25 05:17–06:22 | **`557b9de`**（冻结树 `%TEMP%\rios-pinned-tree`） | **`ab07a29ead9c7ae7`** ★ | `data/` 复制（156 MB）＋ 名册 `roster-<uid>.md` 已补 | **27 / 27 套全绿**，**27 / 27 守卫成立**，rc=0 | `out/pinned-gate-557b9de.log` |
+| 6 | 2026-09-25 05:17–06:22 | **`557b9de`**（冻结树 `%TEMP%\rios-pinned-tree`） | **`ab07a29ead9c7ae7`** ★ | `data/` 复制（156 MB）＋ 名册 `roster-*.md` 已补 | **27 / 27 套全绿**，**27 / 27 守卫成立**，rc=0 | `out/pinned-gate-557b9de.log` |
 | 7 | 2026-09-25 06:55–09:08 | **`04a205a`**（主树一遍 ＋ 冻结树 `%TEMP%\rios-pinned-tree` 一遍） | 主树 `D9A3A5243194AD04`／冻结树 **`4be4ce520b29735e`** ★ | `data/` 复制（156 MB）＋ 名册已补 | 两次都是 **27 / 27 套全绿**，**27 / 27 守卫成立**，rc=0 | `out/selfcheck_traits.txt`、`out/pinned-gate-04a205a.log` |
 | 8 | 2026-09-26 00:21–02:32 | **`79a8e25`**（主树一遍）＋ 冻结树 **`f6c446c`**（`%TEMP%\rios-pinned-tree`） | 主树 **`2E9D706D1290D5C0`**／冻结树 **`eb1a2590b5a2bcf7`** ★ | `data/` 复制（156 MB）＋ 名册已补 | **27 / 27 套判据全绿**（两棵树都是）；**守卫 26 / 27** —— `闸门` 那一套 `rc=1`（守不住）⇒ **两棵树整闸都是 `rc=1`** | `out/selfcheck_aura.txt`、`out/pinned-gate-f6c446c.log` |
 | 9 | 2026-09-26（同日后半夜，§五 的修复落地之后） | **`79a8e25` ＋ 工作树**（含 §五 的判据修复与四星档两支；**单树一遍**，未再跑冻结树） | 主树 **`F4D389568ED8780F`** ★ | `data/` 现读 ＋ 名册已补 | **27 / 27 套判据全绿**，**27 / 27 守卫成立**，**rc=0** | `out/selfcheck_fs.txt` |
@@ -144,7 +144,7 @@ git worktree add --detach $env:TEMP\gatechk <sha>
 
 # 2) 把输入**复制**进去（不是链接）
 Copy-Item data "$env:TEMP\gatechk\data" -Recurse -Force
-Copy-Item docs\roster-<uid>.md "$env:TEMP\gatechk\docs\" -Force   # ← 少这一句就是 25/26
+Copy-Item docs\roster-*.md "$env:TEMP\gatechk\docs\" -Force   # ← 少这一句就是 25/26
 
 # 3) 在那棵树里自己 build，并用**它自己的**仪器
 cd "$env:TEMP\gatechk\rios-sim"; go build -o "$env:TEMP\gatechk\out\acceptance\rios-sim-stage3.exe" .
