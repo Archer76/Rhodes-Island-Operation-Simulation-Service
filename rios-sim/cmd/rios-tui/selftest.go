@@ -843,7 +843,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			fmt.Sprintf("%d 行", len(renderQR(withQuiet(liveQR, 4)))))
 	}
 
-	fmt.Println("== 十六 · 登录屏（五键／三态 Esc／成功带回的话）==")
+	fmt.Println("== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==")
 	{
 		isWelcome := func(s screen) bool { _, ok := s.(welcomeScreen); return ok }
 
@@ -1104,7 +1104,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		_ = os.Remove(cfgTmp)
 	}
 
-	fmt.Println("== 十七 · 桥的常驻会话（登录那条链的前提）==")
+	fmt.Println("== 十五 · 桥的常驻会话（登录那条链的前提）==")
 	//: ★ 这一段的中心是**一件事**：`login_start` 在桥上起的那个后台线程，能不能活到
 	//: 下一次 `login_poll`。一次一进程时它活不过 —— 进程读完 stdin 就退出，线程随之
 	//: 消失，`login_poll` 永远看到 `idle`；而症状极其隐蔽（二维码画得出来，扫了没反应）。
@@ -1138,7 +1138,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		}
 	}
 
-	fmt.Println("== 十四 · 引擎客户端（起子进程讲 JSON 行协议）==")
+	fmt.Println("== 十六 · 引擎客户端（起子进程讲 JSON 行协议）==")
 	//: 负对照在前：把 `RIOS_SIM_BIN` 指到一个**不存在**的路径，必须**具名失败**。
 	//: 静默退化成"没有结果"是最坏的一类错 —— 玩家分不清"这一关搜不出来"与
 	//: "引擎根本没起来"。
@@ -1185,7 +1185,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		}
 	}
 
-	fmt.Println("== 十五 · 解算屏（阶梯／池子／真起一轮引擎）==")
+	fmt.Println("== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==")
 	//: 阶梯：六档**手算**（权威 `depth_ladder` 有两处易错：取不到时按 12 封顶；
 	//: 末端一定落在 `cap` 上，不然"上限 5 人"那一档永远试不到）
 	for _, c := range []struct {
@@ -1263,7 +1263,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 				strings.Contains(v, "已评估") && strings.Contains(v, "["), firstLineWith(v, "已评估"))
 
 			// ------------------------------------------------------ 结果屏
-			fmt.Println("== 十六 · 结果屏（渲染 ＋ **真导出**）==")
+			fmt.Println("== 十八 · 结果屏（渲染 ＋ **真导出**）==")
 			cSolve.guidesDir, _ = os.MkdirTemp("", "rios-selftest-guides-")
 			//: 结果屏要**名册文件**才导得出（桥上那份只有 5 个字段，缺 potential/module）
 			cSolve.roster = &rosterData{Source: "selftest", Path: solveRoster, Count: 2,
@@ -1356,7 +1356,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 	}
 
 	// =====================================================================
-	fmt.Println("== 十七 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==")
+	fmt.Println("== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==")
 	//: 口径（博士 2026-09-26）：用助战 ⇒ 编队上限 **13**（自己的 12 ＋ 助战 1）；
 	//: 助战从**全部干员**里挑（不是名册）；**练度不填、只写名字**；拦截里助战计入。
 	//: 全貌与那条具名登记的后果写在 `support.go` 文件头与 `solveGate` 的注释里。
@@ -1673,7 +1673,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		fmt.Printf("结论：**%d 条红** —— TUI 自检不通过\n", bad)
 		return 1
 	}
-	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／解算入口守卫（自限拦截·两条路）／防绕过／桥具名失败／询问屏／扫码屏／引擎客户端／解算屏／结果屏与导出逐条过")
+	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／解算入口守卫（自限拦截·两条路）／防绕过／桥具名失败／询问屏／扫码屏／登录屏（含桥的常驻会话）／引擎客户端／解算屏／结果屏与导出／助战（上限 13·拦截计入）逐条过")
 	return 0
 }
 
