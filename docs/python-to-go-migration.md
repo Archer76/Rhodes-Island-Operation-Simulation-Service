@@ -220,3 +220,32 @@ TUI 的选关流程是**三层**，而我写的只是中间那层的一部分：
 **未核**：`list_stages`／`list_chapters`／`zone_envs` 的完整语义（排序、limit 的默认、`env`↔`diff_group` 的映射、
 `ENV_ORDER`／`ENV_LABELS` 的取值）**只看了 `data.py` 这一侧的调用与 docstring**；
 `ak_tactic/db/stages.py` 里的实现**未逐行读**（它是参照实现，只读不改）。
+
+### 7.6 ★ `list_stages` 的逐行语义已读 —— 第一刀的 `StageRows` 有**四处实质偏差**
+
+出处：`ak_tactic/db/stages.py:746-782`（`list_stages`）、`:785-790`（`_code_sort_key`）、
+`:89` / `:92` / `:116` / `:125` / `:137`。**下一刀必须按这张表改，不是「在原来基础上加参数」。**
+
+| # | 项 | 参照实现怎么做（原文出处） | 我第一刀 `StageRows` 的做法 | 判定 |
+| --- | --- | --- | --- | --- |
+| 1 | `keyword` 匹配哪几列 | **四列**：`level_id`／`code`／**`zone_id`**／**中文名**，且**全部先 `.upper()`**（`:756`、`:769-772`） | 只匹配 `level_id` 与 `name` 两列，未统一大小写 | ❌ **窄了两列、且大小写口径不同** |
+| 2 | **排序** | `(是否四星档, DIFFICULTY_ORDER 里的序号, _code_sort_key(code), level_id)`（`:775-781`） | `order by zone_id, level_id` | ❌ **完全不同** |
+| 3 | `code` 的排序键 | `_code_sort_key`：按 `-` 分段、**数字段按数值比** ⇒ 让 `2-7` 排在 `2-10` **前面**（`:785-790`） | 没有这个概念（SQL 直接按字符串排 ⇒ `2-10` 会在 `2-7` 前） | ❌ **纯 SQL 排序排不出这个序** |
+| 4 | 过滤面 | 还有 `difficulty`／`env`（对 `diff_group`，大小写不敏感）／`zone`（子串，命令行用）／`exclude_four_star`／`limit`（`:759-768`、`:782`） | 只有 `zone_id` ＋ `keyword` | ⚠️ 缺四项 |
+
+**四条常量（原样抄，出处见上）**：
+
+* `FOUR_STAR_SUFFIX = "#f#"`
+* `DIFFICULTY_ORDER = ("NORMAL", "FOUR_STAR", "RUNE", "SIX_STAR")` —— 备注：这是**四档**，
+  其中 `RUNE` 在本仓的 `stage` 表里实测**未出现**（表里只有 NORMAL 2249／FOUR_STAR 761／SIX_STAR 45）
+* `ENV_ORDER = ("EASY", "NORMAL", "TOUGH", "ALL")`；`ENV_LABELS = {EASY: 剧情体验, NORMAL: 标准实战, TOUGH: 磨难险地, ALL: 通用, NONE: 空, "": 空}`
+* `CHAPTER_TYPES = ("MAINLINE", "BRANCHLINE", "CAMPAIGN", "MAINLINE_ACTIVITY", "ACTIVITY")`；
+  另有一份**只管顺序**的 `CHAPTER_ORDER`（主线各章 → 第 15～17 章 → 剿灭 → 插曲·别传 → 活动）
+  —— 注释里写明了「口径那一份（筛选用）不承担顺序，所以单列一份」
+
+**由此得出的一条实现约束**：第 2、3 项意味着**排序不能在 SQL 里做**（`_code_sort_key` 是分段数值序，
+SQLite 没有现成表达）⇒ Go 侧要**取回后在内存里按同一个 key 排**，且比较器必须与参照实现**逐段同序**。
+这一点与 `datadb.go` 现在的 `order by ...` 直接冲突。
+
+★ **`StageRows`／`ZoneRows` 的处置建议**：`StageRows` **改写**（按上表四项 ＋ 内存排序 ＋ 补过滤）；
+`ZoneRows` **保留但改名**（它是「原始 zone 表」，而 TUI 第一屏要的是 `list_chapters` 的 chapter 层）。
