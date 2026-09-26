@@ -100,6 +100,8 @@ type response struct {
 	Arrivals json.RawMessage `json:"arrivals,omitempty"`
 	//: `spots` 的应答：可部署格（见 `spots.go`）。
 	Spots json.RawMessage `json:"spots,omitempty"`
+	//: `candidates` 的应答：几何剪枝后的候选落位（见 `candidates.go`）。
+	Candidates json.RawMessage `json:"candidates,omitempty"`
 	//: `loadout` 的应答：名册与计划合起来之后的练度（见 `loadout.go`）。
 	Loadout json.RawMessage `json:"loadout,omitempty"`
 	//: `stageenv` 的应答：构建规格要用的关卡静态 8 项（见 `stageenv.go`）。
@@ -860,6 +862,27 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Spots: raw}
+	case "candidates":
+		// 几何剪枝后的候选落位（`search.candidates_for`，见 `candidates.go`）。
+		// 关卡走 req.Level 或 req.Path（合成关卡）；名册走 spec.roster（**一个路径**）——
+		// 桥那边只送 5 个字段，而这一层要 potential 与 module 才算得对攻击力。
+		var cq CandidatesQuery
+		if len(req.Spec) > 0 {
+			if err := json.Unmarshal(req.Spec, &cq); err != nil {
+				return response{ID: req.ID, OK: false,
+					Error: fmt.Sprintf("candidates 的 spec 解不开：%v", err)}
+			}
+		}
+		cout, err := CandidatesFor(req.Level, req.Path, cq.Difficulty, cq)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(cout)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Candidates: raw}
 	case "spawns":
 		// 丙阶段四·第三十批：出怪规格（`simgo/spec.py::_spawn_spec`，见 `spawns.go`）。
 		// 关卡走 req.Level 或 req.Path（合成关卡）。**不吃计划**——出怪表是关卡数据。
