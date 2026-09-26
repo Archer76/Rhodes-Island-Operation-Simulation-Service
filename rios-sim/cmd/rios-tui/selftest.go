@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -177,6 +179,56 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 	ns := noStageScreen{}.view(empty)
 	check("NoStage 屏给的是**能照做的话**（含命令）",
 		strings.Contains(ns, "db stage-fetch"), "含 db stage-fetch")
+
+	fmt.Println("== 八 · 路径补全（check_tui.py 那套判据搬过来）==")
+	tmp, terr := os.MkdirTemp("", "rios-tui-complete")
+	if terr != nil {
+		check("建临时目录", false, terr.Error())
+	} else {
+		defer os.RemoveAll(tmp)
+		sep := string(os.PathSeparator)
+		for _, name := range []string{"alpha-1", "alpha-2", "beta"} {
+			_ = os.Mkdir(filepath.Join(tmp, name), 0o755)
+		}
+		nt, cd := completeDir("", "/X/guides")
+		check("空输入补成默认目录", nt == "/X/guides"+sep, nt)
+		check("补出来带分隔符（好接着往下打）", strings.HasSuffix(nt, sep), nt)
+
+		//: ★ 唯一匹配用**自造场景**，不依赖本机目录里恰好只有一个同前缀条目
+		//:   —— 那正是 Python 那边两条判据恒红的根因（worklog 仓与产品仓同前缀）。
+		_ = os.Mkdir(filepath.Join(tmp, "solo"), 0o755)
+		nt, cd = completeDir(filepath.Join(tmp, "sol"), "")
+		sst, serr := os.Stat(strings.TrimRight(nt, "/\\"))
+		check("唯一匹配补到真目录", serr == nil && sst.IsDir(), nt)
+		check("补的是目录就带分隔符", strings.HasSuffix(nt, sep), nt)
+		check("唯一匹配时不返回候选（没什么可挑的）", len(cd) == 0,
+			fmt.Sprintf("%d 个候选", len(cd)))
+
+		nt, _ = completeDir(filepath.ToSlash(tmp)+"/sol", "")
+		check("正斜杠输入补出来仍是正斜杠（不在一个路径里混两种）",
+			!strings.Contains(nt, "\\"), nt)
+
+		nt, cd = completeDir(filepath.Join(tmp, "al"), "")
+		check("多个匹配时只补到公共前缀，并把候选交回",
+			len(cd) == 2 && strings.HasSuffix(filepath.ToSlash(nt), "alpha-"),
+			fmt.Sprintf("%d 个候选 → %s", len(cd), nt))
+		check("补到前缀之后**不**擅自加分隔符（还没定是哪一个）",
+			!strings.HasSuffix(nt, sep), nt)
+
+		_, listed := completeDir(tmp+sep, "")
+		check("以分隔符结尾时列出该目录下全部条目", len(listed) == 4,
+			fmt.Sprintf("%d 条", len(listed)))
+
+		_ = os.Mkdir(filepath.Join(tmp, "Alpha-3"), 0o755)
+		nt, cd = completeDir(filepath.Join(tmp, "a"), "")
+		check("大小写不同的兄弟目录也能补出公共前缀（不能被大小写噎住）",
+			len(cd) == 3 && len(nt) > len(tmp)+1,
+			fmt.Sprintf("%s / 候选 %d 个", nt, len(cd)))
+
+		nt, cd = completeDir("/__rios_no_such_dir__/x", "")
+		check("不存在的路径原样退回、不给候选",
+			nt == "/__rios_no_such_dir__/x" && len(cd) == 0, nt)
+	}
 
 	fmt.Println()
 	if bad > 0 {
