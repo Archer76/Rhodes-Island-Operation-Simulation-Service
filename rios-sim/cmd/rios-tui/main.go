@@ -30,6 +30,7 @@ func main() {
 	var (
 		selftest  = flag.Bool("selftest", false, "无终端自检：逐层渲染并断言，退出码即判据")
 		preflight = flag.Bool("preflight", false, "启动前自检：逐项查发布目录是否完整（启动.cmd 第一步就是它）")
+		setup     = flag.Bool("setup", false, "首次运行准备：缺什么就自动补齐（装 Python 要你点头，其余全自动）")
 		dumpCh    = flag.Bool("chapters", false, "打印章节表后退出")
 		dumpEnv   = flag.String("envs", "", "打印该 zone 的环境分层后退出")
 		dumpSt    = flag.String("stages", "", "打印该 zone 的关卡列表后退出（可配 -env 再筛）")
@@ -37,11 +38,14 @@ func main() {
 	)
 	flag.Parse()
 
-	//: ★ 自检要跑在 `resolveDataDir` **之前**：新装好的树本来就没有 sqlite（§12.5：
-	//: data 不随包），先跑那个的话会在自检有机会说话之前就退出 —— 而它正是为了
-	//: 说清「缺什么、怎么补」才存在的。
+	//: ★ 自检与首次运行准备都要跑在 `resolveDataDir` **之前**：新装好的树本来就没有
+	//: sqlite（§12.5：data 不随包），先跑那个的话会在它们有机会动手之前就退出。
+	//: `-setup` 尤其如此 —— 它的**全部工作**就是「缺的时候补上」，而那个函数报的正是「缺」。
 	if *preflight {
 		os.Exit(runPreflight())
+	}
+	if *setup {
+		os.Exit(runSetup())
 	}
 
 	if err := resolveDataDir(); err != nil {
@@ -140,13 +144,22 @@ func dataDirCandidates() []string {
 	return append(out, "data")
 }
 
-// findDataDir 找**存在的** data 目录（先 exe 同级，再 cwd），找不到返回空串。
+// findDataDir 找**存在的** data 目录（`RIOS_DB` 优先 → exe 同级 → exe 同级 eng/ → cwd），
+// 找不到返回空串。
+//
+// ★ 为什么必须认 `RIOS_DB`：那是**显式指令**（判据与外部树都用它，取数子包与
+// `resolveDataDir` 都认）。少了这一条就会出现「`RIOS_DB` 指着的库明明在、预检却说
+// 没有数据 ⇒ 自动准备又会去建一份」这种自相矛盾 —— 与 `findEngineExe` 那条
+// 「显式指定了却不认」是同一族错。
 //
 // 与 `resolveDataDir` 的差别：那个认「里面有 akdb.sqlite 的才算数」，这个只认目录在
 // 不在 —— 启动前自检要分得清两种缺法，它们的提示**不一样**：
 // 目录在而 `gamedata/` 缺 ⇒ 要**下载**；目录在而 sqlite 缺 ⇒ 要**构建**。
 func findDataDir() (string, []string) {
 	tried := dataDirCandidates()
+	if v := os.Getenv("RIOS_DB"); v != "" {
+		tried = append([]string{v}, tried...)
+	}
 	for _, c := range tried {
 		if st, err := os.Stat(c); err == nil && st.IsDir() {
 			return c, tried

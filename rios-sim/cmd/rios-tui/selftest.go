@@ -1730,12 +1730,63 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		}
 	}
 
+	fmt.Println("== 二十一 · 首次运行准备的计划（-setup 的判定层）==")
+	{
+		//: 为什么只判"计划"不真跑：`-setup` 真跑会下载几十 MB 并建库 —— 那是长等待，
+		//: 塞进无终端自检会让这条尺子从"秒级"变成"十几分钟级"。所以把**判定**抽成
+		//: 纯函数 `setupPlanFrom` 在这里走遍组合，真跑那一层交给 `tools/build_installer.py`
+		//: 的装完自查（它本来就要装一棵树）。
+		all := setupPlanFrom(true, true, true)
+		check("三项齐全 ⇒ 计划为空（启动器每次都会调它，这条路径必须是哑的）",
+			len(all) == 0, fmt.Sprintf("%d 步", len(all)))
+
+		noPy := setupPlanFrom(false, true, true)
+		needKeys := func(steps []setupStep) string {
+			out := []string{}
+			for _, s := range steps {
+				out = append(out, s.key)
+			}
+			return strings.Join(out, ",")
+		}
+		check("缺解释器 ⇒ 只计划 Python 一项，且**不动**已经齐的数据",
+			needKeys(noPy) == "python", needKeys(noPy))
+		check("缺数据 ⇒ 计划里有 data（并给出具名原因）",
+			needKeys(setupPlanFrom(true, false, true)) == "data" &&
+				strings.Contains(setupPlanFrom(true, false, true)[0].why, "_level_index.json"),
+			needKeys(setupPlanFrom(true, false, true)))
+		check("缺派生库 ⇒ 计划里有 derived（具名到 akdb.sqlite）",
+			needKeys(setupPlanFrom(true, true, false)) == "derived" &&
+				strings.Contains(setupPlanFrom(true, true, false)[0].why, "akdb.sqlite"),
+			needKeys(setupPlanFrom(true, true, false)))
+		check("三样全缺 ⇒ 三步按 python→data→derived 排（先有解释器才谈得上建库）",
+			needKeys(setupPlanFrom(false, false, false)) == "python,data,derived",
+			needKeys(setupPlanFrom(false, false, false)))
+		//: 负对照：把「齐全」和「缺一样」的读数摆在一起，证明这把尺子分得开
+		//: （恒真的判据在这里会把它俩判成同一个结果）。
+		check("负对照：齐全与缺一样必须给出**不同**的计划",
+			len(all) != len(setupPlanFrom(true, false, true)),
+			fmt.Sprintf("齐全=%d 步 / 缺数据=%d 步", len(all), len(setupPlanFrom(true, false, true))))
+
+		//: 真环境那一层：在开发树里（解释器在、数据在）应当判成"不用准备"。
+		//: 这一条同时给上面那些纯函数读数当一个"接得上真环境"的凭据。
+		real := setupPlan()
+		realKeys := needKeys(real)
+		check("真环境（开发树）：解释器与数据都在 ⇒ 计划为空",
+			realKeys == "", "实得："+realKeys)
+
+		//: 工程侧根与那条命令的定位（发布树里必须是 eng/tools/）
+		rs := rebuildScript()
+		check("那条「一次做齐」的命令定位得到，且与桥脚本同一个根",
+			rs != "" && strings.HasSuffix(filepath.ToSlash(rs), "/tools/rebuild_data.py"),
+			rs)
+	}
+
 	fmt.Println()
 	if bad > 0 {
 		fmt.Printf("结论：**%d 条红** —— TUI 自检不通过\n", bad)
 		return 1
 	}
-	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／解算入口守卫（自限拦截·两条路）／防绕过／桥具名失败／询问屏／扫码屏／登录屏（含桥的常驻会话）／引擎客户端／解算屏／结果屏与导出／助战（上限 13·拦截计入）／发布形态（认树·数据根）逐条过")
+	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／解算入口守卫（自限拦截·两条路）／防绕过／桥具名失败／询问屏／扫码屏／登录屏（含桥的常驻会话）／引擎客户端／解算屏／结果屏与导出／助战（上限 13·拦截计入）／发布形态（认树·数据根）／首次运行准备（计划层）逐条过")
 	return 0
 }
 

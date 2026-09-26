@@ -65,16 +65,15 @@ LAUNCHER = "\r\n".join([
     #: 别让 Python 往安装目录里写 __pycache__：装到 Program Files 之类没写权限的地方时
     #: 那些写失败是无害的噪音，但会把目录弄脏（哈希清单、卸载残留都要跟着解释）。
     "set PYTHONDONTWRITEBYTECODE=1",
-    "rios-tui.exe -preflight",
-    #: 把自检的退出码**原样**记下来再判：`if errorlevel 2` 对 2 及以上都为真，
-    #: 直接用它会让 rc=3（缺派生库）被报成 2。两个码的含义不同，别在这里压平。
-    "set RIOS_PF=%ERRORLEVEL%",
-    "if %RIOS_PF% GEQ 2 (",
+    #: 先跑首次运行准备：缺数据／缺派生库就自动补（装 Python 会问一句），
+    #: 什么都不缺时它一个字节都不打印、立刻返回 —— 所以每次启动都调它是安全的。
+    "rios-tui.exe -setup",
+    "if errorlevel 1 (",
     "  echo.",
-    "  echo This folder is not ready, so the UI will not start.",
+    "  echo Setup did not finish - read the messages above.",
     "  echo Press any key to close.",
     "  pause >nul",
-    "  exit /b %RIOS_PF%",
+    "  exit /b 1",
     ")",
     "rios-tui.exe",
     "set RIOS_RC=%ERRORLEVEL%",
