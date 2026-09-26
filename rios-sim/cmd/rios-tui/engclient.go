@@ -39,6 +39,10 @@ const (
 	envBridge = "RIOS_BRIDGE"
 	//: 桥脚本在仓里的相对位置。
 	bridgeRel = "tools/rios_bridge.py"
+	//: 发布树里的位置（迁移图 §12.2：工程侧 Python 单放 `eng/`）。
+	//: ★ 两种形态都要认，且**先认开发树那一种** —— 开发时两者可能同时存在，
+	//: 而仓里那份才是权威（发布树是它的副本）。
+	bridgeRelEng = "eng/tools/rios_bridge.py"
 )
 
 // RosterOperator 是名册里一名干员的**界面侧**字段（桥上只给这几个）。
@@ -149,11 +153,16 @@ func newBridgeClient() (*bridgeClient, error) {
 	return &bridgeClient{python: py, script: script}, nil
 }
 
-// findBridgeScript 依次找：`RIOS_BRIDGE` → exe 所在目录往上 5 层 → cwd 往上 5 层。
+// findBridgeScript 依次找：`RIOS_BRIDGE` → exe 所在目录往上 5 层 → cwd 往上 5 层；
+// 每一层先看 `tools/rios_bridge.py`（开发树），再看 `eng/tools/rios_bridge.py`（发布树）。
 //
 // 为什么要往上找而不是写死一个相对路径：发布形态是「双击 exe」，cwd 未必是 exe
 // 所在目录；而开发时 exe 又常常建在 `out/` 里（比仓根低一层）。逐层往上找
 // 两头都照顾得到，找到的**第一个**就是它。
+//
+// ★ 发布树多一个 `eng/`：迁移图 §12.2 把工程侧 Python 单放一个目录（登录／名册／
+// 建库都走它）。不多认这一层的话，双击启动会报「找不到桥脚本」，而它明明就躺在
+// `eng/tools/` 里 —— 那种「缺件报错本身是错的」最难查。
 func findBridgeScript() (string, []string) {
 	tried := []string{}
 	hit := func(cand string) bool {
@@ -176,10 +185,25 @@ func findBridgeScript() (string, []string) {
 		roots = append(roots, wd)
 	}
 	for _, root := range roots {
+		//: ★ 发布形态**到此为止**：桥脚本要么在 `eng/tools/`，要么在 `tools/`
+		//: （同级），再往上走会走出安装目录、借到旁边另一棵树的副本 ——
+		//: 实测过一次（打包自查的负对照），理由见 `isReleaseTree`。
+		if isReleaseTree(root) {
+			for _, rel := range []string{bridgeRel, bridgeRelEng} {
+				cand := filepath.Join(root, filepath.FromSlash(rel))
+				if hit(cand) {
+					return cand, tried
+				}
+			}
+			continue
+		}
 		dir := root
 		for i := 0; i < 5; i++ {
-			if hit(filepath.Join(dir, filepath.FromSlash(bridgeRel))) {
-				return filepath.Join(dir, filepath.FromSlash(bridgeRel)), tried
+			for _, rel := range []string{bridgeRel, bridgeRelEng} {
+				cand := filepath.Join(dir, filepath.FromSlash(rel))
+				if hit(cand) {
+					return cand, tried
+				}
 			}
 			parent := filepath.Dir(dir)
 			if parent == dir {

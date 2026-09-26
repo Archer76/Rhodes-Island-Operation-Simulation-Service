@@ -28,13 +28,21 @@ import (
 
 func main() {
 	var (
-		selftest = flag.Bool("selftest", false, "无终端自检：逐层渲染并断言，退出码即判据")
-		dumpCh   = flag.Bool("chapters", false, "打印章节表后退出")
-		dumpEnv  = flag.String("envs", "", "打印该 zone 的环境分层后退出")
-		dumpSt   = flag.String("stages", "", "打印该 zone 的关卡列表后退出（可配 -env 再筛）")
-		env      = flag.String("env", "", "与 -stages 连用：按环境分层筛（EASY/NORMAL/TOUGH/ALL）")
+		selftest  = flag.Bool("selftest", false, "无终端自检：逐层渲染并断言，退出码即判据")
+		preflight = flag.Bool("preflight", false, "启动前自检：逐项查发布目录是否完整（启动.cmd 第一步就是它）")
+		dumpCh    = flag.Bool("chapters", false, "打印章节表后退出")
+		dumpEnv   = flag.String("envs", "", "打印该 zone 的环境分层后退出")
+		dumpSt    = flag.String("stages", "", "打印该 zone 的关卡列表后退出（可配 -env 再筛）")
+		env       = flag.String("env", "", "与 -stages 连用：按环境分层筛（EASY/NORMAL/TOUGH/ALL）")
 	)
 	flag.Parse()
+
+	//: ★ 自检要跑在 `resolveDataDir` **之前**：新装好的树本来就没有 sqlite（§12.5：
+	//: data 不随包），先跑那个的话会在自检有机会说话之前就退出 —— 而它正是为了
+	//: 说清「缺什么、怎么补」才存在的。
+	if *preflight {
+		os.Exit(runPreflight())
+	}
 
 	if err := resolveDataDir(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -96,11 +104,7 @@ func resolveDataDir() error {
 	if v := os.Getenv("RIOS_DB"); v != "" {
 		return nil
 	}
-	tried := []string{}
-	if exe, err := os.Executable(); err == nil {
-		tried = append(tried, filepath.Join(filepath.Dir(exe), "data"))
-	}
-	tried = append(tried, "data")
+	tried := dataDirCandidates()
 	for _, c := range tried {
 		if st, err := os.Stat(filepath.Join(c, "akdb.sqlite")); err == nil && !st.IsDir() {
 			return os.Setenv("RIOS_DB", c)
@@ -111,6 +115,44 @@ func resolveDataDir() error {
 		"    python -m ak_tactic db build        # 约 14 秒\n"+
 		"  或显式指定：RIOS_DB=<放 sqlite 的目录>",
 		strings.Join(tried, "\n    "))
+}
+
+// dataDirCandidates 给出「data 目录」的候选，按优先级：exe 同级的 `data/` →
+// exe 同级 `eng/data/` → cwd 下的 `data/`。
+//
+// ★ 一处口径两处用：`resolveDataDir`（真正定下 RIOS_DB）与启动前自检
+// （`preflight.go` 找 gamedata）必须看**同一批位置** —— 两处各写一遍，迟早会出现
+// 「自检说数据在位、真跑起来说找不到」这种最难查的不一致。
+//
+// ★ 为什么要有 `eng/data`（发布树形态，2026-09-27 实测定下来的）：迁移图 §12.2 把
+// 工程侧 Python 单放 `eng/`，而 Python 那边的数据根是**硬编码**的
+// `Path(__file__).resolve().parents[2] / "data"`（`ak_tactic/db/build.py:40`、
+// `ak_tactic/tui/data.py:239`）—— 在发布树里 `parents[2]` 正好是 `eng/`，所以
+// Python 认的是 `eng/data/`。Go 侧若只认 `<发布根>/data/`，两边就会各看一个目录，
+// 症状是「python -m ak_tactic db build 说建好了，界面说找不到库」。
+// 认下 `eng/data` 之后两边指向同一处，且**双击 exe 不靠环境变量也能跑**。
+func dataDirCandidates() []string {
+	out := []string{}
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		out = append(out, filepath.Join(dir, "data"), filepath.Join(dir, "eng", "data"))
+	}
+	return append(out, "data")
+}
+
+// findDataDir 找**存在的** data 目录（先 exe 同级，再 cwd），找不到返回空串。
+//
+// 与 `resolveDataDir` 的差别：那个认「里面有 akdb.sqlite 的才算数」，这个只认目录在
+// 不在 —— 启动前自检要分得清两种缺法，它们的提示**不一样**：
+// 目录在而 `gamedata/` 缺 ⇒ 要**下载**；目录在而 sqlite 缺 ⇒ 要**构建**。
+func findDataDir() (string, []string) {
+	tried := dataDirCandidates()
+	for _, c := range tried {
+		if st, err := os.Stat(c); err == nil && st.IsDir() {
+			return c, tried
+		}
+	}
+	return "", tried
 }
 
 func printChapters(stages []data.StageRecord, zones []data.ZoneRecord) {

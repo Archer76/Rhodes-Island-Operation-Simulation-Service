@@ -907,9 +907,9 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			}
 			return s.backNote(), s
 		}
-		nSame, _ := noteOf("1", "1", true)     //: 本来就登着这个号（只刷新了凭据）
-		nKnown, _ := noteOf("1", "2", true)    //: 本机登过、但不是当前号
-		nNew, _ := noteOf("1", "3", false)     //: 新号
+		nSame, _ := noteOf("1", "1", true)  //: 本来就登着这个号（只刷新了凭据）
+		nKnown, _ := noteOf("1", "2", true) //: 本机登过、但不是当前号
+		nNew, _ := noteOf("1", "3", false)  //: 新号
 		check("登录成功带回的话三档互不相同",
 			nSame != nKnown && nKnown != nNew && nSame != nNew,
 			fmt.Sprintf("同号=%q｜老号=%q｜新号=%q", nSame, nKnown, nNew))

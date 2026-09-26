@@ -60,6 +60,40 @@ func newEngineClient() (*engineClient, error) {
 	return &engineClient{path: path, dir: engineWorkDir()}, nil
 }
 
+// isReleaseTree 判「这个目录是不是**发布树**」。
+//
+// 判据两条取或：同级有 `eng/` 目录（迁移图 §12.2：发布侧 Python 单放 `eng/`），
+// 或同级有引擎 exe `rios-sim.exe`（发布树里两个 exe 同目录）。
+//
+// ★ 为什么非有这个判断不可：两处查找（引擎 exe、桥脚本）都会**往上走**若干层，
+// 那是为了照顾开发形态 —— 开发时 exe 常建在 `out/xxx/` 里，比仓根低两三层。
+// 但同一套「往上走」用在发布树上会**走出安装目录**，于是可能借到一棵无关目录里的
+// `rios-sim.exe` 或 `tools/rios_bridge.py`。
+//
+// 实测（2026-09-27，打包脚本装完自查的负对照）：把发布树里的 `eng/` 改名之后，
+// 启动器自检**照样报「工程侧 Python 在位」**，报的还是开发树的那一份
+// （`D:\...\ak-tactic\tools\rios_bridge.py`）。那正是本仓最忌讳的形状：
+// **你以为读的是 A，实际读的是 B** —— 而且它在"打包自查"这个场景里最危险：
+// 少装了一个目录，却因为旁边正好有棵开发树而判成绿的。
+//
+// ⇒ 判据改成「先认发布形态」：同级有 `eng/` **或**有引擎 exe ⇒ **只在这棵树里找**，
+// 一步都不往上走。开发树（有 `go.mod`／`tools/` 但没有 `eng/`、没有引擎 exe）照旧往上走。
+//
+// ⚠ **登记的代价**：若哪次开发把引擎 exe 直接建在 `out/`（`go build -o out/rios-sim.exe`）
+// 而界面 exe 也在那儿，那么 `out/` 会被判成发布树，桥脚本的查找就在 `out/` 止步、
+// 报「找不到桥脚本」（**具名**失败，不是静默）。处置：把 `tools/` 摆到那儿，
+// 或用 `RIOS_BRIDGE=<绝对路径>` 显式指定。本仓既有的验收 exe 都建在
+// `out/acceptance/` 且带前缀（`_datadb_check.exe` 那一族），不会踩到。
+func isReleaseTree(dir string) bool {
+	if st, err := os.Stat(filepath.Join(dir, "eng")); err == nil && st.IsDir() {
+		return true
+	}
+	if st, err := os.Stat(filepath.Join(dir, engineExe)); err == nil && !st.IsDir() {
+		return true
+	}
+	return false
+}
+
 // findEngineExe 依次找：`RIOS_SIM_BIN` → 界面 exe 同目录 → 往上三层 → cwd。
 //
 // ★ **显式指定了却不存在 ⇒ 具名失败，不再回退去找别的**。第一版是"指的那个不在就
@@ -67,6 +101,8 @@ func newEngineClient() (*engineClient, error) {
 // 它居然**照样拿到了一个客户端**（在别处找到了另一个 `rios-sim.exe`）。在判据里
 // 那是很坏的事 —— **你以为读的是 A 仪器，实际读的是 B**。环境变量是明确的指令，
 // 指令落空就要说，不许静默改读别的。
+//
+// ★ 发布形态（同级有 `eng/`）**不往上走**，理由见 `isReleaseTree`。
 func findEngineExe() (string, []string, error) {
 	tried := []string{}
 	hit := func(cand string) bool {
@@ -94,6 +130,11 @@ func findEngineExe() (string, []string, error) {
 	for _, root := range roots {
 		if hit(filepath.Join(root, engineExe)) {
 			return filepath.Join(root, engineExe), tried, nil
+		}
+		//: ★ 发布形态**到此为止**：同级（或 `eng/` 同级）就是全部可能的位置，
+		//: 再往上走会走出安装目录、借到别人的 exe（见 `isReleaseTree`）。
+		if isReleaseTree(root) {
+			continue
 		}
 		//: 开发时常在 `out/` 里，往上三层基本能回到仓根
 		dir := root
