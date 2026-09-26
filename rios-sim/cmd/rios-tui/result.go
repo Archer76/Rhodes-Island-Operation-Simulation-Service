@@ -117,6 +117,12 @@ func (s *resultScreen) view(c *appCtx) string {
 		for _, ln := range maa.OperatorsLines(ops) {
 			b.WriteString("  " + ln + "\n")
 		}
+		//: 助战那一格**单列一行**：它不在这份打法的 `deploys` 里（是"要求"不是"部署"），
+		//: 但会进导出的 `opers` 末尾（口径 1／3）。所以屏上要说清它是什么。
+		if n := c.supportForSolve(); n != "" {
+			b.WriteString("  " + pad("助战 "+n, 14) +
+				styleDim.Render("第 13 格；只写名字，练度不用填") + "\n")
+		}
 		b.WriteString("\n" + styleDim.Render(
 			"编制要求取自名册（真实专精 / 模组 / 信赖）。") + "\n")
 	}
@@ -223,6 +229,14 @@ func (s *resultScreen) export(c *appCtx) action {
 	if len(c.squad) > 0 {
 		squad = strings.Join(c.squad, " ")
 	}
+	//: ★ 助战接上导出（口径 1／3）：`maa.MaaOptions.SupportName` 非空时会在 `opers`
+	//: **末尾多一格、只写名字**（不带练度 —— MAA 识别不了助战干员的练度）。
+	//: 那一格的形状由 `maa` 包的 `SupportOper` 与 `MaaOper.MarshalJSON` 收敛，
+	//: 逐字节判据在 `maaexport_test.go` 里；这一屏只负责把名字接上去。
+	support := c.supportForSolve()
+	if support != "" {
+		squad += " +助战 " + support
+	}
 	db, derr := data.OpenReadOnly("akdb")
 	var tbl map[string]maa.ModuleInfo
 	if derr == nil {
@@ -236,6 +250,8 @@ func (s *resultScreen) export(c *appCtx) action {
 		Difficulty: c.stage.Difficulty,
 		Title:      c.stage.Code + " " + squad,
 		Details:    note + "由 R.I.O.S. 解算导出；编制要求取自名册，含真实专精与模组。",
+		//: 助战那一格。空 = 整格不加（不带助战时导出的字节与加这个字段之前相同）。
+		SupportName: support,
 	})
 	if err != nil {
 		s.msg = "★ 导出失败：" + err.Error()

@@ -236,6 +236,12 @@ func (e *engineClient) callSolve(p solveParams, depth int,
 		"max_ops": depth, "min_ops": 1, "beam": p.beam, "per_op": p.perOp,
 		"difficulty": p.difficulty,
 	}
+	//: ★ 助战走 spec 的 `support` 键（引擎侧是 `solver.go` 的 `SolveQuery.Support`，
+	//: 见口径 1／3）。**空的时候整个键不发** —— 于是"不带助战"那一轮的请求与加这个
+	//: 字段之前**逐字节相同**（读数可复核，也不给老引擎多送一个它不认识的键）。
+	if p.support != "" {
+		spec["support"] = p.support
+	}
 	fields, err := e.call("solve", 1, p.levelID, spec, timeout)
 	if err != nil {
 		return nil, err

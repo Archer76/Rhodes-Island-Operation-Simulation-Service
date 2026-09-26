@@ -125,6 +125,17 @@ type appCtx struct {
 	squad []string
 	mode  string
 
+	//: ---- 助战（口径 2026-09-26，见 `support.go` 文件头）----
+	//:
+	//: `useSupport` 是选人屏上那个开关，`supportName` 是挑中的那一位。
+	//: 两者分开是为了屏上能显示「用（某某）」；**下游只认 `supportForSolve()`**
+	//: （开关关掉 ⇒ 空串，名字留着也不算数）。
+	useSupport  bool
+	supportName string
+	//: 这一轮的**编队上限**：不用助战 12、用助战 13（自己的 12 ＋ 助战 1，助战占一格）。
+	//: 由 `setSupportUse` 维护 —— 屏上**不许写死**这个数（口径 1）。
+	squadLimit int
+
 	//: 解算结果（结果屏读它）。`plan`／`verdict` 是引擎给的原样 JSON，不在这里
 	//: 重新解释 —— 那是 `solver.go` 与 `maa` 包的事。
 	solvePlan      json.RawMessage

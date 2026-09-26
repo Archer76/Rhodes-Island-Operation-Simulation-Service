@@ -114,13 +114,21 @@ const (
 	//: 只是拦下之后退回的屏不同。**不许**在这里加回豁免。
 	gateBlockAuto
 
+	//: ★ 口径 4（2026-09-26）：**带了助战 ⇒ 放行**。助战那一位没有练度（协议里
+	//: `requirements` 是可选、默认为空），永远不满足「≤E1L1」⇒ 编队不可能「全员 ≤E1L1」。
+	//:
+	//: ⚠ **具名登记的后果（必然结果，不是 bug）**：这道自限拦截**拦不住任何带助战的
+	//: 编队** —— 「1 位助战 ＋ 11 位 E0L1」照样放行。理由与全貌写在 `support.go`
+	//: 的文件头与下面 `solveGate` 的注释里；要改先改口径。
+	gateAllowSupport
+
 	//: 数组长度用，不是一条分支。
 	solveGateBranchCount
 )
 
-// solveGateBranchNames 是四条分支的名字（判据与排障打印用）。
+// solveGateBranchNames 是五条分支的名字（判据与排障打印用）。
 var solveGateBranchNames = [solveGateBranchCount]string{
-	"放行·空编队", "放行·非全员低练度", "拦下·手选", "拦下·自动",
+	"放行·空编队", "放行·非全员低练度", "拦下·手选", "拦下·自动", "放行·带助战",
 }
 
 // solveGateHits 是四条分支的**行使计数**。判据读它证明每条分支都真的被走到过，
@@ -136,17 +144,52 @@ type solveVerdict struct {
 	Branch solveGateBranch // 走的是哪条分支（行使计数与判据都看它）
 }
 
-// solveGate 是这条政策的**唯一判定**：给定「已选编队」与「来源模式」，答放行还是拦。
+// solveGate 是这条政策的**唯一判定**：给定「已选编队」、「来源模式」与「助战名」，
+// 答放行还是拦。
 //
-// 纯函数：只看两个入参（`solveSource` 只用来选分支，不改变拦不拦）。三条同时
+// 纯函数：只看入参（`solveSource` 只用来选分支，不改变拦不拦）。三条同时
 // 成立才拦 —— 注意**没有**槽位那一条（口径 3）：
 //
-//	选了人 ∧ 全员在 E0L1..E1L1 之内 ⇒ 拦（手选、自动**一样**拦，口径 2）
+//	选了人 ∧ 全员在 E0L1..E1L1 之内 ∧ **没有助战** ⇒ 拦（手选、自动**一样**拦，口径 2）
+//	助战非空 ⇒ **放行**（口径 4，见下）
+//
+// # ★ 助战为什么必须是一条**独立分支**，而不是把它拼进 `picked`
+//
+// 口径 4 说「助战没有练度、永远不满足 ≤E1L1」，那说的是**协议里那一位没有练度要求**。
+// 而 Go 侧的**零值** `RosterOperator{}`（Elite=0、Level=0）**反倒落在范围内**：
+// `isMinLevel` 的判定式是 `Elite == 0 && Level <= 1`，`0 <= 1` 为真 ⇒ 拿一个零值干员
+// 顶替助战，闸门**照样拦**，与口径 4 正好相反。⇒ 助战必须是独立信号。
+//
+// # ★★ 具名登记的后果（口径 4 的必然结果，不是实现缺陷）
+//
+// 「全员压到最低练度」那条拦截，**在带一位助战时必然放行**：助战那一位不参与
+// `allMinLevel`，编队因此不可能「全员 ≤E1L1」。一句话：
+//
+//	**这道闸拦不住「1 位助战 ＋ 11 位 E0L1」的编队。**
+//
+// 这是博士 2026-09-26 两条口径（4 助战计入判定 ＋ 1 助战占一格）合起来的必然结果。
+// 按口径就这么实现，如实登记在这里与 `support.go` 的文件头；**要改先改口径**，
+// 不要在守卫里偷偷补一条别的判定（那会让「唯一判定」变成两处）。
 //
 // ★ 唯一的 `allMinLevel` 调用点就在这里。这个事实由下面那条**防绕过判据**
 // （`guardBypassFindings`）盯着：它扫源码，守卫之外再出现一处 `allMinLevel`
 // 调用就判红。
-func solveGate(picked []RosterOperator, src solveSource) solveVerdict {
+//
+// ⚠ 第三个入参是**可变参数**（0 个或 1 个）：不传 = 「不用助战」，语义与旧的两参调用
+// **完全一致**。写成可变参数是为了让既有调用点一个字都不用改（含自检第十段那一处
+// 冻结的取样）—— 本轮有两句要求同时成立：「助战必须进守卫的入参」与「不许改动
+// 既有段落」。生产路径上唯一的调用点是 `enterSolve`，它**总是**把助战传进来
+// （自检里有一条断言盯着：带助战 ⇒ 走在「放行·带助战」这条分支上）。
+func solveGate(picked []RosterOperator, src solveSource, support ...string) solveVerdict {
+	//: 助战名先折掉空白：屏上交回来的是干员名，空白名不算助战（与 `supportForSolve`
+	//: 同一个口径 —— 两处都折一次，是为了让直接调守卫的调用方也拿到同样的语义）。
+	sup := ""
+	if len(support) > 0 {
+		sup = strings.TrimSpace(support[0])
+	}
+	if sup != "" {
+		return solveVerdict{Allow: true, Branch: gateAllowSupport}
+	}
 	if len(picked) == 0 {
 		return solveVerdict{Allow: true, Branch: gateAllowEmptySquad}
 	}
@@ -316,7 +359,7 @@ type squadPickScreen struct {
 func (*squadPickScreen) title() string { return "选人" }
 
 func (*squadPickScreen) help() string {
-	return "↑/↓ 移动 · 空格 勾选 · Enter 进入下一步 · M 切换模式 · Esc 返回 · Q 退出"
+	return "↑/↓ 移动 · 空格 勾选 · T 助战（用／不用）· Enter 进入下一步 · M 切换模式 · Esc 返回 · Q 退出"
 }
 
 // newSquadPickScreen 造一张新的选人屏。`keep` 是「重建时要把哪些勾带过来」
@@ -359,8 +402,13 @@ func (s *squadPickScreen) view(c *appCtx) string {
 	if c.mode == "only" {
 		mode = "只用我选的"
 	}
-	head = append(head, slot+"　模式："+mode+
+	//: 编队上限**不写死在这里**：读数来自 `appCtx.squadLimit`（开关拨一下它就变）。
+	//: 口径 1：不用助战 12、用助战 13（自己的 12 ＋ 助战 1）—— 助战占一格。
+	head = append(head, slot+fmt.Sprintf("　编队上限 %d 人", c.squadLimitShown())+
+		"　模式："+mode+
 		fmt.Sprintf("　已勾 %d 人", len(s.picked)))
+	//: 助战那一行：开关的开与关都要**看得见**（`supportLine` 一份实现，助战屏共用）。
+	head = append(head, c.supportLine()+"　按 T 切换助战（用 ⇒ 去挑一位）")
 	head = append(head, c.rosterLine())
 
 	rows := make([]string, 0, len(s.rows))
@@ -404,6 +452,10 @@ func (s *squadPickScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
 		} else {
 			c.mode = "only"
 		}
+	case keyIs(k, "t"):
+		//: 助战的开关。**开** ⇒ 立刻压一屏去挑人（「开着但没人」不是一个可停留的状态，
+		//: 见 `toggleSupport`）；**关** ⇒ 名字一起清掉、上限回 12。
+		return s, toggleSupport(c)
 	case keyIs(k, "esc"), keyIs(k, "backspace"):
 		return s, action{kind: actBack}
 	case keyIs(k, "q"):
@@ -530,7 +582,10 @@ func professionCN(code string) string {
 // ② 自检里按**分支计数前后差**断言两条路各自走了哪条分支（路被绕开 ⇒ 读数为 0）。
 func (r *root) enterSolve(picked []RosterOperator, src solveSource) solveVerdict {
 	c := r.ctx
-	v := solveGate(picked, src)
+	//: ★ 助战进守卫的**唯一入口**就在这里（口径 4）：读 `appCtx` 上那个"实际带上的助战"
+	//: （开关关掉 ⇒ 空串，见 `supportForSolve`）。谁要绕过这里自己判一遍，就会被
+	//: `guardBypassFindings` 扫出来。
+	v := solveGate(picked, src, c.supportForSolve())
 	solveGateHits[v.Branch]++ //: 行使计数：每条分支都要有非零读数
 	if !v.Allow {
 		c.note = blockNote(v.Branch)
@@ -574,12 +629,22 @@ func (r *root) enterSolve(picked []RosterOperator, src solveSource) solveVerdict
 		difficulty: c.stage.Difficulty, pool: pool,
 		//: 与 Python 的搜索缺省同值（那一屏不暴露这两个旋钮）：`per_op=6`、`beam=5`
 		perOp: 6, beam: 5,
+		//: ★ 助战随这一轮**交给引擎**（口径 1／3）：它进 `solve` 的 spec（`support`），
+		//: 由引擎原样回声（`SolveOut.Support`）。**它不进搜索的池子** —— 搜索只在
+		//: 自己的干员里挑组合，助战是「编队里那一格」，不是候选。
+		support: c.supportForSolve(),
 	}
 	scr := newSolveScreen(params, ladder)
 	scr.log("开始解算……")
 	if poolNote != "" {
 		//: 池子那句只在日志里（Python 同口径：它不进解算屏的表头）
 		scr.log("候选池：" + poolNote + "　（这是程序挑组合的范围，不是出战人数）")
+	}
+	if params.support != "" {
+		//: 把「助战不参与搜索」这件事写进日志：否则玩家看到"上限 13"而搜索只到 12，
+		//: 会以为是少搜了（口径 1 的 13 是**编队**上限，不是搜索深度）。
+		scr.log("本轮带助战：" + params.support +
+			"　（助战不进搜索的候选池，只在编队与导出里占第 13 格）")
 	}
 	if c.deployLimit > 0 {
 		scr.log(fmt.Sprintf("本关最多可部署 %d 人；先按 %d 人找",

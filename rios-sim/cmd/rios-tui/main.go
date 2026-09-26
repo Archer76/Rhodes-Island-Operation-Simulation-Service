@@ -79,6 +79,9 @@ func newAppCtx(stages []data.StageRecord, zones []data.ZoneRecord) *appCtx {
 		dataDir:   data.DataDBDir(),
 		guidesDir: guidesDir(),
 		mode:      "auto", //: 照 Python 的 `State.__init__`（缺省「允许程序补充」）
+		//: 助战开关的初值：**不用**。上限跟着它走（口径 1：不用 12、用 13），
+		//: 只有这一处给出初值，屏上读的是它。
+		squadLimit: squadLimitOf(false),
 	}
 }
 

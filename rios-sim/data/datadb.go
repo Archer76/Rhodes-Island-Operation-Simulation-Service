@@ -87,6 +87,58 @@ func OperatorCount() (int, error) {
 	return n, nil
 }
 
+// OperatorRow 是 `operator` 表里「挑助战干员」要用的那几列。
+//
+// ⚠ 列名照**真 schema**（现查 `pragma table_info(operator)`）：`char_id` / `name` /
+// `profession` 三个都在。库里有 `profession_cn`，但这里**只取英文枚举** —— 中文名走
+// 界面那份 `professionCN`（选人屏已经在用同一张表），两处各写一份中文迟早会漂。
+type OperatorRow struct {
+	CharID     string
+	Name       string
+	Profession string
+}
+
+// AllOperators 列出**全部干员**（界面挑助战那一屏用它）。
+//
+// # 为什么需要这个口
+//
+// 助战是**好友的**干员，不属于本机名册（`roster` 那份是玩家自己号里的）⇒
+// 「能从哪些人里挑助战」只能来自 gamedata 派生库里的全量表，不能从名册来。
+//
+// ★ 只取 `is_operator = 1` 的 **460** 行：`operator` 表一共 1164 行，另外 704 行是
+// **装置 630 ＋ 召唤物 74**（`profession` 分别是 `TRAP` / `TOKEN`，等级一律 1）
+// —— 它们不是干员，助战列表里不该出现。判据用库里的 `is_operator` 列本身，
+// **不另立一张职业白名单**（白名单会随版本漂，而这一列是数据自带的）。
+//
+// 排序固定 `char_id`：**有稳定顺序**，读数才可复核（与 `StageRows` 同一条理由）。
+//
+// 库不在 ⇒ **具名**返回（`ErrDBMissing` 包在错误里），由调用方决定怎么显示；
+// **不许静默返回空列表** —— 那与「这个世界没有干员」长得一模一样（与 `OperatorCount`
+// 同一条口径）。
+func AllOperators() ([]OperatorRow, error) {
+	db, err := OpenReadOnly("akdb")
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	rows, err := db.Query(`select char_id, COALESCE(name,''), COALESCE(profession,'')
+	                       from operator where COALESCE(is_operator,0) = 1
+	                       order by char_id`)
+	if err != nil {
+		return nil, fmt.Errorf("查 operator 失败：%w", err)
+	}
+	defer rows.Close()
+	out := []OperatorRow{}
+	for rows.Next() {
+		var r OperatorRow
+		if err := rows.Scan(&r.CharID, &r.Name, &r.Profession); err != nil {
+			return nil, fmt.Errorf("读 operator 行失败：%w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // StageRow 是 `stage` 表里 TUI 选关卡要用的那几列。
 //
 // ⚠ 列名照 `docs/python-to-go-migration.md` §7.3 的**真 schema**（现查），不照命名习惯猜

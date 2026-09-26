@@ -13,7 +13,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"rios-sim/core"
 	"rios-sim/data"
+	"rios-sim/maa"
 )
 
 // runSelftest 是 TUI 的**无终端判据**。
@@ -1350,6 +1352,319 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			rRoot.Update(keyMsg("h"))
 			check("H 回准备屏（整轮重来）",
 				screenName(rRoot.top()) == "main.welcomeScreen", screenName(rRoot.top()))
+		}
+	}
+
+	// =====================================================================
+	fmt.Println("== 十七 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==")
+	//: 口径（博士 2026-09-26）：用助战 ⇒ 编队上限 **13**（自己的 12 ＋ 助战 1）；
+	//: 助战从**全部干员**里挑（不是名册）；**练度不填、只写名字**；拦截里助战计入。
+	//: 全貌与那条具名登记的后果写在 `support.go` 文件头与 `solveGate` 的注释里。
+	//:
+	//: ★ 本段自己的负对照（**负对照在前**，照第十段那套写法）：
+	//:  ① 把守卫的结论反过来读：**不带助战**时同一份「全员 ≤E1L1」的编队必须
+	//:     **仍然拦** —— 它若放行，说明"放行"被无条件走了，下面那条"带助战不拦"
+	//:     就成了同义反复（满屏 ✓ 零信息量）。
+	//:  ② 尺子 `supportForSolve` 要**两个方向都读得到**：开＋有名字 ⇒ 给名字；
+	//:     关（名字还留着）⇒ 空串。只试一个方向分不出"恒空"与"开关真的管用"。
+	//:  ③ 屏上那三种形态的字面必须分得开：不带助战那一行**不含**子串「助战：用」。
+	//:  ④ **一条故意造的红**（照文件开头那条全局负对照的写法，红完把 `bad` 归零）。
+	rulerOK17 := true
+	{
+		noSup12 := make([]RosterOperator, 0, 12)
+		for i := 0; i < 12; i++ {
+			noSup12 = append(noSup12, RosterOperator{
+				CharID: fmt.Sprintf("char_sup%02d", i), Name: fmt.Sprintf("练%02d", i),
+				Profession: "PIONEER", Elite: i % 2, Level: 1})
+		}
+		inv17 := solveGate(noSup12, solveSourceManual, "")
+		if !check("负对照：不带助战时，12 位全员 ≤E1L1 的编队**仍然拦**（尺子要判红）",
+			!inv17.Allow && inv17.Branch == gateBlockManual,
+			fmt.Sprintf("Allow=%v 分支=%s", inv17.Allow,
+				solveGateBranchNames[inv17.Branch])) {
+			rulerOK17 = false
+		}
+		on17 := &appCtx{useSupport: true, supportName: "令"}
+		off17 := &appCtx{useSupport: false, supportName: "令"}
+		if !check("负对照：supportForSolve 两个方向都要读到（开⇒名字、关⇒空串）",
+			on17.supportForSolve() == "令" && off17.supportForSolve() == "",
+			fmt.Sprintf("开=%q 关=%q", on17.supportForSolve(), off17.supportForSolve())) {
+			rulerOK17 = false
+		}
+		zero17 := &appCtx{}
+		if !check("负对照：不带助战那一行**不含**子串「助战：用」（三种形态分得开）",
+			!strings.Contains(zero17.supportLine(), "助战：用"),
+			fmt.Sprintf("%q", zero17.supportLine())) {
+			rulerOK17 = false
+		}
+	}
+	if !rulerOK17 {
+		fmt.Println("★ 本段负对照没红 ⇒ 第十七段的读数作废")
+		return 3
+	}
+	//: ④ 故意造的红：口径 4 那句话说的是"协议里助战**没有练度要求**"，而 Go 的
+	//:   **零值**干员（Elite 0／Level 0）**落在**「≤E1L1」范围内（`0 <= 1` 为真）
+	//:   ⇒ 拿零值干员顶替助战，闸门照样拦，与口径 4 相反。所以下面这条命题是**假的**：
+	//:   它必须报 ✗。它红了，才证明这一段的断言不是同义反复。
+	if check("负对照（故意造的红）：零值干员不在「≤E1L1」范围内",
+		!isMinLevel(RosterOperator{}),
+		fmt.Sprintf("isMinLevel(零值)=%v —— 真值就是它**在**范围内",
+			isMinLevel(RosterOperator{}))) {
+		fmt.Println("★ 这条负对照没红 ⇒ 第十七段的读数作废")
+		return 3
+	}
+	bad = 0 //: 与文件开头那条全局负对照同处置：故意造的红不算进最终读数
+
+	//: ---- 开关与上限（都在选人屏上看得见）----
+	//: 用第十段那套假名册（`fake`，4 人）：开关与上限与名册无关，不必另造一份。
+	cS17 := pickCtx(6)
+	rS17 := newRoot(cS17, welcomeScreen{})
+	pS17 := newSquadPickScreen(cS17, nil)
+	rS17.push(pS17, onSquadPicked)
+	check("开关初值：关（屏上写着「助战：不用」）",
+		!cS17.useSupport && strings.Contains(rS17.View(), "助战：不用"),
+		firstLineWith(rS17.View(), "助战："))
+	check("开关关着：上限是 12（自己那 12 格）",
+		cS17.squadLimitShown() == 12 && strings.Contains(rS17.View(), "编队上限 12 人"),
+		fmt.Sprintf("squadLimitShown=%d｜%s", cS17.squadLimitShown(),
+			firstLineWith(rS17.View(), "编队上限")))
+	press(rS17, "t")
+	check("按 T：开关变「用」，并**单独压一屏**挑助战",
+		screenName(rS17.top()) == "*main.supportPickScreen" &&
+			strings.Contains(rS17.View(), "助战：用"),
+		fmt.Sprintf("%s｜%s", screenName(rS17.top()), firstLineWith(rS17.View(), "助战：用")))
+	check("开关一开：上限就是 13（自己的 12 ＋ 助战 1，助战占一格）",
+		cS17.squadLimitShown() == 13 && strings.Contains(rS17.View(), "编队上限 13 人"),
+		fmt.Sprintf("squadLimitShown=%d｜%s", cS17.squadLimitShown(),
+			firstLineWith(rS17.View(), "编队上限")))
+
+	//: ---- 助战屏：列的是**全部干员**（不是名册）----
+	supScr17, isSupScr17 := rS17.top().(*supportPickScreen)
+	nSup17 := 0
+	if supScr17 != nil {
+		nSup17 = len(supScr17.rows)
+	}
+	inRoster17 := map[string]bool{}
+	for _, op := range fake.Operators {
+		inRoster17[op.Name] = true
+	}
+	//: 断言用一个**名册里没有**的名字：只有名册外的名字才证得动"列的是全部干员"。
+	//: 阿米娅在 gamedata 全量表里（`char_002_amiya`），任何小号名册都不会有她。
+	const probe17 = "阿米娅"
+	probeIdx17, tokenRows17 := -1, 0
+	if isSupScr17 {
+		for i, op := range supScr17.rows {
+			if op.Name == probe17 {
+				probeIdx17 = i
+			}
+			if op.Profession == "TOKEN" || op.Profession == "TRAP" {
+				tokenRows17++
+			}
+		}
+	}
+	check("助战屏：候选来自**全部干员**（名册里没有的名字也在列）",
+		isSupScr17 && probeIdx17 >= 0 && !inRoster17[probe17],
+		fmt.Sprintf("候选 %d 名；%s 在第 %d 行；它在名册里吗=%v",
+			nSup17, probe17, probeIdx17+1, inRoster17[probe17]))
+	check("助战屏：写明「练度不用填（MAA 不识别）」（口径 3 要看得见）",
+		strings.Contains(rS17.View(), "练度不用填") &&
+			strings.Contains(rS17.View(), "MAA 不识别"),
+		firstLineWith(rS17.View(), "练度不用填"))
+	check("助战屏：候选里没有装置／召唤物（取的是 is_operator=1 的干员表）",
+		tokenRows17 == 0, fmt.Sprintf("TOKEN/TRAP 行 %d（共 %d 行）", tokenRows17, nSup17))
+
+	//: ---- 回车：把名字记下来 ----（`pointer` 取消后走 Esc）
+	if isSupScr17 && probeIdx17 >= 0 {
+		supScr17.cursor = probeIdx17
+	}
+	press(rS17, "enter")
+	check("回车：助战名字记下来了（记在 appCtx 上那一位）",
+		cS17.supportName == probe17 && cS17.supportForSolve() == probe17,
+		fmt.Sprintf("supportName=%q supportForSolve=%q", cS17.supportName, cS17.supportForSolve()))
+	check("回车后：助战屏弹掉、回到选人屏，屏上看得见「用（阿米娅）」",
+		screenName(rS17.top()) == "*main.squadPickScreen" &&
+			strings.Contains(rS17.View(), "助战：用（"+probe17+"）"),
+		fmt.Sprintf("%s｜%s", screenName(rS17.top()), firstLineWith(rS17.View(), "助战：用")))
+
+	//: ---- 关掉（再按 T）与 Esc 取消：两条路都要把状态收干净 ----
+	press(rS17, "t")
+	check("再按 T：关掉 —— 名字清掉、上限回 12、屏上写「不用」",
+		!cS17.useSupport && cS17.supportName == "" && cS17.squadLimitShown() == 12 &&
+			strings.Contains(rS17.View(), "助战：不用"),
+		fmt.Sprintf("开关=%v 名字=%q 上限=%d", cS17.useSupport, cS17.supportName,
+			cS17.squadLimitShown()))
+	press(rS17, "t")   //: 重新开 ⇒ 进助战屏
+	press(rS17, "esc") //: 取消
+	check("助战屏 Esc：取消 = 不用助战 —— 没记名字、退回选人屏、上限回 12",
+		screenName(rS17.top()) == "*main.squadPickScreen" && !cS17.useSupport &&
+			cS17.supportName == "" && cS17.supportForSolve() == "" &&
+			cS17.squadLimitShown() == 12,
+		fmt.Sprintf("%s｜开关=%v 名字=%q supportForSolve=%q 上限=%d",
+			screenName(rS17.top()), cS17.useSupport, cS17.supportName,
+			cS17.supportForSolve(), cS17.squadLimitShown()))
+
+	//: ---- 拦截：12 位全员 ≤E1L1，带助战 ⇒ 放行；不带 ⇒ 拦 ----
+	//: 两条都**走入口**（`enterSolve`）：行使计数只在入口里加，直接调纯函数读不到
+	//: "这条路真的过了守卫"（那种读数是全 0，与"走了某条分支"分得开）。
+	min12Names := make([]string, 0, 12)
+	min12 := make([]RosterOperator, 0, 12)
+	entries12 := make([]map[string]any, 0, 12)
+	for i := 0; i < 12; i++ {
+		nm, cid := fmt.Sprintf("练%02d", i), fmt.Sprintf("char_sup%02d", i)
+		min12Names = append(min12Names, nm)
+		min12 = append(min12, RosterOperator{CharID: cid, Name: nm,
+			Profession: "PIONEER", Elite: i % 2, Level: 1})
+		entries12 = append(entries12, map[string]any{
+			"name": nm, "charId": cid, "elite": i % 2, "level": 1, "potential": 1})
+	}
+	blob12, _ := json.Marshal(entries12)
+	dir12, _ := os.MkdirTemp("", "rios-selftest-support-")
+	path12 := filepath.Join(dir12, "roster12.json")
+	_ = os.WriteFile(path12, blob12, 0o644)
+	c12 := &appCtx{w: 90, h: 26, deployLimit: 6, mode: "auto",
+		roster: &rosterData{Source: "selftest", Complete: true, Count: 12,
+			Operators: min12, Path: path12},
+		stage: &data.StageRecord{Code: "1-7", LevelID: "main_01-07", Name: "测试关"}}
+	r12 := newRoot(c12, welcomeScreen{})
+	s12 := newSquadPickScreen(c12, nil)
+	r12.push(s12, onSquadPicked)
+	markNames(r12, s12, min12Names...)
+	check("12 位全员 ≤E1L1：都勾上了（下面两条拦截读数拿的就是这一份编队）",
+		len(s12.picked) == 12, fmt.Sprintf("勾了 %d 位", len(s12.picked)))
+	dBlock17 := delta(func() { press(r12, "enter") })
+	check("不带助战：12 位全员 ≤E1L1 ⇒ **拦**（走「拦下·手选」，编队没定下来）",
+		screenName(r12.top()) == "*main.squadPickScreen" &&
+			oneBranch(dBlock17, gateBlockManual) && len(c12.squad) == 0,
+		fmt.Sprintf("%s｜%s｜squad=%v", screenName(r12.top()), fmtDelta(dBlock17), c12.squad))
+
+	//: 同一份 12 人编队，加一位助战 ⇒ 必须**放行**（口径 4，含那条具名登记的后果：
+	//: "1 位助战 ＋ 11 位 E0L1"照样放行 —— 这里正是 12 位 E0L1 ＋ 1 位助战）。
+	press(r12, "t")
+	if sup12, ok := r12.top().(*supportPickScreen); ok && len(sup12.rows) > 0 {
+		sup12.cursor = 0
+	}
+	press(r12, "enter")
+	check("挑完助战：回到选人屏，助战记下来了",
+		screenName(r12.top()) == "*main.squadPickScreen" && c12.supportForSolve() != "",
+		fmt.Sprintf("%s｜助战=%q", screenName(r12.top()), c12.supportForSolve()))
+	dAllow17 := delta(func() { press(r12, "enter") })
+	check("带助战：同 12 位全员 ≤E1L1 ⇒ **不拦**（压解算屏），走「放行·带助战」分支",
+		screenName(r12.top()) == "*main.solveScreen" && oneBranch(dAllow17, gateAllowSupport),
+		fmt.Sprintf("%s｜%s", screenName(r12.top()), fmtDelta(dAllow17)))
+	check("带助战：编队定下来了（12 人）",
+		len(c12.squad) == 12, fmt.Sprintf("%d 人（%v）", len(c12.squad), c12.squad))
+	if sc12, ok := r12.top().(*solveScreen); ok {
+		check("带助战：这一轮的命令排上了，且助战进了 solveParams（要交给引擎）",
+			sc12.p.support != "" && sc12.p.support == c12.supportForSolve(),
+			fmt.Sprintf("params.support=%q（appCtx 上 %q）", sc12.p.support,
+				c12.supportForSolve()))
+	} else {
+		check("带助战：栈顶该是解算屏", false, screenName(r12.top()))
+	}
+	check("登记：零值干员（Elite 0／Level 0）**落在**「≤E1L1」范围内 ⇒ 助战不能用零值顶替",
+		isMinLevel(RosterOperator{}), fmt.Sprintf("isMinLevel(零值)=%v", isMinLevel(RosterOperator{})))
+
+	//: ---- 导出：带 `SupportName` ⇒ `opers` 末尾多一格，且**只有一个键 name** ----
+	supDir17, _ := os.MkdirTemp("", "rios-selftest-sup-export-")
+	supRosterPath17 := filepath.Join(supDir17, "roster.json")
+	_ = os.WriteFile(supRosterPath17, []byte(`[{"name":"圣聆初雪","charId":"char_1046_sbell2",`+
+		`"elite":2,"level":90,"potential":1,"module_level":0}]`), 0o644)
+	rr17, rrErr17 := core.ReadRoster(supRosterPath17)
+	if rrErr17 != nil {
+		check("导出：名册读得出来（下面两条读数靠它）", false, fmt.Sprintf("err=%v", rrErr17))
+	} else {
+		plan17 := core.PlayPlan{Stage: "main_01-07", Title: "1-7",
+			Deploys: []core.DeployOrder{{Operator: "圣聆初雪", Position: [2]int{1, 2},
+				Direction: "Right", Skill: 1}}}
+		jobNo17, errNo17 := maa.ToMaa(plan17, &rr17, nil, nil,
+			maa.MaaOptions{StageName: "main_01-07"})
+		jobSup17, errSup17 := maa.ToMaa(plan17, &rr17, nil, nil,
+			maa.MaaOptions{StageName: "main_01-07", SupportName: "阿米娅"})
+		//: 断言落在**序列化之后**的字节上：`opers` 那一格的形状由 `MaaOper.MarshalJSON`
+		//: 收敛（助战条目只输出 `name`），看 Go 结构体看不出来。
+		blobSup17, _ := json.Marshal(jobSup17)
+		var wire17 struct {
+			Opers []map[string]any `json:"opers"`
+		}
+		_ = json.Unmarshal(blobSup17, &wire17)
+		last17 := map[string]any{}
+		if len(wire17.Opers) > 0 {
+			last17 = wire17.Opers[len(wire17.Opers)-1]
+		}
+		check("导出：不带 SupportName 时**不多**那一格（负方向也要看）",
+			errNo17 == nil && len(jobNo17.Opers) == 1,
+			fmt.Sprintf("err=%v opers=%d", errNo17, len(jobNo17.Opers)))
+		check("导出：带 SupportName ⇒ opers 末尾多一格、且**只有一个键 name**",
+			errSup17 == nil && len(jobSup17.Opers) == len(jobNo17.Opers)+1 &&
+				len(last17) == 1 && last17["name"] == "阿米娅",
+			fmt.Sprintf("err=%v opers %d→%d；末格 %v（%d 个键）", errSup17,
+				len(jobNo17.Opers), len(jobSup17.Opers), last17, len(last17)))
+
+		//: ★ 端到端：走**结果屏那条路**（`result.go` 的导出）真导一份出来 —— 判据要盯的
+		//: 正是"结果屏把助战接上了"这件事，只调 `ToMaa` 证不动接线。落盘到**临时**的
+		//: Guides 目录（不碰玩家那份，与第十六段同口径）。
+		planBlob17, _ := json.Marshal(plan17)
+		guidesSup17, _ := os.MkdirTemp("", "rios-selftest-sup-guides-")
+		cExp17 := &appCtx{guidesDir: guidesSup17, w: 90, h: 26,
+			stage:     &data.StageRecord{Code: "1-7", LevelID: "main_01-07"},
+			solvePlan: planBlob17, squad: []string{"圣聆初雪"},
+			useSupport: true, supportName: "阿米娅",
+			roster: &rosterData{Source: "selftest", Path: supRosterPath17, Count: 1,
+				Operators: []RosterOperator{{CharID: "char_1046_sbell2", Name: "圣聆初雪",
+					Elite: 2, Level: 90}}}}
+		rsSup17 := newResultScreen()
+		rsSup17.update(cExp17, keyMsg("e"))
+		if cExp17.exportPath == "" {
+			check("结果屏导出（带助战）：写出了作业文件", false, rsSup17.msg)
+		} else {
+			blobExp17, rerrExp17 := os.ReadFile(cExp17.exportPath)
+			var wireExp17 struct {
+				Opers []map[string]any `json:"opers"`
+			}
+			jerrExp17 := json.Unmarshal(blobExp17, &wireExp17)
+			lastExp17 := map[string]any{}
+			if len(wireExp17.Opers) > 0 {
+				lastExp17 = wireExp17.Opers[len(wireExp17.Opers)-1]
+			}
+			check("结果屏导出（带助战）：落盘的 opers 末尾就是助战那一格（只有 name）",
+				rerrExp17 == nil && jerrExp17 == nil && len(wireExp17.Opers) == 2 &&
+					len(lastExp17) == 1 && lastExp17["name"] == "阿米娅",
+				fmt.Sprintf("%s｜opers=%d 末格=%v（%d 个键）", cExp17.exportPath,
+					len(wireExp17.Opers), lastExp17, len(lastExp17)))
+			check("结果屏渲染：助战**单列一行**（它不在 deploys 里 —— 是要求不是部署）",
+				strings.Contains(rsSup17.view(cExp17), "助战 阿米娅"),
+				firstLineWith(rsSup17.view(cExp17), "助战"))
+		}
+	}
+
+	//: ---- 引擎那一侧：助战**真的送到了**（真起一轮，读引擎的回声）----
+	//: 界面自己记着名字不算数（那只证明界面知道）；凭据只有引擎回声
+	//: （`SolveOut.Support`）。那一段的往返参数与第十五段同值（per_op=1、beam=1、1 人）。
+	if _, eerr17 := newEngineClient(); eerr17 != nil {
+		fmt.Printf("  （未核：找不到引擎 exe，助战随 solve 送引擎那一条不判红。具名原因：%s）\n",
+			firstLineWith(eerr17.Error(), "★"))
+	} else {
+		dirE17, _ := os.MkdirTemp("", "rios-selftest-sup-engine-")
+		rosterE17 := filepath.Join(dirE17, "roster.json")
+		_ = os.WriteFile(rosterE17, []byte(`[
+ {"name":"圣聆初雪","charId":"char_1046_sbell2","elite":2,"level":90,"potential":1,"module_level":0},
+ {"name":"赤刃明霄陈","charId":"char_1050_chen3","elite":2,"level":90,"potential":1,
+  "module":"uniequip_002_chen3","module_level":3}]`), 0o644)
+		p17 := solveParams{levelID: "main_01-07", rosterPath: rosterE17,
+			pool: []string{"圣聆初雪", "赤刃明霄陈"}, perOp: 1, beam: 1, support: "阿米娅"}
+		msg17 := runSolveRoundCmd(p17, 1)()
+		m17, ok17 := msg17.(solveRoundMsg)
+		switch {
+		case !ok17:
+			check("助战随 solve 送到引擎：回来的不是一轮解算结果", false,
+				fmt.Sprintf("%T", msg17))
+		case m17.err != nil:
+			fmt.Printf("  （未核：这一轮解算没跑成，不判红。具名原因：%s）\n",
+				firstLineWith(m17.err.Error(), "★"))
+		default:
+			check("助战随 solve 送到引擎：引擎原样回声（solveOutView.Support）",
+				m17.out.Support == p17.support,
+				fmt.Sprintf("引擎回声 %q（送的是 %q）", m17.out.Support, p17.support))
 		}
 	}
 

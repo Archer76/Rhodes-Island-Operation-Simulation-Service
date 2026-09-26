@@ -171,6 +171,10 @@ type solveOutView struct {
 	Depth     int             `json:"depth"`
 	Evaluated int             `json:"evaluated"`
 	Note      string          `json:"note"`
+	//: 引擎**回声**的助战名（它从 spec 的 `support` 收下、原样放进 `SolveOut.Support`）。
+	//: 这一栏是"界面确实把助战送到了引擎那一步"的**唯一凭据** —— 自检里有一条真往返
+	//: 断言读的就是它（屏上自己记着名字不算数：那只证明界面知道）。
+	Support string `json:"support"`
 }
 
 // solveRoundMsg 是「一轮引擎调用回来了」。
@@ -188,6 +192,9 @@ type solveParams struct {
 	pool       []string
 	perOp      int
 	beam       int
+	//: 助战干员的名字（口径 1／3：用助战 ⇒ 编队上限 13）。它随请求进引擎的
+	//: `solve` spec（`support` 键），**不进 `pool`** —— 搜索只在自己的干员里挑组合。
+	support string
 }
 
 // runSolveRoundCmd 起**一轮**解算。
@@ -281,6 +288,11 @@ func (s *solveScreen) headText(c *appCtx) string {
 		squad := "（不指定，全名册）"
 		if len(c.squad) > 0 {
 			squad = strings.Join(c.squad, "、")
+		}
+		//: 助战是**编队里的一格**（口径 1：占了第 13 格）⇒ 写在编队那一行里，
+		//: 与"程序可以补充人"那句并列。它**不在搜索的候选池**里（搜索只挑自己的）。
+		if c.supportForSolve() != "" {
+			squad += "　＋助战 " + c.supportForSolve()
 		}
 		mode := "允许补充"
 		if c.mode == "only" {

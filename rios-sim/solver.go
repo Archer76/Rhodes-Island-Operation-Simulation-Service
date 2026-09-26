@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"rios-sim/core"
 )
@@ -61,6 +62,19 @@ type SolveQuery struct {
 	//: （`buildspec.go` 那里写着：196 关、45.3 个百分点，从可跑变拒跑）。
 	AllowDevices *bool `json:"allow_devices,omitempty"`
 	AllowSkills  *bool `json:"allow_skills,omitempty"`
+
+	//: 助战干员的名字（界面 `cmd/rios-tui` 在 `solveParams.support` 里送过来）。
+	//:
+	//: ★ 口径（博士 2026-09-26）：**用助战 ⇒ 编队上限 13**（自己的 12 ＋ 助战 1，
+	//: 助战占一格）；不用 ⇒ 12。**练度不填、只写名字** —— 官方协议里 `opers[]`
+	//: 只有 `name` 必填，`requirements` 是"练度要求，自动编队时校验。可选，
+	//: 默认为空"，MAA 也不识别助战干员的练度。
+	//:
+	//: ⚠ 它**不参与搜索**：搜索只在 `Operators` 给定的池子里挑组合，助战是"编队里
+	//: 那一格"，不是候选。所以 `MaxOps` 不会因为它 +1（13 是**编队**上限，不是
+	//: 搜索深度）。引擎这边的落点只有两处：原样回声进 `SolveOut.Support`，
+	//: 以及留一份在 `SolveOut.Params["support"]` 里（排障时看得见这一轮带了谁）。
+	Support string `json:"support,omitempty"`
 }
 
 // SolveStep 是一层的 beam 摘要（`SearchResult.steps` 的一项）。
@@ -101,6 +115,11 @@ type SolveOut struct {
 	Note      string          `json:"note"`
 	Covered   SolveStats      `json:"covered"`
 	Params    map[string]any  `json:"params"`
+	//: 助战干员的名字（`SolveQuery.Support` 的**原样回声**）。
+	//:
+	//: ⚠ `omitempty`：不带助战时整个键消失 ⇒ 那一轮的应答与加这个字段之前
+	//: **逐字节相同**（下游对拍与缓存不受影响）。
+	Support string `json:"support,omitempty"`
 }
 
 // rankKey 是 `Verdict.rank()` 的 Go 形态（全序键，越大越好）。
@@ -343,6 +362,12 @@ func Solve(level, path string, q SolveQuery) (SolveOut, error) {
 		Params: map[string]any{"level": level, "path": path,
 			"operators": len(q.Operators), "max_ops": q.MaxOps,
 			"beam": q.Beam, "per_op": q.PerOp, "min_ops": q.MinOps}}
+	//: 助战**如实回声**（它不是搜索参数，所以不进上面那串搜索旋钮里；单独放一栏，
+	//: 空的时候连键都不出现 —— 不带助战的应答与加这个字段之前逐字节相同）。
+	if strings.TrimSpace(q.Support) != "" {
+		out.Support = strings.TrimSpace(q.Support)
+		out.Params["support"] = out.Support
+	}
 	var st *Stage
 	var err error
 	if path != "" {
