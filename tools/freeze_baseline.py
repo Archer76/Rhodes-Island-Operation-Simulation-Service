@@ -637,7 +637,9 @@ def ak_tactic_sig() -> dict:
 def python_identity() -> dict:
     return {
         "version": sys.version.split()[0],
-        "executable": sys.executable,
+        #: 同上口径：解释器**只记文件名**，不记本机绝对路径。
+        #: 版本信息另有 `version` 一栏，身份不缺这一条路径。
+        "executable": Path(sys.executable).name,
         "git_head": git_head(),
         "ak_tactic": ak_tactic_sig(),
         "ak_tactic_dirty": git_dirty("ak_tactic"),
@@ -656,8 +658,17 @@ def instrument_identity() -> dict:
         _channel_fail("★ 找不到仪器 %s —— 冻结基线不许在不知道仪器是谁的情况下录"
                          % p)
     st = p.stat()
+    try:
+        #: ★ 口径（博士 2026-09-26）：**入库文件里不得出现本机绝对路径**。
+        #: 仪器身份里那串路径只在 `_old_identity_text` 里打印给人看（`cmd_status`
+        #: 比的是 `sha256_16`），所以记**仓库相对**形式即可 —— 这也正是
+        #: `golden_go.instrument_line()` 早就用的口径（`p.name` / `relative_to(ROOT)`）。
+        #: 仪器落在工作区之外（例如临时构建目录）时才退化为文件名。
+        shown = p.resolve().relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        shown = p.name
     return {
-        "path": str(p),
+        "path": shown,
         "sha256_16": file_sha16(p),
         "size": st.st_size,
         "mtime": datetime.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),

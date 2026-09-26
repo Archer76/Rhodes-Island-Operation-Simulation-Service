@@ -676,7 +676,7 @@ def complete_dir(text: str, base: Path | None = None) -> tuple[str, list[str]]:
     """
     raw = (text or "").strip()
     # 全程只用**一种**分隔符：用户在打 `/` 就继续用 `/`，否则用系统的。
-    # `/` 与 `\` 在 Windows 上都能用，但混起来（`<工作区上级>\ak-tactic\`）
+    # `/` 与 `\` 在 Windows 上都能用，但混起来（`X:/dir/sub\`）
     # 看着像出错了，而补全的全部价值就是让人不用回头检查。
     sep = "/" if ("/" in raw and "\\" not in raw) else os.sep
     if not raw:
@@ -686,9 +686,9 @@ def complete_dir(text: str, base: Path | None = None) -> tuple[str, list[str]]:
         head, tail = raw, ""
     else:
         head, tail = os.path.split(raw)
-        # `os.path.split` **会把分隔符吃掉**：`../ak-tac` → 头是
-        # `<工作区上级>`、尾是 `ak-tac`。不补回来的话拼出的路径少一个斜杠
-        # （`<工作区上级>` + `ak-tactic\` = `<工作区上级>ak-tactic\`），
+        # `os.path.split` **会把分隔符吃掉**：`X:/dir/sub` → 头是
+        # `X:/dir`、尾是 `sub`。不补回来的话拼出的路径少一个斜杠
+        # （`X:/dir` + `sub\` = `X:/dirsub\`），
         # 而那个字符串看上去还挺像回事，只有真去用它才会发现。
         if head and not head.endswith(("/", "\\")):
             head += sep
