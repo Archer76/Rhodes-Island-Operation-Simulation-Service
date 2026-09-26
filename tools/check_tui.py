@@ -1545,8 +1545,10 @@ def check_completion() -> None:
           "PathInput(" in Path(A.__file__).read_text(encoding="utf-8"),
           "PathInput(")
 
-    here = Path(D.__file__).resolve().parents[2]          # 仓库根
-    stem = here.name[:4]                                  # ak-t…
+    # ★ 这里原先还取 `here` / `stem`（仓库根 ＋ 其名前 4 字符）去**仓库上一级**找
+    #   「唯一匹配」。2026-09-26 拆掉：那等于要求本机目录里恰好只有一个同前缀条目，
+    #   而 `<工作区上级>` 下同时住着 `ak-tactic`／`ak-tactic-worklog`／`AK-TACTIC-进度.md`
+    #   三个 ⇒ 下面那两条判据**恒红**。
 
     # 空输入：补成默认目录，且带分隔符
     new, cands = D.complete_dir("")
@@ -1555,19 +1557,26 @@ def check_completion() -> None:
           new)
     check("补出来带分隔符（好接着往下打）", new.endswith(("/", "\\")), new)
 
-    # 唯一匹配：补到真实存在的目录
-    new, cands = D.complete_dir(str(here.parent / stem))
-    check("唯一匹配补到真目录", Path(new.rstrip("/\\")).is_dir(), new)
-    check("补的是目录就带分隔符", new.endswith(("/", "\\")), new)
-    check("唯一匹配时不返回候选（没什么可挑的）", cands == [], str(cands))
+    # 唯一匹配：**自造一个确定的场景**，不依赖本机目录长什么样。
+    #   （判据不许依赖本机目录名 —— 这正是紧跟着的「多匹配」那块早就写过的教训。）
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        solo = Path(tmp) / "solo"
+        solo.mkdir()
+        # 前缀从**自造目录**现推，不写死盘符（写死盘符等于把判据钉死在这台机器上）。
+        _anchor = Path(tmp).anchor.replace("\\", "/")
+        new, cands = D.complete_dir(str(Path(tmp) / "sol"))
+        check("唯一匹配补到真目录", Path(new.rstrip("/\\")).is_dir(), new)
+        check("补的是目录就带分隔符", new.endswith(("/", "\\")), new)
+        check("唯一匹配时不返回候选（没什么可挑的）", cands == [], str(cands))
 
-    # 分隔符风格：用户打 / 就全用 /，不混
-    new, _ = D.complete_dir(str(here.parent).replace("\\", "/") + "/" + stem)
-    check("正斜杠输入补出来仍是正斜杠（不在一个路径里混两种）",
-          "\\" not in new and new.startswith("D:/"), new)
+        # 分隔符风格：用户打 / 就全用 /，不混
+        new, _ = D.complete_dir(Path(tmp).as_posix() + "/sol")
+        check("正斜杠输入补出来仍是正斜杠（不在一个路径里混两种）",
+              "\\" not in new and new.startswith(_anchor), new)
 
     # 多匹配：**自造一个确定的场景**，不依赖本机目录长什么样。
-    # （早先拿 `<工作区上级>` 里前两个目录的首字母当前缀，结果选到了 `.`——
+    # （早先拿工作区路径里前两个目录的首字母当前缀，结果选到了 `.`——
     # 而 `Path` 会把 `/.` 规范化掉，测的就不是补全逻辑了。）
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
