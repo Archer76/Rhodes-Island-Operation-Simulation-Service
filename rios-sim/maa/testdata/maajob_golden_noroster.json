@@ -1,0 +1,85 @@
+{
+  "stage_name": "act54side_ex08",
+  "opers": [
+    {
+      "name": "赤刃明霄陈",
+      "skill": 3,
+      "skill_usage": 1,
+      "requirements": {
+        "elite": 2,
+        "level": 90,
+        "skill_level": 10,
+        "module": 1,
+        "potential": 2
+      }
+    },
+    {
+      "name": "予愿安洁莉娜",
+      "skill": 3,
+      "skill_usage": 1,
+      "requirements": {
+        "elite": 2,
+        "level": 60,
+        "skill_level": 10,
+        "potential": 1
+      }
+    },
+    {
+      "name": "圣聆初雪",
+      "skill": 2,
+      "skill_usage": 1,
+      "requirements": {
+        "elite": 2,
+        "level": 90,
+        "skill_level": 10,
+        "module": 2,
+        "potential": 1
+      }
+    }
+  ],
+  "groups": [],
+  "actions": [
+    {
+      "type": "Deploy",
+      "name": "赤刃明霄陈",
+      "location": [
+        4,
+        2
+      ],
+      "direction": "Left",
+      "doc": "赤刃明霄陈  技能3（专3）  精2 90  潜2"
+    },
+    {
+      "type": "Deploy",
+      "name": "予愿安洁莉娜",
+      "location": [
+        1,
+        4
+      ],
+      "direction": "Right",
+      "doc": "予愿安洁莉娜  技能3（专3）  精2 60  潜1"
+    },
+    {
+      "type": "Deploy",
+      "name": "圣聆初雪",
+      "location": [
+        10,
+        4
+      ],
+      "direction": "Right",
+      "doc": "圣聆初雪  技能2（专3）  精2 90  潜1"
+    },
+    {
+      "type": "SpeedUp"
+    },
+    {
+      "type": "SkillDaemon"
+    }
+  ],
+  "minimum_required": "v6.0.0",
+  "doc": {
+    "title": "测试",
+    "details": "【编队】赤刃明霄陈(精2 90 潜2 技3专3)｜予愿安洁莉娜(精2 60 潜1 技3专3)｜圣聆初雪(精2 90 潜1 技2专3)\n\n| # | 干员 | 落位 | 朝向 | 技能 | 精英 | 等级 | 潜能 | 模组 | 部署 |\n|---|---|---|---|---|---|---|---|---|---|\n| 1 | 赤刃明霄陈 | (4, 2) | Left | 3（专3） | 2 | 90 | 2 | 记忆残页 X - | 10s |\n| 2 | 予愿安洁莉娜 | (1, 4) | Right | 3（专3） | 2 | 60 | 1 | 无 | 28s |\n| 3 | 圣聆初雪 | (10, 4) | Right | 2（专3） | 2 | 90 | 1 | 千分之一的心 Y - | 71s |\n\n详情"
+  },
+  "difficulty": 1
+}

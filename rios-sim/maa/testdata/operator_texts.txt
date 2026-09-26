@@ -1,0 +1,172 @@
+char_id 查得： {'赤刃明霄陈': 'char_1050_chen3', '予愿安洁莉娜': 'char_1015_aglna2', '圣聆初雪': 'char_1046_sbell2'}
+=== used_operators(plan, roster) ===
+[
+  {
+    "name": "赤刃明霄陈",
+    "position": [
+      4,
+      2
+    ],
+    "direction": "Left",
+    "skill": 3,
+    "mastery": 3,
+    "elite": 2,
+    "level": 90,
+    "potential": 2,
+    "trust": null,
+    "module": "uniequip_002_chen3",
+    "module_name": "记忆残页",
+    "module_type": "X",
+    "module_slot": 1,
+    "module_level": 3,
+    "time": 10.0
+  },
+  {
+    "name": "予愿安洁莉娜",
+    "position": [
+      1,
+      4
+    ],
+    "direction": "Right",
+    "skill": 3,
+    "mastery": 3,
+    "elite": 2,
+    "level": 60,
+    "potential": 1,
+    "trust": null,
+    "module": null,
+    "module_name": null,
+    "module_type": null,
+    "module_slot": null,
+    "module_level": 0,
+    "time": 28.0
+  },
+  {
+    "name": "圣聆初雪",
+    "position": [
+      10,
+      4
+    ],
+    "direction": "Right",
+    "skill": 2,
+    "mastery": 3,
+    "elite": 2,
+    "level": 90,
+    "potential": 1,
+    "trust": null,
+    "module": "uniequip_002_sbell2",
+    "module_name": "千分之一的心",
+    "module_type": "Y",
+    "module_slot": 2,
+    "module_level": 0,
+    "time": 71.0
+  }
+]
+=== used_operators(plan, None) ===
+[
+  {
+    "name": "赤刃明霄陈",
+    "position": [
+      4,
+      2
+    ],
+    "direction": "Left",
+    "skill": 3,
+    "mastery": 3,
+    "elite": 2,
+    "level": 90,
+    "potential": 2,
+    "trust": null,
+    "module": "uniequip_002_chen3",
+    "module_name": "记忆残页",
+    "module_type": "X",
+    "module_slot": 1,
+    "module_level": null,
+    "time": 10.0
+  },
+  {
+    "name": "予愿安洁莉娜",
+    "position": [
+      1,
+      4
+    ],
+    "direction": "Right",
+    "skill": 3,
+    "mastery": 3,
+    "elite": 2,
+    "level": 60,
+    "potential": 1,
+    "trust": null,
+    "module": null,
+    "module_name": null,
+    "module_type": null,
+    "module_slot": null,
+    "module_level": null,
+    "time": 28.0
+  },
+  {
+    "name": "圣聆初雪",
+    "position": [
+      10,
+      4
+    ],
+    "direction": "Right",
+    "skill": 2,
+    "mastery": 3,
+    "elite": 2,
+    "level": 90,
+    "potential": 1,
+    "trust": null,
+    "module": "uniequip_002_sbell2",
+    "module_name": "千分之一的心",
+    "module_type": "Y",
+    "module_slot": 2,
+    "module_level": null,
+    "time": 71.0
+  }
+]
+=== operators_report ===
+| # | 干员 | 落位 | 朝向 | 技能 | 精英 | 等级 | 潜能 | 模组 | 部署 |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 赤刃明霄陈 | (4, 2) | Left | 3（专3） | 2 | 90 | 2 | 记忆残页 X 3 | 10s |
+| 2 | 予愿安洁莉娜 | (1, 4) | Right | 3（专3） | 2 | 60 | 1 | 无 | 28s |
+| 3 | 圣聆初雪 | (10, 4) | Right | 2（专3） | 2 | 90 | 1 | 千分之一的心 Y - | 71s |
+=== operators_lines ===
+1. 赤刃明霄陈：(4,2) Left  技3专3  精2 90  潜2  模组 记忆残页 X 3    10.0s
+2. 予愿安洁莉娜：(1,4) Right  技3专3  精2 60  潜1  模组 无    28.0s
+3. 圣聆初雪：(10,4) Right  技2专3  精2 90  潜1  模组 千分之一的心 Y -    71.0s
+=== operators_brief ===
+赤刃明霄陈(精2 90 潜2 技3专3)｜予愿安洁莉娜(精2 60 潜1 技3专3)｜圣聆初雪(精2 90 潜1 技2专3)
+=== 空打法 ===
+operators_report: ['（这份打法里没有部署任何干员）']
+operators_lines: ['（这份打法里没有部署任何干员）']
+operators_brief: '（无干员）'
+=== difficulty 各路 ===
+  difficulty_code('NORMAL') = 1
+  difficulty_code('FOUR_STAR') = 2
+  difficulty_code('EASY') = 0
+  difficulty_code('SIX_STAR') = 0
+  difficulty_code('normal') = 1
+  difficulty_code('') = 0
+  difficulty_code(None) = 0
+  difficulty_code(' four_star ') = 2
+=== module_* 退化路 ===
+  'uniequip_002_chen3': type='X' name='记忆残页' slot=1
+  'uniequip_001_chen3': type=None name='赤刃明霄陈证章' slot=None
+  'uniequip_002_sbell2': type='Y' name='千分之一的心' slot=2
+  'uniequip_002_logos': type='D' name='来自河谷的笔盒' slot=4
+  'uniequip_001_angel': type=None name='能天使证章' slot=None
+  'uniequip_999_nope': type=None name=None slot=None
+  '': type=None name=None slot=None
+  None: type=None name=None slot=None
+=== skill_usage（真名册 / None / 槽 0 / 越界 / 查不到的干员名）===
+  roster=真 赤刃明霄陈 slot=3 → 1
+  roster=真 赤刃明霄陈 slot=2 → 1
+  roster=真 赤刃明霄陈 slot=1 → 1
+  roster=真 圣聆初雪 slot=2 → 0
+  roster=真 予愿安洁莉娜 slot=3 → 1
+  roster=真 赤刃明霄陈 slot=0 → 0
+  roster=真 查无此人 slot=1 → 1
+  roster=真 赤刃明霄陈 slot=3 → 1
+  roster=None 赤刃明霄陈 slot=3 → 1
+  roster 缺 char_id 时 slot=3 → 1
