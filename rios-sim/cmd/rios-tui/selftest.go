@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -794,12 +795,59 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			fmt.Sprintf("%d 行", len(renderQR(withQuiet(liveQR, 4)))))
 	}
 
+	fmt.Println("== 十四 · 引擎客户端（起子进程讲 JSON 行协议）==")
+	//: 负对照在前：把 `RIOS_SIM_BIN` 指到一个**不存在**的路径，必须**具名失败**。
+	//: 静默退化成"没有结果"是最坏的一类错 —— 玩家分不清"这一关搜不出来"与
+	//: "引擎根本没起来"。
+	oldBin, hadBin := os.LookupEnv(envEngine)
+	_ = os.Setenv(envEngine, filepath.Join(os.TempDir(), "__rios_no_such_engine__.exe"))
+	if _, err := newEngineClient(); err == nil {
+		check("负对照：引擎 exe 不存在时必须具名失败", false, "竟然拿到了客户端")
+	} else {
+		//: 断言的性质是「**报错点名了那个环境变量与那个路径**」，不是某句固定文案 ——
+		//: 第一版照字面匹配"找不到引擎"，而修好回退缺陷之后那句话变成了
+		//: "指到一个不存在的路径"，于是这条**因为错误的理由**红了。判据要盯性质，
+		//: 不要盯文案（文案会随修 bug 变，性质不会）。
+		msg := err.Error()
+		check("负对照：引擎 exe 不存在时必须具名失败",
+			strings.Contains(msg, envEngine) &&
+				strings.Contains(msg, "__rios_no_such_engine__"),
+			firstLineWith(msg, "不存在的路径"))
+	}
+	if hadBin {
+		_ = os.Setenv(envEngine, oldBin)
+	} else {
+		_ = os.Unsetenv(envEngine)
+	}
+	//: 真往返：`ping` 不需要任何数据，正好用来证「发现 → 起进程 → 写一行 → 读一行 →
+	//: 校 id」这条链。引擎 exe 不在场就**未核不判红**（它是随包发的另一个可执行
+	//: 文件，开发机上未必就在查找路径里 —— 那种"未核"必须看得见）。
+	if ec, err := newEngineClient(); err != nil {
+		fmt.Printf("  （未核：这次找不到引擎 exe，不判红。具名原因：%s）\n",
+			firstLineWith(err.Error(), "找不到引擎"))
+	} else {
+		fields, cerr := ec.call("ping", 7, nil, 20*time.Second)
+		if cerr != nil {
+			check("引擎真实往返：ping 必须答上来", false, fmt.Sprintf("err=%v", cerr))
+		} else {
+			_, hasPong := fields["pong"]
+			check("引擎真实往返：ping 答了且带 pong 段", hasPong,
+				fmt.Sprintf("顶层键 %s", string(mustJSONKeys(fields))))
+			//: ⚠「应答 id 对不上」那一条**在真引擎上不可达**：真引擎会把请求的 id
+			//: 原样回填（我拿 id=999 试过，它答的也是 999）⇒ 这不是"没实现"，是
+			//: 这条分支需要**假引擎**才走得通。照本仓口径**具名未核**，不假造读数。
+			//: 核法：临时把 `RIOS_SIM_BIN` 指到一个回错 id 的小程序（或给引擎加一个
+			//: 只在判据下开的"故意答错 id"开关）。
+			fmt.Println("  （未核：应答 id 校验分支——真引擎会回填请求 id，需假引擎才走得到）")
+		}
+	}
+
 	fmt.Println()
 	if bad > 0 {
 		fmt.Printf("结论：**%d 条红** —— TUI 自检不通过\n", bad)
 		return 1
 	}
-	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／解算入口守卫（自限拦截·两条路）／防绕过／询问屏／扫码屏逐条过")
+	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／解算入口守卫（自限拦截·两条路）／防绕过／桥具名失败／询问屏／扫码屏／引擎客户端逐条过")
 	return 0
 }
 
