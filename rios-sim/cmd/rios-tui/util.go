@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -23,6 +24,27 @@ var (
 // Rich `cell_len` 在 147 条真实对象上**逐字符 0 分歧**。照它排版，新旧界面的
 // 对齐才是同一套口径。
 
+// sortByLevelDesc 把名册按**练度降序**排（精英、等级，同级按 char_id 定序）。
+//
+// 与 Python 的 `Roster.top()` 同向；那边还带 `potential` 参与比较，而桥给的名册没有
+// 这个字段，所以同级改按 `char_id` 定序 —— 保证两次打开的顺序一致（**登记为分歧**）。
+//
+// ★ 只有这一份：选人屏的显示序与解算屏补人用的池子序是**同一个口径**，两处各写一遍
+// 迟早会漂，而"补进来的人不一样"在下游只表现为"结果不一样"，极难查。
+func sortByLevelDesc(ops []RosterOperator) {
+	sort.SliceStable(ops, func(i, j int) bool {
+		a, b := ops[i], ops[j]
+		if a.Elite != b.Elite {
+			return a.Elite > b.Elite
+		}
+		if a.Level != b.Level {
+			return a.Level > b.Level
+		}
+		return a.CharID < b.CharID
+	})
+}
+
+// pad 补齐到 w 列（按视觉宽度，见文件头）。
 func pad(s string, w int) string {
 	if d := w - ansi.StringWidth(s); d > 0 {
 		return s + strings.Repeat(" ", d)

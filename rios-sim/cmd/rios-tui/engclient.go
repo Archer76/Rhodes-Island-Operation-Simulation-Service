@@ -61,6 +61,9 @@ type rosterData struct {
 	Note      string           `json:"note"`     // 降级时必须说明缺了什么
 	Count     int              `json:"count"`
 	Operators []RosterOperator `json:"operators"`
+	//: 名册**文件**的路径。★ 解算屏要把它交给引擎：引擎读的是这份文件（那份名册
+	//: 带 `potential`/`module`，而桥上只送 5 个字段），差这几个字段攻击力就会算错。
+	Path string `json:"path"`
 }
 
 // bridgeReq / bridgeResp 是协议的两端。应答里的 `trace` 等字段这里不接
@@ -79,6 +82,7 @@ type bridgeResp struct {
 	Note      string           `json:"note"`
 	Count     int              `json:"count"`
 	Operators []RosterOperator `json:"operators"`
+	Path      string           `json:"path"`
 	//: 扫码登录那两条（`login_start` / `login_poll`）。同一份应答结构当联合体用，
 	//: 与桥那边「一条命令一组字段」的形状对应。
 	Phase    string   `json:"phase"`

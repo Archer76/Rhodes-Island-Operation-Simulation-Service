@@ -327,16 +327,9 @@ func newSquadPickScreen(c *appCtx, keep []RosterOperator) *squadPickScreen {
 		ops := append([]RosterOperator(nil), r.Operators...)
 		//: 练度降序 —— 与 Python 的 `Roster.top()` 同向（那边还带 potential，
 		//: 桥上没给这个字段，同级改按 char_id 定序，保证两次打开顺序一致）。
-		sort.SliceStable(ops, func(i, j int) bool {
-			a, b := ops[i], ops[j]
-			if a.Elite != b.Elite {
-				return a.Elite > b.Elite
-			}
-			if a.Level != b.Level {
-				return a.Level > b.Level
-			}
-			return a.CharID < b.CharID
-		})
+		//: ★ 比较器**只有一份**（`util.go` 的 `sortByLevelDesc`）：解算屏补人用的是
+		//: 同一个口径，两处各写一遍迟早会漂。
+		sortByLevelDesc(ops)
 		s.rows = ops
 	}
 	//: 把上一轮已经定下的编队勾回来（Python 用 `state.squad` 做同一件事）。
@@ -558,15 +551,44 @@ func (r *root) enterSolve(picked []RosterOperator, src solveSource) solveVerdict
 		names = append(names, op.Name)
 	}
 	c.squad = names
-	switch {
-	case len(names) == 0 && src == solveSourceAuto:
-		c.note = "已选「不用，让程序自己挑」—— 下一步（解算）尚未实现"
-	case len(names) == 0:
-		c.note = "未指定干员 —— 下一步（解算）尚未实现"
-	default:
-		c.note = fmt.Sprintf("已确定编队 %d 人：%s —— 下一步（解算）尚未实现",
-			len(names), strings.Join(names, "、"))
+	//: 放行 ⇒ **压解算屏**，并把第一轮的命令交给根模型（屏自己拿不到 `tea.Cmd` 的出口）。
+	//: 池子与阶梯在这一刻定下来，之后不再变。
+	if c.stage == nil {
+		c.note = "没有选中的关卡，解算无从跑起"
+		return v
 	}
+	if c.roster == nil || c.roster.Path == "" {
+		//: 名册没有**路径**就跑不了解算：引擎读的是那份文件（桥上只送 5 个字段）。
+		//: 具名说出来，不许静默压一屏跑不出东西的解算屏。
+		reason := c.rosterErr
+		if reason == "" {
+			reason = "桥的 roster 应答里没有 path"
+		}
+		c.note = "名册没有可用路径，解算跑不起来：" + firstLineWith(reason, "★")
+		return v
+	}
+	pool, poolNote := solvePool(c)
+	ladder := depthLadder(c.deployLimit)
+	params := solveParams{
+		levelID: c.stage.LevelID, rosterPath: c.roster.Path,
+		difficulty: c.stage.Difficulty, pool: pool,
+		//: 与 Python 的搜索缺省同值（那一屏不暴露这两个旋钮）：`per_op=6`、`beam=5`
+		perOp: 6, beam: 5,
+	}
+	scr := newSolveScreen(params, ladder)
+	scr.log("开始解算……")
+	if poolNote != "" {
+		//: 池子那句只在日志里（Python 同口径：它不进解算屏的表头）
+		scr.log("候选池：" + poolNote + "　（这是程序挑组合的范围，不是出战人数）")
+	}
+	if c.deployLimit > 0 {
+		scr.log(fmt.Sprintf("本关最多可部署 %d 人；先按 %d 人找",
+			c.deployLimit, ladder[0]))
+	} else {
+		scr.log(fmt.Sprintf("取不到本关的可部署人数，按编队上限 %d 人封顶", squadCap))
+	}
+	r.push(scr, nil)
+	r.pending = runSolveRoundCmd(params, scr.currentDepth())
 	return v
 }
 

@@ -406,6 +406,13 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			{CharID: "char_3", Name: "丙", Profession: "MEDIC", Elite: 1, Level: 45},
 			{CharID: "char_4", Name: "丁", Profession: "CASTER", Elite: 2, Level: 90},
 		}}
+	//: ★ 名册还得有一个**文件路径**：放行之后解算屏要把它交给引擎（引擎读的是那份
+	//: 文件，桥上只送 5 个字段）。自检**自己写一份最小名册到临时目录**，不去依赖玩家
+	//: 那份 gitignore 的文件 —— 依赖它的话，判据在别人机器上只会静默跳过。
+	fakeDir, _ := os.MkdirTemp("", "rios-selftest-roster-")
+	fake.Path = filepath.Join(fakeDir, "roster.json")
+	_ = os.WriteFile(fake.Path, []byte(
+		`[{"name":"丙","charId":"char_3","elite":1,"level":45,"potential":1}]`), 0o644)
 	//: `slot` 只填给**屏上显示**（口径 3：槽位不参与判定）—— 下面故意拿 2／5／0
 	//: 三种槽位跑同一个编队，判定必须一样。
 	pickCtx := func(slot int) *appCtx {
@@ -455,12 +462,26 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 
 	//: 混进一位超范围的（丙 E1 45级）⇒ **放行**。
 	markNames(rA, pickTop(rA), "丙")
-	dAllow := delta(func() { press(rA, "enter") })
-	check("放行：混进一位超范围的干员就不拦（退回上一层）",
-		screenName(rA.top()) == "main.welcomeScreen", screenName(rA.top()))
+	var cmdA tea.Cmd
+	dAllow := delta(func() { _, cmdA = rA.Update(keyMsg("enter")) })
+	check("放行：混进一位超范围的干员就不拦（压解算屏）",
+		screenName(rA.top()) == "*main.solveScreen", screenName(rA.top()))
 	check("放行：编队定下来了（3 人，按码点序）", len(cA.squad) == 3,
 		fmt.Sprintf("%v", cA.squad))
-	check("放行：提示里写明下一步还没实现", strings.Contains(cA.note, "尚未实现"), cA.note)
+	if sc, ok := rA.top().(*solveScreen); ok {
+		//: ★ 这一条盯的是"压了屏却没跑"：屏压上了、第一轮命令也排上了，才算真的进了解算
+		check("放行：第一轮命令已排上（不是压了屏却没跑）", cmdA != nil, "cmd 非空")
+		//: ⚠ 首轮人数取自**阶梯**，而阶梯的第一项是 `cap`（`deployLimit ≤ 4` 时就是
+		//: 它本身，见 `depth_ladder`）—— 这个上下文用的是 `deployLimit=2`，所以首轮
+		//: 是 **2 人**而不是 4。我第一版照"起点恒为 4"写，断言当场红了而**代码是对的**。
+		wantDepth := sc.ladder[0]
+		check("放行：池子非空、首轮人数取自阶梯",
+			len(sc.p.pool) > 0 && sc.currentDepth() == wantDepth,
+			fmt.Sprintf("池子 %d 人 / 首轮 %d 人（阶梯 %v）",
+				len(sc.p.pool), sc.currentDepth(), sc.ladder))
+	} else {
+		check("放行：栈顶该是解算屏", false, screenName(rA.top()))
+	}
 	check("行使计数：这一次调用只走了「放行·非全员低练度」这条分支",
 		oneBranch(dAllow, gateAllowNotMinLevel), fmtDelta(dAllow))
 
@@ -491,7 +512,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 	rF.push(sF, onSquadPicked)
 	dEmpty := delta(func() { press(rF, "enter") })
 	check("空编队：不拦（「一位也没选」不是「全员低练度」）",
-		screenName(rF.top()) == "main.welcomeScreen", screenName(rF.top()))
+		screenName(rF.top()) == "*main.solveScreen", screenName(rF.top()))
 	check("空编队：编队是空的（也没被定成别人）", len(cF.squad) == 0,
 		fmt.Sprintf("%v", cF.squad))
 	check("行使计数：这一次调用只走了「放行·空编队」这条分支",
@@ -530,7 +551,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 	onStagePicked(rH, &data.StageRecord{Code: "1-7", Name: "测试关"})
 	dAutoEmpty := delta(func() { press(rH, "enter") })
 	check("自动路（程序还没挑出人）：放行 —— 走的是「放行·空编队」这条分支",
-		screenName(rH.top()) == "main.welcomeScreen" && oneBranch(dAutoEmpty, gateAllowEmptySquad),
+		screenName(rH.top()) == "*main.solveScreen" && oneBranch(dAutoEmpty, gateAllowEmptySquad),
 		fmt.Sprintf("%s｜%s", screenName(rH.top()), fmtDelta(dAutoEmpty)))
 
 	//: 屏流程：选定关卡压的是「问编队」屏；选「我自己选」才进选人屏。
@@ -540,9 +561,8 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 	check("选定关卡后压的是「问编队」屏（**不许静默跳过**）",
 		screenName(rE.top()) == "*main.squadAskScreen", screenName(rE.top()))
 	press(rE, "enter") // 光标 0 ＝「不用，让程序自己挑」
-	check("选「让程序自己挑」→ 退回上一层并具名说明",
-		screenName(rE.top()) == "main.welcomeScreen" && strings.Contains(cE.note, "尚未实现"),
-		cE.note)
+	check("选「让程序自己挑」→ 压解算屏（空编队走「放行·空编队」）",
+		screenName(rE.top()) == "*main.solveScreen", screenName(rE.top()))
 	onStagePicked(rE, &data.StageRecord{Code: "1-7", Name: "测试关"})
 	if ask, ok := rE.top().(*squadAskScreen); ok {
 		ask.cursor = 1 //「我自己选」
@@ -826,7 +846,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		fmt.Printf("  （未核：这次找不到引擎 exe，不判红。具名原因：%s）\n",
 			firstLineWith(err.Error(), "找不到引擎"))
 	} else {
-		fields, cerr := ec.call("ping", 7, nil, 20*time.Second)
+		fields, cerr := ec.call("ping", 7, "", nil, 20*time.Second)
 		if cerr != nil {
 			check("引擎真实往返：ping 必须答上来", false, fmt.Sprintf("err=%v", cerr))
 		} else {
@@ -842,12 +862,89 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		}
 	}
 
+	fmt.Println("== 十五 · 解算屏（阶梯／池子／真起一轮引擎）==")
+	//: 阶梯：六档**手算**（权威 `depth_ladder` 有两处易错：取不到时按 12 封顶；
+	//: 末端一定落在 `cap` 上，不然"上限 5 人"那一档永远试不到）
+	for _, c := range []struct {
+		limit int
+		want  []int
+	}{
+		{0, []int{4, 6, 8, 10, 12}},
+		{12, []int{4, 6, 8, 10, 12}},
+		{8, []int{4, 6, 8}},
+		{5, []int{4, 5}},
+		{4, []int{4}},
+		{2, []int{2}},
+	} {
+		got := depthLadder(c.limit)
+		check(fmt.Sprintf("阶梯 deployLimit=%d", c.limit),
+			fmt.Sprint(got) == fmt.Sprint(c.want),
+			fmt.Sprintf("实得 %v，手算 %v", got, c.want))
+	}
+	//: 池子三态（`candidates_for` 是**按名单遍历**的 ⇒ 空池子一个候选都不产生，
+	//: 而搜索会把它报成"几何剪枝后一个候选都不剩" —— 那句把原因指错方向）
+	cPool := &appCtx{roster: fake, squad: []string{"丙", "查无此人"}, mode: "auto"}
+	pool, poolNote := solvePool(cPool)
+	check("池子：勾的 ＋ 按练度补到上限，且点名名册里没有的",
+		len(pool) == 4 && strings.Contains(poolNote, "名册里没有"),
+		fmt.Sprintf("%d 人｜%s", len(pool), poolNote))
+	cOnly := &appCtx{roster: fake, mode: "only"}
+	_, onlyNote := solvePool(cOnly)
+	check("池子：「只用我选的」但没勾人 ⇒ 具名说池子是空的",
+		strings.Contains(onlyNote, "池子是空的"), onlyNote)
+	cNoRoster := &appCtx{mode: "auto"}
+	if _, note := solvePool(cNoRoster); !strings.Contains(note, "名册是空的") {
+		check("池子：没有名册 ⇒ 具名说名册是空的", false, note)
+	} else {
+		check("池子：没有名册 ⇒ 具名说名册是空的", true, note)
+	}
+	//: ★ 运行期行使见证：**真起一轮**引擎（`runSolveRoundCmd` 返回的就是一个
+	//: `func() tea.Msg`，直接调它即可），再喂给屏的消息处理，看状态机走完。
+	//: 参数取最小（per_op=1、beam=1、1 人）—— 这一条要的是"链通"，不是"搜得好"。
+	if _, err := newEngineClient(); err != nil {
+		fmt.Printf("  （未核：找不到引擎 exe，解算那一段不判红。具名原因：%s）\n",
+			firstLineWith(err.Error(), "★"))
+	} else {
+		solveDir, _ := os.MkdirTemp("", "rios-selftest-solve-")
+		solveRoster := filepath.Join(solveDir, "roster.json")
+		_ = os.WriteFile(solveRoster, []byte(`[
+ {"name":"圣聆初雪","charId":"char_1046_sbell2","elite":2,"level":90,"potential":1,"module_level":0},
+ {"name":"赤刃明霄陈","charId":"char_1050_chen3","elite":2,"level":90,"potential":1,
+  "module":"uniequip_002_chen3","module_level":3}]`), 0o644)
+		params := solveParams{levelID: "main_01-07", rosterPath: solveRoster,
+			pool: []string{"圣聆初雪", "赤刃明霄陈"}, perOp: 1, beam: 1}
+		scr := newSolveScreen(params, []int{1})
+		scr.log("开始解算……")
+		cSolve := &appCtx{w: 90, h: 26, deployLimit: 6,
+			stage: &data.StageRecord{Code: "1-7", LevelID: "main_01-07", Name: "测试关"}}
+		msg := runSolveRoundCmd(params, 1)()
+		if m, ok := msg.(solveRoundMsg); ok && m.err != nil {
+			fmt.Printf("  （未核：这一轮解算没跑成，不判红。具名原因：%s）\n",
+				firstLineWith(m.err.Error(), "★"))
+		} else {
+			_, _ = scr.onMsg(cSolve, msg)
+			check("真起一轮：跑完并落到 done（不是卡在 running）",
+				scr.done && scr.running == false && scr.err == "",
+				fmt.Sprintf("done=%v running=%v err=%q", scr.done, scr.running, scr.err))
+			check("真起一轮：日志里有轮摘要", len(scr.lines) > 0,
+				firstLineWith(strings.Join(scr.lines, "\n"), "第 1 人"))
+			check("真起一轮：评估次数非零（真跑了模拟）", scr.evals > 0,
+				fmt.Sprintf("%d 次", scr.evals))
+			check("真起一轮：结果写进 appCtx（结果屏要读它）",
+				len(cSolve.solveVerdict) > 0 && cSolve.solveStars >= 0,
+				fmt.Sprintf("verdict %d 字节 / %d 星", len(cSolve.solveVerdict), cSolve.solveStars))
+			v := scr.view(cSolve)
+			check("真起一轮：渲染里有「已评估」与进度条",
+				strings.Contains(v, "已评估") && strings.Contains(v, "["), firstLineWith(v, "已评估"))
+		}
+	}
+
 	fmt.Println()
 	if bad > 0 {
 		fmt.Printf("结论：**%d 条红** —— TUI 自检不通过\n", bad)
 		return 1
 	}
-	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／解算入口守卫（自限拦截·两条路）／防绕过／桥具名失败／询问屏／扫码屏／引擎客户端逐条过")
+	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／解算入口守卫（自限拦截·两条路）／防绕过／桥具名失败／询问屏／扫码屏／引擎客户端／解算屏逐条过")
 	return 0
 }
 

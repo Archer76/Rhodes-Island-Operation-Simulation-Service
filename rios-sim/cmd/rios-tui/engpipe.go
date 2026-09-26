@@ -144,15 +144,21 @@ type engineResp struct {
 
 // call 起一次引擎、发一行请求、读一行应答，返回整份应答对象。
 //
-// 一次一进程：解算那一屏一次只发一条 `solve`（它内部要跑几十上百场模拟，
-// 进程启动的开销相对可以忽略）。协议（`id` ＋ 一行 JSON）照常，换成常驻时
-// 调用方不用动。
-func (e *engineClient) call(cmd string, id int, spec any,
+// ⚠ **`level` 是请求的顶层字段，不是 spec 里的**：引擎的 `solve`／`candidates`／
+// `spots` 都读 `req.Level`（`main.go` 的 case 里写着）。第一版把它塞进 spec，引擎当场
+// 报"少了 level（关卡号或 levelId）或 path" —— 是那句**具名失败**点出来的，不是猜的。
+//
+// 一次一进程：解算那一屏一次只发一条 `solve`（它内部要跑几十上百场模拟，进程启动的
+// 开销相对可以忽略）。协议（`id` ＋ 一行 JSON）照常，换成常驻时调用方不用动。
+func (e *engineClient) call(cmd string, id int, level string, spec any,
 	timeout time.Duration) (map[string]json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	req := map[string]any{"id": id, "cmd": cmd}
+	if level != "" {
+		req["level"] = level
+	}
 	if spec != nil {
 		req["spec"] = spec
 	}
@@ -222,9 +228,15 @@ func (e *engineClient) call(cmd string, id int, spec any,
 
 // callSolve 发一条 `solve`，拿回它的 `solve` 段。
 //
-// `spec` 是 `solver.go` 里 `SolveQuery` 的形状（那边是同一个仓，键名对得上）。
-func (e *engineClient) callSolve(spec any, timeout time.Duration) (json.RawMessage, error) {
-	fields, err := e.call("solve", 1, spec, timeout)
+// `level` 走顶层字段（见 `call` 的说明），spec 里是 `solver.go` 的 `SolveQuery` 形状。
+func (e *engineClient) callSolve(p solveParams, depth int,
+	timeout time.Duration) (json.RawMessage, error) {
+	spec := map[string]any{
+		"roster": p.rosterPath, "operators": p.pool,
+		"max_ops": depth, "min_ops": 1, "beam": p.beam, "per_op": p.perOp,
+		"difficulty": p.difficulty,
+	}
+	fields, err := e.call("solve", 1, p.levelID, spec, timeout)
 	if err != nil {
 		return nil, err
 	}

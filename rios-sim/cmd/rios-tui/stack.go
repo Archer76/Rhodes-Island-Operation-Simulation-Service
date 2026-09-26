@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+
 	tea "github.com/charmbracelet/bubbletea"
 
 	"rios-sim/data"
@@ -55,6 +57,18 @@ type action struct {
 	res  any              // actBack 带回给上一屏的结果
 	push screen           // actPush 的目标屏
 	done func(*root, any) // actPush 的关屏回调
+	//: 顺手要跑的一条命令（异步活儿：解算那一轮引擎调用）。屏自己拿不到 `tea.Cmd`
+	//: 的出口 —— `update` 的返回值只有"下一屏"与"想干什么"。
+	cmd tea.Cmd
+}
+
+// msgScreen 是「会收到异步消息」的屏：根模型把非按键消息交给实现它的那一屏。
+//
+// 为什么需要这个接口：一轮解算要跑几十秒到几分钟，界面线程绝不能被它卡住（卡住了
+// 连「中止」都按不动）⇒ 那活儿必须走 `tea.Cmd` 异步跑，回来是一条 `tea.Msg`。
+// 而 `screen` 接口只有 `update(…, tea.KeyMsg)`，收不到它。
+type msgScreen interface {
+	onMsg(c *appCtx, msg tea.Msg) (screen, action)
 }
 
 // appCtx 是整个向导共享的一份状态。照 Python 的 `State`，只留现在已经用得到的那些；
@@ -98,6 +112,16 @@ type appCtx struct {
 	//: 照 Python 的 `State.squad` 与 `State.mode`。
 	squad []string
 	mode  string
+
+	//: 解算结果（结果屏读它）。`plan`／`verdict` 是引擎给的原样 JSON，不在这里
+	//: 重新解释 —— 那是 `solver.go` 与 `maa` 包的事。
+	solvePlan      json.RawMessage
+	solveVerdict   json.RawMessage
+	solveStars     int
+	solveNote      string
+	solveSteps     []solveStepView
+	solveEvaluated int
+	solveSeconds   float64
 }
 
 type frame struct {
@@ -109,6 +133,9 @@ type root struct {
 	ctx   *appCtx
 	stack []frame
 	quit  bool
+	//: 回**调里**（`pop` 的 done 里）压屏时要求的命令先存这儿 —— 下一次 `Update`
+	//: 的出口把它交出去。bubbletea 的 `Init` 只在程序启动时调一次，动态压的屏拿不到它。
+	pending tea.Cmd
 }
 
 func newRoot(c *appCtx, first screen) *root {
@@ -142,6 +169,7 @@ func (r *root) pop(res any) {
 func (r *root) Init() tea.Cmd { return nil }
 
 func (r *root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		r.ctx.w, r.ctx.h = msg.Width, msg.Height
@@ -156,16 +184,40 @@ func (r *root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			//: 屏可以就地换掉自己（例如「没有关卡」这种终态）。
 			r.stack[len(r.stack)-1].scr = next
 		}
-		switch act.kind {
-		case actQuit:
+		if act.kind == actQuit {
 			return r, tea.Quit
-		case actBack:
-			r.pop(act.res)
-		case actPush:
-			r.push(act.push, act.done)
+		}
+		cmd = r.apply(act)
+	default:
+		//: 异步消息（引擎回来了之类）交给**实现 `msgScreen` 的那一屏** ——
+		//: `screen` 接口只收按键，收不到它（见 `msgScreen`）。
+		if ms, ok := r.top().(msgScreen); ok {
+			next, act := ms.onMsg(r.ctx, msg)
+			if next != nil {
+				r.stack[len(r.stack)-1].scr = next
+			}
+			if act.kind == actQuit {
+				return r, tea.Quit
+			}
+			cmd = r.apply(act)
 		}
 	}
-	return r, nil
+	if cmd == nil {
+		cmd = r.pending
+	}
+	r.pending = nil
+	return r, cmd
+}
+
+// apply 执行一次动作，并把它的命令交出去。
+func (r *root) apply(act action) tea.Cmd {
+	switch act.kind {
+	case actBack:
+		r.pop(act.res)
+	case actPush:
+		r.push(act.push, act.done)
+	}
+	return act.cmd
 }
 
 func (r *root) View() string {
