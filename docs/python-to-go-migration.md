@@ -142,3 +142,32 @@ JSON 行协议引擎。**TUI 一旦做进 Go，这一块自动闭合**（exe 双
 2. 按 schema 定 Go 侧的**只读取数面**（先只做 TUI 第 [1] 步要的关卡列表／章节／zone）。
 3. 与 `data/gamedata` 那条既有入口（`DataRoot()`）分开命名，**不许混成一个入口**——
    前者是**派生库**（一条命令几秒重建），后者是**非派生**数据（要下载），两者的失效处置不同。
+
+### 7.3 真 schema（2026-09-26 现查，下一刀直接照这张表写）
+
+**`data/akdb.sqlite`**（派生库，`python -m ak_tactic db build` 几秒重建）：
+
+| 表 | 关键列 | 谁要用 |
+| --- | --- | --- |
+| `stage` | `level_id, code, difficulty, zone_id, data_path, name, stage_type, diff_group, hard_level_id` | TUI 第 [1] 步**选关卡**（关卡列表／章节归属） |
+| `zone` | `zone_id, zone_index, type, name_first/second/title/third, activity_id, activity_name` | 同上（章节与活动名） |
+| `operator` | `char_id, name, appellation, rarity, profession_cn, position, is_operator, is_not_obtainable, …` | 第 [2] 步**编队**（按职业/星级筛） |
+| `operator_attr` / `operator_phase` / `operator_trait` / `operator_talent` / `operator_potential` / `operator_skill` | 逐档面板／范围／特性／天赋／潜能／技能槽 | 编队面板与练度显示 |
+| `module` / `module_level` | `module_id, char_id, name, type…`；`module_id, level, …` | **缺口 ② MAA 导出**的 `_uniequip()` |
+| `skill` / `skill_level` | `skill_id, name, level_count…`；`skill_id, level, …, blackboard` | 同上，`_skill_book()` |
+| `attack_range` / `tile` / `meta` | 范围格表／地块／元信息 | 范围显示 |
+
+**`data/enemydb.sqlite`**（prts.wiki 侧，**要联网**才有）：
+
+| 表 | 关键列 | 谁要用 |
+| --- | --- | --- |
+| `enemy` | `page, prts_id, name, display_name, grade, category, camp, ability…` | 敌人图鉴 |
+| `enemy_level` | `page, level, hp, atk, defense, res, move_speed, blackboard…` | 逐档数值 |
+| `enemy_resist` | `page, level, name, value, is_immune, source` | 抗性 |
+| `enemy_skill` | `page, level, slot, name, init_cooldown, cooldown, sp_cost, kind, effect` | 敌方技能 |
+
+★ **`enemydb` 正是 `spawns.go:36` 那条现成裂缝要的东西**（`species_provider` 今天由 Python 送）。
+开库之后可以顺带把它接上 —— 但**那是另一刀**，不在本次数据层里顺手做（会改判决面，必须单独过闸）。
+
+★ **未核**：这两张表与 `ak_tactic` 侧读它们的那段代码是否**逐列同名同义**未核；
+`meta` 表里有没有版本号可用于「库与代码对不上」的守卫，**未核**。
