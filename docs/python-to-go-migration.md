@@ -195,3 +195,28 @@ JSON 行协议引擎。**TUI 一旦做进 Go，这一块自动闭合**（exe 双
 
 **这不改变 §四 的裁定**（甲仍然对：有现成的库当然直接用），
 但它改变**代码放哪**：库的读取代码不必住在引擎二进制里。
+
+### 7.5 下一刀要对齐的三件事（读 `ak_tactic/tui/data.py` 现得，**只读**）
+
+★ **第一刀那个 `StageRows` / `ZoneRows` 是「不够 + 粒度不对」，不是「够用了」** ——
+TUI 的选关流程是**三层**，而我写的只是中间那层的一部分：
+
+| 层 | Python 落点 | 我第一刀的状态 |
+| --- | --- | --- |
+| **[1] 章／活动**（第一屏） | `data.py::chapter_rows()` → `db/stages.py::list_chapters(conn)`，返回 `[{key, title, subtitle, levels, parts}]` | ❌ **没做**（我写的 `ZoneRows` 是它的**下一级**） |
+| **[2] 环境分层** | `data.py::zone_envs(zone_id)` → `[{env, label, levels}]`，按 `ENV_ORDER` 排（剧情体验 → 标准实战 → 磨难险地 → 通用） | ❌ 没做 |
+| **[3] 关卡列表** | `data.py::stage_rows(keyword, limit, zone_id, env, difficulty)` → `db/stages.py::list_stages(...)` | ⚠️ 部分（我的 `StageRows` 只有 `zone_id` ＋ `keyword`） |
+
+**三条必须照抄的口径**（不照抄就会「看着对、筛错了」）：
+
+1. **`zone_id` 是精确匹配**，Python 那侧专门写了理由：
+   「按分部下钻时必须精确：`main_1` 用子串会把 `main_10` 一起捞出来」。
+   ⇒ 我的 `StageRows` 里 `zone_id = ?` 是对的；**但 `keyword` 那一路的语义要跟 `list_stages` 对齐**（未核）。
+2. **`chapter` 比 `zone` 高一级**：「103 个活动含多个 zone（『月行水上』= 通学路 ＋ 殡仪堂），
+   平铺会让用户自己认前缀」⇒ 第一屏要的是 chapter。
+3. **`zone_envs` 的条数含四星限定版**，理由写得明白：「不含的话菜单报 24、列表给 41 行，看着像筛错了」；
+   而且**全是 `NONE` 的章节（第 0～8、15～17 章）这一层菜单就不该出现**。
+
+**未核**：`list_stages`／`list_chapters`／`zone_envs` 的完整语义（排序、limit 的默认、`env`↔`diff_group` 的映射、
+`ENV_ORDER`／`ENV_LABELS` 的取值）**只看了 `data.py` 这一侧的调用与 docstring**；
+`ak_tactic/db/stages.py` 里的实现**未逐行读**（它是参照实现，只读不改）。
