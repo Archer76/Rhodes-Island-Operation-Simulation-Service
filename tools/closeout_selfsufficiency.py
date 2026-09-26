@@ -53,12 +53,13 @@ GO_DIR = ROOT / "rios-sim"
 DECLARED = {
     #: ⚠ **现数**：`len(SUITE)` 才是权威（本行与它必须相等，第 2 节会量）。
     #: 两条会话各 +1 时，「都改成 +1」必丢一次——所以这里是数出来的，不是算出来的。
-    "suites": 27,          # 一 · 「二十七套判据」「二十七套守卫」
+    "suites": 28,          # 一 · 「二十八套判据」「二十八套守卫」
     #: ⚠ **不要把它跟 `suites` 当成同一个数**（2026-09-23）：两条命令各有两套判据
     #: 之后，「命令数」与「套数」就不再相等了 —— `sim` 上有「自造规格」（Go 两种
     #: 入参形式的差分）与「调用链」（Python 那条路还造不造规格）两套。
     #: 现数＝`len(set(COMMAND_OF.values()))`，**不是**算出来的。
-    "commands": 24,        # 二 · 有判据的命令数（distinct 值）
+    #: ★ 2026-09-26 从 24 改成 25：加了「候选生成」→ `candidates`（新的一条命令）。
+    "commands": 25,        # 二 · 有判据的命令数（distinct 值）
     "gaps": 5,             # 三 · 缺口表的行数
     "resolve_callsites": 2,  # 出 loadout.go 之外调 ResolveLoadout 的地方
                              # （loadout 命令 ＋ specdeploys 的规格构造）
@@ -103,6 +104,12 @@ COMMAND_OF = {
     #: 它的数据源与「敌人」同一份，所以 Go 面登记成 `enemies`——
     #: 这一栏要的是「存在这样一条命令」，不是「一一对应」。
     "敌方机制": "enemies",
+    #: ★ 第二十八套（2026-09-26）：「候选生成」判的是引擎命令 `candidates`
+    #: （`rios-sim/candidates.go`，搜索层第一层·几何剪枝）的输出。
+    #: 它同时把 `candidates` 从第 2 节那条「既非判据命令也非 ping/sim 的余项」
+    #: 里**消掉**（在那之前 `arrivals`／`candidates`／`solve`／`spots` 四条
+    #: 命令都是余项）。
+    "候选生成": "candidates",
 }
 
 #: 有 Go 命令、但**有意**没有跨实现判据的（现在只剩一个）。
