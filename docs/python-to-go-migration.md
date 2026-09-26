@@ -295,3 +295,52 @@ Python 的做法是**把字面量 `None` 插进 f-string**（`精None None 潜No
 中文输入法全角输入（如 `ＳＲ`）在 Python 侧由 `unicodedata.normalize("NFKC", …)` 归一
 （`ak_tactic/tui/app.py:1256`／`:1463`）。Go stdlib 没有 NFKC ⇒ **不加 `golang.org/x/text`**，
 自写窄表：`U+FF01–FF5E` 减 `0xFEE0` ＋ `U+3000` → 空格。**覆盖真实场景，零新依赖。**
+
+---
+
+## 九 · ★★ 订正：缺口不是三块，是**四块** —— 补上「**搜索层**」
+
+**本文件 §三 曾写「TUI 第 [3] 步解算**只差接线**」，那句话是错的，在此订正。**
+
+子代理在 `rios-sim/*.go` ＋ `rios-sim/mech/*.go`（**57 个非测试文件、24 276 行**）搜
+`beam|Searcher|evaluated|candidates_for` ⇒ **零命中**（取证范围写全，免得被读成「大概没有」）。
+
+⇒ **Go 侧没有搜索层。** 今天的「解算」是**两段**：
+
+| 段 | 在哪 | 行数 |
+| --- | --- | --- |
+| beam 搜索（每次迭代挑候选、调评估） | **Python** `ak_tactic/search.py` | 425 |
+| 一场战斗的推演 | **Go** `rios-sim`（`Verifier(engine="go")`，`ak_tactic/verify.py:150`） | 24 276 |
+
+**所以「界面能自己解算」＝ 还得把搜索层搬过去**（连同 `eta.py` 的 `ArrivalIndex`／路线计划那一族）。
+这条以前没进清单，是因为 §三当时只盘了「界面／数据／导出」，把「解算」误当成已经落在 Go 上了。
+
+⚠ **未核**：搜索层搬到 Go 的工量**没有估**（425 行 Python，但它牵着 `parallel.py` 的多进程并行与
+`Verifier` 的一整套取数面——**要单独做一次只读侦察**才知道边界）。
+
+## 十 · bubbletea 落地蓝图（子代理交付，2026-09-26）
+
+产出：`out/zz_go_tui_framework.md`（749 行／83 KB；第一部分＝4 个候选的选型依据，
+第二部分＝bubbletea 落地蓝图）。
+
+**三条会直接改实现方式的硬事实**：
+
+1. **「UI 与引擎同进程」今天做不到**：`rios-sim` 根目录 **70 个 `.go` 全是 `package main`**
+   （唯一可 import 的子包是 `rios-sim/mech`）⇒ 只能走**子进程 JSON 行协议**，
+   或先做一次结构重构（把引擎拆成可 import 的包）。**这一条要博士裁**（它也决定
+   §7.4 那条「数据面住不住引擎二进制」的答案）。
+2. **bubbletea v2 换了 import path**（`charm.land/…`）＋ API 大面积改（`View() tea.View`、
+   `tea.KeyPressMsg`、空格键叫 `"space"`、屏幕模式移到 View 字段）
+   ⇒ 现网教程多数是 v1，照抄会编译不过。
+3. **屏是 14 个，不是 6 个**：Welcome／Login／GuidesDir／Ask(modal)／Qr(modal)／Chapter／Part／
+   Env／Stage／SquadAsk／SquadPick／Solve／Result／NoStage。建议**各自一个 Model ＋ 根 Model 持栈**
+   （对照 Python 的 `_path`），并把 Python 里「按回调对象身份认关卡列表那一格」
+   （`app.py:2643-2644`，注释自己说按名字认会漏）换成**显式 Kind 标记**。
+
+**它还量了依赖代价**（不许 build，故按 `goproxy.cn` 的 `.mod` 递归求路径集合上界，
+并用 `modernc.org/sqlite` 做**校准对照**：同法数 **53**、真值 `go list -m all` = **26** ⇒ ≈2× 高估）：
+折算后 bubbletea 套装 **~19-20** 个模块、tview ~8、gocui ~5、tcell ~8。现水位：**1 个直接依赖**。
+⚠ **体积与启动耗时未核**（零读数，不许 build）。
+
+**还需补一条对拍探针**：`x/ansi` 的 `StringWidth` 与 Rich `cell_len` 在**东亚歧义字符**上
+是否逐字符一致 **未核** ⇒ 建议**写第一行界面代码之前**先做这个探针（宽字符列宽算错，表格全歪）。
