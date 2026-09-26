@@ -15,11 +15,17 @@
 
     ping                      握手：协议号 ＋ 解释器版本 ＋ 当前账号
     accounts                  本机登过的账号（含当前标记）＋ 游戏 uid
-    login_start [timeout=180] 起扫码登录（**后台线程**跑 login_by_qr），返回二维码
+    login_start [timeout=180] 起扫码登录（**后台线程**跑 login_by_qr），返回二维码矩阵
     login_poll                取扫码进度／结果（waiting / done / failed）
     activate {uid}            切到某个已登账号
     logout                    退出账号
     roster                    名册：来源（skland / operbox）、是否完整、干员练度列表
+
+★ 二维码为什么给**矩阵**而不是画好的字符：编码（文本 → 模块）由 Python 的
+  `ak_tactic.qrterm.matrix` 走 `qrcode` 库做，**画法**（静默区、半格、颜色）是界面的
+  事、留在 Go 侧。早先这条给的是 43 行带 ANSI 的成品（单次约 90 KB），而登录屏每秒
+  轮询一次；现在的 `qr_matrix` 是每行一串 `0`/`1`（约 3 KB），且**两端不会各有一套
+  二维码编码器** —— 两份编码器迟早会漂，而二维码画错是"扫不出来"，最难查的那类症状。
 
 ★ 三条纪律：
 
@@ -70,7 +76,8 @@ class LoginSession:
         with self.lock:
             self.phase = "idle"      # idle → waiting → done / failed
             self.url = ""
-            self.qr_lines: list[str] = []
+            self.qr_matrix: list[str] = []
+            self.qr_note = ""
             self.status = None
             self.text = ""
             self.result: dict | None = None
@@ -83,7 +90,8 @@ class LoginSession:
             return {
                 "phase": self.phase,
                 "url": self.url,
-                "qr_lines": list(self.qr_lines),
+                "qr_matrix": list(self.qr_matrix),
+                "qr_note": self.qr_note,
                 "status": self.status,
                 "text": self.text,
                 "error": self.error,
@@ -96,15 +104,23 @@ class LoginSession:
         self.reset()
 
         def on_qr(_scan_id: str, content: str) -> None:
+            matrix: list[str] = []
+            note = ""
             try:
-                #: 用 skland 自己的终端渲染（`_render_terminal_qr`）—— 与 CLI 出的
-                #: 二维码字形一致；换一套渲染就是"同一个码两种样子"。
-                lines = skland._render_terminal_qr(content).splitlines()
-            except Exception:                                    # noqa: BLE001
-                lines = []
+                #: 只要**矩阵**（border=0）：静默区与配色是界面的事，Go 侧自己挑。
+                #: 用 `qrcode` 库（`qrterm.matrix`）而不是自己编码 —— 与 Python 界面
+                #: 用的是同一个编码器。
+                from ak_tactic.qrterm import matrix as qr_matrix
+                matrix = ["".join("1" if c else "0" for c in row)
+                          for row in qr_matrix(content, border=0)]
+            except Exception as exc:                             # noqa: BLE001
+                #: 编不出来就把**原因**带回去（`qr_note`），别给一张空图：
+                #: 空矩阵与「码还没到」在界面上长得一样，而这两件事的处置完全不同。
+                note = "%s: %s" % (exc.__class__.__name__, exc)
             with self.lock:
                 self.url = content
-                self.qr_lines = [_plain(x) for x in lines]
+                self.qr_matrix = matrix
+                self.qr_note = note
                 self.phase = "waiting"
             self.qr_ready.set()
 
@@ -182,14 +198,15 @@ def cmd_login_start(req: dict) -> dict:
     SESSION.qr_ready.wait(timeout=10.0)
     snap = SESSION.snapshot()
     return {"phase": snap["phase"], "url": snap["url"],
-            "qr_lines": snap["qr_lines"], "text": snap["text"],
+            "qr_matrix": snap["qr_matrix"], "qr_size": len(snap["qr_matrix"]),
+            "qr_note": snap["qr_note"], "text": snap["text"],
             "error": snap["error"]}
 
 
 def cmd_login_poll(req: dict) -> dict:
     snap = SESSION.snapshot()
-    #: ⚠ **不重发二维码**：那 43 行带 ANSI，单次应答约 90 KB，而登录屏每秒轮询一次
-    #: —— 重发等于每秒搬 90 KB 过管道。二维码只在 `login_start` 给一次。
+    #: ⚠ **不重发二维码**：登录屏每秒轮询一次，而矩阵虽然比原先的 ANSI 小得多，
+    #: 也没有每秒搬一遍的必要。二维码只在 `login_start` 给一次。
     return {"phase": snap["phase"], "status": snap["status"], "text": snap["text"],
             "url": snap["url"], "error": snap["error"], "result": snap["result"]}
 

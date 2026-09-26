@@ -28,6 +28,19 @@ type screen interface {
 	update(c *appCtx, k tea.KeyMsg) (screen, action)
 }
 
+// modal 是「不算一步」的屏 —— 对应 Python 的 `ModalScreen`（AskScreen / QrScreen）。
+//
+// 两条要照做，否则就是可见的行为差：
+//   - **不进面包屑**：Python 的步骤条只记向导的路径，模态屏盖在上面但不占一格。
+//   - **独占整屏**：Textual 的 ModalScreen 会连顶栏一起盖住，底下的屏不参与绘制。
+//     我们这边若照常画顶栏，观感就变成「一屏挤在另一屏的下半截」。
+type modal interface{ isModal() bool }
+
+func isModalScreen(s screen) bool {
+	m, ok := s.(modal)
+	return ok && m.isModal()
+}
+
 type actKind int
 
 const (
@@ -152,12 +165,18 @@ func (r *root) View() string {
 	if len(r.stack) == 0 {
 		return ""
 	}
+	top := r.top()
+	if isModalScreen(top) {
+		//: 模态屏**独占整屏**：不画顶栏与面包屑（对应 Textual 的 ModalScreen
+		//: 把底下的屏连顶栏一起盖住）。它自己的 help 印在最底下。
+		return top.view(r.ctx) + "\n" + styleDim.Render(top.help()) + "\n"
+	}
 	head := ""
 	if r.ctx.h == 0 || r.ctx.h >= tinyHeight {
 		head = styleTitle.Render("R.I.O.S. 作战演算") + "  " +
 			styleCrumb.Render(r.crumb()) + "\n"
 	}
-	body := r.top().view(r.ctx)
+	body := top.view(r.ctx)
 	foot := styleDim.Render(r.help())
 	if r.ctx.note != "" {
 		foot += "\n" + r.ctx.note
@@ -166,9 +185,14 @@ func (r *root) View() string {
 }
 
 // crumb 是面包屑：把栈里各屏的标题串起来（对应 Python 的步骤条 `theme.step_bar`）。
+//
+// 模态屏**不进面包屑** —— 它不算向导里的一步（见 `modal`）。
 func (r *root) crumb() string {
 	out := make([]string, 0, len(r.stack))
 	for _, f := range r.stack {
+		if isModalScreen(f.scr) {
+			continue
+		}
 		out = append(out, f.scr.title())
 	}
 	return joinArrow(out)

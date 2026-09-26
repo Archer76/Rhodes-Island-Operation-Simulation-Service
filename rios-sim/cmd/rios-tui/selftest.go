@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"rios-sim/data"
 )
@@ -496,13 +497,167 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			strings.SplitN(lerr.Error(), "\n", 2)[0])
 	}
 
+	// ---------------------------------------------------------------- 询问屏
+
+	fmt.Println("== 十二 · 询问屏（一问一答）==")
+	//: 负对照排在最前：编号越界必须**什么都不做**。这既测了行为，也证明了
+	//: 「按了键」与「什么都没发生」在这把尺子下是分得开的。
+	var got any
+	r.push(newAskScreen("登录", "不登录的话，是本次跳过还是以后都不再问？",
+		[]askRow{{"once", "本次不登录"}, {"never", "以后都不问"}}),
+		func(_ *root, res any) { got = res })
+	press(r, "9")
+	check("负对照：编号越界什么都不做（仍停在询问屏）",
+		got == nil && isModalScreen(r.top()) && len(r.stack) == 2,
+		fmt.Sprintf("got=%v 栈深=%d", got, len(r.stack)))
+	press(r, "1")
+	check("数字键交还的是「值」而不是标签", got == "once", fmt.Sprintf("got=%v", got))
+	check("选完就退回上一层", len(r.stack) == 1, fmt.Sprintf("栈深=%d", len(r.stack)))
+
+	got = "先放个值"
+	r.push(newAskScreen("退出账号", "确认退出？",
+		[]askRow{{"yes", "退出"}, {"no", "算了"}}),
+		func(_ *root, res any) { got = res })
+	press(r, "１") //: 全角数字（中文输入法全角模式下送来的就是这个）
+	check("全角数字也一样能选", got == "yes", fmt.Sprintf("got=%v", got))
+
+	got = "先放个值"
+	r.push(newAskScreen("退出账号", "确认退出？", []askRow{{"yes", "退出"}}),
+		func(_ *root, res any) { got = res })
+	press(r, "esc")
+	check("Esc 交还 nil（取消与「选了个空串」是两回事）", got == nil,
+		fmt.Sprintf("got=%v", got))
+
+	askView := newAskScreen("登录", "正文一句话",
+		[]askRow{{"a", "甲"}, {"b", "乙"}}).view(c)
+	check("渲染里有标题与正文",
+		strings.Contains(askView, "登录") && strings.Contains(askView, "正文一句话"),
+		"标题/正文")
+	check("渲染里有编号行",
+		strings.Contains(askView, "1　甲") && strings.Contains(askView, "2　乙"), "1　甲 / 2　乙")
+	boxFirst := strings.Split(boxStyle.Render("x"), "\n")[0]
+	check("整框宽度 = 68（Width(66) ＋ 边框 2，照 Python 的 width: 68）",
+		ansi.StringWidth(boxFirst) == 68, fmt.Sprintf("实得 %d", ansi.StringWidth(boxFirst)))
+
+	//: 模态屏两条：不进面包屑、独占整屏（照 Textual 的 ModalScreen）
+	crumbBefore := r.crumb()
+	r.push(newAskScreen("x", "y", []askRow{{"a", "b"}}), nil)
+	check("模态屏不进面包屑", r.crumb() == crumbBefore, fmt.Sprintf("%q", r.crumb()))
+	check("模态屏独占整屏（不画顶栏）", !strings.Contains(r.View(), appTitle), "无顶栏")
+	r.pop(nil)
+
+	// ---------------------------------------------------------------- 扫码屏
+
+	fmt.Println("== 十三 · 扫码屏（矩阵 → 半格图）==")
+	m4, err4 := qrMatrixFromRows([]string{"1010", "0101", "1100", "0011"})
+	dark := 0
+	for _, row := range m4 {
+		for _, v := range row {
+			if v {
+				dark++
+			}
+		}
+	}
+	check("矩阵解析：4×4 且暗格 8 个", err4 == nil && len(m4) == 4 && dark == 8,
+		fmt.Sprintf("err=%v 行=%d 暗格=%d", err4, len(m4), dark))
+	//: 三个负对照：非方、非 0/1、空 —— 都必须报错。它们画出来是「看着像二维码的
+	//: 废图」，而那是最难发现的错（人只会觉得"扫不出来"）。
+	_, eNonSquare := qrMatrixFromRows([]string{"101", "0101"})
+	_, eBadChar := qrMatrixFromRows([]string{"10x1"})
+	_, eEmpty := qrMatrixFromRows(nil)
+	check("负对照：非方矩阵必须报错", eNonSquare != nil, fmt.Sprintf("%v", eNonSquare))
+	check("负对照：非 0/1 字符必须报错", eBadChar != nil, fmt.Sprintf("%v", eBadChar))
+	check("负对照：空矩阵必须报错", eEmpty != nil, fmt.Sprintf("%v", eEmpty))
+
+	lines := renderQR(withQuiet(m4, 0))
+	check("四行压成两行半格", len(lines) == 2, fmt.Sprintf("实得 %d 行", len(lines)))
+	flipped := make([][]bool, len(m4))
+	for i, row := range m4 {
+		flipped[i] = append([]bool(nil), row...)
+	}
+	flipped[0][0] = !flipped[0][0]
+	check("负对照：翻一个模块渲染结果必须跟着变（尺子不是恒等映射）",
+		strings.Join(renderQR(withQuiet(flipped, 0)), "\n") != strings.Join(lines, "\n"),
+		"翻转后不同")
+
+	//: 几何：静默区的挑法是从 Python 那份实现搬来的，四个数不许改
+	check("静默区按规范取 4（120×40 放得下）", pickQRBorder(57, 120, 40) == 4,
+		fmt.Sprintf("实得 %d", pickQRBorder(57, 120, 40)))
+	check("窗口不够时逐级退让（80×24 ⇒ 0）", pickQRBorder(57, 80, 24) == 0,
+		fmt.Sprintf("实得 %d", pickQRBorder(57, 80, 24)))
+	mono := true
+	for w := 50; w <= 200; w += 10 {
+		if pickQRBorder(57, w, 40) < pickQRBorder(57, w-10, 40) {
+			mono = false
+		}
+	}
+	check("静默区随窗口变大只增不减（单调）", mono, "40→200 逐档比过")
+
+	wide := fakeQRGeometry(57)
+	bigCtx := &appCtx{w: 120, h: 40}
+	bigView := newQrScreen(wide, "").view(bigCtx)
+	rowsBig := strings.Split(bigView, "\n")
+	maxw := 0
+	for _, ln := range rowsBig {
+		if x := ansi.StringWidth(ln); x > maxw {
+			maxw = x
+		}
+	}
+	check("120×40 下整屏渲染不超窗口（缺角就废，所以这条要真数）",
+		len(rowsBig) <= bigCtx.h && maxw <= bigCtx.w,
+		fmt.Sprintf("%d 行 ≤ %d，最宽 %d ≤ %d", len(rowsBig), bigCtx.h, maxw, bigCtx.w))
+	check("120×40 下不喊「静默区被压」", !strings.Contains(bigView, "静默区已压到"), "无提示")
+	smallView := newQrScreen(wide, "").view(&appCtx{w: 60, h: 18})
+	check("小窗口下把「静默区被压」说出来",
+		strings.Contains(smallView, "静默区已压到"),
+		firstLineWith(smallView, "静默区已压到"))
+	check("贴底提示默认是「等待扫码……」", strings.Contains(bigView, "等待扫码"), "等待扫码……")
+	qs := newQrScreen(wide, "")
+	qs.setNote("已扫码，请在手机上确认")
+	check("setNote 能换掉贴底提示（登录屏轮询时要用）",
+		strings.Contains(qs.view(bigCtx), "已扫码，请在手机上确认"), "已扫码…")
+
+	//: 真桥那一段：**真的**向森空岛申请一张二维码（一次性、会自然过期），
+	//: 证明「Python 编码 → 桥给矩阵 → Go 解析 → 画成半格图」这条链是通的。
+	//: 起不来就**未核不判红**（具名给原因），不把它算成绿。
+	if st, lerr2 := fetchLoginStart(); lerr2 != nil {
+		fmt.Printf("  （未核：桥这次起不了扫码会话，不判红。具名原因：%s）\n",
+			strings.SplitN(lerr2.Error(), "\n", 2)[0])
+	} else if st.QRNote != "" {
+		fmt.Printf("  （未核：桥说二维码编不出来，不判红。具名原因：%s）\n", st.QRNote)
+	} else if liveQR, qerr := qrMatrixFromRows(st.QRMatrix); qerr != nil {
+		check("桥给的矩阵必须解析得动", false, fmt.Sprintf("err=%v", qerr))
+	} else {
+		check("桥真实往返：扫码会话起了且矩阵是方的",
+			len(liveQR) > 0 && len(liveQR)%4 == 1,
+			fmt.Sprintf("phase=%s 边长=%d qr_size=%d", st.Phase, len(liveQR), st.QRSize))
+		check("桥真实往返：矩阵边长 ≥ 21（二维码最小 21×21）", len(liveQR) >= 21,
+			fmt.Sprintf("边长=%d", len(liveQR)))
+		check("桥真实往返：真矩阵能画成半格图且行数对",
+			len(renderQR(withQuiet(liveQR, 4))) == (len(liveQR)+8+1)/2,
+			fmt.Sprintf("%d 行", len(renderQR(withQuiet(liveQR, 4)))))
+	}
+
 	fmt.Println()
 	if bad > 0 {
 		fmt.Printf("结论：**%d 条红** —— TUI 自检不通过\n", bad)
 		return 1
 	}
-	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／选人屏与自限拦截逐条过")
+	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／选人屏与自限拦截／询问屏／扫码屏逐条过")
 	return 0
+}
+
+// fakeQRGeometry 造一张 n×n 的**几何用**矩阵（不是真二维码，只用来量排版：
+// 静默区挑得对不对、渲染行数对不对）。**别拿它当二维码去扫**。
+func fakeQRGeometry(n int) [][]bool {
+	m := make([][]bool, n)
+	for i := range m {
+		m[i] = make([]bool, n)
+		for x := range m[i] {
+			m[i][x] = (i+x)%3 == 0
+		}
+	}
+	return m
 }
 
 // press 把一次按键送进根模型（等价于在真终端里按一下）。

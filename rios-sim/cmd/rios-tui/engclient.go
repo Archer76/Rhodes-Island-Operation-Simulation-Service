@@ -79,6 +79,14 @@ type bridgeResp struct {
 	Note      string           `json:"note"`
 	Count     int              `json:"count"`
 	Operators []RosterOperator `json:"operators"`
+	//: 扫码登录那两条（`login_start` / `login_poll`）。同一份应答结构当联合体用，
+	//: 与桥那边「一条命令一组字段」的形状对应。
+	Phase    string   `json:"phase"`
+	URL      string   `json:"url"`
+	QRMatrix []string `json:"qr_matrix"`
+	QRSize   int      `json:"qr_size"`
+	QRNote   string   `json:"qr_note"`
+	Text     string   `json:"text"`
 }
 
 type bridgeClient struct {
@@ -254,5 +262,42 @@ func fetchRoster() (*rosterData, error) {
 		Note:      resp.Note,
 		Count:     resp.Count,
 		Operators: resp.Operators,
+	}, nil
+}
+
+// loginStartData 是一次 `login_start` 的应答。
+//
+// **二维码只在这一条里给一次**（`login_poll` 不重发）：桥给的是**矩阵**
+// （每行一串 `0`/`1`），画法在 `qr.go` 里 —— 见那边的文件头。
+type loginStartData struct {
+	Phase    string   `json:"phase"`
+	URL      string   `json:"url"`
+	QRMatrix []string `json:"qr_matrix"`
+	QRSize   int      `json:"qr_size"`
+	QRNote   string   `json:"qr_note"` // 非空 = 二维码编不出来，里面是原因
+	Text     string   `json:"text"`
+}
+
+// fetchLoginStart 起一次扫码登录，拿到二维码矩阵。
+//
+// 桥内部会先等二维码出来（最多 10 秒）再应答 —— 那 10 秒里 Python 正拿着一张
+// **新的**二维码向森空岛申请，是网络在花时间，不是桥慢，所以这里给 30 秒余量：
+// 超时了就具名报出来，不静默退成一张空图。
+func fetchLoginStart() (*loginStartData, error) {
+	b, err := newBridgeClient()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.call("login_start", 1, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return &loginStartData{
+		Phase:    resp.Phase,
+		URL:      resp.URL,
+		QRMatrix: resp.QRMatrix,
+		QRSize:   resp.QRSize,
+		QRNote:   resp.QRNote,
+		Text:     resp.Text,
 	}, nil
 }
