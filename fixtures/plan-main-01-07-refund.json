@@ -1,0 +1,32 @@
+{
+  "stage": "main_01-07",
+  "title": "2 人（退款变体）",
+  "deploys": [
+    {
+      "operator": "翎羽",
+      "position": [2, 3],
+      "direction": "Left",
+      "skill": 0,
+      "elite": 1,
+      "level": 55,
+      "potential": 6,
+      "module_level": 0
+    },
+    {
+      "operator": "能天使",
+      "position": [3, 5],
+      "direction": "Up",
+      "skill": 0,
+      "elite": 2,
+      "level": 60,
+      "potential": 1,
+      "module_level": 0
+    }
+  ],
+  "retreats": [
+    {
+      "time": 103.0,
+      "operator": "翎羽"
+    }
+  ]
+}
