@@ -344,3 +344,52 @@ Python 的做法是**把字面量 `None` 插进 f-string**（`精None None 潜No
 
 **还需补一条对拍探针**：`x/ansi` 的 `StringWidth` 与 Rich `cell_len` 在**东亚歧义字符**上
 是否逐字符一致 **未核** ⇒ 建议**写第一行界面代码之前**先做这个探针（宽字符列宽算错，表格全歪）。
+
+---
+
+## 十一 · 范围收窄（博士 2026-09-26）：**工程侧保留 Python**
+
+**博士原话**：「工程测就保留 python，这个不用改。」
+
+### 11.1 这一条**取消了一整类风险**
+
+之前 §三／§九 隐含一个更激进的读法（「Python 全消失」），那会带来一个严重后果：
+**27 套判据的价值是「Go vs Python 逐字段一致」**——参照实现一没，它们同时失去意义，
+只能改成冻结快照，而那等于**自己跟自己比**（自证）。
+
+**工程侧保留 Python ⇒ 参照实现（`ak_tactic/battle/*`）、27 套判据、`tools/*.py` 全部保留
+⇒ 对拍安全网保住，判据不需要换参照。** 数据供给链也不变：`akdb.sqlite` 仍由
+`python -m ak_tactic db build` 建，**Go 只读**（`datadb.go` 正是这么做的）。
+
+### 11.2 保留在 Python 的（**不改**）
+
+建库（`python -m ak_tactic db build`）／数据重建（`tools/rebuild_data.py`）／
+上游抓取（prts.wiki、gamedata 镜像）／森空岛登录（`ak_tactic/skland`）／
+`operbox` 读取／`tools/*.py` 全部判据与驱动。
+
+### 11.3 要补写的收窄为**四块**
+
+| # | 块 | 现状 |
+| --- | --- | --- |
+| 1 | **界面**（14 屏，bubbletea） | 蓝图已出（`out/zz_go_tui_framework.md`），**代码零行** |
+| 2 | **搜索层**（`search.py` 425 行 beam ＋ `eta.py`） | Go 零命中；**工量未核** |
+| 3 | **数据层缺口** | `list_chapters`／`zone_envs` 未做；`StageRows` 四处偏差（§7.6） |
+| 4 | **MAA 导出** | 规格已出（`out/zz_maa_export_spec.md`），代码零行，估 300～500 行 |
+
+### 11.4 裁定：登录／名册走 **Python 子进程**
+
+**博士 2026-09-26 选 1**（另两个候选：自己实现森空岛登录／降级成读 operbox 文件）。
+
+⇒ **Go TUI 的登录屏与「拉名册」由 Go 起子进程调现成的 Python 模块**
+（`ak_tactic.skland`、`operbox_path` 那一族，出处见 `ak_tactic/tui/data.py:1-31`）。
+
+**三条必须写进实现的约束**：
+
+1. **它是一条已知的、要具名登记的依赖**：Go TUI 在本机**没有 Python 时登录／名册这两条路不可用**。
+   按本仓口径，这属于「能力受环境限制」而不是「缺陷」——但**必须可见**：
+   界面上要给出**具名失败**（照 `simgo/client.py:100` 那套写法：说清缺什么、怎么补），
+   **不许**静默退化成「空名册」。
+2. **不许把 `python` 写死成命令名**：要能指定解释器（与 `RIOS_SIM_BIN` 同款做法），
+   否则将来换虚拟环境会静默走错。
+3. **子进程协议要与现有那条同形**（JSON 行协议／一次性调用），
+   别为它发明第二套 IPC —— 本仓已有 `ak_tactic/simgo/client.py` 那套可照抄的形状。
