@@ -16,31 +16,42 @@ import (
 //
 // 分工照 Python：**选人屏只管画列表与勾人**，回车把「勾了哪些人」交还给调用方
 // （`actBack` 带 res），由回调决定下一步。判定与拦截也在回调里，不放屏上 ——
-// 屏是可被重建的，规则不是。
+// 屏是可被重建的，规则不是。★ 2026-09-26 起，那个「回调里的判定」收成了**解算入口
+// 的守卫**（`enterSolve` ＋ `solveGate`，见下），因为两条路（手选／自动）都要经过它。
 //
 // ---------------------------------------------------------------------------
-// # 政策：拦下「全员压到最低练度」的编队
+// # 政策：拦下「全员压到最低练度」的编队 —— 落点是**解算入口的守卫**
 //
 // 博士原话（2026-09-26）：
 //
 //	「如果玩家在选择干员的时候把所有槽位都选上了小于等于精一1级的干员，就提示
 //	 『本模拟器不希望被用于暴力破解自限玩法』并退回干员选择界面。」
 //
-// 判定范围（博士随后明确）：**精英0 1级 到 精英1 1级（含两端）**。读作
-// 「每一位被选中的干员都满足 `(elite==0 && level<=1) || (elite==1 && level<=1)`，
-// **并且**所有槽位都选上了」。「所有槽位」＝这一关的**可部署人数**
-// （Python 侧叫 `State.deploy_limit`，来自 gamedata 的 `options.characterLimit`）。
+// 博士当天确认的三条口径（2026-09-26，**改口径先改这一段**）：
 //
-// 为什么要有这条：本模拟器是**帮玩家在真实名册里找出打得过的编队**用的。
-// 把每一个槽位都填成初始练度的干员，是拿它去替玩家**暴力破解自限玩法**
-// （「全员精零一级通关」那类挑战）——那问的已经不是「我这一关该怎么打」，
-// 而是「帮我把自定的规则绕过去」。这句话就是那条界线的落点：拦下、退回、
-// 让人看见界线在这儿；而不是悄悄算出一个能过的解。
+//  1. **闸门放在解算入口**：判定收成**一个**守卫 `solveGate`，手选与自动编队
+//     **两条路都必须过它**，以后写解算屏时**绕不过去**。原实现把判定写在选人屏
+//     的回调里，只有手选那条路经过 —— 那正是这条口径要修掉的东西。
+//  2. **两条路都拦**（★ 口径变更，登记）：自动编队（「不用，让程序自己挑」）
+//     **同样拦**。当天早上那版曾裁定「程序自己挑出来的放行」（理由是"那是程序挑的、
+//     不是玩家在自限"，外加"整册低练度的新号否则走不下去"），博士随即**撤销**该豁免：
+//     判据是**编队的练度**，不是「谁挑的」。⇒ 守卫里**没有豁免分支**，`solveSource`
+//     只决定拦下之后退回哪一屏，**不决定拦不拦**。
+//  3. **不要槽位条件**：判定就是「**选了人** 且 **全员 ≤ E1L1** ⇒ 拦」。原先那条
+//     「取不到可部署人数 ⇒ 判定退化为非空即拦」的说法**作废** —— 那不是退化，
+//     **这就是规则本身**。⇒ 守卫签名里**没有** `slotLimit`；屏上那行
+//     「槽位 N 人／槽位：未知」照旧显示，但**不参与判定**（它是给玩家看的信息）。
 //
-// ★ 退化（如实登记，不假装知道槽位数）：取不到可部署人数时（Go 侧现在的实际
-// 情况 —— 引擎那侧的 `options.characterLimit` 还没接到界面来，`deployLimit`
-// 恒为 0；Python 侧同一个数是 0 时含义相同），判定**退化为**
-// 「非空且全员在范围内也算触发」。屏上会把这次退化写出来（不是只有代码知道）。
+// 判定范围（博士明确）：**精英0 1级 到 精英1 1级（含两端）**。
+//
+// 为什么要有这条：本模拟器是**帮玩家在真实名册里找出打得过的编队**用的。把编队
+// 填成初始练度，是拿它去替玩家**暴力破解自限玩法**（「全员精零一级通关」那类挑战）
+// ——那问的已经不是「我这一关该怎么打」，而是「帮我把自定的规则绕过去」。这句话
+// 就是那条界线的落点：拦下、退回、让人看见界线在这儿；而不是悄悄算出一个能过的解。
+//
+// ⚠ 副作用（如实登记，不是实现缺陷）：口径 2 之后，「名册整册低练度的新号」在手选
+// 与自动两条路上**都会被拦**。要留路得先由博士改口径（例如按「是否整册低练度」
+// 另开一条分支），**不要在守卫之外偷偷放行**。
 // ---------------------------------------------------------------------------
 
 // squadMinLevelMsg 是拦下时那句话。**一字不改**：它是政策本身，不是提示文案。
@@ -58,8 +69,8 @@ func isMinLevel(op RosterOperator) bool {
 // allMinLevel 是「每一个被选中的干员都在范围内」。
 //
 // 空列表返回 true —— 这是「全员」的**真空真**（一位也没有，就没有反例）。
-// 「非空」这一条不在这里判，由 pickTriggersBlock 判：两件事分开写，
-// 免得把"没勾人"和"勾了但不够低"混成一个函数的结果。
+// 「非空」这一条不在这里判，由守卫 `solveGate` 判：两件事分开写，
+// 免得把「没勾人」和「勾了但不够低」混成一个函数的结果。
 func allMinLevel(picked []RosterOperator) bool {
 	for _, op := range picked {
 		if !isMinLevel(op) {
@@ -69,33 +80,154 @@ func allMinLevel(picked []RosterOperator) bool {
 	return true
 }
 
-// pickTriggersBlock 是那条政策的**纯函数判据**（界面只是它的一个调用方）。
-//
-// 三条同时成立才拦：
-//  1. 勾了人（空编队不是「所有槽位都选上了」）；
-//  2. 勾的每一位都在「E0L1..E1L1」之内；
-//  3. 槽位满了 —— `slotLimit` 是这一关的可部署人数；`slotLimit <= 0` 表示
-//     **取不到**，此时第 3 条退化为不判（见文件头的退化说明）。
-func pickTriggersBlock(picked []RosterOperator, slotLimit int) bool {
-	if len(picked) == 0 {
-		return false
+// ---- 解算入口的守卫 ---------------------------------------------------------
+
+// solveSource 是「这一份编队是谁定的」。它是守卫的第二个入参，**只影响拦下之后
+// 退回哪一屏**；拦不拦只看编队本身（口径 2：没有豁免）。
+type solveSource int
+
+const (
+	solveSourceManual solveSource = iota // 手选：玩家在选人屏自己勾出来的
+	solveSourceAuto                      // 自动：「不用，让程序自己挑」—— 程序挑出来的
+)
+
+func (s solveSource) String() string {
+	if s == solveSourceAuto {
+		return "自动编队"
 	}
-	if !allMinLevel(picked) {
-		return false
-	}
-	if slotLimit > 0 && len(picked) < slotLimit {
-		return false // 槽位没满
-	}
-	return true
+	return "手选编队"
 }
 
-// blockNote 是拦下时留在屏上那句话。槽位取不到时**顺带把退化写出来**。
-func blockNote(slotLimit int) string {
-	msg := "★ " + squadMinLevelMsg + " —— 已退回干员选择界面，请调整编队。"
-	if slotLimit <= 0 {
-		msg += "\n（本次没取到本关的可部署人数，按「非空且全员在范围内」判定。）"
+// solveGateBranch 是守卫**实际走的那条分支**。它同时是行使计数的下标 ——
+// 判据靠它区分「走了这条分支」与「这条路根本没判」（后者的读数是全 0）。
+type solveGateBranch int
+
+const (
+	//: 空编队 ⇒ 放行：一位也没选，不是「全员低练度」（真空真不算触发）。
+	gateAllowEmptySquad solveGateBranch = iota
+	//: 编队里有超过 E1L1 的人 ⇒ 放行：不在政策范围内。
+	gateAllowNotMinLevel
+	//: 手选、非空、全员低练度 ⇒ **拦**。
+	gateBlockManual
+	//: 自动、非空、全员低练度 ⇒ **拦**。★ 口径 2（2026-09-26）：早上那版这里是一条
+	//: 「自动编队豁免」，博士当天下文撤销 —— 现在它与手选那条一样是拦下的分支，
+	//: 只是拦下之后退回的屏不同。**不许**在这里加回豁免。
+	gateBlockAuto
+
+	//: 数组长度用，不是一条分支。
+	solveGateBranchCount
+)
+
+// solveGateBranchNames 是四条分支的名字（判据与排障打印用）。
+var solveGateBranchNames = [solveGateBranchCount]string{
+	"放行·空编队", "放行·非全员低练度", "拦下·手选", "拦下·自动",
+}
+
+// solveGateHits 是四条分支的**行使计数**。判据读它证明每条分支都真的被走到过，
+// 而且是**这一次调用**走的（自检取前后差，不是只看总数非零）。
+var solveGateHits [solveGateBranchCount]int
+
+// solveGateHitsSnapshot 取一次计数快照。
+func solveGateHitsSnapshot() [solveGateBranchCount]int { return solveGateHits }
+
+// solveVerdict 是守卫的结论。
+type solveVerdict struct {
+	Allow  bool            // true = 放行进解算
+	Branch solveGateBranch // 走的是哪条分支（行使计数与判据都看它）
+}
+
+// solveGate 是这条政策的**唯一判定**：给定「已选编队」与「来源模式」，答放行还是拦。
+//
+// 纯函数：只看两个入参（`solveSource` 只用来选分支，不改变拦不拦）。三条同时
+// 成立才拦 —— 注意**没有**槽位那一条（口径 3）：
+//
+//	选了人 ∧ 全员在 E0L1..E1L1 之内 ⇒ 拦（手选、自动**一样**拦，口径 2）
+//
+// ★ 唯一的 `allMinLevel` 调用点就在这里。这个事实由下面那条**防绕过判据**
+// （`guardBypassFindings`）盯着：它扫源码，守卫之外再出现一处 `allMinLevel`
+// 调用就判红。
+func solveGate(picked []RosterOperator, src solveSource) solveVerdict {
+	if len(picked) == 0 {
+		return solveVerdict{Allow: true, Branch: gateAllowEmptySquad}
 	}
-	return msg
+	if !allMinLevel(picked) {
+		return solveVerdict{Allow: true, Branch: gateAllowNotMinLevel}
+	}
+	if src == solveSourceAuto {
+		return solveVerdict{Allow: false, Branch: gateBlockAuto}
+	}
+	return solveVerdict{Allow: false, Branch: gateBlockManual}
+}
+
+// guardBypassFindings 是那条「防后人绕过守卫」的判据核心：扫一份源码，报出
+// **守卫函数体之外**还在自己判「全员低练度」的地方。
+//
+// 判据只有一条：`allMinLevel` 的**调用点**必须全部落在 `solveGate` 的函数体里
+// —— 定义行 `func allMinLevel` 不算调用点，整行注释也不算（注释里提到函数名是
+// 在解释政策，不是在判）。理由见口径 1：政策的判定只有一处，谁要在别处再判一遍，
+// 就得调这个函数，而那一处会被这里照出来。
+//
+// 做成**吃源码文本的纯函数**，是为了让这条判据自己能判红：自检喂它一份故意在
+// 守卫之外多写一处调用的合成源码，要求它报 ≥1 处；报 0 就是尺子恒空（等于没写）。
+// 反过来，喂「调用只在守卫体内」的源码必须报 0 处 —— 两个方向都试过，它才是一条
+// 会红也会绿的尺子。
+//
+// ⚠ 自检文件 `selftest.go` **不在扫描范围内**：它是造负对照的地方，本来就会直接
+// 调 `allMinLevel` 来证明这函数不是恒真。它不是界面路径，也不压屏。
+func guardBypassFindings(src string) []string {
+	//: ★ 先归一化行尾再按行比对 —— 顶格收尾大括号认的是 `ln == "}"`，而工作树的
+	//: 检出可能是 CRLF（`core.autocrlf`），那时每行尾巴都带 \r，收尾大括号永远认不到，
+	//: **守卫体内那一处合法调用会被误报成「守卫之外」**。
+	//: 这不是假想：本轮就实测到了 —— 负对照喂的合成源码是 LF（报得对），真源码是
+	//: CRLF（报了一处假红）。两个方向的对照合起来才把这个尺子自身的毛病照出来。
+	src = strings.ReplaceAll(src, "\r\n", "\n")
+	lines := strings.Split(src, "\n")
+	gateStart, gateEnd := -1, -1
+	for i, ln := range lines {
+		if strings.HasPrefix(ln, "func solveGate(") {
+			gateStart = i
+			continue
+		}
+		//: gofmt 之下，顶层函数的收尾就是一个**顶格**的 }。
+		if gateStart >= 0 && ln == "}" {
+			gateEnd = i
+			break
+		}
+	}
+	out := []string{}
+	//: ★ 被找的那个记号在这里**拼出来**，不写成字面量 —— 否则本函数自己这一行就会
+	//: 被自己扫成「守卫之外的一处调用」（判据把自己判红，是尺子的经典自伤）。
+	token := "allMin" + "Level("
+	def := "func allMin" + "Level("
+	for i, ln := range lines {
+		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, "//") || !strings.Contains(ln, token) {
+			continue
+		}
+		if strings.Contains(ln, def) {
+			continue //: 定义行，不是调用点
+		}
+		if gateStart >= 0 && i > gateStart && i < gateEnd {
+			continue //: 守卫体内 —— 政策的判定就住在这儿
+		}
+		out = append(out, fmt.Sprintf("第 %d 行 %s", i+1, t))
+	}
+	return out
+}
+
+// blockNote 是拦下时留在屏上那句话。
+//
+// ★ 口径 3（2026-09-26）：它现在**陈述规则本身**。早先那句「本次没取到本关的可部署
+// 人数，按「非空且全员在范围内」判定」随槽位条件一起作废 —— 槽位不再参与判定，
+// 所以这里**没有**任何「退路／退化」要交代。
+func blockNote(branch solveGateBranch) string {
+	back := "已退回干员选择界面，请调整编队。"
+	if branch == gateBlockAuto {
+		back = "已退回「选编队」，请换一种选法。"
+	}
+	return "★ " + squadMinLevelMsg + " —— " + back +
+		"\n（判定规则：编队非空、且每一位都在「精英0 1级 到 精英1 1级」之内 ⇒ 拦下；" +
+		"自动编队同样拦。与槽位数无关。）"
 }
 
 // ---- 名册（桥取一次，缓存在共享态里）----------------------------------------
@@ -122,6 +254,9 @@ func (c *appCtx) ensureRoster() *rosterData {
 
 // slotLimit 是这一关的**可部署人数**（Python 的 `State.deploy_limit`）。
 // 0 = 取不到 —— 引擎那侧的 `options.characterLimit` 还没接到界面来。
+//
+// ★ 口径 3（2026-09-26）：这个数现在**只用来显示**（选人屏那行「槽位 N 人／
+// 槽位：未知」），**不参与那条拦截的判定** —— 守卫 `solveGate` 的签名里没有它。
 func (c *appCtx) slotLimit() int { return c.deployLimit }
 
 // ---- [2a] 问编队 -----------------------------------------------------------
@@ -220,8 +355,9 @@ func newSquadPickScreen(c *appCtx, keep []RosterOperator) *squadPickScreen {
 
 func (s *squadPickScreen) view(c *appCtx) string {
 	head := make([]string, 0, 2)
-	//: 槽位数**必须写在屏上**：那条拦截规则判的就是"所有槽位都选上了没有"，
-	//: 玩家看不到槽位数就没法理解为什么被拦。
+	//: 槽位数**照旧写在屏上**（给玩家看的信息），但它**不参与判定**了 ——
+	//: 口径 3（2026-09-26）：判定就是「选了人且全员 ≤E1L1」，与槽位数无关，
+	//: 所以这里写「未知」也不会改变拦不拦。
 	slot := styleCursor.Render(fmt.Sprintf("槽位 %d 人", c.slotLimit()))
 	if c.slotLimit() <= 0 {
 		slot = styleCursor.Render("槽位：未知（没取到本关的可部署人数）")
@@ -385,9 +521,61 @@ func professionCN(code string) string {
 	return code
 }
 
-// ---- 回调：压屏与拦截（对应 RiosApp._squad_asked / _squad_picked）----------
+// ---- 回调：压屏与解算入口（对应 RiosApp._squad_asked / _squad_picked）-------
+
+// enterSolve 是**解算入口**，也是那条守卫的落点：**两条路（手选／自动）都必须
+// 从这里进**（口径 1）。判定只住在 `solveGate` 里，屏上动作只住在这里。
+//
+// 为什么现在就立这个入口：解算屏还没有实体（`cmd/rios-tui/` 下没有 solve/result
+// 文件），所以「绕不过去」现在只能靠**入口唯一**来保证 —— 谁要进解算，就得调这个
+// 函数；谁要在别处自己判一遍，就会被 `guardBypassFindings` 扫出来。
+//
+// ★ 给未来的解算屏（登记，2026-09-26）：`SolveScreen` 落地时**必须**经由本函数进解算
+// （把下面两处 `note` 换成压解算屏即可，守卫的位置不动），并且那时要**再加**一条断言
+// 盯着「解算入口这条路径确实经过 solveGate」。现在已有的两条是：
+// ① 本文件里那条源码扫描判据 `guardBypassFindings`（守卫之外不许有第二处判定）；
+// ② 自检里按**分支计数前后差**断言两条路各自走了哪条分支（路被绕开 ⇒ 读数为 0）。
+func (r *root) enterSolve(picked []RosterOperator, src solveSource) solveVerdict {
+	c := r.ctx
+	v := solveGate(picked, src)
+	solveGateHits[v.Branch]++ //: 行使计数：每条分支都要有非零读数
+	if !v.Allow {
+		c.note = blockNote(v.Branch)
+		switch src {
+		case solveSourceAuto:
+			//: 自动编队被拦（口径 2，没有豁免）：回到「选编队」那一屏 ——
+			//: 程序挑的人玩家改不了，能改的是「走哪条路」。
+			r.push(&squadAskScreen{}, onSquadAsked)
+		default:
+			//: 手选被拦：选人屏这一刻已经弹掉了，所以把它**重新压回来**
+			//: （等价于「退回干员选择界面」），并把勾选带过去 —— 人才知道该改哪一个。
+			r.push(newSquadPickScreen(c, picked), onSquadPicked)
+		}
+		return v
+	}
+	names := make([]string, 0, len(picked))
+	for _, op := range picked {
+		names = append(names, op.Name)
+	}
+	c.squad = names
+	switch {
+	case len(names) == 0 && src == solveSourceAuto:
+		c.note = "已选「不用，让程序自己挑」—— 下一步（解算）尚未实现"
+	case len(names) == 0:
+		c.note = "未指定干员 —— 下一步（解算）尚未实现"
+	default:
+		c.note = fmt.Sprintf("已确定编队 %d 人：%s —— 下一步（解算）尚未实现",
+			len(names), strings.Join(names, "、"))
+	}
+	return v
+}
 
 // onSquadAsked 是问编队屏的回调。Esc（res 不是 bool）已经弹回上一层，什么都不做。
+//
+// 「不用，让程序自己挑」这条路**也过守卫**（口径 2：没有豁免）：程序挑出来的编队
+// 放在 `c.autoPicks` 里 —— 搜索层还没接进来，运行期它是空的（走「空编队放行」那条
+// 分支）；自检里显式填一个全员低练度的自动编队，好把 `gateBlockAuto` 真的走到。
+// **它不是「没判」**：判定与行使计数都发生在 `enterSolve` 里。
 func onSquadAsked(r *root, res any) {
 	manual, ok := res.(bool)
 	if !ok {
@@ -395,40 +583,23 @@ func onSquadAsked(r *root, res any) {
 	}
 	c := r.ctx
 	if !manual {
-		c.squad = nil
 		c.mode = "auto"
-		c.note = "已选「不用，让程序自己挑」—— 下一步（解算）尚未实现"
+		r.enterSolve(c.autoPicks, solveSourceAuto)
 		return
 	}
 	c.ensureRoster() //: 取不到也只记进 rosterErr，由选人屏具名显示
 	r.push(newSquadPickScreen(c, nil), onSquadPicked)
 }
 
-// onSquadPicked 是选人屏的回调：**这条政策的落点**。
+// onSquadPicked 是选人屏的回调：**手选这条路的落点**。
 //
-// 被拦下时不用"退一层"来实现 —— 选人屏这一刻已经弹掉了，所以正确的动作是
-// **把选人屏重新压回来**（Python 是 dismiss 之后由调用方 push 新屏；Go 这边
-// 自己持有屏实例，等价于"回到选人界面"），并把勾选带过去，顺带把话说在屏上。
+// 拦下时不用「退一层」来实现 —— 选人屏这一刻已经弹掉了，正确的动作是**把选人屏
+// 重新压回来**（Python 是 dismiss 之后由调用方 push 新屏；Go 这边自己持有屏实例，
+// 等价于「回到选人界面」）。这件事现在住在 `enterSolve` 里（两条路共用）。
 func onSquadPicked(r *root, res any) {
 	picked, ok := res.([]RosterOperator)
 	if !ok {
 		return // Esc：已弹回上一层
 	}
-	c := r.ctx
-	if pickTriggersBlock(picked, c.slotLimit()) {
-		c.note = blockNote(c.slotLimit())
-		r.push(newSquadPickScreen(c, picked), onSquadPicked)
-		return
-	}
-	names := make([]string, 0, len(picked))
-	for _, op := range picked {
-		names = append(names, op.Name)
-	}
-	c.squad = names
-	if len(names) == 0 {
-		c.note = "未指定干员 —— 下一步（解算）尚未实现"
-		return
-	}
-	c.note = fmt.Sprintf("已确定编队 %d 人：%s —— 下一步（解算）尚未实现",
-		len(names), strings.Join(names, "、"))
+	r.enterSolve(picked, solveSourceManual)
 }

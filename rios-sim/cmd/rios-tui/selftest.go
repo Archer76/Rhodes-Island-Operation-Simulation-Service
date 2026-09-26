@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -295,11 +296,12 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			string(before) == string(after) && strings.Contains(c.note, "未修改"), c.note)
 	}
 
-	fmt.Println("== 十 · 选人屏与「自限」拦截（政策＝纯函数）==")
+	fmt.Println("== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==")
 
-	//: ★ 本段自己的负对照：开头那条全局负对照只证了 `check` 不是恒真的；
-	//:   这里要证**本段用的判据**不是恒真的 —— 一条恒真的 `allMinLevel`
-	//:   会让下面"拦下／放行"那几条断言全部退化成同义反复（满屏 ✓ 零信息量）。
+	//: ★ 本段自己的负对照（**负对照在前**）：开头那条全局负对照只证了 `check` 不是
+	//:   恒真的；这里要证**本段用的这把尺子**不是恒真的 —— 一条恒真的 `allMinLevel`
+	//:   会让下面「拦下／放行」的断言全退化成同义反复（满屏 ✓ 零信息量）；
+	//:   而一条恒空的「防绕过」判据等于没写，也要在这里试出来。
 	rulerOK := true
 	if !check("负对照：混入一位 E2 干员时 allMinLevel 必须为假（尺子要判红）",
 		!allMinLevel([]RosterOperator{{CharID: "x", Name: "甲", Elite: 2, Level: 1}}),
@@ -312,9 +314,69 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		"别的话里不含那句话") {
 		rulerOK = false
 	}
+	//: 把守卫的结论**反过来读**：全员低练度 ＋ 手选 ⇒「放行」若成立，说明这守卫
+	//: 拦不住任何东西，下面那些「拦下」的断言就全是空话。这是口径 1／2 的反向对照。
+	inv := solveGate([]RosterOperator{{CharID: "a", Name: "甲", Elite: 0, Level: 1}},
+		solveSourceManual)
+	if !check("负对照：把守卫结论反过来读必须不成立（全员低练度＋手选 ⇒ 不是放行）",
+		!inv.Allow,
+		fmt.Sprintf("Allow=%v 分支=%s", inv.Allow, solveGateBranchNames[inv.Branch])) {
+		rulerOK = false
+	}
+	//: 防绕过扫描器的**两个方向**：会红（合成源码里守卫之外多一处调用）＋ 不滥红
+	//: （调用只在守卫体内 ⇒ 0 处）。只试一个方向分不出「判据恒空」与「源码干净」。
+	//: 合成源码里那个记号是**拼出来**的：本文件不在扫描范围内，但拼写让它即使被扫
+	//: 也不会自己撞上自己。
+	sneakCall := "allMin" + "Level(p)"
+	cleanSrc := "func solveGate(p []RosterOperator, src solveSource) solveVerdict {\n" +
+		"\tif !" + sneakCall + " {\n\t\treturn solveVerdict{}\n\t}\n\treturn solveVerdict{}\n}\n"
+	bypassSrc := cleanSrc + "\nfunc sneaky(p []RosterOperator) bool {\n\treturn " + sneakCall +
+		" // 绕过守卫自己再判一遍\n}\n"
+	if !check("负对照：防绕过扫描器喂「守卫之外多一处调用」必须报 ≥1 处（尺子要判红）",
+		len(guardBypassFindings(bypassSrc)) > 0,
+		fmt.Sprintf("报出 %v", guardBypassFindings(bypassSrc))) {
+		rulerOK = false
+	}
+	if !check("反向对照：同一把尺子喂「调用只在守卫体内」必须报 0 处（尺子不恒非空）",
+		len(guardBypassFindings(cleanSrc)) == 0,
+		fmt.Sprintf("报出 %v", guardBypassFindings(cleanSrc))) {
+		rulerOK = false
+	}
 	if !rulerOK {
 		fmt.Println("★ 本段负对照没红 ⇒ 第十段的读数作废")
 		return 3
+	}
+
+	//: 行使读数：围着**一次**调用取前后差。只看「整个自检跑完这个计数非零」证不了
+	//: 什么 —— 别的调用会把它垫高，某条路被绕开也看不出来。前后差能证明
+	//: 「**这一次**调用走的是哪条分支」，这正是口径 1／2 唯一能被证伪的地方。
+	delta := func(f func()) [solveGateBranchCount]int {
+		b := solveGateHitsSnapshot()
+		f()
+		a := solveGateHitsSnapshot()
+		var d [solveGateBranchCount]int
+		for i := range d {
+			d[i] = a[i] - b[i]
+		}
+		return d
+	}
+	fmtDelta := func(d [solveGateBranchCount]int) string {
+		parts := make([]string, 0, solveGateBranchCount)
+		for i := range d {
+			parts = append(parts, fmt.Sprintf("%s=%d", solveGateBranchNames[i], d[i]))
+		}
+		return strings.Join(parts, " ")
+	}
+	oneBranch := func(d [solveGateBranchCount]int, want solveGateBranch) bool {
+		if d[want] != 1 {
+			return false
+		}
+		for i := range d {
+			if i != int(want) && d[i] != 0 {
+				return false
+			}
+		}
+		return true
 	}
 
 	//: 纯函数的边界：判定范围是「精英0 1级 到 精英1 1级（含两端）」。
@@ -343,6 +405,8 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			{CharID: "char_3", Name: "丙", Profession: "MEDIC", Elite: 1, Level: 45},
 			{CharID: "char_4", Name: "丁", Profession: "CASTER", Elite: 2, Level: 90},
 		}}
+	//: `slot` 只填给**屏上显示**（口径 3：槽位不参与判定）—— 下面故意拿 2／5／0
+	//: 三种槽位跑同一个编队，判定必须一样。
 	pickCtx := func(slot int) *appCtx {
 		return &appCtx{w: 90, h: 26, roster: fake, deployLimit: slot, mode: "auto",
 			stage: &data.StageRecord{Code: "1-7", Name: "测试关"}}
@@ -363,63 +427,110 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		}
 	}
 
-	//: 甲 E0L1、乙 E1L1 —— 两位都在范围内；槽位 2 ⇒ 满。
+	//: 甲 E0L1、乙 E1L1 —— 两位都在范围内。槽位 2 只是**显示**（口径 3）。
 	cA := pickCtx(2)
 	rA := newRoot(cA, welcomeScreen{})
 	sA := newSquadPickScreen(cA, nil)
 	rA.push(sA, onSquadPicked)
-	check("选人屏把槽位数写在屏上", strings.Contains(rA.View(), "槽位 2 人"),
-		firstLineWith(rA.View(), "槽位"))
+	check("选人屏把槽位数写在屏上（口径 3：显示照旧）",
+		strings.Contains(rA.View(), "槽位 2 人"), firstLineWith(rA.View(), "槽位"))
 	check("选人屏列出的是名册里的人（共 4 人）", strings.Contains(rA.View(), "共 4 人"),
 		firstLineWith(rA.View(), "共 "))
 	markNames(rA, sA, "甲", "乙")
 	check("空格真的勾上了人（勾选是新屏自己持有的）", len(sA.picked) == 2,
 		fmt.Sprintf("%d 人", len(sA.picked)))
-	press(rA, "enter")
-	check("拦下：仍停在选人屏（**没**进下一步）",
+	dBlock := delta(func() { press(rA, "enter") })
+	check("手选·拦下：仍停在选人屏（**没**进下一步）",
 		screenName(rA.top()) == "*main.squadPickScreen", screenName(rA.top()))
-	check("拦下：提示语里含那句话", strings.Contains(cA.note, squadMinLevelMsg), cA.note)
-	check("拦下：那句话**画在屏上**", strings.Contains(rA.View(), squadMinLevelMsg),
+	check("手选·拦下：提示语里含那句话", strings.Contains(cA.note, squadMinLevelMsg), cA.note)
+	check("手选·拦下：那句话**画在屏上**", strings.Contains(rA.View(), squadMinLevelMsg),
 		firstLineWith(rA.View(), squadMinLevelMsg))
-	check("拦下：编队没有被定下来", cA.squad == nil, fmt.Sprintf("%v", cA.squad))
-	check("拦下：勾选跟着回到新屏（人还看得见该改哪一个）",
+	check("手选·拦下：编队没有被定下来", cA.squad == nil, fmt.Sprintf("%v", cA.squad))
+	check("手选·拦下：勾选跟着回到新屏（人还看得见该改哪一个）",
 		pickTop(rA) != nil && len(pickTop(rA).picked) == 2,
 		fmt.Sprintf("%d 人", len(pickTop(rA).picked)))
+	check("行使计数：这一次调用只走了「拦下·手选」这条分支",
+		oneBranch(dBlock, gateBlockManual), fmtDelta(dBlock))
 
 	//: 混进一位超范围的（丙 E1 45级）⇒ **放行**。
 	markNames(rA, pickTop(rA), "丙")
-	press(rA, "enter")
+	dAllow := delta(func() { press(rA, "enter") })
 	check("放行：混进一位超范围的干员就不拦（退回上一层）",
 		screenName(rA.top()) == "main.welcomeScreen", screenName(rA.top()))
 	check("放行：编队定下来了（3 人，按码点序）", len(cA.squad) == 3,
 		fmt.Sprintf("%v", cA.squad))
 	check("放行：提示里写明下一步还没实现", strings.Contains(cA.note, "尚未实现"), cA.note)
+	check("行使计数：这一次调用只走了「放行·非全员低练度」这条分支",
+		oneBranch(dAllow, gateAllowNotMinLevel), fmtDelta(dAllow))
 
-	//: 全员在范围内、但**槽位没满**（2/5）⇒ **不拦**。
-	cC := pickCtx(5)
-	rC := newRoot(cC, welcomeScreen{})
-	sC := newSquadPickScreen(cC, nil)
-	rC.push(sC, onSquadPicked)
-	markNames(rC, sC, "甲", "乙")
-	press(rC, "enter")
-	check("槽位未满（2/5）不拦：退回了上一层",
-		screenName(rC.top()) == "main.welcomeScreen", screenName(rC.top()))
-	check("槽位未满不拦：编队定下来了", len(cC.squad) == 2, fmt.Sprintf("%v", cC.squad))
+	//: ★ 口径 3（2026-09-26）：槽位**不再参与判定**。同一个「全员在范围内」的编队，
+	//:   在槽位 2／5／0 三种情况下判定必须**一模一样**（都拦）—— 旧实现里
+	//:   「槽位 2 人、只勾了 2 人」拦、「槽位 5 人、只勾了 2 人」放行，
+	//:   那条「槽位没满就不拦」现在**作废**（它不再是数据缺失导致的退化，而是规则）。
+	for _, slot := range []int{2, 5, 0} {
+		cS := pickCtx(slot)
+		rS := newRoot(cS, welcomeScreen{})
+		sS := newSquadPickScreen(cS, nil)
+		rS.push(sS, onSquadPicked)
+		if slot == 0 {
+			check("槽位取不到时屏上仍写「未知」（口径 3：显示照旧，判定不看它）",
+				strings.Contains(rS.View(), "槽位：未知"), firstLineWith(rS.View(), "槽位"))
+		}
+		markNames(rS, sS, "甲", "乙")
+		d := delta(func() { press(rS, "enter") })
+		check(fmt.Sprintf("口径 3：槽位 %d 时判定与槽位无关（非空＋全员低练度 ⇒ 拦）", slot),
+			screenName(rS.top()) == "*main.squadPickScreen" && oneBranch(d, gateBlockManual),
+			fmt.Sprintf("%s｜%s", screenName(rS.top()), fmtDelta(d)))
+	}
 
-	//: **退化**：槽位数取不到（0）⇒ 非空且全员在范围内也算触发，且屏上写明退化。
-	cD := pickCtx(0)
-	rD := newRoot(cD, welcomeScreen{})
-	sD := newSquadPickScreen(cD, nil)
-	rD.push(sD, onSquadPicked)
-	check("槽位取不到时屏上写「未知」（不写成 0 人）",
-		strings.Contains(rD.View(), "槽位：未知"), firstLineWith(rD.View(), "槽位"))
-	markNames(rD, sD, "甲")
-	press(rD, "enter")
-	check("退化：非空且全员在范围内 ⇒ 拦下",
-		screenName(rD.top()) == "*main.squadPickScreen" &&
-			strings.Contains(cD.note, squadMinLevelMsg), cD.note)
-	check("退化：**退化本身**写在提示里（不是只有代码知道）",
-		strings.Contains(cD.note, "没取到本关的可部署人数"), firstLineWith(cD.note, "没取到"))
+	//: 空编队 ⇒ 放行（一位也没选，不是「全员低练度」）。
+	cF := pickCtx(2)
+	rF := newRoot(cF, welcomeScreen{})
+	sF := newSquadPickScreen(cF, nil)
+	rF.push(sF, onSquadPicked)
+	dEmpty := delta(func() { press(rF, "enter") })
+	check("空编队：不拦（「一位也没选」不是「全员低练度」）",
+		screenName(rF.top()) == "main.welcomeScreen", screenName(rF.top()))
+	check("空编队：编队是空的（也没被定成别人）", len(cF.squad) == 0,
+		fmt.Sprintf("%v", cF.squad))
+	check("行使计数：这一次调用只走了「放行·空编队」这条分支",
+		oneBranch(dEmpty, gateAllowEmptySquad), fmtDelta(dEmpty))
+
+	fmt.Println("  —— 自动编队那条路（口径 2：**也拦**，没有豁免）——")
+	//: 程序挑出来的编队住在 `c.autoPicks` 里（搜索层还没接进来 ⇒ 运行期它是空的）。
+	//: 这里显式填一个**全员低练度**的自动编队：口径 2 要求它**被拦**，而且必须走在
+	//: `拦下·自动` 这条分支上 —— 「这条路根本没走守卫」的读数是**全 0**，
+	//: 与「走了拦下·自动」是分得开的（这正是这条断言要证的事）。
+	cG := pickCtx(2)
+	cG.autoPicks = []RosterOperator{
+		{CharID: "char_1", Name: "甲", Profession: "PIONEER", Elite: 0, Level: 1},
+		{CharID: "char_2", Name: "乙", Profession: "WARRIOR", Elite: 1, Level: 1},
+	}
+	rG := newRoot(cG, welcomeScreen{})
+	onStagePicked(rG, &data.StageRecord{Code: "1-7", Name: "测试关"})
+	check("自动路：选定关卡后压的是「问编队」屏",
+		screenName(rG.top()) == "*main.squadAskScreen", screenName(rG.top()))
+	dAuto := delta(func() { press(rG, "enter") }) //: 光标 0 ＝「不用，让程序自己挑」
+	check("自动编队·拦下：全员在范围内 ⇒ **拦**（口径 2：没有豁免）",
+		screenName(rG.top()) == "*main.squadAskScreen" &&
+			strings.Contains(cG.note, squadMinLevelMsg),
+		fmt.Sprintf("%s｜%s", screenName(rG.top()), firstLineWith(cG.note, "★")))
+	check("自动编队·拦下：**不是**「没判」——计数必须走在「拦下·自动」这条分支上",
+		oneBranch(dAuto, gateBlockAuto), fmtDelta(dAuto))
+	check("自动编队·拦下：提示语陈述规则本身（口径 3：写明与槽位数无关）",
+		strings.Contains(cG.note, "与槽位数无关"), firstLineWith(cG.note, "判定规则"))
+	check("自动编队·拦下：编队没有被定下来", len(cG.squad) == 0, fmt.Sprintf("%v", cG.squad))
+
+	//: 同一条路的另一次：运行期程序还没挑出人（`autoPicks` 为空）⇒ 走「空编队放行」。
+	//: 这两条读数合起来说明自动路**确实过了守卫**（而不是压根没判）：
+	//: 一次走拦下分支、一次走空编队分支，看的是同一个入口。
+	cH := pickCtx(2)
+	rH := newRoot(cH, welcomeScreen{})
+	onStagePicked(rH, &data.StageRecord{Code: "1-7", Name: "测试关"})
+	dAutoEmpty := delta(func() { press(rH, "enter") })
+	check("自动路（程序还没挑出人）：放行 —— 走的是「放行·空编队」这条分支",
+		screenName(rH.top()) == "main.welcomeScreen" && oneBranch(dAutoEmpty, gateAllowEmptySquad),
+		fmt.Sprintf("%s｜%s", screenName(rH.top()), fmtDelta(dAutoEmpty)))
 
 	//: 屏流程：选定关卡压的是「问编队」屏；选「我自己选」才进选人屏。
 	cE := pickCtx(0)
@@ -438,6 +549,50 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 	press(rE, "enter")
 	check("选「我自己选」→ 进选人屏", screenName(rE.top()) == "*main.squadPickScreen",
 		screenName(rE.top()))
+
+	//: ---- 防绕过判据：拿它去扫**本包真源码**的这一次读数 ----
+	//: 尺子会不会红，由上面那两条合成源码对照证过（会红 ＋ 不滥红）；这里换成真文件。
+	//: 判的是口径 1 那句话：「谁要在别处再判一遍，就会在源码里留下第二处调用点」。
+	_, selfPath, _, pathOK := runtime.Caller(0)
+	if !pathOK {
+		fmt.Println("  （未核：拿不到本文件的编译期路径，防绕过扫描跳过，不判红）")
+	} else {
+		pkgDir := filepath.Dir(selfPath)
+		entries, derr := os.ReadDir(pkgDir)
+		if derr != nil {
+			fmt.Printf("  （未核：读不到本包源码目录 %s，不判红。具名原因：%v）\n",
+				pkgDir, derr)
+		} else {
+			scanned, gateDefs := 0, 0
+			findings := []string{}
+			for _, e := range entries {
+				name := e.Name()
+				//: `selftest.go` 是造负对照的那个文件（上面就直接调了 `allMinLevel`），
+				//: 它不是界面路径 —— 扫描范围把它排除，理由写在 `guardBypassFindings`。
+				if e.IsDir() || !strings.HasSuffix(name, ".go") || name == "selftest.go" {
+					continue
+				}
+				raw, rerr := os.ReadFile(filepath.Join(pkgDir, name))
+				if rerr != nil {
+					continue
+				}
+				scanned++
+				for _, ln := range strings.Split(string(raw), "\n") {
+					if strings.HasPrefix(ln, "func solveGate(") {
+						gateDefs++
+					}
+				}
+				for _, f := range guardBypassFindings(string(raw)) {
+					findings = append(findings, name+":"+f)
+				}
+			}
+			check(fmt.Sprintf("防绕过：本包 %d 个界面源码文件里，判定只有守卫那一处", scanned),
+				scanned > 0 && len(findings) == 0,
+				fmt.Sprintf("守卫之外的调用点 %d 处 %v", len(findings), findings))
+			check("防绕过：守卫函数确实定义着（改名或删掉都会判红）",
+				gateDefs == 1, fmt.Sprintf("顶层 func solveGate( 的条数 %d", gateDefs))
+		}
+	}
 
 	fmt.Println("== 十一 · 桥客户端：缺件必须具名（不许退化成空名册）==")
 	oldPy := os.Getenv(envPython)
@@ -475,10 +630,11 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		if len(inRange) == 0 {
 			fmt.Println("  （未核：这个号的名册里没有落在 E0L1..E1L1 的干员，判定无从跑起）")
 		} else {
-			blocked := pickTriggersBlock(inRange, 0)
-			check("真名册判定：范围内的人全勾上 ⇒ 拦下（槽位取不到，走退化）", blocked,
-				fmt.Sprintf("范围内 %d/%d 人，pickTriggersBlock=%v", len(inRange),
-					len(live.Operators), blocked))
+			v := solveGate(inRange, solveSourceManual)
+			check("真名册判定：范围内的人全勾上 ⇒ 拦下（口径 3：与槽位数无关）",
+				!v.Allow && v.Branch == gateBlockManual,
+				fmt.Sprintf("范围内 %d/%d 人，分支=%s", len(inRange), len(live.Operators),
+					solveGateBranchNames[v.Branch]))
 		}
 		//: 字段对了不等于**画得出来**（中文名宽度、可见窗口、截断都在渲染这一层）。
 		//: 所以拿真名册再渲染一次选人屏。
@@ -643,7 +799,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		fmt.Printf("结论：**%d 条红** —— TUI 自检不通过\n", bad)
 		return 1
 	}
-	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／选人屏与自限拦截／询问屏／扫码屏逐条过")
+	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／解算入口守卫（自限拦截·两条路）／防绕过／询问屏／扫码屏逐条过")
 	return 0
 }
 

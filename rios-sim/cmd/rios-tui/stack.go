@@ -83,9 +83,16 @@ type appCtx struct {
 	rosterErr string
 
 	//: 这一关的**可部署人数**（Python 的 `State.deploy_limit`，来自 gamedata 的
-	//: `options.characterLimit`）。**0 = 取不到** —— 那条拦截规则遇到 0 会**退化**，
-	//: 见 `squad.go` 文件头的登记。
+	//: `options.characterLimit`）。**0 = 取不到**。★ 口径 3（2026-09-26）：它现在
+	//: **只用来显示**（选人屏那行「槽位 N 人／槽位：未知」），**不参与**那条拦截的
+	//: 判定 —— 守卫 `solveGate` 的签名里没有它。见 `squad.go` 文件头。
 	deployLimit int
+
+	//: 「不用，让程序自己挑」这条路**程序挑出来的编队**。守卫的自动分支判的就是它
+	//: （口径 2：自动编队同样拦）。搜索层还没接进来 ⇒ 运行期它是空的（nil），
+	//: 于是自动路走「空编队放行」那条分支；自检显式填一个全员低练度的来行使
+	//: `gateBlockAuto`。填它的地方将来是搜索层／解算屏，**不是**第二处判定。
+	autoPicks []RosterOperator
 
 	//: 已确定的编队（干员名）与模式（`auto` 允许程序补充 / `only` 只用我选的）。
 	//: 照 Python 的 `State.squad` 与 `State.mode`。
