@@ -421,6 +421,6 @@ func (s *solveScreen) finish(c *appCtx, out solveOutView) action {
 	if c.solveNote == "" && use.Stars < 3 {
 		c.solveNote = "没找到三星方案（可加大 --beam / --per-op）"
 	}
-	s.log("（结果屏尚未实现：结果已存进 appCtx）")
-	return action{kind: actNone}
+	//: 压结果屏（Python 那边是 `push_screen(ResultScreen())`）
+	return action{kind: actPush, push: newResultScreen()}
 }

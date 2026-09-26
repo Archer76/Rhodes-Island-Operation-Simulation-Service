@@ -46,9 +46,10 @@ func isModalScreen(s screen) bool {
 type actKind int
 
 const (
-	actNone actKind = iota
-	actBack         // 退回上一层（Esc）
-	actPush         // 压一屏（带回调）
+	actNone  actKind = iota
+	actBack          // 退回上一层（Esc）
+	actPush          // 压一屏（带回调）
+	actPopTo         // 连弹到**第一个满足条件的屏**（含它自己）—— 结果屏的 R／H 两个出口
 	actQuit
 )
 
@@ -60,6 +61,8 @@ type action struct {
 	//: 顺手要跑的一条命令（异步活儿：解算那一轮引擎调用）。屏自己拿不到 `tea.Cmd`
 	//: 的出口 —— `update` 的返回值只有"下一屏"与"想干什么"。
 	cmd tea.Cmd
+	//: actPopTo 的判别式（照 Python 的 `goto_home` / `goto_stage_list`：退到哪一层）
+	match func(screen) bool
 }
 
 // msgScreen 是「会收到异步消息」的屏：根模型把非按键消息交给实现它的那一屏。
@@ -122,6 +125,8 @@ type appCtx struct {
 	solveSteps     []solveStepView
 	solveEvaluated int
 	solveSeconds   float64
+	//: 最近一次导出的作业路径（结果屏把它显示出来 —— 玩家要靠它找到文件）。
+	exportPath string
 }
 
 type frame struct {
@@ -216,8 +221,31 @@ func (r *root) apply(act action) tea.Cmd {
 		r.pop(act.res)
 	case actPush:
 		r.push(act.push, act.done)
+	case actPopTo:
+		r.popTo(act.match)
 	}
 	return act.cmd
+}
+
+// popTo 连弹到**第一个满足条件的屏**（含它自己），并且**不回调**被弹掉的屏。
+//
+// 照 Python 的两个出口（`goto_home` / `goto_stage_list`）：
+//   - `H` 回准备屏 ⇒ 整轮清空、连"在哪一章"都忘掉；
+//   - `R` 回选关页 ⇒ 章／分部／环境的选择都留着，编队也留着（换一关通常还是同一队）。
+//
+// 不回调是**刻意的**：这两个出口是"退到某一层"，不是"逐级返回"，逐级回调会把中间
+// 那几屏的 `done`（例如再压一屏）当成副作用带出来。
+func (r *root) popTo(match func(screen) bool) {
+	if match == nil {
+		return
+	}
+	for i := len(r.stack) - 1; i >= 0; i-- {
+		if match(r.stack[i].scr) {
+			r.stack = r.stack[:i+1]
+			return
+		}
+	}
+	//: 找不到目标层就不动（例如结果屏是从别处压上来的）—— 不许把栈弹空
 }
 
 func (r *root) View() string {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -936,6 +937,97 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			v := scr.view(cSolve)
 			check("真起一轮：渲染里有「已评估」与进度条",
 				strings.Contains(v, "已评估") && strings.Contains(v, "["), firstLineWith(v, "已评估"))
+
+			// ------------------------------------------------------ 结果屏
+			fmt.Println("== 十六 · 结果屏（渲染 ＋ **真导出**）==")
+			cSolve.guidesDir, _ = os.MkdirTemp("", "rios-selftest-guides-")
+			//: 结果屏要**名册文件**才导得出（桥上那份只有 5 个字段，缺 potential/module）
+			cSolve.roster = &rosterData{Source: "selftest", Path: solveRoster, Count: 2,
+				Operators: []RosterOperator{
+					{CharID: "char_1046_sbell2", Name: "圣聆初雪", Elite: 2, Level: 90},
+					{CharID: "char_1050_chen3", Name: "赤刃明霄陈", Elite: 2, Level: 90},
+				}}
+			rv := newResultScreen().view(cSolve)
+			for _, want := range []string{"评价", "时长", "击杀", "漏怪", "剩余生命", "总伤害",
+				"用到的干员", "编制要求取自名册", "已评估"} {
+				if !strings.Contains(rv, want) {
+					check("结果屏渲染里有「"+want+"」", false, firstLineWith(rv, "评价"))
+					break
+				}
+			}
+			check("结果屏渲染：判决六栏 ＋ 干员清单 ＋ 汇总都在",
+				strings.Contains(rv, "评价") && strings.Contains(rv, "总伤害") &&
+					strings.Contains(rv, "用到的干员") && strings.Contains(rv, "已评估"),
+				firstLineWith(rv, "评价"))
+			check("结果屏渲染：把没找到三星的**来路**摆出来（不许只说一句没找到）",
+				cSolve.solveNote != "" && strings.Contains(rv, cSolve.solveNote),
+				firstLineWith(rv, "没找到"))
+
+			//: ★★ **真导出**：这一条是判据 2（端到端）那段"结果 → MAA 导出"的实证。
+			//: 走的是与作业完全相同的取数（名册文件 ＋ 库里的模组表），落盘到**临时
+			//: 的** Guides 目录（不碰玩家那份）。
+			rRoot := newRoot(cSolve, welcomeScreen{})
+			rRoot.push(&stageScreen{}, nil)
+			rs := newResultScreen()
+			rRoot.push(rs, nil)
+			_, actExport := rs.update(cSolve, keyMsg("e"))
+			_ = actExport
+			if cSolve.exportPath == "" {
+				check("真导出：写出了作业文件", false, rs.msg)
+			} else {
+				blob, rerr := os.ReadFile(cSolve.exportPath)
+				var job map[string]any
+				jerr := json.Unmarshal(blob, &job)
+				check("真导出：文件真的落盘了且是 JSON",
+					rerr == nil && jerr == nil && len(blob) > 0,
+					fmt.Sprintf("%s（%d 字节）", cSolve.exportPath, len(blob)))
+				opers, _ := job["opers"].([]any)
+				//: 不变量是「**文件里的 opers 条数 ＝ 打法里的部署条数**」，不是一个写死的
+				//: 数字 —— 自检那次解算跑的是 `max_ops=1`（故意取最小参数），所以这里
+				//: 是 1 条而不是 2 条。我第一版写死成 2，红了，而**导出是对的**。
+				var planForCount struct {
+					Deploys []json.RawMessage `json:"deploys"`
+				}
+				_ = json.Unmarshal(cSolve.solvePlan, &planForCount)
+				check("真导出：stage_name 用 levelId、opers 条数＝打法里的部署条数",
+					job["stage_name"] == "main_01-07" && len(opers) == len(planForCount.Deploys),
+					fmt.Sprintf("stage_name=%v opers=%d（打法里 %d 条部署）",
+						job["stage_name"], len(opers), len(planForCount.Deploys)))
+				doc, _ := job["doc"].(map[string]any)
+				details, _ := doc["details"].(string)
+				check("真导出：doc.details 带上了出处那句",
+					strings.Contains(details, "由 R.I.O.S. 解算导出"), firstLineWith(details, "【编队】"))
+			}
+			//: 负对照：没有解算结果时导出必须**具名**拒绝，不许写出半个文件
+			cEmpty := &appCtx{guidesDir: cSolve.guidesDir}
+			rsEmpty := newResultScreen()
+			rsEmpty.update(cEmpty, keyMsg("e"))
+			check("负对照：没有结果时导出具名拒绝",
+				strings.Contains(rsEmpty.msg, "没有可导出的编队"), rsEmpty.msg)
+			//: 负对照：名册路径坏掉 ⇒ 具名失败（不许静默导出成一份没有练度的作业）
+			cBadRoster := &appCtx{guidesDir: cSolve.guidesDir, stage: cSolve.stage,
+				solvePlan: cSolve.solvePlan, solveVerdict: cSolve.solveVerdict,
+				roster: &rosterData{Path: filepath.Join(os.TempDir(), "__no_such_roster__.json")}}
+			rsBad := newResultScreen()
+			rsBad.update(cBadRoster, keyMsg("e"))
+			check("负对照：名册读不出来时导出具名失败",
+				strings.Contains(rsBad.msg, "★ 导出失败"), rsBad.msg)
+
+			//: 出口：R 回选关页、H 回准备屏、**Esc 什么都不做**（博士 2026-09-17 裁定）
+			before := len(rRoot.stack)
+			rRoot.Update(keyMsg("esc"))
+			check("结果屏不挂 Esc（按 Esc 什么都不做，且不退出）",
+				len(rRoot.stack) == before && screenName(rRoot.top()) == "*main.resultScreen",
+				screenName(rRoot.top()))
+			rRoot.Update(keyMsg("r"))
+			check("R 回选关页（连弹到选关卡那一层，编队留着）",
+				screenName(rRoot.top()) == "*main.stageScreen", screenName(rRoot.top()))
+			//: ⚠ `R` 之后栈顶已经不是结果屏了 ⇒ 要验 `H` 得**重新压一张**。
+			//: 第一版连着按 R 再按 H，于是那个 `h` 打到了选关屏上（断言当场红了）。
+			rRoot.push(newResultScreen(), nil)
+			rRoot.Update(keyMsg("h"))
+			check("H 回准备屏（整轮重来）",
+				screenName(rRoot.top()) == "main.welcomeScreen", screenName(rRoot.top()))
 		}
 	}
 
@@ -944,7 +1036,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		fmt.Printf("结论：**%d 条红** —— TUI 自检不通过\n", bad)
 		return 1
 	}
-	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／解算入口守卫（自限拦截·两条路）／防绕过／桥具名失败／询问屏／扫码屏／引擎客户端／解算屏逐条过")
+	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／解算入口守卫（自限拦截·两条路）／防绕过／桥具名失败／询问屏／扫码屏／引擎客户端／解算屏／结果屏与导出逐条过")
 	return 0
 }
 
