@@ -1774,12 +1774,21 @@ def cmd_mechanics(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------- tui
 
 def cmd_tui(args: argparse.Namespace) -> int:
-    """终端界面。
+    """终端界面（**已退役**：主界面是 Go 版）。
 
     `textual` **在这个函数里才被导入**——它是本项目唯一的重依赖，
     不能因为没装它就让 `db` / `formula` / `verify` 一起跑不起来。
     （守卫见 `tools/check_tui.py`：它真的去断言"跑别的子命令不会导入 textual"。）
+
+    ★ 界面已整体迁到 Go（`rios-sim/cmd/rios-tui`；发布形态是安装包里的 `启动.cmd`）。
+    这一支**保留作对照与排障**：两版用户可见行为对等，而逐屏判据与 27 套
+    「Go vs Python 逐字段对拍」还都拿它当参照物。所以这里**只提示、不拦截** ——
+    拦掉它等于把回归网的参照物撤了。
     """
+    print("★ 这个 Python 终端界面已退役；主界面是 Go 版（rios-tui.exe，或安装包里的 启动.cmd）。",
+          file=sys.stderr)
+    print("  留它是为了当迁移的对照：逐屏判据与 Go vs Python 对拍都还拿它做参照物。",
+          file=sys.stderr)
     try:
         from .tui.app import run
     except ImportError as exc:                       # pragma: no cover

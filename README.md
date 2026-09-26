@@ -105,8 +105,8 @@ Python 侧仍是本仓库的 `ak_tactic/`。**Release 里只有代码与二进�
 
 | 目录 | 是什么 |
 | --- | --- |
-| `ak_tactic/` | Python 侧全部产品代码（CLI、取数、属性、正文编译、解算、搜索、终端界面、两个本地库） |
-| `rios-sim/` | Go 侧模拟器内核（默认引擎） |
+| `ak_tactic/` | Python 侧全部产品代码（CLI、取数、属性、正文编译、解算、搜索、**旧终端界面**、两个本地库）。界面已迁到 Go（见 `rios-sim/cmd/rios-tui`），Python 那套保留作对照 |
+| `rios-sim/` | Go 侧模拟器内核（默认引擎）＋ `cmd/rios-tui`（**界面本体**，bubbletea） |
 | `tools/` | 面向使用者的脚本：自检套件、三条回归基线、名册与账号、生成物 |
 | `fixtures/` | **判据集**：可执行作业与回归基线（按 schema 认，不按文件名）。子目录 `fixtures/golden/` 是**冻结基线**——把每套判据的期望值冻进版本控制，让判据可以「Go 现读 vs 冻结基线」地跑，不再实时对拍 Python（迁移进度见 [`docs/golden-baseline.md`](docs/golden-baseline.md)） |
 | `docs/` | 实测报告与口径文档 |
@@ -122,25 +122,48 @@ Python 侧仍是本仓库的 `ak_tactic/`。**Release 里只有代码与二进�
 | 方案求解 | 复核一份打法、搜索一套可三星的阵容、按该次作战的费用环境编成名册 |
 | 记录导出 | 摆位图／时间轴／路线热度／漏怪归因报告，以及 MAA copilot 作业 |
 
-## 终端向导
+## 终端界面
 
-```
-python -m ak_tactic tui
+**Go 版是主界面**（`rios-sim/cmd/rios-tui`，bubbletea）。安装包装好的目录里双击 `启动.cmd`；
+从克隆自己建也可以：
+
+```bash
+cd rios-sim
+go build -o rios-tui.exe ./cmd/rios-tui
+go build -o rios-sim.exe .          # 引擎：界面是**子进程**调它，两个 exe 放同目录
+./rios-tui.exe                      # 没有 data/ 会具名报缺什么、怎么补
 ```
 
 四步走完：**选关卡 → 指定编队 → 解算 → 导出**。不用记子命令与参数，算完直接把作业 JSON 落地。
 
 | 屏 | 按键 |
 | --- | --- |
-| `[0]` 准备 | `Enter` 开始 ・ `D` 改导出目录 ・ `L` 登录 ・ `U` 取账号 uid ・ `O` 退出账号 ・ `Q` 退出程序 |
-| 登录 | `L` 扫码登录 ・ `S` 切换已登过的账号 ・ `Esc` 不登录（会问一句是本次还是以后） |
-| 选关卡 | `Enter` 选定 ・ `Esc` 返回上一层 |
-| 选编队 | 主职业行 / 子职业行挑范围（鼠标点或 `←` `→`）・`Space` 勾选 ・`M` 切模式 ・`Enter` 开始解算 ・`Esc` 返回 |
-| 解算 | `Q` 中止（**退回上一步**，不是退出程序） |
-| 结果 | `E` 导出 ・ `H` 回主界面 ・ `Q` 退出程序 |
+| `[0]` 准备 | `Enter` 开始 ・ `D` 改导出目录 ・ `L` 登录 ・ `Q` 退出程序 |
+| 登录 | `L` 扫码登录 ・ `S` 切换账号 ・ `U` 补全账号信息 ・ `O` 退出账号 ・ `Esc` 返回 |
+| 改导出目录 | `Tab` 补全 ・ `Enter` 确定 ・ `Esc` 返回（不修改） |
+| 选章／选部／选环境／选关卡 | `↑` `↓` 移动 ・ `Enter` 选定 ・ `Esc` 返回 ・ `Q` 退出 |
+| 问编队 | `1`–`9` 选择 ・ `Esc` 返回 |
+| 选人 | `↑` `↓` 移动 ・ `空格` 勾选 ・ `T` 助战（用／不用）・ `M` 切换模式 ・ `Enter` 进入下一步 ・ `Esc` 返回 |
+| 挑助战 | `↑` `↓` 移动 ・ `Enter` 选定 ・ `Esc` 取消（不用助战） |
+| 解算 | `Q` 中止（**退回上一步**，不是退出程序）・ 跑完自动进结果屏 |
+| 结果 | `E` 导出 ・ `R` 重选关卡 ・ `H` 主界面 ・ `Q` 退出程序 |
 
-`Esc` 逐层返回，一路退回到 `[0]`。解算屏与结果屏不挂 `Esc`——那两屏的出口是明确的：
-解算中止退回上一步，结果屏只留回主界面与退出程序。方案与全部裁定见 [`docs/tui-plan.md`](docs/tui-plan.md)。
+`Esc` 逐层返回，一路退回到 `[0]`；**最外层按 `Esc` 什么都不做**，退出是 `Q`。
+解算屏与结果屏不挂 `Esc` —— 那两屏的出口是明确的（中止退回上一步／回主界面）。
+无终端判据：`rios-tui.exe -selftest`（退出码即判据，含负对照）；
+启动前自检：`rios-tui.exe -preflight`。
+
+### 旧界面（Python，**已退役**）
+
+```bash
+python -m ak_tactic tui      # 需要 textual
+```
+
+它**不再是主界面**：迁到 Go 之后两版**用户可见行为对等**，那 14 屏的逐屏判据与
+27 套「Go vs Python 逐字段对拍」是这次迁移的回归网。它保留下来作**对照与排障**用，
+不再随安装包发布。迁移的施工图、逐屏状态、每一处分道扬镳的登记与未核项见
+[`docs/python-to-go-migration.md`](docs/python-to-go-migration.md)；旧界面的原始方案与裁定见
+[`docs/tui-plan.md`](docs/tui-plan.md)。
 
 ## 快速开始
 
@@ -224,7 +247,7 @@ python -m ak_tactic verify main_01-07 --team "…"   # 验证一份打法（退�
 python -m ak_tactic search SR-EX-8 --beam …  # 搜索一套能三星的阵容
 python -m ak_tactic team SR-6                # 按角色出名册建议
 python tools/export_srx8.py                  # 导出 MAA copilot 作业
-python -m ak_tactic tui                      # 终端向导
+python -m ak_tactic tui                      # 旧界面（已退役，见「终端界面」一节）
 ```
 
 全部子命令、参数与退出码见 [`docs/cli.md`](docs/cli.md)；库表结构与查询示例见

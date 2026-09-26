@@ -406,6 +406,12 @@ Go 侧在临时模块里 build 一枚，**未动 `rios-sim/go.mod`**）：
 上游抓取（prts.wiki、gamedata 镜像）／森空岛登录（`ak_tactic/skland`）／
 `operbox` 读取／`tools/*.py` 全部判据与驱动。
 
+★ **界面不在这张名单里** —— 它已经迁到 Go（`rios-sim/cmd/rios-tui`），
+`ak_tactic/tui` 从「主界面」变成「**对照物**」：`python -m ak_tactic tui` 仍然能跑
+（并会往 stderr 打一句去向提示），但它**只提示、不拦截**，因为逐屏判据与 27 套
+「Go vs Python 逐字段对拍」都还拿它当参照物 —— 拦掉入口等于撤了回归网。
+发布形态里**不含它**（§12.6：安装包只放运行时必须的文件）。
+
 ### 11.3 要补写的收窄为**四块**
 
 | # | 块 | 现状 |
