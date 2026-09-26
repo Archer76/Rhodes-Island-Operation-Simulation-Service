@@ -1668,12 +1668,74 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		}
 	}
 
+	fmt.Println("== 二十 · 发布形态的两条判定（启动前自检的底座）==")
+	{
+		//: 为什么要在这里判：这两条判定（怎么认发布树、数据根在哪）落下去之后，
+		//: 原来只有**打包脚本的装完自查**在行使它们 —— 那要装一棵树才跑得到。
+		//: 放在这里，`-selftest` 一条命令就能把它们的**判定表**走一遍。
+		base, err := os.MkdirTemp("", "rios-release-form-")
+		if err != nil {
+			check("建临时目录（发布形态判定的夹具）", false, err.Error())
+		} else {
+			defer os.RemoveAll(base)
+			mk := func(name string, withEng bool, withEngine bool) string {
+				d := filepath.Join(base, name)
+				_ = os.MkdirAll(d, 0o755)
+				if withEng {
+					_ = os.MkdirAll(filepath.Join(d, "eng"), 0o755)
+				}
+				if withEngine {
+					_ = os.WriteFile(filepath.Join(d, engineExe), []byte("x"), 0o644)
+				}
+				return d
+			}
+			withEng := mk("release", true, true)
+			devTree := mk("dev", false, false)
+			halfTree := mk("half", false, true)
+			engOnly := mk("engonly", true, false)
+
+			check("发布形态：同级有 eng/ ⇒ 是（正常安装出来的样子）",
+				isReleaseTree(withEng), withEng)
+			//: 负对照：开发树长什么样（有 tools/ 有 go.mod，但没有 eng/、没有引擎 exe）
+			//: —— 这一条必须 false，否则开发时那套"往上找"就废了。
+			check("负对照：开发树（没有 eng/、没有引擎 exe）⇒ 不是",
+				!isReleaseTree(devTree), devTree)
+			check("半成品：只有引擎 exe、没有 eng/ ⇒ 也算发布树",
+				isReleaseTree(halfTree), halfTree)
+			check("只有 eng/、引擎 exe 还没摆 ⇒ 也算发布树",
+				isReleaseTree(engOnly), engOnly)
+
+			//: 数据根：发布树里 Python 侧的 `parents[2]` 就是 eng/ ⇒ 两侧共同的数据根是
+			//: `eng/data`。候选里没有它，就会出现「db build 说建好了、界面说找不到库」。
+			found := ""
+			for _, c := range dataDirCandidates() {
+				if strings.HasSuffix(filepath.ToSlash(c), "eng/data") {
+					found = c
+				}
+			}
+			check("数据目录候选里有 eng/data（发布树两侧的共同数据根）",
+				found != "", strings.Join(dataDirCandidates(), " ｜ "))
+			//: 负对照：候选里**必须**还留着开发树那两个（exe 同级 data／cwd 下 data），
+			//: 否则开发时就找不到数据了 —— 加了 eng/data 不能把原来的挤掉。
+			cands := strings.Join(dataDirCandidates(), " ｜ ")
+			check("负对照：加了 eng/data 之后，原来的候选一个没少",
+				strings.Contains(filepath.ToSlash(cands), "/data ｜") ||
+					strings.HasSuffix(filepath.ToSlash(cands), "/data"), cands)
+
+			//: 缺件报告里同一个路径不许出现两次（exe 同级与 cwd 在同一棵树上时会重叠）。
+			d := dedupe([]string{"a", "b", "a", "c", "b"})
+			check("dedupe 去重且保序（缺件报告里不重复列同一个路径）",
+				len(d) == 3 && d[0] == "a" && d[1] == "b" && d[2] == "c",
+				strings.Join(d, ","))
+		}
+	}
+
 	fmt.Println()
 	if bad > 0 {
 		fmt.Printf("结论：**%d 条红** —— TUI 自检不通过\n", bad)
 		return 1
 	}
-	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／解算入口守卫（自限拦截·两条路）／防绕过／桥具名失败／询问屏／扫码屏／登录屏（含桥的常驻会话）／引擎客户端／解算屏／结果屏与导出／助战（上限 13·拦截计入）逐条过")
+	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／解算入口守卫（自限拦截·两条路）／防绕过／桥具名失败／询问屏／扫码屏／登录屏（含桥的常驻会话）／引擎客户端／解算屏／结果屏与导出／助战（上限 13·拦截计入）／发布形态（认树·数据根）逐条过")
 	return 0
 }
 
