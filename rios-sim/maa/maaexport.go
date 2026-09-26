@@ -370,6 +370,49 @@ type MaaOper struct {
 	Skill        int             `json:"skill"`
 	SkillUsage   int             `json:"skill_usage"`
 	Requirements MaaRequirements `json:"requirements"`
+
+	//: 助战那一格：**只写名字**（博士 2026-09-26：MAA 无法识别助战干员的练度）。
+	//:
+	//: 用私有标记而不是另立一个类型，是为了让 `[]MaaOper` 的其余消费点 ——
+	//: 判据里那些 `job.Opers[i].SkillUsage` —— 不必全改成类型断言；
+	//: 序列化交给下面的 `MarshalJSON` 收敛成 `{"name": …}`。
+	supportOnly bool
+}
+
+// SupportOper 造一个「助战」条目。
+//
+// 助战是**好友的**干员，不属于本机名册：它的练度玩家填不了、MAA 也不认，
+// 所以这一格只有名字。
+func SupportOper(name string) MaaOper { return MaaOper{Name: name, supportOnly: true} }
+
+// marshalNoEscape 是**不带 HTML 转义**的序列化。
+//
+// ⚠ 自定义 `MarshalJSON` 千万不能用 `json.Marshal` 实现：那会把内层重新按**默认**
+// 口径转义（`<` `>` `&` 变成 `\u003c` 之类），而外层编码器的 `SetEscapeHTML(false)`
+// **管不到已经序列化好的字节**。这不是理论风险 —— 第一版就是这么写的，
+// `TestEscapeHTMLOff` 当场判红（干员名里的 `&` 被转义）。默认口径的转义规则见
+// `MarshalJob` 的注释：Python 的 `ensure_ascii=False` 不转义它们。
+func marshalNoEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil { // Encode 自带末尾换行，下面去掉
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
+// MarshalJSON 让助战条目只输出 `name` 一个键。
+//
+// ⚠ 用**别名类型**转发默认行为，否则会无限递归（`plain` 不带方法集）。
+func (o MaaOper) MarshalJSON() ([]byte, error) {
+	if o.supportOnly {
+		return marshalNoEscape(struct {
+			Name string `json:"name"`
+		}{o.Name})
+	}
+	type plain MaaOper
+	return marshalNoEscape(plain(o))
 }
 
 // MaaAction 是一条动作：Deploy 用 5 键、Retreat 用 2 键、
@@ -409,6 +452,17 @@ type MaaOptions struct {
 	Title           string // 空 ⇒ 用 plan.Title ⇒ 再退成「N 人」
 	Details         string // 追加在编队表后面的人读说明
 	MinimumRequired string // 空 ⇒ v6.0.0（Python 的形参缺省）
+
+	//: 助战干员的名字。非空 ⇒ `opers` 末尾多一格（**只写名字**、不带练度），
+	//: 编队总数因此是 12 ＋ 1 = 13。MAA 会自己挑助战，不需要别的写法
+	//: （博士 2026-09-26 裁定）。
+	//:
+	//: ⚠ **未核**：MAA 官方协议原文没有取过（`out/zz_maa_export_spec.md` §12
+	//: 早已挂着这一条），所以「一个只有 `name` 的 `opers` 条目能不能被吃下、
+	//: 要不要带 `requirements`／`skill_usage`」**没验过** —— 这是本包唯一一处
+	//: 没有 Python 参照、也没有官方文档背书的形状。核法：在 MAA 里实机导入一份
+	//: 带 13 人的作业（判据比不了它，只能人验）。
+	SupportName string
 }
 
 // DefaultMinimumRequired 是 Python 形参的缺省值。
@@ -458,7 +512,7 @@ func ToMaa(plan core.PlayPlan, roster *core.RosterRead, tbl map[string]ModuleInf
 		return MaaJob{}, err
 	}
 
-	opers := make([]MaaOper, 0, len(ops))
+	opers := make([]MaaOper, 0, len(ops)+1)
 	for _, op := range ops {
 		req := MaaRequirements{
 			Elite: op.Elite, Level: op.Level,
@@ -476,6 +530,11 @@ func ToMaa(plan core.PlayPlan, roster *core.RosterRead, tbl map[string]ModuleInf
 			SkillUsage:   SkillUsage(db, charIDOf(roster, op.Name), op.Skill),
 			Requirements: req,
 		})
+	}
+	//: 助战那一格加在**末尾**（第 13 位）。它**不进** `doc.details` 的人读编队表 ——
+	//: 那一份写的是「这份打法部署了谁」，而助战是**要求**不是部署。
+	if opt.SupportName != "" {
+		opers = append(opers, SupportOper(opt.SupportName))
 	}
 
 	actions := make([]MaaAction, 0, len(ops)+len(plan.Retreats)+2)

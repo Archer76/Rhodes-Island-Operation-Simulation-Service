@@ -633,6 +633,66 @@ func TestLineEndingDivergence(t *testing.T) {
 		"「同一台机器上 Python 写盘 vs Go 写盘」时可见", where)
 }
 
+// TestSupportOperIsNameOnly 是「助战那一格只写名字」的判据。
+//
+// ★ 不信任我自己的 `MarshalJSON`：把整份作业**解析回来**，断言第 13 项**恰好只有
+// 一个键、且键名是 name** —— 这才叫「只写名字」。
+//
+// 配两条负对照：不带助战时必须还是 3 条（多了说明那一格被无条件加上）；助战那条
+// **不许**出现 requirements／skill／skill_usage 三个键。
+func TestSupportOperIsNameOnly(t *testing.T) {
+	base := MaaOptions{Difficulty: "NORMAL", Title: "测试", Details: "详情"}
+	withSup := base
+	withSup.SupportName = "令"
+	job, err := ToMaa(goldenPlan(), nil, handTable(), nil, withSup)
+	if err != nil {
+		t.Fatalf("组装失败：%v", err)
+	}
+	if len(job.Opers) != 4 {
+		t.Fatalf("带助战时 opers 应为 3 ＋ 1 = 4 条，实得 %d", len(job.Opers))
+	}
+	blob, err := MarshalJob(job)
+	if err != nil {
+		t.Fatalf("序列化失败：%v", err)
+	}
+	var back struct {
+		Opers []map[string]any `json:"opers"`
+	}
+	if err := json.Unmarshal(blob, &back); err != nil {
+		t.Fatalf("解析失败：%v", err)
+	}
+	last := back.Opers[len(back.Opers)-1]
+	if len(last) != 1 || last["name"] != "令" {
+		t.Fatalf("助战那一格应**只有名字**：%v", last)
+	}
+	for _, k := range []string{"requirements", "skill", "skill_usage"} {
+		if _, ok := last[k]; ok {
+			t.Fatalf("助战那一格不该有 %q 键：%v", k, last)
+		}
+	}
+	//: 负对照：不带助战 ⇒ 仍然 3 条
+	noSup, err := ToMaa(goldenPlan(), nil, handTable(), nil, base)
+	if err != nil {
+		t.Fatalf("组装失败：%v", err)
+	}
+	if len(noSup.Opers) != 3 {
+		t.Fatalf("不带助战时 opers 必须还是 3 条，实得 %d（那一格被无条件加上了？）",
+			len(noSup.Opers))
+	}
+	//: 正对照：前 12 条（这里 3 条）的形状**没被**自定义序列化带偏
+	var plain struct {
+		Opers []map[string]any `json:"opers"`
+	}
+	noBlob, _ := MarshalJob(noSup)
+	if err := json.Unmarshal(noBlob, &plain); err != nil {
+		t.Fatalf("解析失败：%v", err)
+	}
+	if len(plain.Opers[0]) != 4 {
+		t.Fatalf("普通干员那一条应有 4 个键（name/skill/skill_usage/requirements），实得 %v",
+			plain.Opers[0])
+	}
+}
+
 // TestDegenerateDivergence 把那条**登记的**分道扬镳钉成判据。
 //
 // Python 在练度取不到时印 `null` / `精None None  潜None`；Go 按博士 2026-09-26 的
