@@ -69,6 +69,24 @@ func OpenReadOnly(name string) (*sql.DB, error) {
 	return db, nil
 }
 
+// OperatorCount 数一下 `operator` 表有多少行。
+//
+// 给界面首页那句「干员库：已获取（akdb.sqlite N 名）」用 —— 它同时是
+// **启动器自检的第一项**（迁移图 §12.3：缺件要具名报错，不许静默跑出一个空列表；
+// 而空列表与「这个世界没有干员」长得一模一样）。
+func OperatorCount() (int, error) {
+	db, err := OpenReadOnly("akdb")
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`select count(*) from operator`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("数 operator 行失败：%w", err)
+	}
+	return n, nil
+}
+
 // StageRow 是 `stage` 表里 TUI 选关卡要用的那几列。
 //
 // ⚠ 列名照 `docs/python-to-go-migration.md` §7.3 的**真 schema**（现查），不照命名习惯猜

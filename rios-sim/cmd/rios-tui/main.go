@@ -61,10 +61,22 @@ func main() {
 		return
 	}
 
-	p := tea.NewProgram(newModel(stages, zones), tea.WithAltScreen())
+	p := tea.NewProgram(newRoot(newAppCtx(stages, zones), welcomeScreen{}), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "★ 界面退出：%v\n", err)
 		os.Exit(1)
+	}
+}
+
+// newAppCtx 组装共享态。尺寸先给一个常见默认值，真值由 `tea.WindowSizeMsg` 补上。
+func newAppCtx(stages []data.StageRecord, zones []data.ZoneRecord) *appCtx {
+	return &appCtx{
+		stages:   stages,
+		zones:    zones,
+		chapters: data.ListChapters(stages, zones),
+		w:        90,
+		h:        26,
+		dataDir:  data.DataDBDir(),
 	}
 }
 
