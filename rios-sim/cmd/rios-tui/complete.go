@@ -133,15 +133,3 @@ func expandUser(p string) string {
 	}
 	return p
 }
-
-// defaultGuidesDir 是「空输入时补到哪」。
-//
-// ⚠ 还没接线：Python 侧它是配置里的 `guides_dir`（可被 `D` 键改）。
-// 这里按**安装布局**推：sqlite 在 `<根>/data/`，作业输出在 `<根>/Guides/`。
-// 等 GuidesDir 屏接上配置读写之后，这一处要改成读配置。
-func defaultGuidesDir() string {
-	if dir := os.Getenv("RIOS_DB"); dir != "" {
-		return filepath.Join(filepath.Dir(dir), "Guides")
-	}
-	return "Guides"
-}

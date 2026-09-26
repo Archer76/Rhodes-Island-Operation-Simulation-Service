@@ -59,9 +59,8 @@ func (welcomeScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
 		//: 而这条正是 `-selftest` 第五段抓出来的。
 		return nil, action{kind: actPush, push: c.stagePickScreen(), done: onChapterPicked}
 	case keyIs(k, "d"):
-		c.note = "改目录（GuidesDir 屏）尚未实现：它要子进程列目录 ＋ PathInput 的 tab 补全，" +
-			"而 check_tui.py 里那套补全判据也要一起搬 —— 排在下一刀"
-		return nil, action{kind: actNone}
+		//: 对应 Python 的 `action_dir → push_screen(GuidesDirScreen(), self._dir_done)`。
+		return nil, action{kind: actPush, push: newGuidesDirScreen(c), done: onGuidesDirChosen}
 	case keyIs(k, "l"):
 		c.note = "登录屏尚未实现：它走 Python 子进程（§11.4 的三条约束已定），尚未接线"
 		return nil, action{kind: actNone}
@@ -78,7 +77,7 @@ func (welcomeScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
 // 后者会让人以为自己的设置没生效。
 func (c *appCtx) dirLine() string {
 	if c.guidesDir == "" {
-		return styleDim.Render("（尚未接入：Guides 目录存在配置里，读写配置走 Python 子进程那条路）")
+		return styleDim.Render("（配置里没有 guides_dir，也推不出默认目录 —— 按 D 显式设一个）")
 	}
 	out := c.guidesDir + "\n" + styleDim.Render("MAA 作业输出到 "+
 		filepath.Join(c.guidesDir, "<关卡名>"))

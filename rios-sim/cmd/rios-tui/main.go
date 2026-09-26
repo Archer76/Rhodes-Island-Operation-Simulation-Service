@@ -71,12 +71,13 @@ func main() {
 // newAppCtx 组装共享态。尺寸先给一个常见默认值，真值由 `tea.WindowSizeMsg` 补上。
 func newAppCtx(stages []data.StageRecord, zones []data.ZoneRecord) *appCtx {
 	return &appCtx{
-		stages:   stages,
-		zones:    zones,
-		chapters: data.ListChapters(stages, zones),
-		w:        90,
-		h:        26,
-		dataDir:  data.DataDBDir(),
+		stages:    stages,
+		zones:     zones,
+		chapters:  data.ListChapters(stages, zones),
+		w:         90,
+		h:         26,
+		dataDir:   data.DataDBDir(),
+		guidesDir: guidesDir(),
 	}
 }
 

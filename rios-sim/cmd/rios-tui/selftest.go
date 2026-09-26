@@ -230,12 +230,64 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			nt == "/__rios_no_such_dir__/x" && len(cd) == 0, nt)
 	}
 
+	fmt.Println("== 九 · 改目录屏（GuidesDir）==")
+	gdTmp, gerr := os.MkdirTemp("", "rios-tui-guides")
+	if gerr != nil {
+		check("建临时目录", false, gerr.Error())
+	} else {
+		defer os.RemoveAll(gdTmp)
+		cfgTmp := filepath.Join(gdTmp, "tui.json")
+		os.Setenv("RIOS_TUI_CONFIG", cfgTmp)
+		defer os.Unsetenv("RIOS_TUI_CONFIG")
+		check("配置路径已指到临时文件（判据不碰玩家真正的配置）",
+			configPath() == cfgTmp, configPath())
+
+		c.guidesDir = filepath.Join(gdTmp, "Guides")
+		press(r, "d")
+		check("D 键压到改目录屏", screenName(r.top()) == "*main.guidesDirScreen",
+			screenName(r.top()))
+		gv := r.View()
+		check("屏幕上写着怎么用（Tab 补全／留空不改）",
+			strings.Contains(gv, "Tab 补全") && strings.Contains(gv, "不修改"),
+			firstLineWith(gv, "Tab 补全"))
+		check("输入框预填的是当前目录", strings.Contains(gv, c.guidesDir), c.guidesDir)
+
+		//: 造两个同前缀目录 —— 补全的"多个匹配"分支才走得到。
+		_ = os.MkdirAll(filepath.Join(gdTmp, "alpha-1"), 0o755)
+		_ = os.MkdirAll(filepath.Join(gdTmp, "alpha-2"), 0o755)
+		gs := r.top().(*guidesDirScreen)
+		gs.in.SetValue(filepath.Join(gdTmp, "al"))
+		press(r, "tab")
+		check("Tab 把输入补到公共前缀",
+			strings.HasSuffix(filepath.ToSlash(gs.in.Value()), "alpha-"), gs.in.Value())
+		check("并把候选交回界面（不替用户猜）", len(gs.cands) == 2,
+			fmt.Sprintf("%d 个候选", len(gs.cands)))
+		check("候选也画在屏上", strings.Contains(r.View(), "候选："), firstLineWith(r.View(), "候选："))
+
+		pick := filepath.Join(gdTmp, "alpha-1")
+		gs.in.SetValue(pick)
+		press(r, "enter")
+		check("回车后回到准备屏", screenName(r.top()) == "main.welcomeScreen", screenName(r.top()))
+		raw, rerr := os.ReadFile(cfgTmp)
+		check("配置真的写下来了（值正确）",
+			rerr == nil && strings.Contains(string(raw), "alpha-1"), fmt.Sprintf("err=%v", rerr))
+		check("共享态跟着更新", c.guidesDir == pick, c.guidesDir)
+		check("提示是具名的（说清改成了什么）", strings.Contains(c.note, "已改为"), c.note)
+
+		press(r, "d")
+		before, _ := os.ReadFile(cfgTmp)
+		press(r, "esc")
+		after, _ := os.ReadFile(cfgTmp)
+		check("Esc 返回且**不修改**配置",
+			string(before) == string(after) && strings.Contains(c.note, "未修改"), c.note)
+	}
+
 	fmt.Println()
 	if bad > 0 {
 		fmt.Printf("结论：**%d 条红** —— TUI 自检不通过\n", bad)
 		return 1
 	}
-	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路逐条过")
+	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录逐条过")
 	return 0
 }
 
