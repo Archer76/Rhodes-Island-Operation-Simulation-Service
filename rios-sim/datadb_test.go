@@ -122,3 +122,42 @@ func TestOpenReadOnlyMissingDB(t *testing.T) {
 		t.Fatalf("库不在时应给 ErrDBMissing，实得：%v", err)
 	}
 }
+
+// TestStageRowsKeywordIsLiteral 是 2026-09-26 那处 **LIKE 通配符 bug 的判别对照**。
+//
+// 参照实现做的是**字面量子串**匹配（`ak_tactic/db/stages.py:769-772`）：
+// `keyword="%"` 在它那里**匹配不到任何一列** ⇒ **0 行**。
+// 而旧实现把它交给 SQL `LIKE '%'||?||'%'` ⇒ `%` 是通配符 ⇒ **全表**。
+//
+// 这正是「一条能红得起来的判据」：把 `stageRowHasKeyword` 换回 `LIKE`，这条立刻红。
+// 顺带钉住 `_`（LIKE 里同样是通配符）。
+//
+// ⚠ **`_` 不是判别用例**（第一版把它写进来，测试当场红，是我的期望错）：`_` **真实出现**在
+// 几乎每一个 `level_id` 里（`main_00-01`、`easy_09-01`、`act31side_ex04`…）⇒ 字面量匹配下
+// 它**本来就该命中全表 3055 行**。判别的只有 `%`（全库没有哪个 `level_id` 含 `%`）。
+// 这条留在这里，免得下一个人再把它当 bug 修一遍。
+func TestStageRowsKeywordIsLiteral(t *testing.T) {
+	d := dbDirForTest(t)
+	if d == "" {
+		t.Skip("本机没有 data/akdb.sqlite ⇒ 跳过")
+	}
+	t.Setenv("RIOS_DB", d)
+	for _, kw := range []string{"%", "%zz%"} {
+		got, err := StageRows("", kw)
+		if err != nil {
+			t.Fatalf("StageRows(%q) 出错：%v", kw, err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("`keyword=%q` 应得 0 行（字面量匹配），实得 %d 行 ⇒ "+
+				"筛选被当成了通配符，等于把筛悄悄关掉", kw, len(got))
+		}
+	}
+	//: 正对照：同一个函数在正常词上**必须**能筛出来，否则上面那个 0 可能是「查询没跑成功」。
+	ok, err := StageRows("", "MAIN_09-01")
+	if err != nil {
+		t.Fatalf("正对照出错：%v", err)
+	}
+	if len(ok) == 0 {
+		t.Fatal("正对照失败：`MAIN_09-01` 应能筛出（大小写不敏感），实得 0 行")
+	}
+}

@@ -105,10 +105,12 @@ func StageRows(zoneID, keyword string) ([]StageRow, error) {
 		where = append(where, "zone_id = ?")
 		args = append(args, zoneID)
 	}
-	if keyword != "" {
-		where = append(where, "(level_id like ? or name like ?)")
-		args = append(args, "%"+keyword+"%", "%"+keyword+"%")
-	}
+	//: ⚠ **`keyword` 不进 SQL**（2026-09-26 修的一处真 bug）：参照实现
+	//: （`ak_tactic/db/stages.py:756`、`:769-772`）做的是**字面量子串**匹配
+	//: （`kw = keyword.strip().upper()` 之后 `in` 四列），而 SQL `LIKE '%'||?||'%'`
+	//: 会把 `%`／`_` 当**通配符**。判别实测：`keyword="%"` 时 Python 给 **0 行**，
+	//: 而 LIKE 会给**全表 3055 行** —— 那等于把筛选悄悄关掉，属最坏的一类静默。
+	//: ⇒ 在 Go 侧按同一口径筛（四列、统一 upper、字面量）。
 	if len(where) > 0 {
 		q += " where " + strings.Join(where, " and ")
 	}
@@ -118,6 +120,7 @@ func StageRows(zoneID, keyword string) ([]StageRow, error) {
 		return nil, fmt.Errorf("查 stage 失败：%w", err)
 	}
 	defer rows.Close()
+	kw := strings.ToUpper(strings.TrimSpace(keyword))
 	out := []StageRow{}
 	for rows.Next() {
 		var r StageRow
@@ -125,9 +128,26 @@ func StageRows(zoneID, keyword string) ([]StageRow, error) {
 			&r.DataPath, &r.Name, &r.StageType); err != nil {
 			return nil, fmt.Errorf("读 stage 行失败：%w", err)
 		}
+		if kw != "" && !stageRowHasKeyword(r, kw) {
+			continue
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// stageRowHasKeyword 复刻参照实现的 keyword 口径：**四列**（level_id / code / zone_id / 中文名），
+// 统一 `upper()` 之后做**字面量**子串匹配（`ak_tactic/db/stages.py:769-772`）。
+//
+// ⚠ 两处都必须照抄，少一处就是「筛少了」：**列数**（少一个 `zone_id` 就搜不到按分部写的词）
+// 与**大小写**（Python 先 `.upper()`，不照抄则大小写不同的写法会漏）。
+func stageRowHasKeyword(r StageRow, kw string) bool {
+	for _, s := range []string{r.LevelID, r.Code, r.ZoneID, r.Name} {
+		if strings.Contains(strings.ToUpper(s), kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // ZoneRow 是 `zone` 表里章节／活动要用的那几列。
