@@ -816,6 +816,40 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			fmt.Sprintf("%d 行", len(renderQR(withQuiet(liveQR, 4)))))
 	}
 
+	fmt.Println("== 十七 · 桥的常驻会话（登录那条链的前提）==")
+	//: ★ 这一段的中心是**一件事**：`login_start` 在桥上起的那个后台线程，能不能活到
+	//: 下一次 `login_poll`。一次一进程时它活不过 —— 进程读完 stdin 就退出，线程随之
+	//: 消失，`login_poll` 永远看到 `idle`；而症状极其隐蔽（二维码画得出来，扫了没反应）。
+	//: 所以这里必须**真起一个常驻会话**、连着发两条命令、看第二条能不能看见那条会话。
+	if sess, serr := newBridgeSession(); serr != nil {
+		fmt.Printf("  （未核：桥这次起不来，不判红。具名原因：%s）\n",
+			firstLineWith(serr.Error(), "★"))
+	} else {
+		defer sess.close()
+		//: ① 同一个进程里连发两条：`id` 要自增，且两条都要答在**自己那一问**上
+		p1, e1 := sess.call("ping", nil, 30*time.Second)
+		p2, e2 := sess.call("ping", nil, 30*time.Second)
+		check("常驻会话：同一进程里连发两条都答得上来（id 自增且不串）",
+			e1 == nil && e2 == nil && p1 != nil && p2 != nil && p1.Proto == p2.Proto,
+			fmt.Sprintf("proto=%v/%v cred=%q", p1.Proto, p2.Proto, p1.CredState))
+		//: ② 真起一次扫码会话
+		st, serr2 := sess.call("login_start", nil, 40*time.Second)
+		if serr2 != nil {
+			check("常驻会话：login_start 起了扫码会话", false, serr2.Error())
+		} else if st.QRNote != "" {
+			fmt.Printf("  （未核：桥说二维码编不出来，不判红。具名原因：%s）\n", st.QRNote)
+		} else {
+			check("常驻会话：login_start 给了矩阵", len(st.QRMatrix) > 0,
+				fmt.Sprintf("边长=%d phase=%s", len(st.QRMatrix), st.Phase))
+			//: ③ ★ 关键那一问：**换一条命令**问同一个会话的进度。
+			//:    `idle` 就是"会话不存在"——那正是"一次一进程"会有的症状。
+			pl, perr := sess.call("login_poll", nil, 30*time.Second)
+			check("常驻会话：另起一问能看见那条会话（phase ≠ idle）",
+				perr == nil && pl.Phase != "idle" && pl.Phase != "",
+				fmt.Sprintf("phase=%q（idle 就是会话没了）", pl.Phase))
+		}
+	}
+
 	fmt.Println("== 十四 · 引擎客户端（起子进程讲 JSON 行协议）==")
 	//: 负对照在前：把 `RIOS_SIM_BIN` 指到一个**不存在**的路径，必须**具名失败**。
 	//: 静默退化成"没有结果"是最坏的一类错 —— 玩家分不清"这一关搜不出来"与
