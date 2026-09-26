@@ -334,14 +334,21 @@ func (r *root) pushStage() {
 	r.push(&stageScreen{heading: head, rows: data.ListStages(c.stages, f)}, onStagePicked)
 }
 
-// onStagePicked 是选关屏的回调。Python 这里进 SquadAskScreen（问编队）——
-// 那两屏尚未实现，所以先具名说清走到哪了。
+// onStagePicked 是选关屏的回调：选定关卡 → 进 [2] 问编队（`squadAskScreen`，
+// 对应 Python 的 `RiosApp.goto_stage_pick` 之后那一步
+// —— `_squad_asked`／`_squad_picked` 见 `squad.go`）。
 func onStagePicked(r *root, res any) {
 	st, _ := res.(*data.StageRecord)
 	if st == nil {
 		return
 	}
-	r.ctx.stage = st
-	r.ctx.note = fmt.Sprintf("已选 %s %s —— 下一步（问编队／选人／解算）尚未实现",
-		st.Code, st.Name)
+	c := r.ctx
+	c.stage = st
+	//: ★ 这一关的**可部署人数**目前取不到（引擎侧的 `options.characterLimit`
+	//: 还没接到界面来），显式写 0 —— **不是**"这一关能上 0 个人"。
+	//: 那条拦截规则遇到 0 会退化，见 `squad.go` 文件头的登记。
+	c.deployLimit = 0
+	c.squad = nil
+	c.ensureRoster() //: 进 [2] 时读一次名册并缓存（取不到也只记原因，不拦路）
+	r.push(&squadAskScreen{}, onSquadAsked)
 }

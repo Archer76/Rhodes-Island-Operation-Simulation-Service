@@ -141,12 +141,24 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			check("关卡屏渲染里有第一关的代号", strings.Contains(r.View(), ss.rows[0].Code),
 				ss.rows[0].Code)
 			press(r, "enter")
-			check("选定后回到准备屏", screenName(r.top()) == "main.welcomeScreen",
-				screenName(r.top()))
-			check("并留下具名提示（走到哪一步）",
-				strings.Contains(c.note, "尚未实现") && strings.Contains(c.note, "已选"), c.note)
+			//: ★ 这两条断言在 [2] 接进来之后**改了内容**（不是放宽）：以前选定
+			//:   关卡只留一句占位提示，现在会压到「问编队」屏 —— 那才是 Python
+			//:   的走向（`_squad_asked`）。旧断言写的是占位实现的形状。
+			check("选定关卡后压到「问编队」屏（[2] 的第一步）",
+				screenName(r.top()) == "*main.squadAskScreen", screenName(r.top()))
+			check("还没定编队（要先答「要不要手动加人」）", len(c.squad) == 0,
+				fmt.Sprintf("%d 人", len(c.squad)))
 		}
 	}
+
+	//: 这一轮下钻把屏栈压深了，而下面几段要在**准备屏**上按键：逐层 Esc 退回去
+	//: （Esc 是本仓唯一的"退一层"，最底层不退）。上限 10 次是防呆——
+	//: 万一将来某一层的回调会再压屏，这里也不至于转不出来。
+	for i := 0; i < 10 && len(r.stack) > 1; i++ {
+		press(r, "esc")
+	}
+	check("逐层 Esc 能退回准备屏", screenName(r.top()) == "main.welcomeScreen",
+		screenName(r.top()))
 
 	fmt.Println("== 六 · 环境筛选（取数口径）==")
 	hit := ""
@@ -282,12 +294,214 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			string(before) == string(after) && strings.Contains(c.note, "未修改"), c.note)
 	}
 
+	fmt.Println("== 十 · 选人屏与「自限」拦截（政策＝纯函数）==")
+
+	//: ★ 本段自己的负对照：开头那条全局负对照只证了 `check` 不是恒真的；
+	//:   这里要证**本段用的判据**不是恒真的 —— 一条恒真的 `allMinLevel`
+	//:   会让下面"拦下／放行"那几条断言全部退化成同义反复（满屏 ✓ 零信息量）。
+	rulerOK := true
+	if !check("负对照：混入一位 E2 干员时 allMinLevel 必须为假（尺子要判红）",
+		!allMinLevel([]RosterOperator{{CharID: "x", Name: "甲", Elite: 2, Level: 1}}),
+		fmt.Sprintf("allMinLevel=%v",
+			allMinLevel([]RosterOperator{{CharID: "x", Name: "甲", Elite: 2, Level: 1}}))) {
+		rulerOK = false
+	}
+	if !check("负对照：提示语检查用在别的话上必须为假（尺子要判红）",
+		!strings.Contains("与那句话无关的一段文本", squadMinLevelMsg),
+		"别的话里不含那句话") {
+		rulerOK = false
+	}
+	if !rulerOK {
+		fmt.Println("★ 本段负对照没红 ⇒ 第十段的读数作废")
+		return 3
+	}
+
+	//: 纯函数的边界：判定范围是「精英0 1级 到 精英1 1级（含两端）」。
+	bounds := []struct {
+		label string
+		op    RosterOperator
+		want  bool
+	}{
+		{"E0L1 ✓", RosterOperator{Elite: 0, Level: 1}, true},
+		{"E1L1 ✓", RosterOperator{Elite: 1, Level: 1}, true},
+		{"E1L2 ✗", RosterOperator{Elite: 1, Level: 2}, false},
+		{"E2L1 ✗", RosterOperator{Elite: 2, Level: 1}, false},
+		{"E0L2 ✗", RosterOperator{Elite: 0, Level: 2}, false},
+	}
+	for _, b := range bounds {
+		got := isMinLevel(b.op)
+		check("纯函数边界 isMinLevel "+b.label, got == b.want, fmt.Sprintf("实得 %v", got))
+	}
+
+	//: 假名册：自检**不去起 Python 桥**（那是一次环境依赖，不是判据），
+	//: 但字段与形状跟桥给的**一模一样**（`engclient.go` 的 RosterOperator）。
+	fake := &rosterData{Source: "selftest", Complete: true, Count: 4,
+		Operators: []RosterOperator{
+			{CharID: "char_1", Name: "甲", Profession: "PIONEER", Elite: 0, Level: 1},
+			{CharID: "char_2", Name: "乙", Profession: "WARRIOR", Elite: 1, Level: 1},
+			{CharID: "char_3", Name: "丙", Profession: "MEDIC", Elite: 1, Level: 45},
+			{CharID: "char_4", Name: "丁", Profession: "CASTER", Elite: 2, Level: 90},
+		}}
+	pickCtx := func(slot int) *appCtx {
+		return &appCtx{w: 90, h: 26, roster: fake, deployLimit: slot, mode: "auto",
+			stage: &data.StageRecord{Code: "1-7", Name: "测试关"}}
+	}
+	pickTop := func(r *root) *squadPickScreen {
+		s, _ := r.top().(*squadPickScreen)
+		return s
+	}
+	//: 勾人：把光标移到名字那一行、按一下空格 —— 与真终端里按的是同一个键。
+	markNames := func(r *root, s *squadPickScreen, names ...string) {
+		for _, want := range names {
+			for i, op := range s.rows {
+				if op.Name == want {
+					s.cursor = i
+					press(r, " ")
+				}
+			}
+		}
+	}
+
+	//: 甲 E0L1、乙 E1L1 —— 两位都在范围内；槽位 2 ⇒ 满。
+	cA := pickCtx(2)
+	rA := newRoot(cA, welcomeScreen{})
+	sA := newSquadPickScreen(cA, nil)
+	rA.push(sA, onSquadPicked)
+	check("选人屏把槽位数写在屏上", strings.Contains(rA.View(), "槽位 2 人"),
+		firstLineWith(rA.View(), "槽位"))
+	check("选人屏列出的是名册里的人（共 4 人）", strings.Contains(rA.View(), "共 4 人"),
+		firstLineWith(rA.View(), "共 "))
+	markNames(rA, sA, "甲", "乙")
+	check("空格真的勾上了人（勾选是新屏自己持有的）", len(sA.picked) == 2,
+		fmt.Sprintf("%d 人", len(sA.picked)))
+	press(rA, "enter")
+	check("拦下：仍停在选人屏（**没**进下一步）",
+		screenName(rA.top()) == "*main.squadPickScreen", screenName(rA.top()))
+	check("拦下：提示语里含那句话", strings.Contains(cA.note, squadMinLevelMsg), cA.note)
+	check("拦下：那句话**画在屏上**", strings.Contains(rA.View(), squadMinLevelMsg),
+		firstLineWith(rA.View(), squadMinLevelMsg))
+	check("拦下：编队没有被定下来", cA.squad == nil, fmt.Sprintf("%v", cA.squad))
+	check("拦下：勾选跟着回到新屏（人还看得见该改哪一个）",
+		pickTop(rA) != nil && len(pickTop(rA).picked) == 2,
+		fmt.Sprintf("%d 人", len(pickTop(rA).picked)))
+
+	//: 混进一位超范围的（丙 E1 45级）⇒ **放行**。
+	markNames(rA, pickTop(rA), "丙")
+	press(rA, "enter")
+	check("放行：混进一位超范围的干员就不拦（退回上一层）",
+		screenName(rA.top()) == "main.welcomeScreen", screenName(rA.top()))
+	check("放行：编队定下来了（3 人，按码点序）", len(cA.squad) == 3,
+		fmt.Sprintf("%v", cA.squad))
+	check("放行：提示里写明下一步还没实现", strings.Contains(cA.note, "尚未实现"), cA.note)
+
+	//: 全员在范围内、但**槽位没满**（2/5）⇒ **不拦**。
+	cC := pickCtx(5)
+	rC := newRoot(cC, welcomeScreen{})
+	sC := newSquadPickScreen(cC, nil)
+	rC.push(sC, onSquadPicked)
+	markNames(rC, sC, "甲", "乙")
+	press(rC, "enter")
+	check("槽位未满（2/5）不拦：退回了上一层",
+		screenName(rC.top()) == "main.welcomeScreen", screenName(rC.top()))
+	check("槽位未满不拦：编队定下来了", len(cC.squad) == 2, fmt.Sprintf("%v", cC.squad))
+
+	//: **退化**：槽位数取不到（0）⇒ 非空且全员在范围内也算触发，且屏上写明退化。
+	cD := pickCtx(0)
+	rD := newRoot(cD, welcomeScreen{})
+	sD := newSquadPickScreen(cD, nil)
+	rD.push(sD, onSquadPicked)
+	check("槽位取不到时屏上写「未知」（不写成 0 人）",
+		strings.Contains(rD.View(), "槽位：未知"), firstLineWith(rD.View(), "槽位"))
+	markNames(rD, sD, "甲")
+	press(rD, "enter")
+	check("退化：非空且全员在范围内 ⇒ 拦下",
+		screenName(rD.top()) == "*main.squadPickScreen" &&
+			strings.Contains(cD.note, squadMinLevelMsg), cD.note)
+	check("退化：**退化本身**写在提示里（不是只有代码知道）",
+		strings.Contains(cD.note, "没取到本关的可部署人数"), firstLineWith(cD.note, "没取到"))
+
+	//: 屏流程：选定关卡压的是「问编队」屏；选「我自己选」才进选人屏。
+	cE := pickCtx(0)
+	rE := newRoot(cE, welcomeScreen{})
+	onStagePicked(rE, &data.StageRecord{Code: "1-7", Name: "测试关"})
+	check("选定关卡后压的是「问编队」屏（**不许静默跳过**）",
+		screenName(rE.top()) == "*main.squadAskScreen", screenName(rE.top()))
+	press(rE, "enter") // 光标 0 ＝「不用，让程序自己挑」
+	check("选「让程序自己挑」→ 退回上一层并具名说明",
+		screenName(rE.top()) == "main.welcomeScreen" && strings.Contains(cE.note, "尚未实现"),
+		cE.note)
+	onStagePicked(rE, &data.StageRecord{Code: "1-7", Name: "测试关"})
+	if ask, ok := rE.top().(*squadAskScreen); ok {
+		ask.cursor = 1 //「我自己选」
+	}
+	press(rE, "enter")
+	check("选「我自己选」→ 进选人屏", screenName(rE.top()) == "*main.squadPickScreen",
+		screenName(rE.top()))
+
+	fmt.Println("== 十一 · 桥客户端：缺件必须具名（不许退化成空名册）==")
+	oldPy := os.Getenv(envPython)
+	os.Setenv(envPython, "__rios_no_such_python__")
+	_, berr := fetchRoster()
+	os.Setenv(envPython, oldPy)
+	check("解释器找不到时**具名失败**（报出解释器名与桥脚本路径）",
+		berr != nil && strings.Contains(berr.Error(), "__rios_no_such_python__") &&
+			strings.Contains(berr.Error(), "rios_bridge.py"),
+		fmt.Sprintf("err=%v", berr))
+
+	//: ★ 桥**可达**时做一次真实往返。这一条是**环境相关**的：取不到名册时
+	//:   只具名说明、**不判红** —— 判红会把"这台机器上没有名册／没装 Python"
+	//:   记成"界面写错了"。答了但字段不对，才是真的红。
+	if live, lerr := fetchRoster(); lerr == nil {
+		fieldsOK := len(live.Operators) > 0
+		for _, op := range live.Operators {
+			if op.CharID == "" || op.Name == "" {
+				fieldsOK = false
+				break
+			}
+		}
+		check("桥真实往返：名册取到了，且每条的 char_id／name 都在",
+			live.Source != "" && fieldsOK,
+			fmt.Sprintf("source=%s complete=%v 条数=%d", live.Source, live.Complete,
+				len(live.Operators)))
+		//: 拿**真名册**跑一次判定（上面那几条用的是 4 人的假名册）：这个号里落在
+		//: 「E0L1..E1L1」的人有多少，全勾上会不会被拦（槽位数取不到 ⇒ 走退化分支）。
+		inRange := make([]RosterOperator, 0, len(live.Operators))
+		for _, op := range live.Operators {
+			if isMinLevel(op) {
+				inRange = append(inRange, op)
+			}
+		}
+		if len(inRange) == 0 {
+			fmt.Println("  （未核：这个号的名册里没有落在 E0L1..E1L1 的干员，判定无从跑起）")
+		} else {
+			blocked := pickTriggersBlock(inRange, 0)
+			check("真名册判定：范围内的人全勾上 ⇒ 拦下（槽位取不到，走退化）", blocked,
+				fmt.Sprintf("范围内 %d/%d 人，pickTriggersBlock=%v", len(inRange),
+					len(live.Operators), blocked))
+		}
+		//: 字段对了不等于**画得出来**（中文名宽度、可见窗口、截断都在渲染这一层）。
+		//: 所以拿真名册再渲染一次选人屏。
+		liveCtx := &appCtx{w: 90, h: 26, roster: live, deployLimit: 4, mode: "auto"}
+		liveScr := newSquadPickScreen(liveCtx, nil)
+		liveView := liveScr.view(liveCtx)
+		check("真名册渲染：条数与名册一致",
+			strings.Contains(liveView, fmt.Sprintf("共 %d 人", len(live.Operators))),
+			firstLineWith(liveView, "共 "))
+		check("真名册渲染：第一行就是练度最高的那位（排序生效）",
+			len(liveScr.rows) > 0 && strings.Contains(liveView, liveScr.rows[0].Name),
+			fmt.Sprintf("E%d %d级 %s", liveScr.rows[0].Elite, liveScr.rows[0].Level,
+				liveScr.rows[0].Name))
+	} else {
+		fmt.Printf("  （未核：桥这次取不到名册，不判红。具名原因：%s）\n",
+			strings.SplitN(lerr.Error(), "\n", 2)[0])
+	}
+
 	fmt.Println()
 	if bad > 0 {
 		fmt.Printf("结论：**%d 条红** —— TUI 自检不通过\n", bad)
 		return 1
 	}
-	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录逐条过")
+	fmt.Println("结论：**全绿** —— 取数／降级／屏栈／下钻／退回／空数据退路／路径补全／改目录／选人屏与自限拦截逐条过")
 	return 0
 }
 

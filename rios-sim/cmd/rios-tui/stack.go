@@ -63,6 +63,21 @@ type appCtx struct {
 	envs    []data.ZoneEnv
 	env     string
 	stage   *data.StageRecord
+
+	//: [2] 选编队那一段。名册来自 Python 桥（`engclient.go`，只取一次）；
+	//: 取不到时 `rosterErr` 里是**原因全文**，选人屏只画它的第一行。
+	roster    *rosterData
+	rosterErr string
+
+	//: 这一关的**可部署人数**（Python 的 `State.deploy_limit`，来自 gamedata 的
+	//: `options.characterLimit`）。**0 = 取不到** —— 那条拦截规则遇到 0 会**退化**，
+	//: 见 `squad.go` 文件头的登记。
+	deployLimit int
+
+	//: 已确定的编队（干员名）与模式（`auto` 允许程序补充 / `only` 只用我选的）。
+	//: 照 Python 的 `State.squad` 与 `State.mode`。
+	squad []string
+	mode  string
 }
 
 type frame struct {

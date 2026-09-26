@@ -78,6 +78,7 @@ func newAppCtx(stages []data.StageRecord, zones []data.ZoneRecord) *appCtx {
 		h:         26,
 		dataDir:   data.DataDBDir(),
 		guidesDir: guidesDir(),
+		mode:      "auto", //: 照 Python 的 `State.__init__`（缺省「允许程序补充」）
 	}
 }
 

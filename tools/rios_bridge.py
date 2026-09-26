@@ -19,6 +19,7 @@
     login_poll                取扫码进度／结果（waiting / done / failed）
     activate {uid}            切到某个已登账号
     logout                    退出账号
+    roster                    名册：来源（skland / operbox）、是否完整、干员练度列表
 
 ★ 三条纪律：
 
@@ -213,6 +214,45 @@ def cmd_logout(req: dict) -> dict:
     return {"result": bool(res)}
 
 
+def cmd_roster(req: dict) -> dict:
+    """名册：把 `ak_tactic.tui.data.load_roster()` 的产出翻成一行 JSON。
+
+    ★ 桥上**只翻译，不重新实现**：名册有三个来源（森空岛缓存 → MAA 的 OperBox
+    导出 → 都没有），该按哪个 uid 去找（**游戏 uid ≠ 登录账号 id**，两者通常不相等）
+    全是 `load_roster()` 已经定好的口径。这里自己再走一遍那条链，就是第二份实现，
+    两份迟早会漂。
+
+    `load_roster()` 返回 `None` **不是**「这个号没干员」，而是「一份名册都找不到」。
+    按桥的纪律必须**具名失败**：静默回一个空列表，界面就会显示成「这个号一个干员
+    都没有」——那是最坏的一类错，看着正常、内容是假的。
+
+    字段只给界面要用的那几个（`char_id` / `name` / `profession` / `elite` / `level`）；
+    潜能、信赖、专精、模组等级这次没带（选人屏用不到，且 OperBox 那条来源本来就没有）。
+    """
+    from ak_tactic.tui import data as D
+
+    r = D.load_roster()
+    if r is None:
+        raise LookupError(
+            "RosterUnavailable: load_roster() 返回 None —— 既没有当前账号的 "
+            "data/skland/roster_<游戏uid>.json，也没有**解析得动**的 OperBox 导出。"
+            "先取一份名册：python tools/roster.py（把 data/skland/opers_<uid>.json "
+            "翻成 roster_<uid>.json），或把 MAA 的 OperBox 导出放到 "
+            "tools/operbox_path.py 指的位置。")
+    operators = [{"char_id": op.char_id, "name": op.name,
+                  "profession": op.profession or "",
+                  "elite": int(op.elite), "level": int(op.level)}
+                 for op in r.operators]
+    return {"source": r.source,
+            "complete": bool(r.complete),
+            "uid": r.uid,
+            "nick": r.nick,
+            "path": r.path,
+            "note": _plain(r.note),
+            "count": len(operators),
+            "operators": operators}
+
+
 HANDLERS = {
     "ping": cmd_ping,
     "accounts": cmd_accounts,
@@ -220,6 +260,7 @@ HANDLERS = {
     "login_poll": cmd_login_poll,
     "activate": cmd_activate,
     "logout": cmd_logout,
+    "roster": cmd_roster,
 }
 
 
@@ -228,6 +269,16 @@ def main() -> int:
     #: 一条自己打开的管道，而把 stdout 换成一个吞掉一切的对象。
     out = sys.stdout
     sys.stdout = open(__import__("os").devnull, "w", encoding="utf-8")
+    #: ★ 协议行**一律 UTF-8**，不跟着控制台代码页走。
+    #: 这条是 `roster` 逼出来的：`ensure_ascii=False` 的应答里带干员名，而中文
+    #: Windows 的 stdout 默认是 GBK——名册里只要有一个 GBK 编不出的字符
+    #: （实测：昵称里的 `²`，`UnicodeEncodeError: 'gbk' codec can't encode
+    #: character '\xb2'`），整条应答就写不出去，回给 Go 的是**一个空管道**，
+    #: 而空管道与「桥死了」长得一模一样。协议是字节流，编码得由协议自己定。
+    try:
+        out.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):     # 不是 TextIOWrapper（如被判据套了壳）
+        pass
 
     for raw in sys.stdin:
         raw = raw.strip()
