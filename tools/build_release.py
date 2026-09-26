@@ -264,16 +264,35 @@ def smoke(tree: Path, data_dir: Path | None) -> None:
             % (rc3, out3))
     print("      实得 rc=2，报告里点名了工程侧 Python")
 
-    #: 启动器自己也要真跑一次：`-preflight` 验的是那个 exe，而玩家双击的是这个 .cmd
-    #: （chcp／cd /d %~dp0／errorlevel 这几行是 .cmd 独有的，exe 那侧验不到）。
-    #: 从 NUL 读 stdin ⇒ 里面那句 `pause` 不会把自查挂住。
-    print("  · 启动器 启动.cmd：真跑一次（stdin 接 NUL，免得 pause 挂住）")
-    rc4, out4, err4 = sh(["cmd", "/c", "启动.cmd"], cwd=tree, timeout=300,
-                         stdin_nul=True)
-    if rc4 != 3 or "启动前自检" not in out4:
-        die("启动器没按预期工作：期望 rc=3（缺派生库 ⇒ 不启动界面）且打出预检报告，"
-            "实得 rc=%d：\n%s%s" % (rc4, out4, err4))
-    print("      实得 rc=3，报告是从 启动.cmd 里出来的")
+    #: 启动器自己也要真跑一次 —— 但**不能**在"数据齐全之前"跑那种会去下载的路径：
+    #: 现在 `启动.cmd` 的第一步是 `-setup`，而空树上它会真的开始取 94 MB 数据
+    #: （上一版就是这样撞了 300 秒超时）。所以这里换个问法：
+    #:   ① 把 `eng/` 拿掉 ⇒ `-setup` 找不到那条重建命令，**当场具名失败**、
+    #:      启动器必须停住（同时验到 `.cmd` 里的分支确实是"setup 失败就不启动"）；
+    #:   ② 顺序用内容断言钉住（`-setup` 必须在裸 `rios-tui.exe` **之前**）。
+    #: ⚠ 未核：装完之后双击真的进界面这一条，只有真终端能验（这里没有 TTY）。
+    print("  · 启动器 启动.cmd：真跑一次「准备失败就该停住」那条路（stdin 接 NUL）")
+    eng_dir2 = tree / "eng"
+    bak_dir2 = tree / "eng.bak2"
+    eng_dir2.rename(bak_dir2)
+    try:
+        rc4, out4, err4 = sh(["cmd", "/c", "启动.cmd"], cwd=tree, timeout=300,
+                             stdin_nul=True)
+    finally:
+        bak_dir2.rename(eng_dir2)
+    if rc4 == 0:
+        die("少了 eng/ 时启动器**不该**返回 0（它应当停下来并说明）")
+    txt4 = out4 + err4
+    if "首次运行准备" not in txt4:
+        die("启动器没有先跑 -setup（输出里没有「首次运行准备」）：\n%s" % txt4[-1200:])
+    print("      实得 rc=%d，且确实先跑了 -setup" % rc4)
+
+    cmd_text = (tree / "启动.cmd").read_text(encoding="utf-8", errors="replace")
+    i_setup = cmd_text.find("-setup")
+    i_ui = cmd_text.find("rios-tui.exe", i_setup + 1)
+    if i_setup < 0 or i_ui < 0:
+        die("启动器里找不到「先 -setup 再起界面」这两步：\n%s" % cmd_text)
+    print("      顺序断言：-setup 在裸 rios-tui.exe 之前 ✓")
 
     if data_dir is None:
         print("  · 跳过后半段：没有可用的 data 目录（拿它才跑得动全量自检）")
