@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -46,6 +47,45 @@ type Visit struct {
 
 // Dwell 是这次占据持续了多久（`eta.py:187` 的 `dwell`：**不小于 0**）。
 func (v Visit) Dwell() float64 { return math.Max(0, v.Exit-v.Enter) }
+
+// nullIfInf 把「永不」（+Inf／-Inf／NaN）变成 `nil` —— 序列化出来就是 JSON 的 `null`。
+//
+// ★ 为什么要这一层（博士 2026-09-27 裁：**整表统一**）：
+//
+//	· 官方数据里**移速 0 是常态**（2154 个敌人 key 里 282 个至少一档为 0；第 17 章那个
+//	  `enemy_10211_murad`「泄漏源」是双源确认的真·移速 0，28 个关卡在用），
+//	  这类单位一进时间轴就必然产生 `+Inf`；
+//	· 而 JSON 规范里**没有 Infinity**，Go 的 `encoding/json` 会直接拒绝整个值 ——
+//	  症状是**整条命令拒绝应答**（实测 `main_17-08` 与它的突袭档）；
+//	· 权威（Python）出的是 `Infinity` 字面量，那**不是合法 JSON**（严格解析器一律拒收）
+//	  ⇒ 这一处 Go 出 `null` 是更规范的行为，**登记为分歧**（对拍时把权威的 inf 归一成
+//	  null 再逐位比）。
+//
+// ⚠ **不要**改成「把移速 0 的单位剔出到达表」：镜像数据里 `moveSpeed=0` 混着**缺值**
+// （猎狗两档在 wiki 上都是 1.9，镜像把档 1 写成 0）⇒ 那个等式不成立，剔了会误伤真会动的敌人。
+func nullIfInf(f float64) *float64 {
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		return nil
+	}
+	return &f
+}
+
+// MarshalJSON 让 `Visit` 里那两个可能取到无穷的时刻按 `null` 出。
+//
+// 内部一律保持 `float64`（排序、`Dwell()`、索引全不受影响），**只在出 JSON 那一刻**转 ——
+// 所以这层不会渗进任何计算路径。字段顺序与类型定义逐字一致，免得判据按字节比时莫名变红。
+func (v Visit) MarshalJSON() ([]byte, error) {
+	type shadow struct {
+		Cell    [2]int   `json:"cell"`
+		Enter   *float64 `json:"enter"`
+		Exit    *float64 `json:"exit"`
+		Name    string   `json:"name"`
+		EnemyID string   `json:"enemy_id"`
+		Route   int      `json:"route"`
+	}
+	return json.Marshal(shadow{v.Cell, nullIfInf(v.Enter), nullIfInf(v.Exit),
+		v.Name, v.EnemyID, v.Route})
+}
 
 // EnemyArrival 是一只敌人从入场到抵达终点（或离场）的全过程（`eta.py:192`）。
 type EnemyArrival struct {
@@ -386,6 +426,16 @@ func (idx *ArrivalIndex) CellDwell(cell [2]int) float64 {
 type BusiestRow struct {
 	Cell  [2]int  `json:"cell"`
 	Dwell float64 `json:"dwell"`
+}
+
+// MarshalJSON 同 `Visit`：累计占据时长也可能取到无穷（该格的 visit 全是「永不」），
+// 那时出 `null` 而不是让整条应答失败。理由与形状见 `nullIfInf` 的注释。
+func (r BusiestRow) MarshalJSON() ([]byte, error) {
+	type shadow struct {
+		Cell  [2]int   `json:"cell"`
+		Dwell *float64 `json:"dwell"`
+	}
+	return json.Marshal(shadow{r.Cell, nullIfInf(r.Dwell)})
 }
 
 // Busiest 按累计占据时长排出最忙的格子 —— 摆位的第一手直觉。
