@@ -100,6 +100,8 @@ begin
 end;
 
 // 卸载：玩家自己取的数据**先问再删**（§12.5 四件之一）。
+// ★ `/VERYSILENT` 时**不许弹框** —— 无人值守的卸载会被那个 MsgBox 永久挂住。
+//   静默就按"保留"处理（保数据是安全的那一侧：删了要重新下 156 MB）。
 function InitializeUninstall(): Boolean;
 var
   DataDir: String;
@@ -108,6 +110,8 @@ begin
   DataDir := ExpandConstant('{app}\eng\data');
   if DirExists(DataDir) then
   begin
+    if UninstallSilent then
+      Exit;
     if MsgBox('eng\data 里有你自己取的游戏数据（可能几百 MB）。' + #13#10 + #13#10 +
               '选「是」= 连它一起删掉；选「否」= 保留它，只卸载程序。',
               mbConfirmation, MB_YESNO) = IDYES then
