@@ -127,20 +127,27 @@ def smoke(version: str, exe: Path) -> None:
         die("玩家的 eng\\data 被安装覆盖/删掉了 —— 判据 7 第 2 件不成立")
     print("      玩家数据活过了安装（判据 7 第 2 件）")
 
-    print("  · 装完用启动器自查（缺件要具名，不是跑到一半才炸）")
-    rc2, out2, err2 = sh(["cmd", "/c", "启动.cmd"], cwd=target, timeout=600,
-                         stdin_nul=True)
+    print("  · 装完自查（缺件要具名，不是跑到一半才炸）")
+    #: ⚠ **不要**在这里跑 `启动.cmd`：它现在的第一步是 `-setup`，而空树上 `-setup`
+    #: 会**真的去下载** 94 MB 数据 —— 那会把这条冒烟变成十几分钟（上一版就是撞了超时）。
+    #: 所以分成两问：能不能自己说清缺什么（跑 `-preflight`），以及接线对不对（内容断言）。
+    rc2, out2, err2 = sh([str(target / "rios-tui.exe"), "-preflight"], cwd=target,
+                         timeout=600)
     text = out2 + err2
     if "启动前自检" not in text:
-        die("启动器没打印自检报告（rc=%d）：\n%s" % (rc2, text[-1500:]))
-    #: ★ 这一条第一版**写反了**（写成 `not in` ⇒ 树是好的反而报红，而"报红"的文案
-    #: 还说"不该有致命缺件"）。方向声明在这里，免得下一个人重踩：
-    #: 装了引擎与 eng/ 的树 ⇒ **不许**出现「★ 缺」（致命），且**必须**出现非致命那两档。
+        die("预检没打印报告（rc=%d）：\n%s" % (rc2, text[-1500:]))
     if "★ 缺" in text:
         die("这棵临时树上引擎与 eng/ 都在，不该有致命缺件：\n%s" % text[-1500:])
     if "起不来" not in text and "待办" not in text:
         die("没有派生库时应当报「起不来」或「待办」，实得：\n%s" % text[-1500:])
     print("      实得 rc=%d，报告里点了名（致命缺件 0 件）" % rc2)
+
+    cmd_text = (target / "启动.cmd").read_text(encoding="utf-8", errors="replace")
+    i_setup = cmd_text.find("-setup")
+    i_ui = cmd_text.find("rios-tui.exe", i_setup + 1)
+    if i_setup < 0 or i_ui < 0:
+        die("启动器里找不到「先 -setup 再起界面」这两步：\n%s" % cmd_text)
+    print("      启动器接线：-setup 在裸 rios-tui.exe 之前 ✓")
 
     print("  · 静默卸载（玩家数据不许被带走，且不许弹框挂住）")
     rc3, out3, err3 = uninstall(target, work / "uninstall1.log")
