@@ -31,7 +31,11 @@ PY = sys.executable
 #: 不喂就按**缺省**跑一个样本，于是总表印出「1/1」「2/2」——**全绿里那一行
 #: 的分母小得误导**。第一版就是这样，读数看着漂亮、覆盖面其实是抽样。
 SUITE = [
-    ("关卡", "tools/check_stage_go.py", "Go 自读关卡 vs load_stage（全格地图/路线/出怪）", True),
+    #: ★ 2026-09-26 补：这一套现在比**两条命令**——`load`（全格地图/路线/出怪）与
+    #: `spots`（可部署格：`stage.py:141/147` 的 melee_spots／ranged_spots，
+    #: 逐元素含顺序 ＋ `covered` 七栏两个来源 ＋ 两条恒等式）。
+    ("关卡", "tools/check_stage_go.py",
+     "Go 自读关卡 vs load_stage（全格地图/路线/出怪 ＋ 可部署格 spots）", True),
     ("敌人", "tools/check_enemy_go.py", "Go 自读敌人 vs EnemyLibrary（逐档合并/派生/前缀）", True),
     ("干员", "tools/check_operator_go.py", "Go 自算面板/天赋/特性 vs OperatorCalculator", False),
     ("范围", "tools/check_range_go.py", "Go 自读范围表 vs RangeTable + rotate/footprint", False),
