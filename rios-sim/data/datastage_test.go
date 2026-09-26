@@ -1,4 +1,4 @@
-package main
+package data
 
 // datastage_test.go：`datastage.go` 那三层的**判别对照**。
 //

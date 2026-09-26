@@ -1,4 +1,4 @@
-package main
+package data
 
 // datachapter_test.go：章节层四函数的**金标对照**。
 //

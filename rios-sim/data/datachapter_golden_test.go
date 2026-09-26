@@ -1,4 +1,4 @@
-package main
+package data
 
 // datachapter_golden_test.go：拿 `out/zz_golden.txt` 的 **116 条 CH 金标**逐条比。
 //
@@ -29,7 +29,7 @@ type goldenCH struct {
 
 func readGoldenCH(t *testing.T) []goldenCH {
 	t.Helper()
-	p := filepath.Join("..", "out", "zz_golden.txt")
+	p := filepath.Join("..", "..", "out", "zz_golden.txt")
 	f, err := os.Open(p)
 	if err != nil {
 		t.Skipf("没有 %s（out/ 不入库）⇒ 跳过", p)

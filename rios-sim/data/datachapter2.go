@@ -1,4 +1,4 @@
-package main
+package data
 
 // datachapter2.go：章节层的**归并**（TUI 第一屏的数据本体）。
 //

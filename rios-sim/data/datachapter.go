@@ -1,4 +1,4 @@
-package main
+package data
 
 // datachapter.go：章节层（TUI 第一屏）的**排版四函数**。
 //

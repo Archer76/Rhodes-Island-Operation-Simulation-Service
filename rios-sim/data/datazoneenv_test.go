@@ -1,4 +1,4 @@
-package main
+package data
 
 // datazoneenv_test.go：第二层的**金标对照**（`out/zz_golden.txt` 的 6 条 `ENV` 行）。
 //
@@ -26,7 +26,7 @@ type goldenENV struct {
 
 func readGoldenENV(t *testing.T) []goldenENV {
 	t.Helper()
-	p := filepath.Join("..", "out", "zz_golden.txt")
+	p := filepath.Join("..", "..", "out", "zz_golden.txt")
 	f, err := os.Open(p)
 	if err != nil {
 		t.Skipf("没有 %s（out/ 不入库）⇒ 跳过", p)

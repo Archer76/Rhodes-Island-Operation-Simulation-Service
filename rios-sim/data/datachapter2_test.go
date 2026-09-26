@@ -1,4 +1,4 @@
-package main
+package data
 
 // datachapter2_test.go：章节层**归并**的端到端金标对照。
 //

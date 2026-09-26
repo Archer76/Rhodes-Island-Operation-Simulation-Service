@@ -1,4 +1,4 @@
-package main
+package data
 
 // datadb.go：**只读取数面** —— `data/akdb.sqlite` / `data/enemydb.sqlite`。
 //

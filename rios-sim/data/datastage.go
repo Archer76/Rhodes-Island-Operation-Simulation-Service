@@ -1,4 +1,4 @@
-package main
+package data
 
 // datastage.go：关卡取数的**三层**（`docs/python-to-go-migration.md` §7.5／§7.6）。
 //

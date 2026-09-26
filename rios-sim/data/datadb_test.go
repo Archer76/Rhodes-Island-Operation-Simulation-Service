@@ -1,4 +1,4 @@
-package main
+package data
 
 // datadb_test.go：`datadb.go` 那两条取数口的**正负对照**。
 //
@@ -23,7 +23,7 @@ import (
 // dbDirForTest 找到本机那份库；找不到就跳过（返回空串）。
 func dbDirForTest(t *testing.T) string {
 	t.Helper()
-	for _, d := range []string{filepath.Join("..", "data"), "data"} {
+	for _, d := range []string{filepath.Join("..", "..", "data"), filepath.Join("..", "data"), "data"} {
 		if _, err := os.Stat(filepath.Join(d, "akdb.sqlite")); err == nil {
 			return d
 		}

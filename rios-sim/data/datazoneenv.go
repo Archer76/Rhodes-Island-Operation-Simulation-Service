@@ -1,4 +1,4 @@
-package main
+package data
 
 // datazoneenv.go：TUI 选关的**第二层**——一个 zone 里**实际存在**的环境分层。
 //
