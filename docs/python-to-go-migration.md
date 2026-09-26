@@ -109,3 +109,36 @@ JSON 行协议引擎。**TUI 一旦做进 Go，这一块自动闭合**（exe 双
 ---
 
 *本文件只读产出：未改 `rios-sim/**`、`ak_tactic/**`、`fixtures/**`、`data/**`、`tools/**`。*
+
+---
+
+## 七 · 裁定与实测（2026-09-26，博士已裁）
+
+> **博士原话**：「走甲，有现成的数据库当然直接用。」
+
+⇒ **§四 定为「甲：开库」** —— Go 直接读 `data/akdb.sqlite`（必要时 `enemydb.sqlite`）。
+
+### 7.1 实测：纯 Go 驱动可行（在临时目录里量的，**未动 `rios-sim/go.mod`**）
+
+| 项 | 读数 |
+| --- | --- |
+| 驱动 | `modernc.org/sqlite` **v1.59.0**（纯 Go，**免 CGO**） |
+| 取得到吗 | 取得到（`GOPROXY=https://goproxy.cn,direct`；`proxy.golang.org` 与本机代理都回 200） |
+| 拉进多少模块 | `go list -m all` = **26**（`go mod tidy` 又补了 2 个测试期依赖） |
+| 最小程序体积 | **9.34 MB**（现役 `rios-sim` exe 是 **5.08 MB**） |
+| **真库可读性** | ✅ `akdb.sqlite` → `integrity_check=ok`、`stage=3055`、`operator=1164`；`enemydb.sqlite` → `integrity_check=ok`、`enemy=1807` |
+
+★ **代价要登记**：`rios-sim/go.mod` 今天是**零依赖**（`module rios-sim` ＋ `go 1.26`，全仓无第三方包）。
+走甲会给它加上**第一个依赖**，连带两个后果：
+1. **首次构建要能联网**（之后走模块缓存）。而 `tools/verify_pinned_tree.py` 会在**新建的冻结树里
+   自己 `go build`** ⇒ 那一步从此依赖模块缓存或网络。**这是本次方针带来的第一处真实风险，具名在此。**
+2. exe 体积约 5.08 MB → 9 MB 量级（发布包的体积会跟着变）。
+
+### 7.2 下一刀的第一步（已定）
+
+1. **取真 schema**：`akdb.sqlite` 的表／列名（小刀已踩过一次：我拿 `stage_id` 当列名、
+   又拿 `stage` 表去 `enemydb` 上查 ⇒ **那是探针的错，不是能力缺失**，两条报错原文在
+   §六 的口径下都属于「未核」而非「没有」）。
+2. 按 schema 定 Go 侧的**只读取数面**（先只做 TUI 第 [1] 步要的关卡列表／章节／zone）。
+3. 与 `data/gamedata` 那条既有入口（`DataRoot()`）分开命名，**不许混成一个入口**——
+   前者是**派生库**（一条命令几秒重建），后者是**非派生**数据（要下载），两者的失效处置不同。
