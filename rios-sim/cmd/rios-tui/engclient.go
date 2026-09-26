@@ -28,7 +28,7 @@ import (
 //
 // ★ 两条**不许**：
 //   · 解释器**不写死**：`RIOS_PYTHON` 指定，缺省才是 `python`（发布形态里玩家自己装
-//     的 Python 未必在 PATH 上，且本机实测可用的是 `C:\Python314\python.exe`）。
+//     的 Python 未必在 PATH 上）。
 //   · 找不到解释器／桥脚本时**具名失败**：说清缺什么、怎么补。**绝不**静默退化成
 //     一个空名册 —— 空名册与「这个号一个干员都没有」在界面上长得一模一样。
 
@@ -288,9 +288,11 @@ func (b *bridgeClient) call(cmd string, id int, extra map[string]any,
 // 静默返回空名册，玩家看到的是"名册空"，而不是"你的 Python 没找到"。
 func startError(b *bridgeClient, err error) error {
 	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+		//: ★ 提示里**不写任何本机路径**（原来的写法把开发机上那个解释器的绝对路径
+		//: 印了出来，既是本机信息、对玩家也毫无用处）。给形状，不给机器。
 		return fmt.Errorf("★ 找不到 Python 解释器 %q（桥脚本在 %s）。\n"+
-			"    指定一个再用：PowerShell 里 $env:%s='C:\\Python314\\python.exe'\n"+
-			"    （本机实测可用：C:\\Python314\\python.exe；名册与登录那条链必须走 Python）",
+			"    指定一个再用：PowerShell 里 $env:%s='<你的 python.exe 绝对路径>'\n"+
+			"    （名册与登录那条链必须走 Python；只输名字就得它在 PATH 上）",
 			b.python, b.script, envPython)
 	}
 	return fmt.Errorf("★ 起 Python 桥失败：%v（解释器 %q，脚本 %s）", err, b.python, b.script)

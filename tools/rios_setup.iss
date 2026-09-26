@@ -3,8 +3,10 @@
 ; 用法（Inno **本机还没装**，所以这份还没编译过一次 —— 见下面的"未核"）：
 ;
 ;   ISCC.exe /DAppVersion=0.3.0 ^
-;            /DSrcDir="D:\home\DSH\ak-tactic\out\release\rios-v0.3.0" ^
+;            /DSrcDir="<仓库根>\out\release\rios-v0.3.0" ^
 ;            tools\rios_setup.iss
+;
+; ★ 路径一律写成**仓库相对**形式（本机绝对路径不进仓库，博士 2026-09-26 令）。
 ;
 ; 版本号与 tag 名按目标判据 7 要先跟博士确认一次；本文件把版本号做成**必填参数**，
 ; 就是为了不让它悄悄写死一个。
