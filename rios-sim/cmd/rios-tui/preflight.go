@@ -159,9 +159,19 @@ func preflightChecks() []pfItem {
 	switch {
 	case perr != nil:
 		items = append(items, pfItem{name: "Python 解释器", detail: "试过 " + py + "：" + perr.Error(),
-			fix: "到 https://www.python.org/downloads/ 下载安装（3.10 以上）。\n" +
+			fix: "到 https://www.python.org/downloads/ 下载安装（本仓**实测过**的是 3.11 与 3.14）。\n" +
 				"装好后若仍找不到，用 RIOS_PYTHON=<python.exe 的绝对路径> 指定。\n" +
 				"影响范围：登录、名册、建库不可用；界面其余部分照常。"})
+	case pythonTooOld(pv):
+		//: 「太旧」是**待办**不是缺件：它很可能照样跑得动，只是本仓没在那个版本上实测过。
+		//: 所以给一条提示与一条升级命令，**不拦**（拦下来会误伤能用的环境）。
+		items = append(items, pfItem{name: "Python 解释器",
+			detail: fmt.Sprintf("Python %s（低于实测过的 %d.%d）", pv,
+				pythonTestedMinMajor, pythonTestedMinMinor),
+			fix: "本仓实测跑通的是 3.11 与 3.14；你这个版本很可能也行，只是没实测过 —— 先用着。\n" +
+				"真跑不动（建库／登录报错）就换一个：\n" +
+				"    winget install --id Python.Python.3.14 -e\n" +
+				"或到 https://www.python.org/downloads/ 自取。"})
 	case !hasQR:
 		items = append(items, pfItem{name: "Python 解释器", detail: "Python " + pv + "（qrcode 未安装）",
 			fix: "pip install qrcode —— 只有**扫码登录**要用它（二维码由它编码）。\n" +

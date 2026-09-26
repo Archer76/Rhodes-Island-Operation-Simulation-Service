@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -47,6 +48,58 @@ var wingetPythonIDs = []string{
 // : 官方下载页。**不代装**那条路也走它。
 const pythonURL = "https://www.python.org/downloads/"
 
+// pythonTestedMin 是**实测过**的最低版本，按它判「太旧」。
+//
+// 2026-09-27 的两条读数（不是「应当能跑」那种自述）：
+//
+//	· 3.11.9 实测：`compileall ak_tactic tools` 全包通过、`python -m ak_tactic db info` rc=0；
+//	· AST 扫全仓 298 个 .py：**3.11／3.12 独占特性各 0 处**（`match`／`except*`／
+//	  `tomllib`／`StrEnum`／`Self`／`TaskGroup`／`zip(strict=)`／`bit_count`／`pairwise`
+//	  逐个查过；粗扫报出来的两处「运行期联合类型」与一处 `strict=` 复核后是集合运算与
+//	  领域参数，不是版本要求），且 280/298 个文件带 `from __future__ import annotations`
+//	  ⇒ 注解里的 `X | Y` 不构成版本要求。
+//
+// ⇒ 判据取**保守**的一侧：**只把实测过的 3.11 当作「确定能跑」**，低于它给一条具名提示
+// 而**不拦**（3.10 很可能也行，但我没有那个解释器实测 —— 未核就不许说成「支持」）。
+const (
+	pythonTestedMinMajor = 3
+	pythonTestedMinMinor = 11
+)
+
+// parsePyVersion 把 `3.11.9` 这类版本串拆成主次版本号。
+func parsePyVersion(v string) (int, int, bool) {
+	digits := func(s string) (int, bool) {
+		t := strings.TrimFunc(s, func(r rune) bool { return r < '0' || r > '9' })
+		if t == "" {
+			return 0, false
+		}
+		n, err := strconv.Atoi(t)
+		return n, err == nil
+	}
+	parts := strings.Split(strings.TrimSpace(v), ".")
+	if len(parts) < 2 {
+		return 0, 0, false
+	}
+	maj, ok1 := digits(parts[0])
+	min, ok2 := digits(parts[1])
+	if !ok1 || !ok2 {
+		return 0, 0, false
+	}
+	return maj, min, true
+}
+
+// pythonTooOld 判「比实测过的还旧」。**解析不出来时返回 false** —— 不拿猜的东西当判据。
+func pythonTooOld(version string) bool {
+	maj, min, ok := parsePyVersion(version)
+	if !ok {
+		return false
+	}
+	if maj != pythonTestedMinMajor {
+		return maj < pythonTestedMinMajor
+	}
+	return min < pythonTestedMinMinor
+}
+
 // setupStep 是准备计划里的一步。
 type setupStep struct {
 	key  string // python / data / derived
@@ -58,11 +111,19 @@ type setupStep struct {
 //
 // 单独抽出来是为了能被判据直接喂四种组合走一遍 —— 真跑一遍 `-setup` 会下载 94 MB，
 // 那是「长等待」，不该塞进无终端自检里。
-func setupPlanFrom(pythonOK, dataOK, derivedOK bool) []setupStep {
+// `pythonOld` 单独一项而不是并进 `pythonOK`：**「没有」与「太旧」是两回事** ——
+// 前者非装不可，后者只是「很可能跑得动、但没实测过」。混成一个布尔，提示就只能说一句
+// 含糊话；而本仓的口径是缺件要具名到「缺什么、怎么办」。
+func setupPlanFrom(pythonOK, pythonOld, dataOK, derivedOK bool) []setupStep {
 	out := []setupStep{}
-	if !pythonOK {
+	switch {
+	case !pythonOK:
 		out = append(out, setupStep{key: "python", what: "装 Python 解释器",
 			why: "没找到可用的解释器（登录、名册、建库三条路都靠它）"})
+	case pythonOld:
+		out = append(out, setupStep{key: "python", what: "换一个新一点的 Python",
+			why: fmt.Sprintf("本机版本低于实测过的 %d.%d（实测跑通的是 3.11 与 3.14）",
+				pythonTestedMinMajor, pythonTestedMinMinor)})
 	}
 	if !dataOK {
 		out = append(out, setupStep{key: "data", what: "取游戏数据（关卡／敌人／干员表）",
@@ -77,20 +138,20 @@ func setupPlanFrom(pythonOK, dataOK, derivedOK bool) []setupStep {
 
 // setupPlan 读真实环境，给出这次要做什么。
 func setupPlan() []setupStep {
-	py := probeInterpreter()
+	py, ver := probeInterpreter()
 	ddir, _ := findDataDir()
 	dataOK := ddir != "" && fileExists(filepath.Join(ddir, "gamedata", "_level_index.json"))
 	derivedOK := ddir != "" && fileExists(filepath.Join(ddir, "akdb.sqlite"))
-	return setupPlanFrom(py != "", dataOK, derivedOK)
+	return setupPlanFrom(py != "", py != "" && pythonTooOld(ver), dataOK, derivedOK)
 }
 
-// probeInterpreter 探一次解释器：能用就返回它的路径（或名字），否则空串。
-func probeInterpreter() string {
+// probeInterpreter 探一次解释器：能用就返回它的路径（或名字）与版本号，否则都空。
+func probeInterpreter() (string, string) {
 	py := interpreterName()
-	if _, _, err := probePython(py); err == nil {
-		return py
+	if ver, _, err := probePython(py); err == nil {
+		return py, ver
 	}
-	return ""
+	return "", ""
 }
 
 // engRoot 给出「工程侧 Python 的根」：`tools/` 的上一层。
@@ -132,9 +193,12 @@ func runSetup() int {
 	fmt.Println("这几步由本程序自动完成；只有 Python 要你点头（也可以自己去装）。")
 	fmt.Println()
 
-	py := probeInterpreter()
-	if py == "" {
-		py = offerPythonInstall()
+	py, ver := probeInterpreter()
+	//: 「太旧」也走代装那条路（装上一个新的就盖过旧的），但它**不拦** —— 见 pythonTooOld。
+	if py == "" || pythonTooOld(ver) {
+		if got := offerPythonInstall(ver); got != "" {
+			py = got
+		}
 	}
 	needData := false
 	for _, st := range plan {
@@ -181,8 +245,17 @@ func runSetup() int {
 }
 
 // offerPythonInstall 走博士 2026-09-27 裁的那条路：**给链接 ＋ 问一句要不要代装**。
-func offerPythonInstall() string {
-	fmt.Printf("没找到 Python 解释器（%s 起不来）。两种办法：\n", interpreterName())
+//
+// `cur` 是现有解释器的版本（空串 = 没找到）。带上它是为了把话说准：**「没有」与「太旧」
+// 是两句话** —— 对后者说「没找到 Python」是错话，而玩家会照着错话去查一个根本不缺的东西。
+func offerPythonInstall(cur string) string {
+	if cur == "" {
+		fmt.Printf("没找到 Python 解释器（%s 起不来）。两种办法：\n", interpreterName())
+	} else {
+		fmt.Printf("本机 Python 是 %s，低于**实测过**的 %d.%d（实测跑通的是 3.11 与 3.14）。\n",
+			cur, pythonTestedMinMajor, pythonTestedMinMinor)
+		fmt.Println("它很可能也能跑；但既然要装，建议直接装个新的。两种办法：")
+	}
 	fmt.Printf("  · 你自己装：%s\n", pythonURL)
 	fmt.Println("  · 或者我来装：用 winget 装官方包（约 30 MB，装到你的用户目录，不需要管理员）")
 	fmt.Print("回车 = 我自己装；输入 y 再回车 = 你替我装： ")

@@ -1736,11 +1736,11 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		//: 塞进无终端自检会让这条尺子从"秒级"变成"十几分钟级"。所以把**判定**抽成
 		//: 纯函数 `setupPlanFrom` 在这里走遍组合，真跑那一层交给 `tools/build_installer.py`
 		//: 的装完自查（它本来就要装一棵树）。
-		all := setupPlanFrom(true, true, true)
+		all := setupPlanFrom(true, false, true, true)
 		check("三项齐全 ⇒ 计划为空（启动器每次都会调它，这条路径必须是哑的）",
 			len(all) == 0, fmt.Sprintf("%d 步", len(all)))
 
-		noPy := setupPlanFrom(false, true, true)
+		noPy := setupPlanFrom(false, false, true, true)
 		needKeys := func(steps []setupStep) string {
 			out := []string{}
 			for _, s := range steps {
@@ -1751,21 +1751,42 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		check("缺解释器 ⇒ 只计划 Python 一项，且**不动**已经齐的数据",
 			needKeys(noPy) == "python", needKeys(noPy))
 		check("缺数据 ⇒ 计划里有 data（并给出具名原因）",
-			needKeys(setupPlanFrom(true, false, true)) == "data" &&
-				strings.Contains(setupPlanFrom(true, false, true)[0].why, "_level_index.json"),
-			needKeys(setupPlanFrom(true, false, true)))
+			needKeys(setupPlanFrom(true, false, false, true)) == "data" &&
+				strings.Contains(setupPlanFrom(true, false, false, true)[0].why, "_level_index.json"),
+			needKeys(setupPlanFrom(true, false, false, true)))
 		check("缺派生库 ⇒ 计划里有 derived（具名到 akdb.sqlite）",
-			needKeys(setupPlanFrom(true, true, false)) == "derived" &&
-				strings.Contains(setupPlanFrom(true, true, false)[0].why, "akdb.sqlite"),
-			needKeys(setupPlanFrom(true, true, false)))
+			needKeys(setupPlanFrom(true, false, true, false)) == "derived" &&
+				strings.Contains(setupPlanFrom(true, false, true, false)[0].why, "akdb.sqlite"),
+			needKeys(setupPlanFrom(true, false, true, false)))
 		check("三样全缺 ⇒ 三步按 python→data→derived 排（先有解释器才谈得上建库）",
-			needKeys(setupPlanFrom(false, false, false)) == "python,data,derived",
-			needKeys(setupPlanFrom(false, false, false)))
+			needKeys(setupPlanFrom(false, false, false, false)) == "python,data,derived",
+			needKeys(setupPlanFrom(false, false, false, false)))
+		//: 「没有」与「太旧」必须是两句不同的话 —— 对太旧的机器说「没找到 Python」是错话。
+		oldOnly := setupPlanFrom(true, true, true, true)
+		check("有 Python 但太旧 ⇒ 计划里有 python，且理由是**版本**不是「没找到」",
+			needKeys(oldOnly) == "python" && strings.Contains(oldOnly[0].why, "低于实测过的"),
+			needKeys(oldOnly)+" / "+oldOnly[0].why)
+		check("太旧 ＋ 缺派生库 ⇒ 两步都在（那两件事互不替代）",
+			needKeys(setupPlanFrom(true, true, true, false)) == "python,derived",
+			needKeys(setupPlanFrom(true, true, true, false)))
+		//: 版本判定的边界（含**保守**的那一侧：3.10 没实测过，就当「太旧」提示一次）。
+		check("版本判定：3.11/3.14 不算旧，3.10 与 3.9 算，2.x 算",
+			!pythonTooOld("3.11.9") && !pythonTooOld("3.14.4") &&
+				pythonTooOld("3.10.11") && pythonTooOld("3.9.13") && pythonTooOld("2.7.18"),
+			fmt.Sprintf("3.11.9=%v 3.14.4=%v 3.10.11=%v 3.9.13=%v",
+				pythonTooOld("3.11.9"), pythonTooOld("3.14.4"),
+				pythonTooOld("3.10.11"), pythonTooOld("3.9.13")))
+		//: 负对照：**解析不出来时不许拿它当判据**（空串、怪串都返回 false＝不提示），
+		//: 否则一个探针抽风就会让所有人看到「你的 Python 太旧」。
+		check("负对照：版本串解析不出来时不判旧（不拿猜的东西当判据）",
+			!pythonTooOld("") && !pythonTooOld("weird") && !pythonTooOld("3"),
+			fmt.Sprintf("空=%v 怪串=%v 单段=%v",
+				pythonTooOld(""), pythonTooOld("weird"), pythonTooOld("3")))
 		//: 负对照：把「齐全」和「缺一样」的读数摆在一起，证明这把尺子分得开
 		//: （恒真的判据在这里会把它俩判成同一个结果）。
 		check("负对照：齐全与缺一样必须给出**不同**的计划",
-			len(all) != len(setupPlanFrom(true, false, true)),
-			fmt.Sprintf("齐全=%d 步 / 缺数据=%d 步", len(all), len(setupPlanFrom(true, false, true))))
+			len(all) != len(setupPlanFrom(true, false, false, true)),
+			fmt.Sprintf("齐全=%d 步 / 缺数据=%d 步", len(all), len(setupPlanFrom(true, false, false, true))))
 
 		//: 真环境那一层：在开发树里（解释器在、数据在）应当判成"不用准备"。
 		//: 这一条同时给上面那些纯函数读数当一个"接得上真环境"的凭据。
