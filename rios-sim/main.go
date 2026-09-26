@@ -98,6 +98,8 @@ type response struct {
 	Spawns json.RawMessage `json:"spawns,omitempty"`
 	//: `arrivals` 的应答：到达表（见 `arrivals.go`）。
 	Arrivals json.RawMessage `json:"arrivals,omitempty"`
+	//: `spots` 的应答：可部署格（见 `spots.go`）。
+	Spots json.RawMessage `json:"spots,omitempty"`
 	//: `loadout` 的应答：名册与计划合起来之后的练度（见 `loadout.go`）。
 	Loadout json.RawMessage `json:"loadout,omitempty"`
 	//: `stageenv` 的应答：构建规格要用的关卡静态 8 项（见 `stageenv.go`）。
@@ -838,6 +840,26 @@ func handle(req *request, started string) response {
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true, Arrivals: raw}
+	case "spots":
+		// 可部署格（`stage.py:141/147` 的 `melee_spots` / `ranged_spots`，见 `spots.go`）。
+		// 关卡走 req.Level 或 req.Path（合成关卡），与 `arrivals` 同口径。
+		var sq SpotsQuery
+		if len(req.Spec) > 0 {
+			if err := json.Unmarshal(req.Spec, &sq); err != nil {
+				return response{ID: req.ID, OK: false,
+					Error: fmt.Sprintf("spots 的 spec 解不开：%v", err)}
+			}
+		}
+		sout, err := SpotsOf(req.Level, req.Path, sq.Difficulty)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		raw, err := json.Marshal(sout)
+		if err != nil {
+			return response{ID: req.ID, OK: false,
+				Error: fmt.Sprintf("序列化失败：%v", err)}
+		}
+		return response{ID: req.ID, OK: true, Spots: raw}
 	case "spawns":
 		// 丙阶段四·第三十批：出怪规格（`simgo/spec.py::_spawn_spec`，见 `spawns.go`）。
 		// 关卡走 req.Level 或 req.Path（合成关卡）。**不吃计划**——出怪表是关卡数据。
