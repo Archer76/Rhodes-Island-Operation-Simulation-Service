@@ -66,13 +66,9 @@ type rosterData struct {
 	Path string `json:"path"`
 }
 
-// bridgeReq / bridgeResp 是协议的两端。应答里的 `trace` 等字段这里不接
-// （`encoding/json` 忽略未知字段）—— 界面只显示 `error` 那一行。
-type bridgeReq struct {
-	ID  int    `json:"id"`
-	Cmd string `json:"cmd"`
-}
-
+// bridgeResp 是协议应答。**一份结构当联合体用**：桥那边"一条命令一组字段"，
+// 这里都接上，取用哪个由调用方决定（`encoding/json` 忽略没出现的键）。
+// 应答里的 `trace` 等字段不接 —— 界面只显示 `error` 那一行。
 type bridgeResp struct {
 	ID        int              `json:"id"`
 	OK        bool             `json:"ok"`
@@ -83,14 +79,51 @@ type bridgeResp struct {
 	Count     int              `json:"count"`
 	Operators []RosterOperator `json:"operators"`
 	Path      string           `json:"path"`
-	//: 扫码登录那两条（`login_start` / `login_poll`）。同一份应答结构当联合体用，
-	//: 与桥那边「一条命令一组字段」的形状对应。
+	//: 扫码登录那两条（`login_start` / `login_poll`）。
 	Phase    string   `json:"phase"`
 	URL      string   `json:"url"`
 	QRMatrix []string `json:"qr_matrix"`
 	QRSize   int      `json:"qr_size"`
 	QRNote   string   `json:"qr_note"`
 	Text     string   `json:"text"`
+	//: `ping`：当前账号与**凭据状态三态**（cred / hgtoken / none）—— 登录屏那句状态
+	//: 就是照它说的（"已保存凭据…"／"已保存 hgToken（尚未铸成 cred）"／"本机还没有任何
+	//: 森空岛凭据"）。不给这一栏，界面只能干说一句"已登录"。
+	Proto     int    `json:"proto"`
+	Python    string `json:"python"`
+	UID       string `json:"uid"`
+	CredState string `json:"cred_state"`
+	//: `accounts`：当前账号、名册用的游戏 uid，以及逐条账号
+	//: （界面显示的是**游戏用户名 ＋ 游戏 uid** —— 博士 2026-09-18 口径）。
+	Current  string       `json:"current"`
+	GameUID  string       `json:"game_uid"`
+	Accounts []accountRow `json:"accounts"`
+	//: `login_poll`：`status` 可空（还没扫过时是 null）⇒ 用指针接，别拿 0 顶替。
+	Status *int `json:"status"`
+	//: `fill_accounts`：补全各账号游戏用户名与 uid（联网那条）。
+	//:
+	//: ⚠ 那个总数在桥上叫 **`total`** 而不是 `accounts` —— `accounts` 这个键已经被上面
+	//: 那条命令占成**数组**了，同一个键两种类型会让"一份结构当联合体用"当场编译不过
+	//: （第一版就是这么撞上的，编译器直接指出来）。
+	Total   int      `json:"total"`
+	Todo    int      `json:"todo"`
+	Filled  int      `json:"filled"`
+	Skipped int      `json:"skipped"`
+	Lines   []string `json:"lines"`
+}
+
+// accountRow 是 `accounts` 命令里的一行账号。
+//
+// ★ 界面上要显示的是**游戏用户名与游戏 uid**：登录账号 id 只是凭据文件名上的东西、
+// 认不出人。`Line` 是 Python 侧 `describe_account` 排好的那一行（已剥掉富文本标记）
+// —— 用它就与旧界面逐字同形。
+type accountRow struct {
+	UID     string `json:"uid"`
+	GameUID string `json:"game_uid"`
+	Nick    string `json:"nick"`
+	Known   bool   `json:"known"`
+	Current bool   `json:"current"`
+	Line    string `json:"line"`
 }
 
 type bridgeClient struct {
@@ -160,9 +193,11 @@ func findBridgeScript() (string, []string) {
 
 // call 起一次子进程、发一行请求、读一行应答。
 //
+// `extra` 是请求里除 `id`/`cmd` 之外的字段（`activate` 要带 `uid`，其余命令用不上）。
 // 一次一进程：名册这条本来就只要一次取数（几百毫秒），常驻进程要管生命周期、
 // 僵尸与并发，这一屏还用不上。协议（`id` ＋ 一行 JSON）照常，换成常驻时调用方不用动。
-func (b *bridgeClient) call(cmd string, id int, timeout time.Duration) (*bridgeResp, error) {
+func (b *bridgeClient) call(cmd string, id int, extra map[string]any,
+	timeout time.Duration) (*bridgeResp, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -183,7 +218,16 @@ func (b *bridgeClient) call(cmd string, id int, timeout time.Duration) (*bridgeR
 	if err := c.Start(); err != nil {
 		return nil, startError(b, err)
 	}
-	req, _ := json.Marshal(bridgeReq{ID: id, Cmd: cmd})
+	payload := map[string]any{"id": id, "cmd": cmd}
+	for k, v := range extra {
+		payload[k] = v
+	}
+	req, err := json.Marshal(payload)
+	if err != nil {
+		_ = c.Process.Kill()
+		_ = c.Wait()
+		return nil, fmt.Errorf("★ 请求序列化失败：%v", err)
+	}
 	if _, err := stdin.Write(append(req, '\n')); err != nil {
 		_ = c.Process.Kill()
 		_ = c.Wait()
@@ -256,7 +300,7 @@ func fetchRoster() (*rosterData, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := b.call("roster", 1, 60*time.Second)
+	resp, err := b.call("roster", 1, nil, 60*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +310,126 @@ func fetchRoster() (*rosterData, error) {
 		Note:      resp.Note,
 		Count:     resp.Count,
 		Operators: resp.Operators,
+		Path:      resp.Path,
 	}, nil
+}
+
+// ---------------------------------------------------------------- 登录那几条
+
+// pingData 是 `ping` 的应答（握手 ＋ 凭据状态）。
+type pingData struct {
+	Proto     int    `json:"proto"`
+	Python    string `json:"python"`
+	UID       string `json:"uid"`
+	CredState string `json:"cred_state"` // cred / hgtoken / none
+}
+
+// fetchPing 握手一次：拿当前账号与**凭据状态三态**。
+//
+// 登录屏那块"登录态"就是照它说的（Python 的 `_status()` 读 `skland.load_cred()`）：
+// 不给这一栏，界面只能干说一句"已登录"，而"有 hgToken 但还没铸成 cred"是**另一种**
+// 状态、处置也不同。
+func fetchPing() (*pingData, error) {
+	b, err := newBridgeClient()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.call("ping", 1, nil, 20*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return &pingData{Proto: resp.Proto, Python: resp.Python, UID: resp.UID,
+		CredState: resp.CredState}, nil
+}
+
+// accountsData 是本机登过的账号那一块。
+type accountsData struct {
+	Current string       `json:"current"`
+	GameUID string       `json:"game_uid"`
+	Rows    []accountRow `json:"accounts"`
+}
+
+// fetchAccounts 读本机登过的账号。**离线**（读的都是本地文件）—— 退出账号不删文件，
+// 所以这里通常不止一行，"切回不必重扫"的根据就是它。
+func fetchAccounts() (*accountsData, error) {
+	b, err := newBridgeClient()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.call("accounts", 1, nil, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return &accountsData{Current: resp.Current, GameUID: resp.GameUID,
+		Rows: resp.Accounts}, nil
+}
+
+// loginPollData 是一次轮询的结果（**不含二维码**：只在 `login_start` 给一次）。
+type loginPollData struct {
+	Phase  string `json:"phase"` // idle → waiting → done / failed
+	Status *int   `json:"status"`
+	Text   string `json:"text"`
+	URL    string `json:"url"`
+}
+
+// pollLogin 问一次扫码进度。
+func pollLogin() (*loginPollData, error) {
+	b, err := newBridgeClient()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.call("login_poll", 1, nil, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return &loginPollData{Phase: resp.Phase, Status: resp.Status,
+		Text: resp.Text, URL: resp.URL}, nil
+}
+
+// activateAccount 切到某个已登账号。**不联网、不重扫** —— 凭据与名册都在本地。
+func activateAccount(uid string) error {
+	b, err := newBridgeClient()
+	if err != nil {
+		return err
+	}
+	_, err = b.call("activate", 1, map[string]any{"uid": uid}, 30*time.Second)
+	return err
+}
+
+// logoutAccount 退出账号（**一个文件都不删** —— 只把"当前账号"这个指向清空）。
+func logoutAccount() error {
+	b, err := newBridgeClient()
+	if err != nil {
+		return err
+	}
+	_, err = b.call("logout", 1, nil, 30*time.Second)
+	return err
+}
+
+// fillResult 是 `fill_accounts` 的应答。
+type fillResult struct {
+	Total   int      `json:"total"`
+	Todo    int      `json:"todo"`
+	Filled  int      `json:"filled"`
+	Skipped int      `json:"skipped"`
+	Lines   []string `json:"lines"`
+}
+
+// fillAccounts 补全各账号的游戏用户名与游戏 uid（**联网**，按一次问一次）。
+//
+// 联网动作不在挂载时悄悄打一次（博士 2026-09-17 裁定）：它只在玩家按 `U` 时跑。
+// 超时给得宽（每个账号一问，逐个串行）。
+func fillAccounts() (*fillResult, error) {
+	b, err := newBridgeClient()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.call("fill_accounts", 1, nil, 180*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return &fillResult{Total: resp.Total, Todo: resp.Todo,
+		Filled: resp.Filled, Skipped: resp.Skipped, Lines: resp.Lines}, nil
 }
 
 // loginStartData 是一次 `login_start` 的应答。
@@ -292,7 +455,7 @@ func fetchLoginStart() (*loginStartData, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := b.call("login_start", 1, 30*time.Second)
+	resp, err := b.call("login_start", 1, nil, 30*time.Second)
 	if err != nil {
 		return nil, err
 	}

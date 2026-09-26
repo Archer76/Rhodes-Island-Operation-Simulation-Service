@@ -13,8 +13,9 @@
 命令（请求 `{"id":N,"cmd":"..."}`；应答 `{"id":N,"ok":true,...}` 或
 `{"id":N,"ok":false,"error":"..."}`）：
 
-    ping                      握手：协议号 ＋ 解释器版本 ＋ 当前账号
+    ping                      握手：协议号 ＋ 解释器版本 ＋ 当前账号 ＋ 凭据状态
     accounts                  本机登过的账号（含当前标记）＋ 游戏 uid
+    fill_accounts             补全各账号的游戏用户名与游戏 uid（**联网**，按一次问一次）
     login_start [timeout=180] 起扫码登录（**后台线程**跑 login_by_qr），返回二维码矩阵
     login_poll                取扫码进度／结果（waiting / done / failed）
     activate {uid}            切到某个已登账号
@@ -158,12 +159,67 @@ def cmd_ping(req: dict) -> dict:
 
     from ak_tactic import skland
 
+    #: 凭据状态：`cred`（有效期内）／`hgtoken`（还没铸成 cred）／`none`。
+    #: ★ 登录屏那句话就是照这三态说的（「已保存凭据：有效期内可直接 status 校验；
+    #: 过期会由 hgToken 静默重铸」／「已保存 hgToken（尚未铸成 cred）」／「本机还没有
+    #: 任何森空岛凭据」）—— 不给这一栏，界面只能干说一句"已登录"。
+    try:
+        st = skland.load_cred()
+        if st.get("cred"):
+            cred_state = "cred"
+        elif st.get("hgToken"):
+            cred_state = "hgtoken"
+        else:
+            cred_state = "none"
+    except Exception:                                        # noqa: BLE001
+        cred_state = "none"
+
     return {
         "proto": PROTO,
         "python": platform.python_version(),
         "impl": sys.implementation.name,
         "uid": skland.current_uid(),
+        "cred_state": cred_state,
     }
+
+
+def cmd_fill_accounts(req: dict) -> dict:
+    """补全本机每个账号的**游戏用户名与游戏 uid**（**联网**，按一次问一次）。
+
+    为什么非有这一条：账号列表要显示的是游戏用户名与游戏 uid，而这两个量**离线推不
+    出来** —— 登录账号 id 是通行证账号（13 位），游戏 uid 是另一个号（8 位），账号 id
+    不出现在任何一份森空岛数据里。唯一的来源是问一次再记住
+    （`~/.skland/accounts.json`）。
+
+    照 `LoginScreen.action_fill` 的口径，三条：
+      · **已经知道的直接跳过**（不白打接口）；
+      · **一个账号失败不影响别的账号**（逐个记结果、逐个报，不是整张列表一起沉掉）；
+      · 补全可能刚把**游戏 uid** 定下来，而名册是按游戏 uid 存的文件 ⇒ 界面拿到应答
+        后应当重读一次名册（这一条在界面侧做，桥上只如实回报）。
+    """
+    from ak_tactic import skland
+    from ak_tactic.tui import data as D
+
+    uids = [a.get("uid") or "" for a in skland.known_accounts()]
+    uids = [u for u in uids if u]
+    todo = [u for u in uids
+            if not (D.account_info(u).get("nick") and D.account_info(u).get("game_uid"))]
+    filled: list[str] = []
+    lines: list[str] = []
+    for uid in todo:
+        info = D.account_info(uid)
+        try:
+            got = skland.resolve_game_uid_for(uid, uid=info.get("game_uid") or None)
+        except Exception as exc:                             # noqa: BLE001
+            lines.append("账号 %s 补全失败：%s: %s"
+                         % (uid, exc.__class__.__name__, exc))
+            continue
+        filled.append(uid)
+        lines.append("%s　游戏uid=%s　（登录账号 %s）"
+                     % (_plain(str(got.get("nickName") or "（森空岛没给昵称）")),
+                        got.get("gameUid"), uid))
+    return {"total": len(uids), "todo": len(todo), "filled": len(filled),
+            "skipped": len(uids) - len(todo), "lines": lines}
 
 
 def cmd_accounts(req: dict) -> dict:
@@ -273,6 +329,7 @@ def cmd_roster(req: dict) -> dict:
 HANDLERS = {
     "ping": cmd_ping,
     "accounts": cmd_accounts,
+    "fill_accounts": cmd_fill_accounts,
     "login_start": cmd_login_start,
     "login_poll": cmd_login_poll,
     "activate": cmd_activate,
