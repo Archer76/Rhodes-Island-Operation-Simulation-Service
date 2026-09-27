@@ -1214,11 +1214,35 @@ def cmd_db(args: argparse.Namespace) -> int:
             return 0
         conn = connect(target, readonly=False)
         try:
+            #: ★ 博士 2026-09-27：「**未来的新活动也按同一逻辑决定去留**」。
+            #: 那条逻辑是模式（代号带不带 sre/side），所以它自动管将来；但**新模式
+            #: 出现时人要看得见** —— 这里把**被拒**的活动代号按「去掉 actNN 前缀后的
+            #: 形态」汇总印出来。将来某个新形态混进来被静默拒掉，这一行就是证据。
             with conn:
+                rows = [dict(r) for r in conn.execute(
+                    "SELECT zone_id, type, activity_id FROM zone")]
+                shapes: dict[str, int] = {}
+                for r in rows:
+                    if (r.get("type") or "") != "ACTIVITY" or keeps_zone(r):
+                        continue
+                    code = (r.get("activity_id") or "").strip() or r["zone_id"]
+                    tail = code.lower()
+                    if tail.startswith("act"):
+                        tail = tail[3:]
+                        i = 0
+                        while i < len(tail) and tail[i].isdigit():
+                            i += 1
+                        tail = tail[i:] or "(只有数字)"
+                    shapes[tail] = shapes.get(tail, 0) + 1
                 gone = prune_foreign_rows(conn)
                 renamed = clean_zone_names(conn)
         finally:
             conn.close()
+        if shapes:
+            print("    被拒的活动代号形态（去掉 actNN 前缀；出现没见过的形态请显式裁定）："
+                  + "、".join("%s×%d" % (k, v)
+                              for k, v in sorted(shapes.items(),
+                                                 key=lambda kv: -kv[1])))
         print(f"清掉 {gone[0]} 个 zone、{gone[1]} 个关卡（口径 `keeps_zone`：type 不在 "
               f"{'、'.join(CHAPTER_TYPES)} 里的，或 type=ACTIVITY 而代号不带 "
               f"{'／'.join(ACTIVITY_KEEP_MARKERS)} 的，以及 zone_id 在 zone 表里查不到的）")
