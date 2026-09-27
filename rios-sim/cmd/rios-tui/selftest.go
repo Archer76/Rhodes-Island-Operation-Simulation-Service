@@ -160,7 +160,8 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		press(r, "enter")
 		if screenName(r.top()) == "*main.envScreen" {
 			check("多档环境的部会先过环境屏", true, "envScreen")
-			check("环境屏首项是不限", strings.Contains(r.View(), "不限"), "不限")
+			check("环境屏首行是「全部关卡」（博士 2026-09-27 定名，逐条见五之九）",
+				strings.Contains(r.View(), "全部关卡"), "全部关卡")
 			r.top().(*envScreen).cursor = 0
 			press(r, "enter")
 		}
@@ -785,6 +786,62 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			badCh == 0, fmt.Sprintf("命中 %d 行", badCh))
 		check("控件清单负对照：关卡屏喂匹配不到的关键词 ⇒ 该形状读 false",
 			badSt == 0, fmt.Sprintf("命中 %d 行", badSt))
+	}
+
+	fmt.Println("== 五之九 · 环境屏的「全部关卡」那一行（Go 比参照多的一行）==")
+	//: ★ 2026-09-27 新加（博士当天定名）。环境屏是**主线第 9-14 章那一类**才会
+	//: 出现的一层（判据是库里那个 zone 真有 ≥2 档 diff_group，不是按章号写死）。
+	//:
+	//: 它的第 0 行是「全部关卡」——**参照实现没有这一行**（`EnvPickScreen` 只列真
+	//: 环境，想跳过去只能 Esc 退回上一层）。博士裁定留着并定名 ⇒ 具名登记的分道
+	//: 扬镳（登记在 `docs/python-to-go-migration.md`）。
+	//:
+	//: 判据盯两件**性质**，不盯文案：
+	//:   ① 首行的字就是「全部关卡」——**名字本身是博士定的规格**，所以这一条是
+	//:      规格断言，不是"某段文案"断言；
+	//:   ② 选中它 ⇒ 列出这一部的**全部**关卡，且**严格多于**任一个真环境档。
+	//: ② 是这条尺子的负对照：若它哪天悄悄退化成"等于某个环境档"，只盯 ① 会照样绿。
+	{
+		zid := ""
+		for _, z := range zones {
+			if data.ZoneEnvsShown(data.ZoneEnvs(z.ZoneID, stages)) {
+				zid = z.ZoneID
+				break
+			}
+		}
+		check("存在多档环境的 zone（这一段的前置）", zid != "", zid)
+		if zid != "" {
+			envs := data.ZoneEnvs(zid, stages)
+			r5 := newRoot(&appCtx{w: 90, h: 26, mode: "auto", stages: stages,
+				envs: envs, part: &data.ChapterPart{ZoneID: zid, Title: "环境屏探针"}},
+				welcomeScreen{})
+			r5.push(&envScreen{}, onEnvPicked)
+			if screenName(r5.top()) != "*main.envScreen" {
+				check("（前置）压到环境屏", false, screenName(r5.top()))
+			} else {
+				check(fmt.Sprintf("环境屏首行是「全部关卡」（%s 这一部）", zid),
+					strings.Contains(r5.View(), "全部关卡"), "全部关卡")
+				press(r5, "enter") //: 光标默认在 0 = 「全部关卡」
+				if screenName(r5.top()) != "*main.stageScreen" {
+					check("选「全部关卡」⇒ 进关卡屏", false, screenName(r5.top()))
+				} else {
+					got := len(r5.top().(*stageScreen).rows)
+					all := len(data.ListStages(stages, data.StageFilter{ZoneID: zid}))
+					check("选「全部关卡」⇒ 列出这一部的全部关卡（不按环境筛）",
+						got == all && got > 0,
+						fmt.Sprintf("实得 %d 关 / 不筛 %d 关", got, all))
+					most := 0
+					for _, e := range envs {
+						if n := len(data.ListStages(stages,
+							data.StageFilter{ZoneID: zid, Env: e.Env})); n > most {
+							most = n
+						}
+					}
+					check("负对照：「全部关卡」严格多于任一单个环境档（否则它是假的）",
+						got > most, fmt.Sprintf("全部 %d 关 > 最大单档 %d 关", got, most))
+				}
+			}
+		}
 	}
 
 	fmt.Println("== 六 · 环境筛选（取数口径）==")

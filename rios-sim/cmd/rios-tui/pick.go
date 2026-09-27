@@ -232,8 +232,17 @@ func (*envScreen) title() string { return "选环境" }
 func (*envScreen) help() string  { return listHelp }
 
 func (s *envScreen) view(c *appCtx) string {
-	//: 第 0 行固定是「不限」——它对应 Python 里的 `env=None`。
-	rows := []string{"不限（这一部的全部环境）"}
+	//: 第 0 行是「全部关卡」——它对应 Python 里的 `env=None`（不按环境筛）。
+	//:
+	//: ★ **这一行是 Go 比参照多出来的**：参照的 `EnvPickScreen`
+	//: （`ak_tactic/tui/app.py:1363-1391`）只列真环境，想跳过这一层只能 Esc 退回
+	//: 上一层。博士 2026-09-27 裁定：**留着**，名字叫「全部关卡」（原先是
+	//: 「不限（这一部的全部环境）」）。⇒ 这是一处**具名登记的分道扬镳**，
+	//: 登记在 `docs/python-to-go-migration.md`。
+	//:
+	//: 语义与 Esc 同一个落点（都把这一部的全部关卡列出来）——所以这一屏的两个
+	//: 口子说的是同一件事，不是两种行为。
+	rows := []string{"全部关卡"}
 	for _, e := range c.envs {
 		rows = append(rows, pad(e.Env, 10)+pad(e.Label, 14)+
 			fmt.Sprintf("关数 %3d", e.Levels))
@@ -249,7 +258,7 @@ func (s *envScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
 	switch {
 	case keyIs(k, "enter"):
 		if s.cursor == 0 {
-			return s, action{kind: actBack} // res=nil 就是「不限」
+			return s, action{kind: actBack} // res=nil 就是「全部关卡」
 		}
 		if s.cursor-1 < len(c.envs) {
 			return s, action{kind: actBack, res: &c.envs[s.cursor-1]}
@@ -499,7 +508,7 @@ func onEnvPicked(r *root, res any) {
 	if e, ok := res.(*data.ZoneEnv); ok && e != nil {
 		r.ctx.env = e.Env
 	} else {
-		r.ctx.env = "" // 不限
+		r.ctx.env = "" // 全部关卡（不按环境筛）
 	}
 	r.pushStage()
 }
