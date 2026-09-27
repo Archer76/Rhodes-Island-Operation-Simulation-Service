@@ -599,6 +599,96 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		}
 	}
 
+	fmt.Println("== 五之七 · 练度门槛下拉（Python `Select #f-trained`）==")
+	//: ★ 2026-09-27 新加。参照实现那一屏的第三个交互件：三档练度门槛
+	//: （`data.py:453-457`），判定是**元组比较** `(elite, level) >= (min)`。
+	//: 这里盯三件事：三档文案与参照逐字相同、**边界**（那条最容易写错的
+	//: `E1L80` 在「≥精英二60」下不该过）、展开时回车只确认门槛。
+	{
+		roster9 := &rosterData{Source: "selftest", Complete: true, Count: 5,
+			Operators: []RosterOperator{
+				{CharID: "char_1", Name: "甲", Profession: "PIONEER", Elite: 0, Level: 1},
+				{CharID: "char_2", Name: "乙", Profession: "WARRIOR", Elite: 1, Level: 1},
+				{CharID: "char_3", Name: "丙", Profession: "MEDIC", Elite: 1, Level: 45},
+				{CharID: "char_4", Name: "丁", Profession: "CASTER", Elite: 2, Level: 90},
+				{CharID: "char_5", Name: "戊", Profession: "MEDIC", Elite: 0, Level: 30},
+			}}
+		ctx9 := &appCtx{w: 90, h: 26, roster: roster9, mode: "auto"}
+		r9 := newRoot(ctx9, newSquadPickScreen(ctx9, nil))
+		r9.Update(tea.WindowSizeMsg{Width: 90, Height: 26})
+		ss9, _ := r9.top().(*squadPickScreen)
+		if ss9 == nil {
+			check("（前置）选人屏在栈顶", false, screenName(r9.top()))
+		} else {
+			labels := make([]string, 0, len(trainedOptions))
+			for _, o := range trainedOptions {
+				labels = append(labels, o.label)
+			}
+			check("练度门槛恰是三档，且文案与参照逐字相同",
+				strings.Join(labels, "|") == "不限|≥ 精英二 60 级|精英二 90 级",
+				strings.Join(labels, "|"))
+			//: ★ 边界：这一组是参照的判据专门钉过的形状（`check_tui.py:1643-1650`：
+			//: 「E1 80 级不该过『≥精英二60』」）—— 元组比较 vs「两个都 ≥」的分水岭。
+			bounds := []struct {
+				why  string
+				op   RosterOperator
+				opt  trainedOption
+				want bool
+			}{
+				{"E1L80 不过「≥精英二60」（精英段不够，元组比较先比精英段）",
+					RosterOperator{Elite: 1, Level: 80}, trainedOptions[1], false},
+				{"E2L60 过「≥精英二60」（边界取等）",
+					RosterOperator{Elite: 2, Level: 60}, trainedOptions[1], true},
+				{"E2L59 不过「≥精英二60」",
+					RosterOperator{Elite: 2, Level: 59}, trainedOptions[1], false},
+				{"E2L45 不过「精英二90」",
+					RosterOperator{Elite: 2, Level: 45}, trainedOptions[2], false},
+				{"E0L1 过「不限」（底线是 (0,1)，不是 (0,0)）",
+					RosterOperator{Elite: 0, Level: 1}, trainedOptions[0], true},
+				{"E0L0 不过「不限」",
+					RosterOperator{Elite: 0, Level: 0}, trainedOptions[0], false},
+			}
+			for _, b := range bounds {
+				check("练度门槛边界："+b.why,
+					meetsTrained(b.op, b.opt) == b.want,
+					fmt.Sprintf("实得 %v", meetsTrained(b.op, b.opt)))
+			}
+			base9 := len(ss9.visible())
+			depth9 := len(r9.stack)
+			press(r9, "f")
+			check("F 打开练度下拉（展开态）", ss9.trOpen, fmt.Sprintf("trOpen=%v", ss9.trOpen))
+			press(r9, "enter") //: 回车 = 确认当前档（不限），**不是**进入下一步
+			check("★ 下拉展开时回车**只确认门槛**、不进入下一步（栈深不变）",
+				!ss9.trOpen && len(r9.stack) == depth9,
+				fmt.Sprintf("trOpen=%v 栈深 %d→%d", ss9.trOpen, depth9, len(r9.stack)))
+			press(r9, "f")
+			press(r9, "down")
+			press(r9, "down")
+			press(r9, "enter") //: 确认「精英二 90 级」
+			vis9 := ss9.visible()
+			check("选「精英二 90 级」⇒ 只剩 E2L90 的那一位",
+				len(vis9) == 1 && vis9[0].Name == "丁",
+				fmt.Sprintf("可见 %d 人", len(vis9)))
+			//: 再加一道职业筛 ⇒ 空集：这时屏上必须说清"是筛选筛没了"，
+			//: 而不是与"名册本身是空的"共用一句含糊的话。
+			for i, v := range func() []string { _, vs := ss9.profOptions(); return vs }() {
+				if v == "PIONEER" {
+					ss9.setProf(i)
+				}
+			}
+			view9 := r9.View()
+			check("筛到空集时屏上说清原因（名册有 N 人／当前筛选没人），不是含糊一句",
+				len(ss9.visible()) == 0 &&
+					strings.Contains(view9, "当前筛选下一个人都没有"),
+				fmt.Sprintf("可见 %d 人", len(ss9.visible())))
+			ss9.setProf(0)
+			ss9.trIdx = 0
+			check("负对照：门槛回到「不限」⇒ 可见人数回到基数",
+				len(ss9.visible()) == base9,
+				fmt.Sprintf("%d / %d", len(ss9.visible()), base9))
+		}
+	}
+
 	fmt.Println("== 六 · 环境筛选（取数口径）==")
 	hit := ""
 	for _, z := range zones {

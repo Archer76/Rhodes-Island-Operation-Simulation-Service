@@ -344,12 +344,40 @@ func (s *squadAskScreen) update(_ *appCtx, k tea.KeyMsg) (screen, action) {
 
 // ---- [2b] 选人屏 -----------------------------------------------------------
 
+// trainedOption 是练度门槛下拉的一档（对应参照的 `Select #f-trained`）。
+type trainedOption struct {
+	label    string
+	eliteMin int
+	levelMin int
+}
+
+// trainedOptions 的三档与判定式**照抄**参照实现（`ak_tactic/tui/data.py:453-457`
+// 的 `TRAINED_FILTERS` 与 `:510-516` 的 `meets_trained`）：不限／≥ 精英二 60 级／
+// 精英二 90 级。
+var trainedOptions = []trainedOption{
+	{label: "不限", eliteMin: 0, levelMin: 1},
+	{label: "≥ 精英二 60 级", eliteMin: 2, levelMin: 60},
+	{label: "精英二 90 级", eliteMin: 2, levelMin: 90},
+}
+
+// meetsTrained 是「这名干员过不过这道门槛」。
+//
+// ★ 判定是**元组比较** `(elite, level) >= (eliteMin, levelMin)` —— 字典序：
+// 先比精英段，精英段相同才比等级。**不是**「两个都大于等于」那种写法。
+// 这条边界最容易写错：`E1L80` 在「≥ 精英二 60 级」下**不该过**（精英段 1 < 2），
+// 而「两个都 ≥」的写法会放它过去。参照的判据专门有一条盯它。
+func meetsTrained(op RosterOperator, o trainedOption) bool {
+	if op.Elite != o.eliteMin {
+		return op.Elite > o.eliteMin
+	}
+	return op.Level >= o.levelMin
+}
+
 // squadPickScreen 是选人屏：槽位数 ＋ 可多选的干员列表（名册来自桥）＋ 进入下一步。
 //
-// ★ 与 Python 的差异（登记，都是**没做**而不是做错）：Python 那一屏还有
-// **主职业行 / 子职业行**两排筛选（`PickerRow`）与**练度门槛下拉**三档
-// （不限／≥精英二60／精英二90），这一版只做「槽位数 ＋ 列表 ＋ 多选 ＋ 前进」。
-// 少了筛选，两百多人的名册得靠上下键翻——判据不依赖它们，先用着。
+// ★ 与 Python 的两排筛选 ＋ 一个练度下拉的差距**已补齐**（2026-09-27）：
+// 主职业行（`#prof-row`）／子职业行（`#sub-row`）／练度门槛（`#f-trained`）
+// 三件都在了 —— 见各自的字段与 `visible()`。
 type squadPickScreen struct {
 	cursor int
 	rows   []RosterOperator
@@ -368,6 +396,12 @@ type squadPickScreen struct {
 	subIdx int
 	subRow hitRow
 	focus  int
+	//: ★ 练度门槛（参照的 `Select #f-trained`）：`trIdx` 是当前档，
+	//: `trOpen`/`trAt` 是下拉的展开态（与关卡屏的难度下拉同一形状：
+	//: **开→选→确认**，展开时独占方向键与回车）。
+	trIdx  int
+	trOpen bool
+	trAt   int
 }
 
 func (*squadPickScreen) title() string { return "选人" }
@@ -433,20 +467,22 @@ func (s *squadPickScreen) subOptions() ([]string, []string) {
 	return items, vals
 }
 
-// visible 是当前职业／子职业筛选下真正列出的干员。
+// visible 是当前**三道筛选**（练度门槛 ＋ 主职业 ＋ 子职业）下真正列出的干员。
 //
-// ★ 子职业只在**职业也选了**的时候参与筛选 —— 照参照 `app.py:1909-1911`
-// （`if self._prof and self._sub:`）。职业回到「全部」时子职业行的值一起清掉。
+// ★ 顺序照参照 `app.py:1906-1911`：先练度、再主职业、再子职业。
+// ★ 子职业只在**职业也选了**的时候参与筛选（`if self._prof and self._sub:`）。
 func (s *squadPickScreen) visible() []RosterOperator {
-	if s.prof == "" {
-		return s.rows
-	}
+	to := trainedOptions[s.trIdx]
 	out := make([]RosterOperator, 0, len(s.rows))
 	for _, op := range s.rows {
-		if op.Profession != s.prof {
+		if !meetsTrained(op, to) {
 			continue
 		}
-		if s.sub != "" && strings.TrimSpace(op.SubProfession) != s.sub {
+		if s.prof != "" && op.Profession != s.prof {
+			continue
+		}
+		if s.prof != "" && s.sub != "" &&
+			strings.TrimSpace(op.SubProfession) != s.sub {
 			continue
 		}
 		out = append(out, op)
@@ -554,6 +590,11 @@ func (s *squadPickScreen) view(c *appCtx) string {
 	head = append(head, c.supportLine()+"　按 T 切换助战（用 ⇒ 去挑一位）")
 	head = append(head, c.rosterLine())
 
+	//: ★ 练度门槛（参照的 `Select #f-trained` 就在这一行；三档见 `trainedOptions`）。
+	//: 位置也要紧 —— 它在职业行**之前**，照参照 compose 的顺序
+	//: （mode-line → #f-trained → #prof-row → #sub-row → 列表）。
+	head = append(head, s.trainedLine())
+
 	//: ★ 分类行（主职业）—— 画出来的**同时**记下每项的格子，鼠标点击靠它。
 	//: 行号 = 上面那几行 head 的条数（`renderPickList` 是一行 head 一行文本地拼的）。
 	items, _ := s.profOptions()
@@ -585,10 +626,52 @@ func (s *squadPickScreen) view(c *appCtx) string {
 			pad(fmt.Sprintf("E%d %d级", op.Elite, op.Level), 9)+
 			professionCN(op.Profession))
 	}
+	//: ⚠ 列不出人时把**为什么**说清：名册本身空 vs 当前筛选下没人 —— 这两件事
+	//: 长得一样（都是空列表），但处置完全不同（去取名册 vs 放宽筛选）。
+	if len(rows) == 0 && len(s.rows) > 0 {
+		return renderPickList(c, head, rows, s.cursor,
+			fmt.Sprintf("  （名册里有 %d 人，当前筛选下一个人都没有"+
+				" —— 放宽练度门槛或职业）", len(s.rows)))
+	}
 	return renderPickList(c, head, rows, s.cursor)
 }
 
+// trainedLine 是练度门槛那一行（展开时把三档列出来、当前项高亮）。
+func (s *squadPickScreen) trainedLine() string {
+	if !s.trOpen {
+		return styleDim.Render("练度：") + trainedOptions[s.trIdx].label +
+			styleDim.Render("（F 换档）")
+	}
+	var b strings.Builder
+	b.WriteString("练度：\n")
+	for i, o := range trainedOptions {
+		if i == s.trAt {
+			b.WriteString(styleCursor.Render("> "+o.label) + "\n")
+		} else {
+			b.WriteString("  " + o.label + "\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func (s *squadPickScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
+	//: ★ 练度下拉展开时**独占**方向键与回车 —— 与关卡屏的难度下拉同一形状
+	//: （「开→选→确认」）。回车在这一支上只确认门槛，**不是**进入下一步。
+	if s.trOpen {
+		switch {
+		case keyIs(k, "up"):
+			s.trAt = max(0, s.trAt-1)
+		case keyIs(k, "down"):
+			s.trAt = min(len(trainedOptions)-1, s.trAt+1)
+		case keyIs(k, "enter"):
+			s.trIdx = s.trAt
+			s.trOpen = false
+			s.cursor = 0
+		case keyIs(k, "esc"):
+			s.trOpen = false
+		}
+		return s, action{kind: actNone}
+	}
 	vis := s.visible()
 	//: 换了职业筛选，可见人数就变 ⇒ 光标先夹回范围内（否则会"指到别人"）。
 	if s.cursor >= len(vis) {
@@ -649,6 +732,11 @@ func (s *squadPickScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
 		} else {
 			c.mode = "only"
 		}
+	case keyIs(k, "f"):
+		//: 练度门槛下拉：F 打开（不开一个新屏，就在原地展开 —— 照参照那个 Select）。
+		s.trOpen = true
+		s.trAt = s.trIdx
+		return s, action{kind: actNone}
 	case keyIs(k, "t"):
 		//: 助战的开关。**开** ⇒ 立刻压一屏去挑人（「开着但没人」不是一个可停留的状态，
 		//: 见 `toggleSupport`）；**关** ⇒ 名字一起清掉、上限回 12。
@@ -693,7 +781,8 @@ func (s *squadPickScreen) pickedOps() []RosterOperator {
 // renderPickList 是选人屏自己的列表渲染：比 `renderList` 多一段信息头，
 // 并**把它占的行数从可见窗口里扣掉** —— 矮窗口下不能因为多了两行说明，
 // 就让列表整个消失（本屏的口径与 Python 的 `_fit_extra` 一样：装饰让路，内容优先）。
-func renderPickList(c *appCtx, head []string, rows []string, cursor int) string {
+func renderPickList(c *appCtx, head []string, rows []string, cursor int,
+	emptyMsg ...string) string {
 	var b strings.Builder
 	for _, ln := range head {
 		b.WriteString(cut(ln, c.w-1) + "\n")
@@ -703,7 +792,11 @@ func renderPickList(c *appCtx, head []string, rows []string, cursor int) string 
 		body = 1
 	}
 	if len(rows) == 0 {
-		b.WriteString(styleDim.Render("  （名册里没有可勾的干员）"))
+		msg := "  （名册里没有可勾的干员）"
+		if len(emptyMsg) > 0 && emptyMsg[0] != "" {
+			msg = emptyMsg[0]
+		}
+		b.WriteString(styleDim.Render(msg))
 		return b.String()
 	}
 	top := 0
