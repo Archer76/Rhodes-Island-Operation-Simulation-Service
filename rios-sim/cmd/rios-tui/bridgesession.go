@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -47,9 +46,9 @@ func newBridgeSession() (*bridgeSession, error) {
 		return nil, err
 	}
 	c := exec.Command(b.python, b.script)
-	//: 与一次性调用同一条纪律：子进程输出一律 UTF-8（中文 Windows 缺省 GBK，
-	//: 一个字符编不出来回给我们的就是空管道，而空管道与「桥死了」长得一样）。
-	c.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
+	//: 与一次性调用走**同一份**环境拼装（`pythonEnv`）：UTF-8 两项让空管道不再冒充
+	//: 「桥死了」，`PYTHONDONTWRITEBYTECODE` 让常驻这条路也不往 eng/ 里写 __pycache__。
+	c.Env = pythonEnv()
 	stdin, err := c.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("★ 桥的 stdin 拿不到：%v", err)

@@ -71,7 +71,7 @@ func newEngineClient() (*engineClient, error) {
 // `rios-sim.exe` 或 `tools/rios_bridge.py`。
 //
 // 实测（2026-09-27，打包脚本装完自查的负对照）：把发布树里的 `eng/` 改名之后，
-// 启动器自检**照样报「工程侧 Python 在位」**，报的还是开发树的那一份
+// 启动前自检**照样报「工程侧 Python 在位」**，报的还是开发树的那一份
 // （`D:\...\ak-tactic\tools\rios_bridge.py`）。那正是本仓最忌讳的形状：
 // **你以为读的是 A，实际读的是 B** —— 而且它在"打包自查"这个场景里最危险：
 // 少装了一个目录，却因为旁边正好有棵开发树而判成绿的。

@@ -2,7 +2,7 @@
 """编译安装器，并把判据 7 的**四件**逐件验成读数。
 
 四件（迁移图 §12.5）：
-  1. **依赖自检**：装完就能用启动器自查，缺件**具名**（不是跑到一半才炸）；
+  1. **依赖自检**：装完就能用入口自查，缺件**具名**（不是跑到一半才炸）；
   2. **不覆盖已有 `data/`**：玩家自己取过数据就不许动它；
   3. **卸载干净**：程序文件走干净，而玩家的数据**先问再删**（无人值守时不弹框、按保留处理）；
   4. **可重复安装／升版本**：就地覆盖，第二次装照样成功。
@@ -105,6 +105,25 @@ def smoke(version: str, exe: Path) -> None:
     marker.write_text("这一行必须活过安装与卸载\n", encoding="utf-8")
     print("  · 对照夹具：先摆一份 eng\\data 里的玩家数据（%s）" % marker.name)
 
+    #: ★ 第二份夹具：`__pycache__`。它与上面那份**成对**才有意义 ——
+    #:   · 上面那份（eng\data 里）必须**活下来**（玩家的数据）；
+    #:   · 这三份必须**被删掉**（Python 写的代码缓存，`[UninstallDelete]` 管的就是它）。
+    #: 三级是刻意的：一级（ak_tactic 根）、二级（子包 battle/）、另一棵树（tools/）——
+    #: 只造二级的话，"通配那一行到底有没有生效"就判不出来。
+    #: ⚠ 为什么不靠"真跑一次让它自己长出来"：这条冒烟只跑 `-preflight`，而预检那条路
+    #: （`python -c` 探版本）不 import 我们的包 ⇒ 树里**一个 .pyc 都不会有**，
+    #: 那样这条断言就是空跑（零个对象、永远绿）。所以夹具必须自己造。
+    pyc_fixtures = [
+        target / "eng" / "ak_tactic" / "__pycache__" / "fake.cpython-314.pyc",
+        target / "eng" / "ak_tactic" / "battle" / "__pycache__" / "fake.cpython-314.pyc",
+        target / "eng" / "tools" / "__pycache__" / "fake.cpython-314.pyc",
+    ]
+    for p in pyc_fixtures:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"\x00fake bytecode\n")
+    print("      再摆 %d 份 __pycache__ 夹具（三级：ak_tactic 根／子包／tools）"
+          % len(pyc_fixtures))
+
     print("  · 第一次安装（静默，装到临时目录）")
     rc, out, err = install(exe, target, work / "install1.log")
     if rc != 0:
@@ -112,7 +131,7 @@ def smoke(version: str, exe: Path) -> None:
                                               work / "install1.log"))
     print("      实得 rc=0")
 
-    want = ["rios-tui.exe", "rios-sim.exe", "启动.cmd",
+    want = ["rios-tui.exe", "rios-sim.exe",
             "eng/ak_tactic/__init__.py", "eng/tools/rios_bridge.py"]
     missing = [w for w in want if not (target / w).is_file()]
     if missing:
@@ -128,9 +147,11 @@ def smoke(version: str, exe: Path) -> None:
     print("      玩家数据活过了安装（判据 7 第 2 件）")
 
     print("  · 装完自查（缺件要具名，不是跑到一半才炸）")
-    #: ⚠ **不要**在这里跑 `启动.cmd`：它现在的第一步是 `-setup`，而空树上 `-setup`
+    #: ⚠ **不要**在这里跑入口的**无参数**那条路：它会先跑 `-setup`，而空树上 `-setup`
     #: 会**真的去下载** 94 MB 数据 —— 那会把这条冒烟变成十几分钟（上一版就是撞了超时）。
-    #: 所以分成两问：能不能自己说清缺什么（跑 `-preflight`），以及接线对不对（内容断言）。
+    #: 也**不要**直接跑界面：实测以 NUL 作 stdin 起 TUI 会**挂住**（bubbletea 无 TTY 不退出）。
+    #: 所以分成两问：能不能自己说清缺什么（跑 `-preflight`），以及入口是不是 rios-tui.exe
+    #: （点名在位 ＋ 树里不该再有那个 .cmd）。
     rc2, out2, err2 = sh([str(target / "rios-tui.exe"), "-preflight"], cwd=target,
                          timeout=600)
     text = out2 + err2
@@ -142,12 +163,12 @@ def smoke(version: str, exe: Path) -> None:
         die("没有派生库时应当报「起不来」或「待办」，实得：\n%s" % text[-1500:])
     print("      实得 rc=%d，报告里点了名（致命缺件 0 件）" % rc2)
 
-    cmd_text = (target / "启动.cmd").read_text(encoding="utf-8", errors="replace")
-    i_setup = cmd_text.find("-setup")
-    i_ui = cmd_text.find("rios-tui.exe", i_setup + 1)
-    if i_setup < 0 or i_ui < 0:
-        die("启动器里找不到「先 -setup 再起界面」这两步：\n%s" % cmd_text)
-    print("      启动器接线：-setup 在裸 rios-tui.exe 之前 ✓")
+    #: 接线断言（原先是读 `启动.cmd` 的文本）：入口就是 `rios-tui.exe` 自己，
+    #: 所以这里问的是"装出来的目录里**没有**那个 .cmd"——它已经不进包了（§12.9）。
+    if (target / "启动.cmd").exists():
+        die("装出来的目录里还有 启动.cmd —— 入口已经是 rios-tui.exe（博士 2026-09-27 裁），"
+            "它不该再进包")
+    print("      入口 rios-tui.exe 在位且能跑预检；装出来的目录里没有 启动.cmd ✓")
 
     print("  · 静默卸载（玩家数据不许被带走，且不许弹框挂住）")
     rc3, out3, err3 = uninstall(target, work / "uninstall1.log")
@@ -161,6 +182,15 @@ def smoke(version: str, exe: Path) -> None:
     if not marker.is_file():
         die("静默卸载把玩家的 eng\\data 删了 —— 静默应当按「保留」处理")
     print("      玩家数据留下了（静默卸载不弹框、按保留处理）")
+
+    #: ★ 与上面那条成对：**代码缓存必须被删掉**，否则「卸载干净」这条打折。
+    #: 三级各自点名（哪一级没删干净要能一眼看出，不能只报一个总数）。
+    left = [p for p in pyc_fixtures if p.exists()]
+    if left:
+        die("卸载之后 eng/ 下的 __pycache__ 还在 %d 处 —— [UninstallDelete] 没盖住：\n%s"
+            % (len(left), "\n".join("  · %s" % p.relative_to(target) for p in left)))
+    print("      %d 处 __pycache__ 都被卸载带走了（判据 7 第 3 件不打折）"
+          % len(pyc_fixtures))
 
     print("  · 第二次安装（可重复安装／升版本）")
     rc4, out4, err4 = install(exe, target, work / "install2.log")
@@ -186,7 +216,13 @@ def main() -> int:
     ap.add_argument("--no-smoke", action="store_true", help="只编译，不做装卸冒烟")
     args = ap.parse_args()
 
-    tree = Path(args.tree) if args.tree else ROOT / "out" / "release" / ("rios-v" + args.version)
+    #: ★ `--tree` 必须转成**绝对路径**再交给 ISCC：`.iss` 里 `[Files]` 的 `Source` 是
+    #: **按 `.iss` 自己所在目录**解析的，传相对路径会被拼到 `tools\` 底下，于是报
+    #: `No files found matching "…\tools\out\release\rios-xxx\*"` —— 一条看上去像「树不存在」
+    #: 的错，其实树在、只是基准目录被拼错了。缺省值本来就是绝对路径，所以只有显式传
+    #: 相对路径才会踩；`resolve()` 把两种写法归一，省得调用方去记这条（2026-09-27 踩到）。
+    tree = (Path(args.tree) if args.tree
+            else ROOT / "out" / "release" / ("rios-v" + args.version)).resolve()
     if not (tree / "rios-tui.exe").is_file():
         die("发布树不对：%s 里没有 rios-tui.exe（先跑 build_release.py）" % tree)
 
