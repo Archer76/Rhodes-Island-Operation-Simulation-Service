@@ -59,12 +59,12 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 	r.Update(tea.WindowSizeMsg{Width: 90, Height: 26})
 
 	fmt.Println("== 一 · 取数层 ==")
-	//: ★ 2026-09-27 博士裁：章节只留 **18 主线（含序章）＋ 剿灭 ＋ 代号带 sre/side
-	//: 的活动**，其余 47 条在建库阶段舍弃 ⇒ 116 → **69**（旧金标 116 已过期）。
-	//: 这个数不是随手写的：dry-run 报 69、`db stage-prune` 清掉 94 个 zone／762 个关卡、
-	//: 两端（Go `-chapters` 与 Python `list_chapters`）复算都是 69。
-	check("章节 69 条（2026-09-27 裁后的口径；旧金标 116）", len(c.chapters) == 69,
-		fmt.Sprintf("实得 %d", len(c.chapters)))
+	//: ★ 2026-09-27 口径又动过一次（当晚）：在「18 主线（含序章）＋ 剿灭 ＋ 代号带
+	//: sre/side 的活动」之上，**加回故事集（`mini`，15 族 249 关）与早期活动
+	//: （`dN`，7 族 132 关）** ⇒ 69 → **91**（见 `keeps_zone` 与施工图 §12.14）。
+	//: 这条数与 Go `-chapters`／Python `list_chapters`／金标三处复算一致。
+	check("章节 91 条（2026-09-27 当晚口径：＋故事集 15 ＋早期活动 7；旧数 69 已过期）",
+		len(c.chapters) == 91, fmt.Sprintf("实得 %d", len(c.chapters)))
 	six := 0
 	for _, s := range stages {
 		if s.Difficulty == "SIX_STAR" {
@@ -2107,6 +2107,12 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 	//:   **零值**干员（Elite 0／Level 0）**落在**「≤E1L1」范围内（`0 <= 1` 为真）
 	//:   ⇒ 拿零值干员顶替助战，闸门照样拦，与口径 4 相反。所以下面这条命题是**假的**：
 	//:   它必须报 ✗。它红了，才证明这一段的断言不是同义反复。
+	//:
+	//: ★ 它**不许**用「把全局红计数清零」来豁免（旧写法就是 `bad = 0`）：
+	//:   那等于把**这一行之前所有红一并勾销** —— 实测 2026-09-27：第一节那条
+	//:   「章节 69 条」红了（真值 91），结论照样印「全绿」、退出码照样 0。
+	//:   正确做法是**只减掉这一条**：先记住此刻的红数，这条故意红之后再放回去。
+	badBeforeDeliberate := bad
 	if check("负对照（故意造的红）：零值干员不在「≤E1L1」范围内",
 		!isMinLevel(RosterOperator{}),
 		fmt.Sprintf("isMinLevel(零值)=%v —— 真值就是它**在**范围内",
@@ -2114,7 +2120,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		fmt.Println("★ 这条负对照没红 ⇒ 第十七段的读数作废")
 		return 3
 	}
-	bad = 0 //: 与文件开头那条全局负对照同处置：故意造的红不算进最终读数
+	bad = badBeforeDeliberate
 
 	//: ---- 开关与上限（都在选人屏上看得见）----
 	//: 用第十段那套假名册（`fake`，4 人）：开关与上限与名册无关，不必另造一份。

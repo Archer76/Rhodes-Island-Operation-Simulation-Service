@@ -82,7 +82,7 @@ __all__ = [
     "FOUR_STAR_SUFFIX", "DIFFICULTY_ORDER", "DIFFICULTY_LABELS", "ENV_LABELS",
     "ENV_ORDER", "CHAPTER_TYPES", "CAMPAIGN_TITLE", "clean_activity_name",
     "prune_foreign_rows", "clean_zone_names",
-    "ACTIVITY_KEEP_MARKERS", "keeps_zone",
+    "ACTIVITY_KEEP_MARKERS", "ACTIVITY_KEEP_DN_RE", "keeps_zone",
 ]
 
 #: 四星限定版的后缀。普通版是 `main_00-01`，四星版是 `main_00-01#f#`，
@@ -148,28 +148,49 @@ CHAPTER_ORDER = ("MAINLINE", "MAINLINE_ACTIVITY", "CAMPAIGN", "BRANCHLINE",
 #: **名字全是空的**（取数只到 `zoneNameSecond: None` 这一层），只能自己给一个。
 CAMPAIGN_TITLE = "剿灭作战"
 
-#: 活动 zone 的**去留模式**（博士 2026-09-27 裁）。
+#: 活动 zone 的**去留模式**（博士 2026-09-27 两次裁定）。
 #:
-#: 正式活动只有两种代号：**原版** `actNNside`、**复刻** `actNNsre`；而
-#: `mini`／`dN`／`bossrush`／`enemyduel`／`autochess`／`multi`／`break`／`vecb`／
-#: `arcade`／`arkhub`／`dp`／`football`／`lock`／`vhalfidle`／`fun`… 这些是
-#: **小玩法与联动**，不进库、也不进菜单。
+#: 第一次（上午）：正式活动只有两种代号 —— 原版 `actNNside`、复刻 `actNNsre`。
+#: 第二次（当晚）：**故事集与早期活动也要回来** ——
 #:
-#: ★ 这是**模式**而不是一张清单 —— 将来新增的活动只要代号带这两个词就自动进、
+#:   · `mini`：故事集一族（`act8mini` 如我所见、`act18mini` 我们明日见、
+#:     `act10mini` 阴云火花…共 15 族 249 关）；
+#:   · `dN`（`d0`／`d2`／`d3`／`d5`／`d7`，见 `ACTIVITY_KEEP_DN_RE`）：早期活动
+#:     一族（`act9d0`／`act17d5` 生于黑夜、`act14d7` 喧闹法则、`act11d7` 火蓝之心、
+#:     `act13d2` 骑兵与猎人、`act10d5` 乌萨斯的孩子们…共 8 族 143 关）。
+#:
+#: ★ 为什么第一次会漏掉它们：这两族的 `activityId` **是空的**，谓词退到用 `zone_id`
+#:   判，而 `act8mini_zone1`／`act9d0_zone1` 里既没有 `sre` 也没有 `side` ⇒ 整族被拒。
+#:   （生于黑夜那 22 条 DM-* 还挂在 `act17d5_*` 上、文件却在 `activities/act9d0/` 下，
+#:   所以照 `act9d0` 找它是空壳 —— 这也是当初看不出问题的一部分原因。）
+#:
+#: ★ 仍然**不进库**的是小玩法与联动：`bossrush`（引航者试炼）、`enemyduel`（争锋频道）、
+#:   `multi`／`vmulti`（促融共竞）、`break`／`vecb`（矢量突破）、`autochess`
+#:   （卫戍协议）、`arkhub`（奇象巡展）、`dp`（逐影集趣）、`football`（阵地足球）、
+#:   `lock`（荷谟伊智境）、`vhalfidle`（次生预案）、`fun`、`zone` 族 —— 共 24 族 380 关，
+#:   它们**不进库也不进菜单**（判据里有负对照盯着，见 `zonerule_test.go`）。
+#:
+#: ★ 这是**模式**而不是一张清单 —— 将来新增的活动只要代号带这些词就自动进、
 #:   不带就自动不进，**不必回来改这里**。也正因为它管的是"将来"，判据里有一条
-#:   专门盯它：出现新的代号形态时必须**显式裁定**，不许静默漏进或漏出
-#:   （见 `tests`／`check_*` 里那一条具名断言）。
+#:   专门盯它：出现新的代号形态时必须**显式裁定**，不许静默漏进或漏出。
 #:
 #: 落点：`keeps_zone` 是唯一判定点，下面四处（含读侧）都调它 —— 口径只有一份。
-ACTIVITY_KEEP_MARKERS = ("sre", "side")
+ACTIVITY_KEEP_MARKERS = ("sre", "side", "mini")
+
+#: `dN` 那一族的模式：字母 `d` **紧跟一个数字**（`act9d0`／`act17d5`／`act13d2`…）。
+#:
+#: ★ 用模式而不是列举 `d0/d2/d3/d5/d7`：将来再出 `d9` 也自动进来。
+#: ★ 它**不会**误收小玩法：`dp`（逐影集趣）、`duel`（争锋频道）、`halfidle`
+#:   （次生预案）里 `d` 后面跟的都是字母 —— 负对照把这三个都钉住了。
+ACTIVITY_KEEP_DN_RE = re.compile(r"d[0-9]")
 
 
 def keeps_zone(z: Mapping[str, Any],
                keep_types: tuple[str, ...] = CHAPTER_TYPES) -> bool:
     """这个 zone 该不该留下（**写入口径的唯一判定点**）。
 
-    `type` 不在 `keep_types` 里 ⇒ 不留；`ACTIVITY` 还要看**代号**带不带
-    `sre`／`side`（见 `ACTIVITY_KEEP_MARKERS`）；其余四类一律留。
+    `type` 不在 `keep_types` 里 ⇒ 不留；`ACTIVITY` 还要看**代号**：
+    带 `sre`／`side`／`mini`，或形如 `dN`（见 `ACTIVITY_KEEP_DN_RE`）；其余四类一律留。
     """
     t = z.get("type") or ""
     if t not in keep_types:
@@ -178,7 +199,9 @@ def keeps_zone(z: Mapping[str, Any],
         return True
     code = (z.get("activity_id") or "").strip() or (z.get("zone_id") or "")
     code = code.lower()
-    return any(m in code for m in ACTIVITY_KEEP_MARKERS)
+    if any(m in code for m in ACTIVITY_KEEP_MARKERS):
+        return True
+    return ACTIVITY_KEEP_DN_RE.search(code) is not None
 
 
 #: 活动名里的「复刻」后缀。写法不止一种：绝大多数是 `墟·复刻`，实测还有
@@ -267,6 +290,19 @@ def fetch_names(*, refresh: bool = False) -> tuple[dict, dict]:
         if not isinstance(e, dict):
             continue
         act = zone_to_act.get(str(zone_id), "")
+        if not act:
+            #: ★ 兜底（2026-09-27 加）：`zoneToActivity` 里**整族**没有故事集与早期活动
+            #: （`act8mini_zone1`／`act9d0_zone1`／`act17d5_zone1`…）。不补这一手，
+            #: 它们的 `activity_name` 就是空的，菜单里那一章会退化成**关卡名**
+            #: —— 实测「如我所见」会显示成「同我所历」、「灯火序曲」显示成「路线安排」，
+            #: 玩家根本认不出那是哪一章。
+            #:
+            #: 兜底方式是**模式**：zone_id 的代号前缀就是活动号（`act8mini_zone1`
+            #: → `act8mini`），拿它去 `basicInfo` 里查名字；查到才算数（查不到照旧留空，
+            #: 绝不凭前缀编一个名字出来）。
+            guess = str(zone_id).split("_")[0]
+            if guess in act_names:
+                act = guess
         zones[str(zone_id)] = {
             "zone_index": e.get("zoneIndex"),
             "type": str(e.get("type") or ""),
@@ -712,11 +748,18 @@ def list_chapters(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         if key == CAMPAIGN_TITLE:
             title, subtitle = CAMPAIGN_TITLE, f"{len(zids)} 个部分"
         elif len(zids) == 1:
-            # 单个 zone 的活动没有分部名可拼：章节名（主线各章）→ 活动名
-            # → 最后才把内部 id（`act1multi`）摆上台面。缺了活动名那一退，
+            # 单个 zone 的活动没有分部名可拼：章节名（主线各章）→ **活动名**
+            # → 分部名 → 最后才把内部 id（`act1multi`）摆上台面。缺了活动名那一退，
             # 「奇象巡展」「卫戍协议」这六个单 zone 活动会显示成空白行——
             # 实测就是空白，不是「名字太长被截了」。
-            title = chapter_label(first) or zone_title(first) or act_name or key
+            #
+            # ★ 顺序在 2026-09-27 改过一次：**活动名提到分部名前面**。
+            # 原先「分部名」在「活动名」之前，是因为当时有活动名的单 zone 活动
+            # 基本都是小玩法；而故事集那 15 族**全是单 zone**，它们的 `name_second`
+            # 是**分部名**（「走入城市」「课程安排」「沸区」…），于是菜单里三个不同的
+            # 故事集会显示成同一个「走入城市」——玩家根本认不出是哪一章。
+            # 活动名是数据里最具体的那一层，优先它；拿不到才退分部名。
+            title = chapter_label(first) or act_name or zone_title(first) or key
             subtitle = ""
         else:
             # 活动名优先；拿不到活动名时退回分部的章节名，别把内部 id 摆上台面

@@ -160,11 +160,18 @@ func ListChapters(stages []StageRecord, zones []ZoneRecord) []Chapter {
 			ch.Title = firstNonEmpty(first.ActivityName, zoneTitle(first), key)
 			ch.Subtitle = pluralParts(len(zids))
 		default:
-			//: 单 zone 组：`chapter_label(first) or zone_title(first) or act_name or key`
-			//: ★ 注意 `chapter_label` **排在 `act_name` 前面**（`:669`）——
+			//: 单 zone 组：`chapter_label(first) or act_name or zone_title(first) or key`
+			//: ★ `chapter_label` **排在 `act_name` 前面**（`:669`）——
 			//: 实测 `main_14` 的 `activity_id='act1mainss'`，菜单标题仍是「第十四章　慈悲灯塔」。
-			ch.Title = firstNonEmpty(chapterLabel(first), zoneTitle(first),
-				first.ActivityName, key)
+			//:
+			//: ★ 2026-09-27 改动：**`act_name` 提到 `zone_title` 前面**（与参照实现
+			//: 同一天同一处）。原先分区名在前，是因为当时有活动名的单 zone 活动
+			//: 基本都是小玩法；而故事集那 15 族**全是单 zone**，它们的 `name_second`
+			//: 是**分部名**（「走入城市」「课程安排」「沸区」…）⇒ 三个不同的故事集
+			//: 会显示成同一个「走入城市」，玩家认不出是哪一章。活动名是数据里
+			//: 最具体的一层，优先它；拿不到才退分部名。
+			ch.Title = firstNonEmpty(chapterLabel(first), first.ActivityName,
+				zoneTitle(first), key)
 			ch.Subtitle = ""
 		}
 		ch.SortType = first.Type

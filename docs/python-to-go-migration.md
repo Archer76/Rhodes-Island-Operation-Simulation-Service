@@ -997,3 +997,76 @@ python tools/build_zip.py     --version v0.3.3 --tree out/release/rios-v0.3.3
 ⇒ 给玩家的一句话话术：**解压到你想放的位置 → 双击 `rios-tui.exe` → 首次会引导取数据与建库**；
 升级请**覆盖解压到同一个目录**（别换目录，否则要重下一遍数据）。
 
+### 12.14 故事集与早期活动**加回**（博士 2026-09-27 当晚裁）
+
+**起因**：博士在解算器的选章屏上发现「生于黑夜／如我所见／我们明日见」都不见了，问是不是把**故事集**丢了 —— 是，而且丢的不是三条，是**两整族 23 个活动**。
+
+**根因**：`keeps_zone` 对 `ACTIVITY` 只认代号里的 `sre`／`side`，而这两族的
+**`activityId` 是空的**，谓词退到用 `zone_id` 判（`act8mini_zone1`／`act9d0_zone1`／
+`act17d5_zone1`），两个标记都不含 ⇒ 整族被拒。
+
+> 顺带一个让人查不出问题的细节：**生于黑夜的 22 条 `DM-*` 全挂在 `act17d5_*`（复刻那一族）上，
+> 而关卡文件住在 `activities/act9d0/` 目录里**。⇒ 照 `act9d0` 找它是**空壳**（0 关），
+> 照名字找 zone 表也找不到（zone 的名字是分部名，活动名在 `activity_table.json`）。
+
+**新口径**（`keeps_zone` 唯一判定点，Python 与 Go 两侧同一份）：
+`ACTIVITY` 留下当且仅当代号带 `sre`／`side`／`mini`，**或形如 `dN`**（字母 d 紧跟一个数字）。
+排除集**没变**：小玩法与联动（`bossrush`／`enemyduel`／`multi`／`break`／`vecb`／
+`autochess`／`arkhub`／`dp`／`football`／`lock`／`vhalfidle`／`fun`／`zone` 族）仍不进库。
+
+**四条判据级的教训**（都是这次当场踩出来的）：
+
+1. **判重看关卡名，不看代号。** 初筛把「乌萨斯的孩子们」（`act10d5`）判成了重复 ——
+   因为它的关卡号 `SV-*` 已经在库里。验下去才发现：库里那批 `SV-*` 是**覆潮之下**的
+   （`act18d3_*`：闯入者／歌手／外来者…），而 `act10d5` 是另一批关
+   （四面埋伏／平行线／浪潮…）——**两边的关卡名交集 0**，只是代号前缀被复用。
+   ⇒ 差一点因为"代号撞了"把一整个真活动当重复剔掉。
+2. **判族看 `zoneToActivity`，不看 `zone_id` 前缀。** `act17d7_zone1`（愚人节活动）
+   看着像 `d7` 族，它的 `activityId` 实际是 **`act7fun`** ⇒ 属小玩法，被正确排除。
+   （同理，按前缀判会把 `act1dp`／`act1enemyduel` 之流混进来。）
+3. **活动名要兜底。** `zoneToActivity` 里**整族没有**这两族 ⇒ `activity_name` 为空，
+   菜单标题会退化成**关卡名**：实测「如我所见」显示成「同我所历」、「灯火序曲」显示成
+   「路线安排」。兜底方式是**模式**：拿 `zone_id` 的代号前缀（`act8mini_zone1` → `act8mini`）
+   去 `basicInfo` 查名字，**查到才算数**（查不到照旧留空，绝不凭前缀编).
+4. **单 zone 那一支的标题顺序要改**：原先是「章节名 → 分部名 → 活动名」，而故事集
+   **全是单 zone**、它们的 `name_second` 是**分部名** ⇒ 三个不同的故事集会显示成
+   同一个「走入城市」。改成「章节名 → **活动名** → 分部名 → key」（两侧同一天同一处）。
+
+**三方对账**（新族 23 个活动）：
+
+```
+源 stage_table 392 关 → 关卡索引 382 关 → 库里 381 关
+  · 索引少 10 条：全是 ST- 剧情关（DM-ST-1／OF-ST1..ST6／CB-ST1..ST3），
+    没有战斗、索引（map.ark-nights）本来就不收 ⇒ 上游缺口，不是我们漏取；
+  · 库里再少 1 条：act17d7_01（LTTB，愚人节）—— 它属 act7fun，被口径正确排除。
+  · 15 个故事集族：源=索引=库=249 关，一条不差。
+```
+
+**新分母**（棘轮同日重登）：`stage` 2293 → **2674**、`zone` 258 → **311**、
+`gamedata/level_files` 326 → **1764**、章节 **69 → 91**。新进的关卡文件用
+§12.12 那一步补齐（去重后缺 221 个、10.4 MB、失败 0）。
+
+| 落点 | 改了什么 |
+| --- | --- |
+| `ak_tactic/db/stages.py` | `ACTIVITY_KEEP_MARKERS` 加 `mini`；新增 `ACTIVITY_KEEP_DN_RE = re.compile(r"d[0-9]")`；`keeps_zone` 两处判定；`fetch_names` 的活动名前缀兜底；单 zone 标题顺序 |
+| `rios-sim/data/datastage.go` | 镜像同一份口径：`activityKeepMarkers` 三个词 ＋ `hasDNCode`（不引 regexp，一个循环） |
+| `rios-sim/data/datachapter2.go` | 单 zone 标题顺序同步（`act_name` 提到 `zone_title` 前） |
+| `rios-sim/data/zonerule_test.go` | 判据扩到**四方向活样本**（side／sre／mini／dN）＋ **19 条负对照**（每一类小玩法一条，含 `dp`／`halfidle` 这两条 `d`+字母的边界） |
+| `rios-sim/data/datachapter2_test.go` | `TestChapterCountIs69` → `Is91`，注释记下 116→69→91 三次变化 |
+| `rios-sim/cmd/rios-tui/selftest.go` | 第一节那条写死的 69 改 91 |
+| `tools/data-watermarks.json` | 重登（stage／zone／level_files 三项） |
+| `out/zz_golden.txt` | `_regolden_ch.py` 重录 CH 段（91 条）＋ 计数行；其余段一字节未动 |
+
+**★ 同批抓出的一把打不响的尺子**（比上面任何一条都值钱）：`selftest.go` 里有一句
+
+```go
+bad = 0 //: …故意造的红不算进最终读数
+```
+
+它的本意只是豁免**紧挨着的那一条**故意造的负对照红，实际效果却是**把它之前所有红一笔勾销**
+—— 实测：第一节那条「章节 69 条」红了（真值 91），**结论照样印「全绿」、退出码照样 0**。
+⇒ 改成「先记住此刻的红数，故意那条之后再放回去」；并加**注入负对照**：临时在第一节造一条假红，
+修前印「全绿」rc=0、修后印「结论：**1 条红**」rc=1（两态都实测过，注入已撤）。
+教训与 §12.10 那条同族：**负对照的豁免要精确到那一条，不能用"清零"来豁免** ——
+清零的豁免范围是"这一行之前的一切"，那正是判据最容易藏污的地方。
+

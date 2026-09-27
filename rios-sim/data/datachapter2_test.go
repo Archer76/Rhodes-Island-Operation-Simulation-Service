@@ -2,15 +2,23 @@ package data
 
 // datachapter2_test.go：章节层**归并**的端到端金标对照。
 //
-// 最要紧的一条是总数：**69 条 chapter**（博士 2026-09-27 裁后的口径 —— 只留
-// 18 主线（含序章）＋ 剿灭 ＋ 代号带 `sre`／`side` 的活动；其余 47 条**在建库
-// 阶段就舍弃**）。这条一红就说明分组整族错了。
+// 最要紧的一条是总数：**91 条 chapter**（博士 2026-09-27 两次裁后的口径 ——
+// 18 主线（含序章）＋ 剿灭 ＋ 代号带 `sre`／`side`／`mini` 或形如 `dN` 的活动）。
+// 这条一红就说明分组整族错了。
 //
-// ★ 2026-09-27 两条同时改了，别再按旧数读：
-//   · 条数 **116 → 69**（建库白名单收紧，见 `ak_tactic/db/stages.py` 的 `keeps_zone`）；
-//   · `levels` 现在**与参照实现同口径**（含 `#s`）—— 09-26 那笔「六星档不做」
+// ★ 2026-09-27 这一天的三次变化，别再按旧数读：
+//   · 条数 **116 → 69**（建库白名单收紧，只留 sre／side 家族）；
+//   · **69 → 91**（当晚加回**故事集**（`mini`，15 族 249 关）与**早期活动**
+//     （`dN`，7 族 132 关）——共 22 章；那两族的 `activityId` 是空的，
+//     旧谓词退到 zone_id 判，两个标记都不含，于是整族被拒）；
+//   · `levels` **与参照实现同口径**（含 `#s`）—— 09-26 那笔「六星档不做」
 //     已**反转**：15～17 章的六星是**险地作战**（等效突袭），加回取数面。
-//     旧注释里那条「别拿本实现的 levels 与 Python 对」的限定**作废**。
+//
+// ★ 排除集**没变**：小玩法与联动（bossrush／enemyduel／multi／break／vecb／
+// autochess／arkhub／dp／football／lock／vhalfidle／fun／zone 族）仍不进库。
+// 注意 `act17d7_zone1`（愚人节活动）看着像 `d7`，它的 `activityId` 实际是
+// **`act7fun`** ⇒ 属小玩法被正确排除 —— 判重与判族**一律按 `zoneToActivity`，
+// 不要按 zone_id 前缀猜**。
 
 import (
 	"strings"
@@ -27,15 +35,16 @@ func chaptersForTest(t *testing.T) []Chapter {
 	return ch
 }
 
-// TestChapterCountIs69：2026-09-27 裁后的口径（旧金标 116 已过期）。
-func TestChapterCountIs69(t *testing.T) {
+// TestChapterCountIs91：2026-09-27 当晚加回故事集与早期活动后的口径
+// （69 → 91；旧金标 116 与中间态 69 都已过期）。
+func TestChapterCountIs91(t *testing.T) {
 	ch := chaptersForTest(t)
-	if len(ch) != 69 {
+	if len(ch) != 91 {
 		ids := make([]string, 0, len(ch))
 		for _, c := range ch {
 			ids = append(ids, c.Key)
 		}
-		t.Fatalf("应有 69 条 chapter（2026-09-27 裁后的口径：18 主线含序章＋剿灭＋sre/side 活动），实得 %d 条：%v", len(ch), ids)
+		t.Fatalf("应有 91 条 chapter（18 主线含序章＋剿灭＋sre/side ＋ 故事集 mini 15 ＋ 早期活动 dN 7），实得 %d 条：%v", len(ch), ids)
 	}
 }
 

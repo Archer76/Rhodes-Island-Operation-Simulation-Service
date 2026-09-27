@@ -1177,9 +1177,13 @@ def cmd_db(args: argparse.Namespace) -> int:
 
     if args.action == "stage-prune":
         # 不联网也能清：口径（`stages.keeps_zone`）是本地判定，不需要重取。
-        from .db.stages import (ACTIVITY_KEEP_MARKERS, CHAPTER_TYPES,
-                                clean_zone_names, keeps_zone,
+        from .db.stages import (ACTIVITY_KEEP_DN_RE, ACTIVITY_KEEP_MARKERS,
+                                CHAPTER_TYPES, clean_zone_names, keeps_zone,
                                 prune_foreign_rows)
+
+        #: 口径变了要印得出来 —— 打印与判据共用同一份词表，别再各写一遍。
+        _rule = ("代号带 %s 的，或形如 dN（%s）的"
+                 % ("／".join(ACTIVITY_KEEP_MARKERS), ACTIVITY_KEEP_DN_RE.pattern))
 
         target = path or DEFAULT_DB_PATH
         if args.dry_run:
@@ -1209,8 +1213,8 @@ def cmd_db(args: argparse.Namespace) -> int:
             print(f"（--dry-run）会清掉 {gone_z} 个 zone、{gone_s} 个关卡。")
             print(f"    要清的 zone 按类型：{by_type}")
             print(f"    口径 `keeps_zone`：type 不在 {'、'.join(CHAPTER_TYPES)} 里的，"
-                  f"或 type=ACTIVITY 而代号不带 "
-                  f"{'／'.join(ACTIVITY_KEEP_MARKERS)} 的（博士 2026-09-27 裁）")
+                  f"或 type=ACTIVITY 而{_rule}"
+                  f"（博士 2026-09-27 两次裁定：先 sre／side，当晚加回 mini 与 dN）")
             return 0
         conn = connect(target, readonly=False)
         try:
@@ -1244,8 +1248,8 @@ def cmd_db(args: argparse.Namespace) -> int:
                               for k, v in sorted(shapes.items(),
                                                  key=lambda kv: -kv[1])))
         print(f"清掉 {gone[0]} 个 zone、{gone[1]} 个关卡（口径 `keeps_zone`：type 不在 "
-              f"{'、'.join(CHAPTER_TYPES)} 里的，或 type=ACTIVITY 而代号不带 "
-              f"{'／'.join(ACTIVITY_KEEP_MARKERS)} 的，以及 zone_id 在 zone 表里查不到的）")
+              f"{'、'.join(CHAPTER_TYPES)} 里的，或 type=ACTIVITY 而{_rule}，"
+              "以及 zone_id 在 zone 表里查不到的）")
         print(f"活动名擦掉「复刻」后缀：{renamed} 条")
         print(f"已写回 {target}")
         return 0

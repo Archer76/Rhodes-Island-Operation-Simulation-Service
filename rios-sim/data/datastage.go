@@ -55,14 +55,40 @@ var envLabels = map[string]string{
 // : 只取这几类 zone（`ak_tactic/db/stages.py:137`；博士 2026-09-18 裁定）。
 var chapterTypes = []string{"MAINLINE", "BRANCHLINE", "CAMPAIGN", "MAINLINE_ACTIVITY", "ACTIVITY"}
 
-// : 活动 zone 的**去留模式**（博士 2026-09-27 裁；与 `ak_tactic/db/stages.py` 的
-// `ACTIVITY_KEEP_MARKERS` 是**同一份口径**）。正式活动只有两种代号：原版
-// `actNNside`、复刻 `actNNsre`；而 `mini`／`dN`／`bossrush`／`enemyduel`／
-// `autochess`／`multi`／`break`／`vecb`／`arcade`／`arkhub`／`dp`／`football`／
-// `lock`／`vhalfidle`／`fun`… 那些**小玩法与联动**一律不进库、也不进菜单。
+// : 活动 zone 的**去留模式**（博士 2026-09-27 两次裁定；与 `ak_tactic/db/stages.py`
+// 的 `ACTIVITY_KEEP_MARKERS` 是**同一份口径**）。
+//
+// 第一次：原版 `actNNside`、复刻 `actNNsre`。第二次加回两族：
+//
+//	· `mini` —— 故事集（`act8mini` 如我所见、`act18mini` 我们明日见…共 15 族 249 关）；
+//	· `dN`   —— 早期活动（`act9d0`／`act17d5` 生于黑夜、`act14d7` 喧闹法则、
+//	  `act11d7` 火蓝之心、`act13d2` 骑兵与猎人、`act10d5` 乌萨斯的孩子们…共 8 族 143 关），
+//	  模式是**字母 d 紧跟一个数字**，见 `hasDNCode`。
+//
+// ★ 为什么第一版漏了它们：这两族的 `activityId` 是空的，谓词退到用 `zone_id` 判，
+// 而 `act8mini_zone1`／`act9d0_zone1` 里两个标记都不含 ⇒ 整族被拒。
+//
+// ★ 仍然不进库的是小玩法与联动：`bossrush`／`enemyduel`／`multi`／`break`／`vecb`／
+// `autochess`／`arkhub`／`dp`／`football`／`lock`／`vhalfidle`／`fun`／`zone` 族
+// （共 24 族 380 关）。`dp`／`duel`／`halfidle` 里 `d` 后面跟的是**字母**，
+// 所以 `hasDNCode` 不会误收 —— 判据里有这三条负对照。
 //
 // ★ 这是**模式**不是一张清单：将来新增的活动按它自动决定去留，不必回来改这里。
-var activityKeepMarkers = []string{"sre", "side"}
+var activityKeepMarkers = []string{"sre", "side", "mini"}
+
+// hasDNCode 判「代号里有没有 `d` 紧跟数字」这一族（`act9d0`／`act17d5`／`act13d2`）。
+//
+// ★ 不列举 `d0/d2/d3/d5/d7`：将来再出 `d9` 也自动进来。
+// ★ 也**不会**误收小玩法 —— `dp`（逐影集趣）、`duel`（争锋频道）、`halfidle`
+// （次生预案）里 `d` 后面都是字母（判据把这三个都钉住了）。
+func hasDNCode(code string) bool {
+	for i := 0; i+1 < len(code); i++ {
+		if code[i] == 'd' && code[i+1] >= '0' && code[i+1] <= '9' {
+			return true
+		}
+	}
+	return false
+}
 
 // keepsZone 是「这个 zone 该不该进菜单」的唯一判定点（`stages.keeps_zone` 的镜像）。
 //
@@ -87,7 +113,7 @@ func keepsZone(z ZoneRecord) bool {
 				return true
 			}
 		}
-		return false
+		return hasDNCode(code)
 	}
 	return false
 }
