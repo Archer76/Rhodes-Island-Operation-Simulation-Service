@@ -14,6 +14,8 @@ package data
 //
 // §4.2 记的是：`totals[zone_id]` **不过滤任何后缀** ⇒ 「这一层报的关数」含 `#f#` **与 `#s`**。
 // 但博士 2026-09-26 裁定**六星档（沙盘推演）不做**（`rios-sim/datadb.go` 的装载口已滤掉）。
+// ★ 2026-09-27 那笔**已反转**：六星是**险地作战**（等效突袭），加回取数面，
+// 装载口不再过滤 —— 所以本文件的 `levels` 现在与参照实现同口径（含 `#s`）。
 // ⇒ **本实现的 `levels` 会比 Python 少**，少的正是落在这些 zone 里的 `#s` 关。
 //
 // **这不是缺陷，是裁定的必然结果**，但它是「Go 与 Python 分道扬镳」的一处，
@@ -60,24 +62,23 @@ type Chapter struct {
 
 // ListChapters 复刻 `list_chapters` 的归并与排序（`stages.py:580-689`）。
 //
-// `stages` 应是 `LoadStageTable` 的产物（**六星档已在装载时滤掉**，见文件头那条登记）。
+// `stages` 应是 `LoadStageTable` 的产物（**六星档已加回**，见文件头那条登记）。
 func ListChapters(stages []StageRecord, zones []ZoneRecord) []Chapter {
 	//: ---- 步 1：zone 侧再筛一遍白名单 ----
 	//: 参照实现在读侧也筛（`:603-609`）：库里可能是旧口径时代留下的，
 	//: 而建库的 `carry_over` 会整表搬、不清库。⇒ 不在白名单里的直接不进菜单。
-	allowed := map[string]bool{}
-	for _, t := range chapterTypes {
-		allowed[t] = true
-	}
+	//: ★ 2026-09-27 起这一层用 `keepsZone`（与写侧 `stages.keeps_zone` 同一个谓词）：
+	//: `ACTIVITY` 还要看代号带不带 `sre`／`side`（博士裁：小玩法与联动不进库），
+	//: 光按 type 判会让旧库把 `mini`／`bossrush` 那一批又摆出来。
 	zoneByID := map[string]ZoneRecord{}
 	for _, z := range zones {
-		if allowed[z.Type] {
+		if keepsZone(z) {
 			zoneByID[z.ZoneID] = z
 		}
 	}
 
 	//: ---- 步 2：一趟同时算三样 ----
-	totals := map[string]int{}     //: 不过滤后缀 ⇒ 「这一层报的关数」（**已不含六星**）
+	totals := map[string]int{}     //: 不过滤后缀 ⇒ 「这一层报的关数」（**含六星，与参照同口径**）
 	counts := map[string]int{}     //: 跳过 `#f#`（`#s` 不跳）⇒ 「真实关卡数」
 	names := map[string][]string{} //: 非空且未出现过的中文名（`#f#` 与普通版同名，去重）
 	seen := map[string]map[string]bool{}
@@ -107,7 +108,9 @@ func ListChapters(stages []StageRecord, zones []ZoneRecord) []Chapter {
 	groups := map[string][]string{}
 	order := []string{}
 	for _, z := range zones {
-		if !allowed[z.Type] {
+		//: 同一把尺子（`keepsZone`），不是又一份口径 —— 照 `stages.py` 的
+		//: `list_zones` 里那句「上面已经筛过、这里再判一次」的写法。
+		if !keepsZone(z) {
 			continue
 		}
 		if counts[z.ZoneID] == 0 {

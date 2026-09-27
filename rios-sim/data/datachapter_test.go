@@ -67,24 +67,10 @@ func TestZoneTitleGolden(t *testing.T) {
 	}
 }
 
-// TestZoneTitleEmptyCountIsThirtyOne 是**计数型**金标：规格 §4.3 实测
-// 「352 个 zone 里 31 个 zone_title 返回空串」。整族错一位这条就会红。
-func TestZoneTitleEmptyCountIsThirtyOne(t *testing.T) {
-	_, zones := stageTableForTest(t)
-	if len(zones) == 0 {
-		t.Fatal("zone 表一行都没读到 ⇒ 查询没跑成功")
-	}
-	n := 0
-	for _, z := range zones {
-		if zoneTitle(z) == "" {
-			n++
-		}
-	}
-	if n != 31 {
-		t.Fatalf("zone_title 返回空串的应有 31 个（实测金标），实得 %d 个（zone 总数 %d）",
-			n, len(zones))
-	}
-}
+// TestZoneTitleEmptyCount 那条**计数型**金标已挪到 `datachapter_golden_test.go`
+// （`TestZoneTitleEmptyCountMatchesGolden`）：它现在**从金标文件读那个数**，
+// 不再写死在测试里 —— 写死等于同一个事实存两份，建库口径一变就要两处同步改
+// （2026-09-27 那一轮就是：zone 352→258、空标题 31→15，而测试里还留着旧数）。
 
 // TestChapterLabelOnlyMainline 是另一条**计数型**金标：规格 §4.3 实测
 // 「18 条非空」＋「非主线 zone 的 chapter_label 全为空串 → True」。

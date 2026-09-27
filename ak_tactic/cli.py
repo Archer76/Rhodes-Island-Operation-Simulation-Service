@@ -1176,29 +1176,41 @@ def cmd_db(args: argparse.Namespace) -> int:
         return 0
 
     if args.action == "stage-prune":
-        # 不联网也能清：口径（只留这五类）是本地判定，不需要重取。
-        from .db.stages import CHAPTER_TYPES, clean_zone_names, prune_foreign_rows
+        # 不联网也能清：口径（`stages.keeps_zone`）是本地判定，不需要重取。
+        from .db.stages import (ACTIVITY_KEEP_MARKERS, CHAPTER_TYPES,
+                                clean_zone_names, keeps_zone,
+                                prune_foreign_rows)
 
         target = path or DEFAULT_DB_PATH
         if args.dry_run:
             conn = connect(target)
             try:
-                per_type = dict(conn.execute(
-                    "SELECT type, count(*) FROM zone GROUP BY type"))
-                gone_z = sum(n for t, n in per_type.items()
-                             if t not in CHAPTER_TYPES)
+                rows = [dict(r) for r in conn.execute(
+                    "SELECT zone_id, type, activity_id FROM zone")]
+                victims = [r["zone_id"] for r in rows if not keeps_zone(r)]
+                gone_z = len(victims)
+                #: ★ 关卡侧的预估与真删**用同一个顺序**：真删先删 zone、再删
+                #:   「不在 zone 表里」的关卡 ⇒ 预估也要把「被删 zone 名下的关卡」
+                #:   一起算进去。只算「原本就不在 zone 表里」的会**少报**。
                 gone_s = conn.execute(
                     "SELECT count(*) FROM stage WHERE zone_id IS NULL OR zone_id = '' "
-                    "OR zone_id NOT IN (SELECT zone_id FROM zone WHERE type IN (%s))"
-                    % ", ".join("?" * len(CHAPTER_TYPES)),
-                    CHAPTER_TYPES).fetchone()[0]
+                    "OR zone_id NOT IN (SELECT zone_id FROM zone)").fetchone()[0]
+                if victims:
+                    gone_s += conn.execute(
+                        "SELECT count(*) FROM stage WHERE zone_id IN (%s)"
+                        % ", ".join("?" * len(victims)), victims).fetchone()[0]
             finally:
                 conn.close()
-            drop = {t: n for t, n in per_type.items() if t not in CHAPTER_TYPES}
+            by_type: dict[str, int] = {}
+            for r in rows:
+                if not keeps_zone(r):
+                    k = r.get("type") or "(NULL)"
+                    by_type[k] = by_type.get(k, 0) + 1
             print(f"（--dry-run）会清掉 {gone_z} 个 zone、{gone_s} 个关卡。")
-            print(f"    要清的 zone 类型：{drop}")
-            print(f"    留下的是：{'、'.join(CHAPTER_TYPES)}"
-                  f"（{sum(n for t, n in per_type.items() if t in CHAPTER_TYPES)} 个 zone）")
+            print(f"    要清的 zone 按类型：{by_type}")
+            print(f"    口径 `keeps_zone`：type 不在 {'、'.join(CHAPTER_TYPES)} 里的，"
+                  f"或 type=ACTIVITY 而代号不带 "
+                  f"{'／'.join(ACTIVITY_KEEP_MARKERS)} 的（博士 2026-09-27 裁）")
             return 0
         conn = connect(target, readonly=False)
         try:
@@ -1207,8 +1219,9 @@ def cmd_db(args: argparse.Namespace) -> int:
                 renamed = clean_zone_names(conn)
         finally:
             conn.close()
-        print(f"清掉 {gone[0]} 个 zone、{gone[1]} 个关卡（不在 "
-              f"{'、'.join(CHAPTER_TYPES)} 里的，以及 zone_id 在 zone 表里查不到的）")
+        print(f"清掉 {gone[0]} 个 zone、{gone[1]} 个关卡（口径 `keeps_zone`：type 不在 "
+              f"{'、'.join(CHAPTER_TYPES)} 里的，或 type=ACTIVITY 而代号不带 "
+              f"{'／'.join(ACTIVITY_KEEP_MARKERS)} 的，以及 zone_id 在 zone 表里查不到的）")
         print(f"活动名擦掉「复刻」后缀：{renamed} 条")
         print(f"已写回 {target}")
         return 0

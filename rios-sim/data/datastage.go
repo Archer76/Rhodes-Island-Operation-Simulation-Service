@@ -21,8 +21,15 @@ package data
 //     `:785-790`），SQLite 没有现成表达 ⇒ 取回后在内存按同一个 key 排。
 //  3. **`zone_id` 精确、`zone` 子串**（`:763`、`:765`）：`main_1` 用子串会把 `main_10` 捞出来。
 //
-// ⚠ 六星档（`SIX_STAR`，游戏内「沙盘推演」）**不做**：博士 2026-09-26 裁定直接排除，
-// 装载时就滤掉（见 `LoadStageTable`）。
+// ★ 六星档（`SIX_STAR`／`#s`）**要**（博士 2026-09-27 裁定，**推翻** 09-26 那笔）。
+//
+//	09-26 那次把它当成「沙盘推演」直接排除 —— **弄错了**：15～17 章的六星是
+//	**险地作战**，**等效于之前的突袭**，必须加回。模拟器不做沙盘推演 ⇒ 实际打的
+//	是它的四星版本（`#s` 与同名普通档**共用同一份 `data_path`**，45/45 实测）。
+//	⇒ 装载口**不再**按 `difficulty` 过滤（`datadb.go` 的 SQL 侧同样去掉）。
+//
+//	⚠ 它会改分母：`stage` 表 45 条回到取数面（详见
+//	`docs/python-to-go-migration.md` §8.1 与 §12.10 的登记）。
 
 import (
 	"fmt"
@@ -30,7 +37,7 @@ import (
 	"strings"
 )
 
-// : 四星档后缀（`ak_tactic/db/stages.py:89`）。六星档的 `#s` 不走这里 —— 它按 difficulty 排除。
+// : 四星档后缀（`ak_tactic/db/stages.py:89`）。六星档的 `#s` 不走这里 —— 它按 difficulty 认（加回后照旧在表里）。
 const fourStarSuffix = "#f#"
 
 // : 难度档的**显示顺序**（`ak_tactic/db/stages.py:92`）。
@@ -47,6 +54,43 @@ var envLabels = map[string]string{
 
 // : 只取这几类 zone（`ak_tactic/db/stages.py:137`；博士 2026-09-18 裁定）。
 var chapterTypes = []string{"MAINLINE", "BRANCHLINE", "CAMPAIGN", "MAINLINE_ACTIVITY", "ACTIVITY"}
+
+// : 活动 zone 的**去留模式**（博士 2026-09-27 裁；与 `ak_tactic/db/stages.py` 的
+// `ACTIVITY_KEEP_MARKERS` 是**同一份口径**）。正式活动只有两种代号：原版
+// `actNNside`、复刻 `actNNsre`；而 `mini`／`dN`／`bossrush`／`enemyduel`／
+// `autochess`／`multi`／`break`／`vecb`／`arcade`／`arkhub`／`dp`／`football`／
+// `lock`／`vhalfidle`／`fun`… 那些**小玩法与联动**一律不进库、也不进菜单。
+//
+// ★ 这是**模式**不是一张清单：将来新增的活动按它自动决定去留，不必回来改这里。
+var activityKeepMarkers = []string{"sre", "side"}
+
+// keepsZone 是「这个 zone 该不该进菜单」的唯一判定点（`stages.keeps_zone` 的镜像）。
+//
+// ★ 为什么读侧也要有这一份：库里那份可能是**旧口径时代留下的**，而建库的
+// `carry_over` 会整表搬、不清库 —— 参照实现的读侧也筛（`stages.py` 的 `list_zones`，
+// 那里写着「菜单不该因为库的状态就把肉鸽、爬塔那些摆出来」）。写侧（`db stage-prune`）
+// 已经把库清干净，这一层是**防旧库**的第二道；两道用同一个谓词，口径只有一份。
+func keepsZone(z ZoneRecord) bool {
+	for _, t := range chapterTypes {
+		if z.Type != t {
+			continue
+		}
+		if t != "ACTIVITY" {
+			return true
+		}
+		code := strings.ToLower(strings.TrimSpace(z.ActivityID))
+		if code == "" {
+			code = strings.ToLower(z.ZoneID)
+		}
+		for _, m := range activityKeepMarkers {
+			if strings.Contains(code, m) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
 
 // StageRecord 是 `stage` 表的一行（TUI 三层都要的那几列）。
 //
@@ -82,7 +126,8 @@ type ZoneRecord struct {
 // 在 SQL 里表达不出来；而且三层（章节／环境／列表）都在同一份数据上做不同聚合，
 // 分开下 SQL 会变成三份各自实现的口径 —— 「同一件事只许有一份实现」。
 //
-// 六星档在这里就被滤掉（博士 2026-09-26 裁定）。
+// ★ 2026-09-27：**不再**按 difficulty 滤任何档（09-26 那笔六星排除已反转，
+// 见文件头那条登记）。
 func LoadStageTable() ([]StageRecord, []ZoneRecord, error) {
 	db, err := OpenReadOnly("akdb")
 	if err != nil {
@@ -100,16 +145,11 @@ func LoadStageTable() ([]StageRecord, []ZoneRecord, error) {
 	}
 	defer rows.Close()
 	stages := []StageRecord{}
-	nSkippedSixStar := 0
 	for rows.Next() {
 		var r StageRecord
 		if err := rows.Scan(&r.LevelID, &r.Code, &r.Difficulty, &r.ZoneID, &r.DataPath,
 			&r.Name, &r.StageType, &r.DiffGroup, &r.HardLevelID); err != nil {
 			return nil, nil, fmt.Errorf("读 stage 行失败：%w", err)
-		}
-		if strings.ToUpper(r.Difficulty) == "SIX_STAR" {
-			nSkippedSixStar++
-			continue
 		}
 		stages = append(stages, r)
 	}

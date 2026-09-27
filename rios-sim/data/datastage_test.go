@@ -33,16 +33,47 @@ func stageTableForTest(t *testing.T) ([]StageRecord, []ZoneRecord) {
 	return stages, zones
 }
 
-func TestLoadStageTableExcludesSixStar(t *testing.T) {
+func TestLoadStageTableKeepsSixStar(t *testing.T) {
 	stages, _ := stageTableForTest(t)
+	//: ★ 2026-09-27 **反转**：09-26 的「六星档不做」弄错了 —— 15～17 章的六星是
+	//: **险地作战**（等效突袭），博士裁定加回。⇒ 断言从「一个都不能有」翻成
+	//: 「必须在场」，并且**对着库自己算**（库里有多少条 SIX_STAR，装载就该给多少条）。
+	six := 0
 	for _, r := range stages {
 		if strings.ToUpper(r.Difficulty) == "SIX_STAR" {
-			t.Fatalf("六星档没被滤掉：%s（博士 2026-09-26 裁定不做沙盘推演）", r.LevelID)
+			six++
 		}
 	}
-	//: 正对照：滤的是六星，不是「滤空了」。
-	if len(stages) < 3000 {
-		t.Fatalf("stage 只剩 %d 行 —— 滤得太多，八成把 NORMAL 也滤了", len(stages))
+	db, err := OpenReadOnly("akdb")
+	if err != nil {
+		t.Fatalf("开库失败：%v", err)
+	}
+	defer db.Close()
+	var wantAll, wantSix int
+	if err := db.QueryRow("SELECT count(*) FROM stage").Scan(&wantAll); err != nil {
+		t.Fatalf("数全表失败：%v（这条要当「查询没跑成功」看）", err)
+	}
+	if err := db.QueryRow(
+		"SELECT count(*) FROM stage WHERE difficulty = 'SIX_STAR'",
+	).Scan(&wantSix); err != nil {
+		t.Fatalf("数六星行失败：%v（这条要当「查询没跑成功」看）", err)
+	}
+	if wantAll == 0 {
+		t.Fatal("库里 stage 一行都没有 ⇒ 查询没跑成功")
+	}
+	if wantSix == 0 {
+		t.Fatal("库里一条 SIX_STAR 都没有 ⇒ 查询没跑成功" +
+			"（不是「六星档不存在」那种有意义的 0）")
+	}
+	if six != wantSix {
+		t.Fatalf("装载回 %d 条六星、库里是 %d 条 —— 装/不装不一致", six, wantSix)
+	}
+	//: 正对照：装的是**整表**，不是「六星装了、别的反而丢了」。
+	//: 不再写死行数窗口 —— 那个窗口是旧库的（3055/非六星 3010），建库口径一收紧
+	//: 就变成假红，还会诱人把窗口调小、把尺子越调越松。改成对着库自己算。
+	if len(stages) != wantAll {
+		t.Fatalf("装载回 %d 行、库里 %d 行 —— 差的那些是被顺手滤掉的",
+			len(stages), wantAll)
 	}
 }
 

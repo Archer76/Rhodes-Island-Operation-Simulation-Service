@@ -2,12 +2,15 @@ package data
 
 // datachapter2_test.go：章节层**归并**的端到端金标对照。
 //
-// 最要紧的一条是总数：参照实现实测 **116 条 chapter**（规格 §4.1：
-// 352 个 zone、222 个有关卡的 zone 并成 116 条）—— 这条一红就说明分组整族错了。
+// 最要紧的一条是总数：**69 条 chapter**（博士 2026-09-27 裁后的口径 —— 只留
+// 18 主线（含序章）＋ 剿灭 ＋ 代号带 `sre`／`side` 的活动；其余 47 条**在建库
+// 阶段就舍弃**）。这条一红就说明分组整族错了。
 //
-// ⚠ **计数口径的限定（必读）**：本实现的 `levels` **不含六星档**（博士 2026-09-26 裁定
-// 排除沙盘推演），而参照实现的 `totals` 含 `#s`。所以**别拿本实现的 levels 与 Python 对**；
-// 能对的是**条数（116）与结构**。这条限定是裁定的必然结果，见 datachapter2.go 的文件头。
+// ★ 2026-09-27 两条同时改了，别再按旧数读：
+//   · 条数 **116 → 69**（建库白名单收紧，见 `ak_tactic/db/stages.py` 的 `keeps_zone`）；
+//   · `levels` 现在**与参照实现同口径**（含 `#s`）—— 09-26 那笔「六星档不做」
+//     已**反转**：15～17 章的六星是**险地作战**（等效突袭），加回取数面。
+//     旧注释里那条「别拿本实现的 levels 与 Python 对」的限定**作废**。
 
 import (
 	"strings"
@@ -24,15 +27,15 @@ func chaptersForTest(t *testing.T) []Chapter {
 	return ch
 }
 
-// TestChapterCountIs116：参照实现实测 116 条（352 zone／222 有关卡的 zone）。
-func TestChapterCountIs116(t *testing.T) {
+// TestChapterCountIs69：2026-09-27 裁后的口径（旧金标 116 已过期）。
+func TestChapterCountIs69(t *testing.T) {
 	ch := chaptersForTest(t)
-	if len(ch) != 116 {
+	if len(ch) != 69 {
 		ids := make([]string, 0, len(ch))
 		for _, c := range ch {
 			ids = append(ids, c.Key)
 		}
-		t.Fatalf("应有 116 条 chapter（规格 §4.1 实测），实得 %d 条：%v", len(ch), ids)
+		t.Fatalf("应有 69 条 chapter（2026-09-27 裁后的口径：18 主线含序章＋剿灭＋sre/side 活动），实得 %d 条：%v", len(ch), ids)
 	}
 }
 

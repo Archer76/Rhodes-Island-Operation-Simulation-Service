@@ -73,7 +73,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 __all__ = [
     "StageTableError", "fetch_level_index", "fetch_names", "insert_stages",
@@ -82,6 +82,7 @@ __all__ = [
     "FOUR_STAR_SUFFIX", "DIFFICULTY_ORDER", "DIFFICULTY_LABELS", "ENV_LABELS",
     "ENV_ORDER", "CHAPTER_TYPES", "CAMPAIGN_TITLE", "clean_activity_name",
     "prune_foreign_rows", "clean_zone_names",
+    "ACTIVITY_KEEP_MARKERS", "keeps_zone",
 ]
 
 #: 四星限定版的后缀。普通版是 `main_00-01`，四星版是 `main_00-01#f#`，
@@ -146,6 +147,39 @@ CHAPTER_ORDER = ("MAINLINE", "MAINLINE_ACTIVITY", "CAMPAIGN", "BRANCHLINE",
 #: 剿灭作战在菜单里的显示名。它的 15 个 zone 在 gamedata 与 theresa.wiki 里
 #: **名字全是空的**（取数只到 `zoneNameSecond: None` 这一层），只能自己给一个。
 CAMPAIGN_TITLE = "剿灭作战"
+
+#: 活动 zone 的**去留模式**（博士 2026-09-27 裁）。
+#:
+#: 正式活动只有两种代号：**原版** `actNNside`、**复刻** `actNNsre`；而
+#: `mini`／`dN`／`bossrush`／`enemyduel`／`autochess`／`multi`／`break`／`vecb`／
+#: `arcade`／`arkhub`／`dp`／`football`／`lock`／`vhalfidle`／`fun`… 这些是
+#: **小玩法与联动**，不进库、也不进菜单。
+#:
+#: ★ 这是**模式**而不是一张清单 —— 将来新增的活动只要代号带这两个词就自动进、
+#:   不带就自动不进，**不必回来改这里**。也正因为它管的是"将来"，判据里有一条
+#:   专门盯它：出现新的代号形态时必须**显式裁定**，不许静默漏进或漏出
+#:   （见 `tests`／`check_*` 里那一条具名断言）。
+#:
+#: 落点：`keeps_zone` 是唯一判定点，下面四处（含读侧）都调它 —— 口径只有一份。
+ACTIVITY_KEEP_MARKERS = ("sre", "side")
+
+
+def keeps_zone(z: Mapping[str, Any],
+               keep_types: tuple[str, ...] = CHAPTER_TYPES) -> bool:
+    """这个 zone 该不该留下（**写入口径的唯一判定点**）。
+
+    `type` 不在 `keep_types` 里 ⇒ 不留；`ACTIVITY` 还要看**代号**带不带
+    `sre`／`side`（见 `ACTIVITY_KEEP_MARKERS`）；其余四类一律留。
+    """
+    t = z.get("type") or ""
+    if t not in keep_types:
+        return False
+    if t != "ACTIVITY":
+        return True
+    code = (z.get("activity_id") or "").strip() or (z.get("zone_id") or "")
+    code = code.lower()
+    return any(m in code for m in ACTIVITY_KEEP_MARKERS)
+
 
 #: 活动名里的「复刻」后缀。写法不止一种：绝大多数是 `墟·复刻`，实测还有
 #: `不义之财 复刻`（空格），所以间隔符要放宽；`玛莉娅·临光` 那种带间隔符但
@@ -406,7 +440,8 @@ def _keep_ph(n: int) -> str:
 
 def _kept_zone_ids(conn: sqlite3.Connection,
                    zones: dict[str, dict[str, Any]] | None) -> set[str]:
-    """本次该留下的 `zone_id` 集合（`CHAPTER_TYPES` 那五类）。
+    """本次该留下的 `zone_id` 集合（`keeps_zone` 那一套口径：五类 type，
+    其中 `ACTIVITY` 还要看代号带不带 `sre`／`side`）。
 
     优先用**本次取到的** zone 表；没取到（名字那三张表失败、只写索引）时退回
     库里现有的 zone 表——那时的口径是「按已知分类留下、其余不要」，而不是
@@ -414,12 +449,11 @@ def _kept_zone_ids(conn: sqlite3.Connection,
     """
     src = zones or {}
     if src:
-        return {zid for zid, z in src.items()
-                if (z.get("type") or "") in CHAPTER_TYPES}
+        return {zid for zid, z in src.items() if keeps_zone(z)}
     try:
         return {r[0] for r in conn.execute(
-            f"SELECT zone_id FROM zone WHERE type IN ({_keep_ph(len(CHAPTER_TYPES))})",
-            CHAPTER_TYPES)}
+            "SELECT zone_id, type, activity_id FROM zone")
+            if keeps_zone({"zone_id": r[0], "type": r[1], "activity_id": r[2]})}
     except sqlite3.OperationalError:
         return set()
 
@@ -436,12 +470,27 @@ def prune_foreign_rows(conn: sqlite3.Connection, *,
     周常 35、导览 2）；② `zone_id` 指向一个 zone 表里**根本没有的** zone 的关卡
     （干员密录 `mem_*` 308、生息演算 `sandbox_*` 159、危机合约 128、小玩法 25、
     活动旧 id 64…）。这两类都进不了菜单，博士 2026-09-18 裁定一并清掉，
-    库里只留这五类。**判据是「(zone.type, zone 表里有没有这条)」，不是 id 前缀**
+    库里只留这几类。**判据是「(zone.type, zone 表里有没有这条)」，不是 id 前缀**
     ——前缀迟早会变，而这两条是数据本身的关系。
+
+    ★ 2026-09-27 博士追加：清库的口径从「五类 type」收紧为
+    **`keeps_zone`**（第五类 `ACTIVITY` 还要看代号带不带 `sre`／`side`）——
+    小玩法与联动那一批（`mini`／`bossrush`／`enemyduel`…）**在建库阶段就舍弃**。
+    这一条是**写入口径**，不是菜单白名单：库里留着它们，玩家会以为这游戏有那些关。
     """
-    zsql = f"DELETE FROM zone WHERE type IS NULL OR type NOT IN ({_keep_ph(len(keep_types))})"
-    cur = conn.execute(zsql, keep_types)
-    zones_gone = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+    rows = list(conn.execute("SELECT zone_id, type, activity_id FROM zone"))
+    victims = [r[0] for r in rows
+               if not keeps_zone({"zone_id": r[0], "type": r[1],
+                                  "activity_id": r[2]}, keep_types)]
+    zones_gone = 0
+    if victims:
+        for i in range(0, len(victims), 400):        # SQLite 变量上限内分批
+            chunk = victims[i:i + 400]
+            cur = conn.execute(
+                f"DELETE FROM zone WHERE zone_id IN ({_keep_ph(len(chunk))})",
+                chunk)
+            if cur.rowcount and cur.rowcount > 0:
+                zones_gone += cur.rowcount
     cur = conn.execute("DELETE FROM stage WHERE zone_id IS NULL OR zone_id = '' "
                        "OR zone_id NOT IN (SELECT zone_id FROM zone)")
     stages_gone = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
@@ -506,7 +555,7 @@ def insert_stages(conn: sqlite3.Connection,
     # 全挤在同一个 None 键上、读回来只剩 1 条。所以这里显式把键排在第一列。
     zone_payload = [(zid,) + tuple(z.get(c) for c in _ZONE_COLS[1:])
                     for zid, z in (zones or {}).items()
-                    if (z.get("type") or "") in CHAPTER_TYPES]
+                    if keeps_zone(z)]
     try:
         with conn:                               # 失败自动回滚
             if zone_payload:
@@ -605,8 +654,7 @@ def list_chapters(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     # 但库里那一份可能是**旧口径时代留下来的**（或者被 `db build` 的 carry_over
     # 整表搬过来的），而 `db build` 不联网、不会顺手清库。菜单不该因为库的状态
     # 就把肉鸽、爬塔那些摆出来。
-    zones = {z: v for z, v in zones.items()
-             if (v.get("type") or "") in CHAPTER_TYPES}
+    zones = {z: v for z, v in zones.items() if keeps_zone(v)}
     counts: dict[str, int] = {}
     totals: dict[str, int] = {}
     stage_names: dict[str, list[str]] = {}
@@ -625,7 +673,9 @@ def list_chapters(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     groups: dict[str, list[str]] = {}
     for zid, z in zones.items():
         ztype = (z.get("type") or "")
-        if ztype not in CHAPTER_TYPES:
+        #: 上面已经把 `zones` 按 `keeps_zone` 过了一遍；这里再判一次是**同一把尺子**
+        #: （不是又一份口径）——将来谁把上面那道预筛删了，这一层仍然拦得住。
+        if not keeps_zone(z):
             continue
         if not counts.get(zid):
             continue                       # 一条关卡都没有的 zone 不进菜单

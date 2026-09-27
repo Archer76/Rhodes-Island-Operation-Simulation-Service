@@ -59,7 +59,11 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 	r.Update(tea.WindowSizeMsg{Width: 90, Height: 26})
 
 	fmt.Println("== 一 · 取数层 ==")
-	check("章节 116 条（迁移图 §7.5 的金标）", len(c.chapters) == 116,
+	//: ★ 2026-09-27 博士裁：章节只留 **18 主线（含序章）＋ 剿灭 ＋ 代号带 sre/side
+	//: 的活动**，其余 47 条在建库阶段舍弃 ⇒ 116 → **69**（旧金标 116 已过期）。
+	//: 这个数不是随手写的：dry-run 报 69、`db stage-prune` 清掉 94 个 zone／762 个关卡、
+	//: 两端（Go `-chapters` 与 Python `list_chapters`）复算都是 69。
+	check("章节 69 条（2026-09-27 裁后的口径；旧金标 116）", len(c.chapters) == 69,
 		fmt.Sprintf("实得 %d", len(c.chapters)))
 	six := 0
 	for _, s := range stages {
@@ -67,7 +71,14 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			six++
 		}
 	}
-	check("六星档已被取数口滤掉（SIX_STAR 行 0）", six == 0, fmt.Sprintf("实得 %d 行", six))
+	//: ★★ 2026-09-27 **反转**：09-26 那笔「六星档不做」是**弄错了** —— 15～17 章的
+	//: 六星是**险地作战**（等效于突袭），博士裁定加回；模拟器不做沙盘推演 ⇒ 实际
+	//: 打的是它的四星版本（`#s` 与同名普通档共用 `data_path`）。⇒ 这一条从
+	//: 「必须为 0」翻成「必须在场」，并钉住**数据事实**：45 = 16（15 章）＋15（16 章）
+	//: ＋14（17 章）。它与建库白名单无关，所以不随口径漂；将来上游加了新的险地作战
+	//: 关卡，这条会红 —— 那是**该被看见**的数据变更。
+	check("六星档（险地作战）已在取数面（SIX_STAR 45 行）", six == 45,
+		fmt.Sprintf("实得 %d 行", six))
 	n, err := data.OperatorCount()
 	check("干员库数得出来（首页那一栏靠它）", err == nil && n > 1000,
 		fmt.Sprintf("n=%d err=%v", n, err))

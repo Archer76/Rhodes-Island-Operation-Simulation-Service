@@ -181,17 +181,14 @@ func StageRows(zoneID, keyword string) ([]StageRow, error) {
 	//: 会把 `%`／`_` 当**通配符**。判别实测：`keyword="%"` 时 Python 给 **0 行**，
 	//: 而 LIKE 会给**全表 3055 行** —— 那等于把筛选悄悄关掉，属最坏的一类静默。
 	//: ⇒ 在 Go 侧按同一口径筛（四列、统一 upper、字面量）。
-	//: ★★ 2026-09-26 博士裁定：**六星档（`SIX_STAR`）不做**
-	//: —— 它是游戏内的「沙盘推演」模式，本项目不模拟这些关卡，**直接排除**。
-	//: 实测这 45 关全是第 15～17 章的 `#s` 险地作战变体（`act2mainss_zone1` 16 ＋
-	//: `act3mainss_zone1` 15 ＋ `act4mainss_zone1` 14）。
-	//: ⚠ 排除**按 `difficulty` 列**、不按 `#s` 后缀：难度是数据里的一等字段，
-	//: 而后缀是命名约定（已有 `#f#`／`#s` 两种，将来还可能有别的）。
-	//: ⚠ 这一条**会改分母**：原先「缓存可达 562 个关卡键」里含这 45 个 ⇒ 凡按关卡数报的
-	//: 读数都要跟着改，且必须具名登记（见 `docs/python-to-go-migration.md` §8.1）。
-	q += " where COALESCE(difficulty,'') <> 'SIX_STAR'"
+	//: ★★ 2026-09-27 博士**推翻** 09-26 那笔：六星档（`SIX_STAR`／`#s`）**不再排除**。
+	//: 09-26 把它当成「沙盘推演」直接滤掉是**弄错了** —— 15～17 章的六星是
+	//: **险地作战**，**等效于突袭**，要加回；模拟器不做沙盘推演 ⇒ 实际打的是它的
+	//: 四星版本（`#s` 与同名普通档共用同一份 `data_path`）。
+	//: ⚠ 这条**改过分母**：45 条从「被排除」回到取数面，凡按关卡数报的读数
+	//: 都要跟着改并具名登记（`docs/python-to-go-migration.md` §8.1 与 §12.10）。
 	if len(where) > 0 {
-		q += " and " + strings.Join(where, " and ")
+		q += " where " + strings.Join(where, " and ")
 	}
 	q += " order by zone_id, level_id"
 	rows, err := db.Query(q, args...)
