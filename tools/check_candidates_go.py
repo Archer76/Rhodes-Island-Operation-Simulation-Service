@@ -636,6 +636,8 @@ def _index_of(v, level):
 _VISIT_CMP: dict = {}
 _GO_ARRIVALS: dict = {}
 ATTR_NOTES: list = []
+#: 冻结档那条说明**只说一次**（否则 603 关会往 `ATTR_NOTES` 里塞 603 条同文）。
+_ATTR_FROZEN_NOTED: list = []
 
 
 def go_arrivals(level):
@@ -665,9 +667,12 @@ def visit_field_diff(level):
         return _VISIT_CMP[level]
     out = None
     if GB.mode == GB.CHECK:
-        ATTR_NOTES.append(
-            "冻结档不做归因（不 import `ak_tactic`）：`dwell` 差只按「`cells` "
-            "是否相同」记条数，**不判因** —— 要判因请用 `RIOS_GOLDEN=off` 跑")
+        if not _ATTR_FROZEN_NOTED:
+            _ATTR_FROZEN_NOTED.append(1)
+            ATTR_NOTES.append(
+                "冻结档不做两侧 visit 比对（不 import `ak_tactic`）：归因只走**只依赖 "
+                "Go** 的那一刀（忠实求和），具名证据取不到 —— 要看具名证据就用 "
+                "`RIOS_GOLDEN=off` 跑同一批")
     else:
         try:
             _st, idx = _index_of(verifier(), level)
