@@ -2505,15 +2505,17 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 
 		//: 一键流程**不许**去拉开发审计用的那几样（博士 2026-09-27 问过一次：
 		//: 「为什么 release 包还会拉 wiki 的干员正文和备注」）。判据把它钉住：
-		//: 玩家清单必须**含**那四步硬依赖，且**不含**备注语料／范围索引／外部名册。
-		//: ★ 「关卡文件」是同日博士裁「关卡数据一次性下完」后加进来的第四步：
-		//:   引擎 `load` 只读盘，而界面问部署人数上限走的就是它。
+		//: 玩家清单必须**含**那三步硬依赖，且**不含**备注语料／范围索引／外部名册。
+		//: ★ 同日晚些时候博士又裁「关卡数据**随用随取**」⇒「关卡文件」这一步
+		//: **从这份清单里去掉了**（它本来会一次下 1765 个文件、98 MB、5～25 分钟），
+		//: 改成选定某一关时取那一个（见二十三节）。所以下面由「必须含」翻成
+		//: **「必须不含」** —— 这条断言就是「首次运行不再全量下载」的守门人。
 		joined := strings.Join(playerSteps, ",")
-		check("一键流程只跑玩家必需的四步（不含 wiki 备注语料）",
+		check("一键流程只跑玩家必需的三步，且**不含关卡文件**（随用随取）",
 			strings.Contains(joined, "akdb.sqlite") &&
 				strings.Contains(joined, "stage 表") &&
-				strings.Contains(joined, "关卡文件") &&
 				strings.Contains(joined, "enemydb.sqlite") &&
+				!strings.Contains(joined, "关卡文件") &&
 				!strings.Contains(joined, "prts-notes") &&
 				!strings.Contains(joined, "op-briefs") &&
 				!strings.Contains(joined, "ranges.json") &&
@@ -2607,6 +2609,39 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			!bars.apply([]byte(`{"ev":"step","key":"关卡`)) && len(bars.steps) == before,
 			"忽略")
 		_ = os.Remove(pf)
+	}
+
+	fmt.Println("== 二十三 · 关卡随用随取（选定一关才取那一个文件）==")
+	//: ★ 2026-09-27 博士裁：首次运行不再一次下 1765 个关卡文件（98 MB、5～25 分钟），
+	//: 改成**选定那一关时**取那一个（约 60 KB）。这一节盯两件性质：
+	//:   ① 已经在盘上的关 ⇒ 桥**不发请求**（`cached`），只报文件大小；
+	//:      —— 这条防的是"每选一次关都重下一遍"那种看不见的浪费；
+	//:   ② 负对照：索引里没有这一关 ⇒ **具名失败**，不许静默当成"这关没地图"
+	//:      （与"部署人数上限不写死 0"同一处置）。
+	//: 这一节要走 Python 桥；桥不在场时**具名未核**（发布树里它随 eng/ 走，通常在场）。
+	{
+		if _, err := newBridgeClient(); err != nil {
+			fmt.Printf("  （未核：这一条要走 Python 桥，这次找不到。具名原因：%s）\n",
+				firstLineWith(err.Error(), "★"))
+		} else {
+			fetched, n, err := ensureLevelFile("main_09-12")
+			if err != nil {
+				fmt.Printf("  （未核：ensure_level 没答上来。具名原因：%s）\n",
+					firstLineWith(err.Error(), "★"))
+			} else {
+				check("已在盘上的关 ⇒ 桥不发请求（cached），并报出文件大小",
+					!fetched && n > 0,
+					fmt.Sprintf("fetched=%v bytes=%d", fetched, n))
+			}
+			if _, _, err := ensureLevelFile("__no_such_level__"); err == nil {
+				check("负对照：索引里没有这一关 ⇒ 具名失败（不许静默当成「这关没地图」）",
+					false, "竟然成功了")
+			} else {
+				check("负对照：索引里没有这一关 ⇒ 具名失败（不许静默当成「这关没地图」）",
+					strings.Contains(err.Error(), "__no_such_level__"),
+					firstLineWith(err.Error(), "索引"))
+			}
+		}
 	}
 
 	fmt.Println()

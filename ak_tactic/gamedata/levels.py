@@ -109,6 +109,38 @@ def plan_levels(src: GameDataSource, level_ids: list[str],
     return plan
 
 
+def ensure_level_file(level_id: str, *, src: GameDataSource | None = None,
+                      index: dict | None = None, retries: int = 3) -> dict:
+    """**确保某一关的关卡 JSON 在本地**（不在就取一个）—— 随用随取的那一半。
+
+    博士 2026-09-27 裁：关卡数据**随用随取**。首次运行不再一次下 1765 个文件
+    （实测 98 MB、5～25 分钟不等），改到玩家真正**选定那一关**时再取一个
+    （约 60 KB，几十到几百毫秒）。界面在问引擎 `load`（部署人数上限）之前调它。
+
+    返回 `{"level","data_path","cached","bytes"}`：
+      · `cached=True` ⇒ 本来就在盘上（没发请求，也没有网络开销）；
+      · `cached=False` ⇒ 这次真取回来了，`bytes` 是字节数。
+
+    取不到（离线/镜像没有）会抛 `GamedataError`，**由调用方具名转述** ——
+    不许静默退化成"这关没有地图"。
+    """
+    s = src or GameDataSource()
+    #: `index` 可注入（与 `plan_levels` 同一形状）：自检用的是 `file://` 假镜像，
+    #: 它没有"站点"也就没有关卡索引，现取会抛「当前镜像没有关卡索引」。
+    meta = (index if index is not None else (s.level_index() or {})).get(level_id) or {}
+    dp = (meta.get("data_path") or "").strip()
+    if not dp:
+        raise GamedataError(
+            "关卡索引里没有这一关：%s（库与索引不同版本？索引 %s）"
+            % (level_id, s.index_path))
+    local = s.local_path("levels/" + dp)
+    if local.is_file():
+        return {"level": level_id, "data_path": dp, "cached": True,
+                "bytes": local.stat().st_size}
+    n, _fetched = fetch_one(s, dp, retries=retries)
+    return {"level": level_id, "data_path": dp, "cached": False, "bytes": n}
+
+
 @dataclass
 class FetchReport:
     asked: int = 0
@@ -329,6 +361,28 @@ def selftest(log=print) -> int:
         plan3 = plan_levels(src, ids, index)
         check("⑤ 负对照：补上那个文件后，同一条路立刻变绿（缺 0、真下了）",
               fetched and plan3.missing == [], "缺 %d 个" % len(plan3.missing))
+
+        #: ⑧ **随用随取**：`ensure_level_file` 的两条路都要走到
+        #: （界面选定一关时调的就是它 —— 见 `pick.go` 的 onStagePicked）。
+        #: ★ 这几条必须留在 `with` 块**里面**：假镜像与缓存在块外已被删掉，
+        #: 拿一个空缓存去调它只会去抓真网络（第一版就是这么写错的：rc=1 且没有结论行）。
+        r1 = ensure_level_file("c", src=src, index=index, retries=1)
+        check("⑧ 已在盘上的关 ⇒ cached=True、报出文件大小、一个请求都不发",
+              r1["cached"] and r1["bytes"] > 0,
+              "cached=%s bytes=%d" % (r1["cached"], r1["bytes"]))
+        pb = src.local_path("levels/obt/main/level_b.json")
+        if pb.exists():
+            pb.unlink()                       #: 造出"盘上没有、镜像里有"那一支
+        r2 = ensure_level_file("b", src=src, index=index, retries=1)
+        check("⑧ 盘上没有但镜像有 ⇒ **真取回来**（cached=False）并落盘",
+              (not r2["cached"]) and r2["bytes"] > 0 and pb.is_file(),
+              "cached=%s bytes=%d 落盘=%s" % (r2["cached"], r2["bytes"], pb.is_file()))
+        try:
+            ensure_level_file("nope", src=src, index=index, retries=1)
+            check("⑧ 负对照：索引里没有这一关 ⇒ 具名失败", False, "竟然成功了")
+        except GamedataError as e:
+            check("⑧ 负对照：索引里没有这一关 ⇒ 具名失败（不许静默当成没地图）",
+                  "nope" in str(e), str(e)[:60])
 
         #: ⑥ 重试：**瞬时错误**要退避重试到成功；**404 一次都不重试**
         #: （这一条是 2026-09-27 那次 1184/1213 假失败逼出来的：镜像会掐 TLS 连接，

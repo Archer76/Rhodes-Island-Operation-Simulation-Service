@@ -111,6 +111,11 @@ type bridgeResp struct {
 	Count     int              `json:"count"`
 	Operators []RosterOperator `json:"operators"`
 	Path      string           `json:"path"`
+	//: `ensure_level`：这一关的关卡 JSON 在不在、这次取回来多少字节。
+	Level    string `json:"level"`
+	DataPath string `json:"data_path"`
+	Cached   bool   `json:"cached"`
+	Bytes    int    `json:"bytes"`
 	//: 扫码登录那两条（`login_start` / `login_poll`）。
 	Phase    string   `json:"phase"`
 	URL      string   `json:"url"`
@@ -344,6 +349,28 @@ func tailLines(s string, n int) string {
 		return "（空）"
 	}
 	return strings.Join(ls, " / ")
+}
+
+// ensureLevelFile 让桥**确保某一关的关卡 JSON 在本地**（不在就取一个）。
+//
+// ★ 随用随取（博士 2026-09-27 裁）：首次运行不再一次下 1765 个文件（实测 98 MB、
+// 5～25 分钟），改到玩家真正**选定这一关**时再取一个（约 60 KB）。
+// 界面在问引擎 `load` 之前调它 —— 引擎只读盘、不下载，文件不在它只会报
+// 「读关卡文件失败」，那不是玩家能照做的说法。
+//
+// 返回 `(这次是否真的取了, 字节数, err)`：本来就在盘上时不发请求、零网络开销。
+func ensureLevelFile(level string) (bool, int, error) {
+	b, err := newBridgeClient()
+	if err != nil {
+		return false, 0, err
+	}
+	//: 给足超时：这是**一次网络往返**（60 KB），慢窗口下可能要几秒
+	resp, err := b.call("ensure_level", 1, map[string]any{"level": level},
+		120*time.Second)
+	if err != nil {
+		return false, 0, err
+	}
+	return !resp.Cached, resp.Bytes, nil
 }
 
 // fetchRoster 取一次名册。失败时返回的错误**带着原因**，由调用方原样显示。

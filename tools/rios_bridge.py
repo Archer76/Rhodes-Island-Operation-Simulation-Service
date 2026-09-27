@@ -336,6 +336,24 @@ def cmd_roster(req: dict) -> dict:
             "operators": operators}
 
 
+def cmd_ensure_level(req: dict) -> dict:
+    """**确保某一关的关卡 JSON 在本地**（不在就取一个）。
+
+    博士 2026-09-27 裁：关卡数据**随用随取** —— 首次运行不再一次下 1765 个文件，
+    改到玩家真正选定那一关时再取一个（约 60 KB）。界面在问引擎 `load` 之前调它。
+
+    取不到就把原因抛出去（协议会把它包成具名错误），**不许**静默退化成"这关没地图"。
+    """
+    level = str(req.get("level") or "").strip()
+    if not level:
+        raise ValueError("ensure_level 少了 level（给 levelId，如 main_09-12）")
+    from ak_tactic.gamedata.levels import ensure_level_file
+
+    r = ensure_level_file(level)
+    return {"level": r["level"], "data_path": r["data_path"],
+            "cached": bool(r["cached"]), "bytes": int(r["bytes"])}
+
+
 HANDLERS = {
     "ping": cmd_ping,
     "accounts": cmd_accounts,
@@ -345,6 +363,7 @@ HANDLERS = {
     "activate": cmd_activate,
     "logout": cmd_logout,
     "roster": cmd_roster,
+    "ensure_level": cmd_ensure_level,
 }
 
 

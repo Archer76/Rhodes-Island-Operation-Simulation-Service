@@ -544,21 +544,31 @@ func onStagePicked(r *root, res any) {
 	}
 	c := r.ctx
 	c.stage = st
-	//: ★ 可部署人数**问引擎**（2026-09-27 接上）。派生库的 `stage` 表没有这一列
-	//: （实测 9 列），只有引擎那份解析器读得到 `options.characterLimit`
-	//: —— 见 `engpipe.go` 的 `callLoad`。
-	//: ⚠ 取不到时**具名记一句**（`c.note`，屏上看得见），**不静默写 0**：
-	//: 「0」读起来是「这一关能上 0 个人」，与「没取到」必须长得不一样。
-	//: 同步调用与 `ensureRoster()` 同一处置（都是读一份数据，不是分钟级的活）。
+	//: ★ 随用随取（博士 2026-09-27 裁）：这一关的关卡 JSON 不在盘上就**现在取一个**
+	//: （约 60 KB）。首次运行不再一次下 1765 个文件；取不到就具名说清，并且**不去
+	//: 问引擎** —— 问了也只会得到「读关卡文件失败」，那是同一件事说两遍。
 	c.deployLimit = 0
-	switch ec, err := newEngineClient(); {
-	case err != nil:
-		c.note = "取部署人数上限失败：" + err.Error()
-	default:
-		if opts, err := ec.callLoad(st.LevelID); err != nil {
-			c.note = "取部署人数上限失败（" + st.LevelID + "）：" + err.Error()
-		} else {
-			c.deployLimit = opts.CharacterLimit
+	if fetched, n, err := ensureLevelFile(st.LevelID); err != nil {
+		c.note = "取这一关的地图失败（" + st.LevelID + "）：" + err.Error()
+	} else {
+		if fetched {
+			c.note = fmt.Sprintf("已取回这一关的地图（%s，%.1f KB）",
+				st.LevelID, float64(n)/1024.0)
+		}
+		switch ec, err := newEngineClient(); {
+		case err != nil:
+			c.note = "取部署人数上限失败：" + err.Error()
+		default:
+			//: ★ 可部署人数**问引擎**（2026-09-27 接上）。派生库的 `stage` 表没有这一列
+			//: （实测 9 列），只有引擎那份解析器读得到 `options.characterLimit`
+			//: —— 见 `engpipe.go` 的 `callLoad`。
+			//: ⚠ 取不到时**具名记一句**（`c.note`，屏上看得见），**不静默写 0**：
+			//: 「0」读起来是「这一关能上 0 个人」，与「没取到」必须长得不一样。
+			if opts, err := ec.callLoad(st.LevelID); err != nil {
+				c.note = "取部署人数上限失败（" + st.LevelID + "）：" + err.Error()
+			} else {
+				c.deployLimit = opts.CharacterLimit
+			}
 		}
 	}
 	c.squad = nil

@@ -337,19 +337,20 @@ func shouldAutoSetup(nflag int, plan []setupStep) bool {
 // `ranges.json` 也只被 prts 抓取器自己读。它们只在**判据与开发审计**里用
 // （`check_data_ready.py`／`audit_op_notes.py`／`fetch_prts_notes.py`）。
 //
-// 而这四步是硬依赖：
+// 而这三步是硬依赖：
 //
 //	· `akdb.sqlite`    —— 界面取关卡表、干员库（`rios-sim/data`）都读它；
 //	· `stage 表`       —— 关卡索引，顺带产出引擎要的 `gamedata/_level_index.json` 缓存；
-//	· `关卡文件`       —— **逐关 JSON**：引擎的 `load` 只读盘、不下载，而界面问
-//	  「可部署人数上限」走的就是 `load`（派生的 `stage` 表没有这一列）。
-//	  博士 2026-09-27 裁「关卡数据一次性下完」⇒ 进了这份清单（否则发布形态下
-//	  没被谁问过的关一律取不到，屏上会报「取部署人数上限失败：读关卡文件失败」）。
 //	· `enemydb.sqlite` —— 引擎的 `refraction.go` 在读（敌人抗性那一族）。
+//
+// ★ 2026-09-27 博士裁：**关卡数据随用随取** —— 「关卡文件」那一步**从这份清单里去掉了**
+// （它本来会一次下 1765 个文件、98 MB、5～25 分钟）。改成玩家选定某一关时，由
+// `onStagePicked` 调桥的 `ensure_level` 取那**一个**文件（约 60 KB）。
+// ⇒ 首次运行只剩下面三步；想一次取齐的人仍旧可以跑 `cache --fetch-levels`。
 //
 // ⇒ 整跑会让玩家白等两段联网抓取（prts 备注与范围页），还顺带把
 // `fetch_prts_notes.py` 拖进安装包 —— 那两件都该只留在开发侧。
-var playerSteps = []string{"akdb.sqlite", "stage 表", "关卡文件", "enemydb.sqlite"}
+var playerSteps = []string{"akdb.sqlite", "stage 表", "enemydb.sqlite"}
 
 // runInstallDatapack 装入数据包（`-install-datapack <zip|目录>`）。
 //
@@ -413,7 +414,8 @@ func runRebuildData(py string) int {
 
 	fmt.Println()
 	fmt.Printf("开始取数据与建库（%d 步，每步一条进度条）：\n", len(playerSteps))
-	fmt.Println("  （只跑玩家真正需要的四步：干员库／关卡索引／逐关文件／敌人库；")
+	fmt.Println("  （只跑玩家真正需要的三步：干员库／关卡索引／敌人库；")
+	fmt.Println("   关卡地图**随用随取** —— 玩到哪一关才下那一关的那一个文件；")
 	fmt.Println("   wiki 备注语料与范围索引只有判据与开发工具用得上，不在这里拉）")
 	fmt.Println("  （中途可以 Ctrl+C 停，停了下次双击会接着做）")
 	fmt.Println()
