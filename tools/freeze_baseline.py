@@ -1420,10 +1420,19 @@ def cmd_record(names: list[str], timeout: float) -> int:
             print("  跑法：RIOS_GOLDEN=record 经 runner（rc=%d，%.1fs）；喂参数 %d 个%s"
                   % (r["rc"], r["sec"], len(extra),
                      "（关卡/敌人清单，与总入口同一口径）" if extra else ""))
-            if r["rc"] == RC_CHANNEL or not tmp.is_file():
+            #: ★ 2026-09-27 实测补上的闸门：**套自己报错的跑法不许写基线**。
+            #: 原先只拦 `RC_CHANNEL`（通道没收到值）与"临时文件不在"，
+            #: 于是「套跑了一半、rc=1、只写出 40 个值」也会被当成一次成功的录制
+            #: —— 实测把 `寻路` 那份 **564 个值**的基线覆盖成 **40 个值**
+            #: （消失 563 键），而且打印里那一行「跑法：… rc=1」混在一堆正常输出中
+            #: 很容易看漏。⇒ 判据是：**录制必须 rc=0 才算录成**；不是 0 就停手、
+            #: 把套的 stderr 尾部打出来，一个字节都不写盘。
+            if r["rc"] != 0 or not tmp.is_file():
                 print("✗ 录不出值（rc=%d）：%s" % (r["rc"], named_reason(r) or "通道没收下任何值"))
                 for line in (r["err"] or "").strip().splitlines()[-6:]:
                     print("    " + line)
+                print("    ⇒ **基线保持原样不动**（录制要求 rc=0；rc≠0 时的 tmp 可能只是"
+                      "半批对象，写下去等于把分母悄悄缩小）")
                 bad += 1
                 continue
             new = json.loads(tmp.read_text(encoding="utf-8"))
