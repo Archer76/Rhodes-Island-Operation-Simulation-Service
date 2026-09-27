@@ -314,6 +314,19 @@ func findFreshPython() string {
 	return hits[0]
 }
 
+// shouldAutoSetup 判「这次该不该先跑一遍首次运行准备」。
+//
+// 判据两条，都是**必要**的：
+//   · `nflag == 0` —— 玩家双击进来的那条路（无参数）。任何显式开关（`-selftest`、
+//     `-preflight`、`-dump*`…）都不走它，免得判据与排障被"顺手下载几十 MB"污染。
+//   · 计划非空 —— 什么都不缺时 `runSetup` 本来就是哑的，这条只是让调用点读起来清楚。
+//
+// 单独抽成纯函数是为了能被判据直接喂两格走一遍：真跑一遍会去下载（长等待），
+// 不该塞进无终端自检。
+func shouldAutoSetup(nflag int, plan []setupStep) bool {
+	return nflag == 0 && len(plan) > 0
+}
+
 // playerSteps 是**玩家真正需要的**那几步（`rebuild_data.py --only` 的 key，精确匹配）。
 //
 // ★ 为什么不是整跑（博士 2026-09-27 问「为什么 release 包还会拉 wiki 的干员正文和备注」）：

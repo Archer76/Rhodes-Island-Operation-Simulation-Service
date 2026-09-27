@@ -1809,6 +1809,17 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 				!strings.Contains(joined, "operbox"),
 			joined)
 
+		//: 双击 exe 那条路（无参数）才自动跑准备；**任何显式开关都不走** ——
+		//: 否则判据与排障会被"顺手下载几十 MB"污染，而那是长等待。
+		check("无参数且缺件才自动跑准备；显式开关与齐全时都不走",
+			shouldAutoSetup(0, setupPlanFrom(false, false, false, false)) &&
+				!shouldAutoSetup(1, setupPlanFrom(false, false, false, false)) &&
+				!shouldAutoSetup(0, setupPlanFrom(true, false, true, true)),
+			fmt.Sprintf("无参缺件=%v 有参缺件=%v 无参齐全=%v",
+				shouldAutoSetup(0, setupPlanFrom(false, false, false, false)),
+				shouldAutoSetup(1, setupPlanFrom(false, false, false, false)),
+				shouldAutoSetup(0, setupPlanFrom(true, false, true, true))))
+
 		//: 工程侧根与那条命令的定位（发布树里必须是 eng/tools/）
 		rs := rebuildScript()
 		check("那条「一次做齐」的命令定位得到，且与桥脚本同一个根",

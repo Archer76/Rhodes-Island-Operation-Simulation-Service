@@ -26,10 +26,25 @@ import (
 	"rios-sim/data"
 )
 
+// main 只做两件收尾相关的事：进门前把控制台调成 UTF-8，出门前还回去。
+//
+// ★ 为什么把真正的工作挪进 `run()`：`os.Exit` **不跑 defer**，而本程序到处用
+// `os.Exit`。把"恢复代码页"留在 main 这一层，才能保证**任何**退出路径都还回去
+// （玩家自己那个窗口里跑完之后被留在 65001 是不礼貌的，也会影响同一窗口里之后的命令）。
+//
+// ★ 这一层也是"双击 exe 就能用"的落点：无参数运行时先自己跑一遍准备（缺件才跑），
+// 于是**不需要** `启动.cmd` 那个壳（博士 2026-09-27 问的正是这件事）。
 func main() {
+	setupConsole()
+	code := run()
+	restoreConsole()
+	os.Exit(code)
+}
+
+func run() int {
 	var (
 		selftest  = flag.Bool("selftest", false, "无终端自检：逐层渲染并断言，退出码即判据")
-		preflight = flag.Bool("preflight", false, "启动前自检：逐项查发布目录是否完整（启动.cmd 第一步就是它）")
+		preflight = flag.Bool("preflight", false, "启动前自检：逐项查发布目录是否完整")
 		setup     = flag.Bool("setup", false, "首次运行准备：缺什么就自动补齐（装 Python 要你点头，其余全自动）")
 		dumpCh    = flag.Bool("chapters", false, "打印章节表后退出")
 		dumpEnv   = flag.String("envs", "", "打印该 zone 的环境分层后退出")
@@ -42,42 +57,60 @@ func main() {
 	//: sqlite（§12.5：data 不随包），先跑那个的话会在它们有机会动手之前就退出。
 	//: `-setup` 尤其如此 —— 它的**全部工作**就是「缺的时候补上」，而那个函数报的正是「缺」。
 	if *preflight {
-		os.Exit(runPreflight())
+		return runPreflight()
 	}
 	if *setup {
-		os.Exit(runSetup())
+		code := runSetup()
+		if code != 0 {
+			pauseIfInteractive("准备没有做完，上面写了缺什么、怎么补。")
+		}
+		return code
+	}
+
+	//: **无参数 ⇒ 这是玩家双击进来的那条路**：先看缺不缺东西，缺就自己跑一遍准备。
+	//: 什么都不缺时 `runSetup` 一个字节都不打印（它那条哑路径），所以这里没有噪音。
+	//: 判断"是不是无参数"用 flag.NFlag()：任何显式开关都不走这条路。
+	if flag.NFlag() == 0 {
+		if code := runSetup(); code != 0 {
+			pauseIfInteractive("准备没有做完（上面写了缺什么、怎么补）。做完再双击一次就行。")
+			return code
+		}
 	}
 
 	if err := resolveDataDir(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(3)
+		pauseIfInteractive("")
+		return 3
 	}
 
 	stages, zones, err := data.LoadStageTable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "★ 读关卡表失败：%v\n", err)
-		os.Exit(3)
+		pauseIfInteractive("")
+		return 3
 	}
 
 	switch {
 	case *selftest:
-		os.Exit(runSelftest(stages, zones))
+		return runSelftest(stages, zones)
 	case *dumpCh:
 		printChapters(stages, zones)
-		return
+		return 0
 	case *dumpEnv != "":
 		printEnvs(stages, *dumpEnv)
-		return
+		return 0
 	case *dumpSt != "":
 		printStages(stages, *dumpSt, *env)
-		return
+		return 0
 	}
 
 	p := tea.NewProgram(newRoot(newAppCtx(stages, zones), welcomeScreen{}), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "★ 界面退出：%v\n", err)
-		os.Exit(1)
+		pauseIfInteractive("")
+		return 1
 	}
+	return 0
 }
 
 // newAppCtx 组装共享态。尺寸先给一个常见默认值，真值由 `tea.WindowSizeMsg` 补上。
