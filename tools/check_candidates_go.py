@@ -692,22 +692,44 @@ def visit_field_diff(level):
                     broken += 1
                     continue
                 pairs.extend(zip(list(a.visits), list(r["visits"])))
-            n_e = n_x = 0
+            n_e = n_x = n_other = 0
+            per: dict = {}
             sample: list[str] = []
             for x, y in pairs:
                 if float(x.enter) != float(y["enter"]):
                     n_e += 1
-                    if len(sample) < 3:
+                    per["enter"] = per.get("enter", 0) + 1
+                    if len(sample) < 4:
                         sample.append("%s %r enter：Python=%.17g Go=%.17g"
                                       % (x.name, x.cell, float(x.enter),
                                          float(y["enter"])))
                 if float(x.exit) != float(y["exit"]):
                     n_x += 1
-                    if len(sample) < 3:
+                    per["exit"] = per.get("exit", 0) + 1
+                    if len(sample) < 4:
                         sample.append("%s %r exit：Python=%.17g Go=%.17g"
                                       % (x.name, x.cell, float(x.exit),
                                          float(y["exit"])))
-            out = {"条数": n_e + n_x, "enter": n_e, "exit": n_x,
+                #: ★★ 2026-09-27 补：**别的栏也必须比**。原先只比 enter/exit，
+                #: 于是「条数 == 0」被读成「两侧输入相同」，把 12 条**由 `name`
+                #: 兜底成 `enemy_id` 引起**的 `dwell` 差顺势记到了「上游算术序」
+                #: 的账上 —— 而那 12 条的 enter/exit **一位都没差**（重录子代理
+                #: 在 `main_03-08` 上当场抓到：65 条 visit 的 name 两侧不同）。
+                #: 教训与本仓那条同族：**报「无差异」之前先证明这把尺子看得见**；
+                #: 看不见的栏只能明说看不见。这里的 `name` 尤其要紧 —— 它是
+                #: `visitLess` 全序键的第 3 位，名字一差，平局顺序就分叉。
+                for got, want, f in ((tuple(y["cell"]), tuple(x.cell), "cell"),
+                                     (y["name"], x.name, "name"),
+                                     (y["enemy_id"], x.enemy_id, "enemy_id"),
+                                     (int(y["route"]), int(x.route), "route")):
+                    if got != want:
+                        n_other += 1
+                        per[f] = per.get(f, 0) + 1
+                        if len(sample) < 4:
+                            sample.append("%s %r %s：Python=%r Go=%r"
+                                          % (x.name, x.cell, f, want, got))
+            out = {"条数": n_e + n_x + n_other, "enter": n_e, "exit": n_x,
+                   "其它栏": n_other, "逐栏": per,
                    "样例": sample, "对不上的敌人": broken}
         except Exception as e:                                   # noqa: BLE001
             ATTR_NOTES.append("%s：归因取证失败（%s：%s）"
@@ -1208,15 +1230,29 @@ def compare_case(tag, level, want, got, seen, printed) -> tuple[int, set]:
                         if _faithful:
                             seen["归因：上游 visit 字段"] += 1
                             _vd = visit_field_diff(level)
+                            #: ★ 棘轮：**忠实求和成立、而六栏 visit 又逐位相同**时，
+                            #: 两侧的 dwell 只能相等（同一个值集合、同一把全序键）
+                            #: ⇒ 出现差异说明本判据的两把尺子里有一把错了（复算口径
+                            #: 或字段比对）。这种事**不许**归到「上游输入」上，
+                            #: 记本套的账并留一句具名。
+                            if _vd is not None and _vd["条数"] == 0:
+                                seen["累加序／口径（本套的账）"] += 1
+                                ATTR_NOTES.append(
+                                    "%s：**自相矛盾** —— Go 的 dwell 是它自己 visit 的"
+                                    "忠实求和，且两侧 visit 六栏逐位相同，两边却仍不等"
+                                    "（本判据的复算口径或字段比对有一把错了）"
+                                    % level)
                             if len(UPSTREAM_SAMPLES) < 6:
                                 if _vd is not None and _vd["条数"]:
                                     UPSTREAM_SAMPLES.append(
                                         "%s/%s %r：本关 visit 字段逐位不同 %d 处"
-                                        "（enter=%d、exit=%d）；Go 自报 dwell=%.17g "
-                                        "与「用 Go 自己的 visit 复算」逐位相同 ⇒ "
-                                        "差在**输入**，不在累加序。例：%s"
+                                        "（enter=%d、exit=%d、其它栏=%d，逐栏 %s）；"
+                                        "Go 自报 dwell=%.17g 与「用 Go 自己的 visit "
+                                        "复算」逐位相同 ⇒ 差在**输入**，不在累加序。例：%s"
                                         % (tag, level, k[:3], _vd["条数"],
                                            _vd["enter"], _vd["exit"],
+                                           _vd.get("其它栏", 0),
+                                           _vd.get("逐栏") or {},
                                            float(g.get("dwell") or 0.0),
                                            "；".join(_vd["样例"][:1]) or "（无样例）"))
                                 else:
@@ -1227,7 +1263,7 @@ def compare_case(tag, level, want, got, seen, printed) -> tuple[int, set]:
                                         % (tag, level, k[:3],
                                            float(g.get("dwell") or 0.0),
                                            "冻结档不做两侧比对"
-                                           if _vd is None else "两侧比对无差异"))
+                                           if _vd is None else "两侧六栏逐位相同"))
                         else:
                             seen["累加序／口径（本套的账）"] += 1
             bad += 1
