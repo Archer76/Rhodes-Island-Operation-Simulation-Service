@@ -500,6 +500,105 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		}
 	}
 
+	fmt.Println("== 五之六 · 子职业行（Python `PickerRow #sub-row`）==")
+	//: ★ 2026-09-27 新加。参照实现的选人屏有**两排**筛选：主职业行与子职业行
+	//: （`app.py:1837-1838`）；后者**只列出当前职业下真有的子职业**，取不到就整行隐藏
+	//: （`app.py:1878-1881`）；主职业一换，子职业行重建并回到「全部」
+	//: （`app.py:1886-1893`）。它的前置（桥与结构体补 `sub_profession`）本轮先落。
+	{
+		roster8 := &rosterData{Source: "selftest", Complete: true, Count: 5,
+			Operators: []RosterOperator{
+				{CharID: "char_1", Name: "甲", Profession: "PIONEER",
+					SubProfession: "尖兵", Elite: 0, Level: 1},
+				{CharID: "char_2", Name: "乙", Profession: "WARRIOR",
+					SubProfession: "剑豪", Elite: 1, Level: 1},
+				{CharID: "char_3", Name: "丙", Profession: "MEDIC",
+					SubProfession: "医师", Elite: 1, Level: 45},
+				{CharID: "char_4", Name: "丁", Profession: "CASTER",
+					SubProfession: "中坚术师", Elite: 2, Level: 90},
+				{CharID: "char_5", Name: "戊", Profession: "MEDIC",
+					SubProfession: "咒愈师", Elite: 0, Level: 30},
+			}}
+		ctx8 := &appCtx{w: 90, h: 26, roster: roster8, mode: "auto"}
+		r8 := newRoot(ctx8, newSquadPickScreen(ctx8, nil))
+		r8.Update(tea.WindowSizeMsg{Width: 90, Height: 26})
+		ss8, _ := r8.top().(*squadPickScreen)
+		if ss8 == nil {
+			check("（前置）选人屏在栈顶", false, screenName(r8.top()))
+		} else {
+			items8, _ := ss8.subOptions()
+			check("没选职业 ⇒ 子职业行**不出现**（整行隐藏，照参照）",
+				len(items8) == 0, fmt.Sprintf("%v", items8))
+			r8.View()
+			check("（同上）隐藏时命中表是空的 —— 点在一块看不见的行上不许有反应",
+				len(ss8.subRow.boxes) == 0,
+				fmt.Sprintf("%d 个格子", len(ss8.subRow.boxes)))
+
+			//: 选「医疗」：它的两名干员分属 医师／咒愈师 ⇒ 子职业行出现、按名册首次出现序。
+			medic := -1
+			_, pv := ss8.profOptions()
+			for i, v := range pv {
+				if v == "MEDIC" {
+					medic = i
+				}
+			}
+			ss8.setProf(medic)
+			subItems, subVals := ss8.subOptions()
+			check("选「医疗」⇒ 子职业行 = 「全部」＋ 该职业下真有的子职业（按名册首次出现序）",
+				len(subItems) == 3 && subItems[0] == "全部" &&
+					subVals[1] == "医师" && subVals[2] == "咒愈师",
+				fmt.Sprintf("%v", subItems))
+
+			//: 鼠标点子职业行里的「咒愈师」。
+			r8.View()
+			box8, found8 := hitBox{}, false
+			for _, b := range ss8.subRow.boxes {
+				if b.idx == 2 {
+					box8, found8 = b, true
+				}
+			}
+			if !found8 {
+				check("（前置）「咒愈师」在子职业行的命中表里", false,
+					fmt.Sprintf("%d 个格子", len(ss8.subRow.boxes)))
+			} else {
+				r8.Update(tea.MouseMsg{Action: tea.MouseActionPress,
+					Button: tea.MouseButtonLeft,
+					X:      box8.x + box8.w/2, Y: box8.line + r8.bodyTop()})
+				vis8 := ss8.visible()
+				subOK := ss8.sub == "咒愈师" && len(vis8) == 1 &&
+					strings.TrimSpace(vis8[0].SubProfession) == "咒愈师"
+				check("★ 鼠标点子职业行的「咒愈师」⇒ 只剩该子职业的那一位",
+					subOK, fmt.Sprintf("sub=%q 可见 %d 人", ss8.sub, len(vis8)))
+			}
+
+			//: 换职业 ⇒ 子职业回到「全部」（否则会留一个在新职业下不存在的子职业）。
+			ss8.setProf(1) //: 先锋
+			check("换职业 ⇒ 子职业回到「全部」、可见集合按新职业重算",
+				ss8.sub == "" && ss8.subIdx == 0 && len(ss8.visible()) == 1,
+				fmt.Sprintf("sub=%q 可见 %d 人", ss8.sub, len(ss8.visible())))
+
+			//: Tab 切焦点 ⇒ ←/→ 作用于子职业行（终端里没有焦点链，Tab 就是那条链）。
+			//: ⚠ 起点要写死：上面那次鼠标点击已经把焦点留在**子职业行**了（那是它的
+			//: 正确行为），不重置的话 Tab 会把它翻回职业行，断言就会因为
+			//: 「我以为焦点在 0」而红 —— 判据红得对，是我的前提写错了。
+			ss8.setProf(medic)
+			ss8.focus = 0
+			r8.View()
+			press(r8, "tab")
+			check("Tab 之后焦点在子职业行（有子职业时才切得过去）",
+				ss8.focus == 1, fmt.Sprintf("focus=%d", ss8.focus))
+			press(r8, "right")
+			check("焦点在子职业行时 → 改的是子职业（不是职业）",
+				ss8.sub == "医师" && ss8.prof == "MEDIC",
+				fmt.Sprintf("prof=%q sub=%q", ss8.prof, ss8.sub))
+			//: 负对照：子职业行隐藏时，Tab 不该把焦点切到一行不存在的控件上。
+			ss8.setProf(0) //: 回到全部
+			press(r8, "tab")
+			check("负对照：子职业行隐藏时 Tab **不切焦点**（否则 ←/→ 会像坏了）",
+				ss8.focus == 0, fmt.Sprintf("focus=%d", ss8.focus))
+		}
+	}
+
 	fmt.Println("== 六 · 环境筛选（取数口径）==")
 	hit := ""
 	for _, z := range zones {

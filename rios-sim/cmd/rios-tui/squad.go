@@ -360,6 +360,14 @@ type squadPickScreen struct {
 	prof    string
 	profIdx int
 	profRow hitRow
+	//: ★ 2026-09-27 再加回：**子职业行**（参照的 `PickerRow #sub-row`）。
+	//: 只在当前职业下真有子职业时才画（参照：取不到任何子职业名就整行隐藏）。
+	//: `focus` 决定 ←/→ 作用在哪一行（0=职业行，1=子职业行）—— 参照那边是
+	//: Textual 的焦点链，Tab 在两排之间走；终端里没有焦点链，就用 Tab 自己切。
+	sub    string
+	subIdx int
+	subRow hitRow
+	focus  int
 }
 
 func (*squadPickScreen) title() string { return "选人" }
@@ -397,16 +405,51 @@ func (s *squadPickScreen) profOptions() ([]string, []string) {
 	return items, vals
 }
 
-// visible 是当前职业筛选下真正列出的干员。
+// subOptions 返回子职业行的两项表；**没有职业筛选时返回 nil**（那一行不显示）。
+//
+// ★ 顺序照参照的 `sub_professions_in`（`data.py:480-496`）：**按名册里首次出现的
+// 次序** —— 名册是练度降序 ⇒ 有强干员的子职业排在前面。这与职业行按游戏序排不同，
+// 是两条各自的口径，不是随手写的。
+// ★ 只列当前职业下真有的（`s.prof`）＋ 永远第一位的「全部」（值为空串）。
+func (s *squadPickScreen) subOptions() ([]string, []string) {
+	if s.prof == "" {
+		return nil, nil
+	}
+	items := []string{"全部"}
+	vals := []string{""}
+	seen := map[string]bool{}
+	for _, op := range s.rows {
+		if op.Profession != s.prof {
+			continue
+		}
+		sub := strings.TrimSpace(op.SubProfession)
+		if sub == "" || seen[sub] {
+			continue
+		}
+		seen[sub] = true
+		items = append(items, sub)
+		vals = append(vals, sub)
+	}
+	return items, vals
+}
+
+// visible 是当前职业／子职业筛选下真正列出的干员。
+//
+// ★ 子职业只在**职业也选了**的时候参与筛选 —— 照参照 `app.py:1909-1911`
+// （`if self._prof and self._sub:`）。职业回到「全部」时子职业行的值一起清掉。
 func (s *squadPickScreen) visible() []RosterOperator {
 	if s.prof == "" {
 		return s.rows
 	}
 	out := make([]RosterOperator, 0, len(s.rows))
 	for _, op := range s.rows {
-		if op.Profession == s.prof {
-			out = append(out, op)
+		if op.Profession != s.prof {
+			continue
 		}
+		if s.sub != "" && strings.TrimSpace(op.SubProfession) != s.sub {
+			continue
+		}
+		out = append(out, op)
 	}
 	return out
 }
@@ -415,6 +458,9 @@ func (s *squadPickScreen) visible() []RosterOperator {
 // `PickerRow.action_move`（它 `post_message(Changed)` 之后屏立刻重筛，理由写在
 // `app.py:1619-1623`：回车在那个控件上是「开始解算」的优先级绑定，压在分类行上
 // 会直接开跑）。所以这里也不占用回车。
+//
+// ★ 换了职业 ⇒ **子职业回到「全部」**（照参照 `app.py:1886-1893`：子职业行按新职业
+// 重建并回到「全部」）。不清的话会留着一个在新职业下根本不存在的子职业，列表就空了。
 func (s *squadPickScreen) setProf(i int) {
 	_, vals := s.profOptions()
 	if i < 0 || i >= len(vals) {
@@ -422,6 +468,18 @@ func (s *squadPickScreen) setProf(i int) {
 	}
 	s.profIdx = i
 	s.prof = vals[i]
+	s.sub, s.subIdx = "", 0
+	s.cursor = 0
+}
+
+// setSub 切子职业行的第 i 档（同样一切就生效）。
+func (s *squadPickScreen) setSub(i int) {
+	_, vals := s.subOptions()
+	if i < 0 || i >= len(vals) {
+		return
+	}
+	s.subIdx = i
+	s.sub = vals[i]
 	s.cursor = 0
 }
 
@@ -434,8 +492,15 @@ func (s *squadPickScreen) onMouse(_ *appCtx, m tea.MouseMsg) (screen, action) {
 	if m.Action != tea.MouseActionPress || m.Button != tea.MouseButtonLeft {
 		return s, action{kind: actNone}
 	}
+	//: 两排都查：先职业行、再子职业行（两排的行号不同，不会互相误命中）。
 	if i := s.profRow.hit(m.Y, m.X); i >= 0 {
+		s.focus = 0
 		s.setProf(i)
+		return s, action{kind: actNone}
+	}
+	if i := s.subRow.hit(m.Y, m.X); i >= 0 {
+		s.focus = 1
+		s.setSub(i)
 	}
 	return s, action{kind: actNone}
 }
@@ -496,6 +561,20 @@ func (s *squadPickScreen) view(c *appCtx) string {
 	s.profRow = row
 	head = append(head, rowText)
 
+	//: ★ 子职业行：紧跟职业行之后（职业行**可能折行**，所以起始行要加上它的行数，
+	//: 不能写死 +1 —— 那是"布局与命中同一份坐标"这条纪律的落点）。
+	subItems, _ := s.subOptions()
+	if len(subItems) > 1 {
+		top := len(head) - 1 + strings.Count(rowText, "\n") + 1
+		subText, srow := renderHitRow(subItems, s.subIdx, max(20, c.w-2), top)
+		s.subRow = srow
+		head = append(head, subText)
+	} else {
+		//: 取不到任何子职业名 ⇒ **整行隐藏**（照参照 `app.py:1878-1881`），
+		//: 不是显示一排空白项。命中表一起清掉，免得点在一个看不见的行上还有反应。
+		s.subRow = hitRow{}
+	}
+
 	rows := make([]string, 0, len(s.rows))
 	for _, op := range s.visible() {
 		box := "[ ]"
@@ -519,14 +598,32 @@ func (s *squadPickScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
 		s.cursor = n
 		return s, action{kind: actNone}
 	}
-	//: ←/→ 切职业分类 —— **一切就生效**，不占回车（照参照 `PickerRow.action_move`；
-	//: 回车在那个控件上是「开始解算」的优先级绑定，压在分类行上会直接开跑）。
+	//: ←/→ 切**当前有焦点的那一行**（Tab 在两排之间切）；**一切就生效**，不占回车
+	//: （照参照 `PickerRow.action_move`；回车在那个控件上是「开始解算」的优先级
+	//: 绑定，压在分类行上会直接开跑）。
 	switch {
+	case keyIs(k, "tab"):
+		//: 只在子职业行**看得见**的时候才切过去 —— 否则焦点会跑到一行不存在的控件上，
+		//: 按 ←/→ 变成"什么都没发生"（用户眼里就是键坏了）。
+		if _, vals := s.subOptions(); len(vals) > 1 {
+			s.focus = 1 - s.focus
+		} else {
+			s.focus = 0
+		}
+		return s, action{kind: actNone}
 	case keyIs(k, "left"):
-		s.setProf(s.profIdx - 1)
+		if s.focus == 1 {
+			s.setSub(s.subIdx - 1)
+		} else {
+			s.setProf(s.profIdx - 1)
+		}
 		return s, action{kind: actNone}
 	case keyIs(k, "right"):
-		s.setProf(s.profIdx + 1)
+		if s.focus == 1 {
+			s.setSub(s.subIdx + 1)
+		} else {
+			s.setProf(s.profIdx + 1)
+		}
 		return s, action{kind: actNone}
 	}
 	switch {
