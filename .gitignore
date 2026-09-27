@@ -58,6 +58,11 @@ _proto/
 # 二进制是可再生的（`go build` 一条命令），不入库；源码与 go.mod 入库。
 rios-sim/rios-sim
 rios-sim/rios-sim.exe
+# 界面本体（`rios-sim/cmd/rios-tui`）的构建产物：与引擎 exe 同类 —— 可再生、
+# 不入库。2026-09-27 补登：跑 `-selftest` 要把 exe 建在**引擎 exe 旁边**
+# （`findEngineExe` 是往上走找的，建在 `out/` 会被判成发布树而具名报错），
+# 于是它会落在 `rios-sim/` 里，此前没有这一条就会以 `??` 冒充未提交源码。
+rios-sim/rios-tui.exe
 rios-sim/*.test.exe
 
 # ---- 会话间交接的内部件：不进仓库 ----

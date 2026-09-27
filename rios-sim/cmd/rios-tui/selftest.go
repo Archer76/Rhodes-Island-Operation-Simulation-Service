@@ -689,6 +689,104 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		}
 	}
 
+	fmt.Println("== 五之八 · 控件清单（「这一屏应当有哪个控件」）==")
+	//: ★ 2026-09-27 新加。**这一类断言本身就是那一批问题的病根**：旧自检只断言
+	//: **屏名与栈深**（见第四／五节），所以一个控件**整件消失**它照样全绿 ——
+	//: 博士实测报的三条（章节屏搜索框、关卡屏难度下拉、选人屏筛选）全是这么溜过去的。
+	//:
+	//: 这张表 = 各屏的**交互件清单**（照参照实现逐条点出来的）。每一项配一个
+	//: **行使性**探针 —— 不是"字段在不在"，而是"它还能不能干活"；
+	//: 于是"控件还在但已经废了"也会红。
+	//:
+	//: ★ 纪律：参照那边某屏加了控件、或这边谁删了控件，**先改这张表**；
+	//: 表里每一项都有断言跟着，改了表不改断言会红（表与断言是一对）。
+	{
+		invCtx := &appCtx{w: 90, h: 26, mode: "auto",
+			roster: &rosterData{Source: "selftest", Complete: true, Count: 3,
+				Operators: []RosterOperator{
+					{CharID: "c1", Name: "甲", Profession: "PIONEER",
+						SubProfession: "尖兵", Elite: 0, Level: 1},
+					{CharID: "c2", Name: "乙", Profession: "MEDIC",
+						SubProfession: "医师", Elite: 1, Level: 45},
+					{CharID: "c3", Name: "丙", Profession: "MEDIC",
+						SubProfession: "咒愈师", Elite: 2, Level: 90},
+				}}}
+		invCtx.chapters = data.ListChapters(stages, zones)
+
+		csI := &chapterScreen{}
+		ssI := newSquadPickScreen(invCtx, nil)
+		stI := &stageScreen{heading: "全部关卡（清单探针）", rows: stages}
+		chapterAll := len(csI.shown(invCtx))
+		stageAll := len(stI.shown())
+
+		//: 搜索框那条探针的**唯一实现**（正例与负对照共用同一份逻辑）—— 两处各写
+		//: 一遍的话，负对照就证明不了正例那把尺子，等于白配。
+		//: 判据是「**打字能改可见条数**」：控件整件没了 ⇒ 关键词进不去 ⇒ 条数不变 ⇒ 红。
+		chapterKw := func(k string) int {
+			csI.update(invCtx, keyMsg(k))
+			n := len(csI.shown(invCtx))
+			csI.box.clear()
+			return n
+		}
+		stageKw := func(k string) int {
+			stI.update(invCtx, keyMsg(k))
+			n := len(stI.shown())
+			stI.box.clear()
+			return n
+		}
+		kwAlive := func(n, all int) bool { return n > 0 && n < all }
+
+		inv := []struct {
+			screen, widget, note string
+			probe                func() bool
+		}{
+			//: 关键词用 `MAIN`（结构性：章节键就是 main_0…main_13 ＋ act*mainss，
+			//: 不随数据刷新而变）；**中文与全角折半角**那两把尺子在五之三，不在这里重复。
+			{"选章节", "搜索框 #kw", "打字能改可见条数",
+				func() bool { return kwAlive(chapterKw("MAIN"), chapterAll) }},
+			{"选关卡", "搜索框 #kw", "打字能改可见条数",
+				func() bool { return kwAlive(stageKw("1-7"), stageAll) }},
+			{"选关卡", "难度下拉 #diff", "恰三档、标签带关数", func() bool {
+				o := stI.diffOptions()
+				return len(o) == 3 && strings.Contains(o[1].label, "关")
+			}},
+			{"选人", "练度门槛 #f-trained", "恰三档（不限／≥精英二60／精英二90）",
+				func() bool { return len(trainedOptions) == 3 }},
+			{"选人", "主职业行 #prof-row", "「全部」＋名册里真有的职业", func() bool {
+				i, v := ssI.profOptions()
+				return len(i) >= 2 && len(i) == len(v) && v[0] == ""
+			}},
+			{"选人", "子职业行 #sub-row", "选职业后出现，且只列该职业下的", func() bool {
+				ssI.setProf(1) //: 第一个职业（先锋 ⇒ 尖兵）
+				i, _ := ssI.subOptions()
+				ssI.setProf(0)
+				return len(i) == 2
+			}},
+			{"选人", "鼠标（mouseScreen）", "这一屏认鼠标", func() bool {
+				_, ok := any(ssI).(mouseScreen)
+				return ok
+			}},
+		}
+		for _, it := range inv {
+			check(fmt.Sprintf("控件清单：%s 有「%s」（%s）", it.screen, it.widget, it.note),
+				it.probe(), "探针")
+		}
+		check("控件清单本身不许被清空（至少 7 项，否则这一段会静默变成零行使）",
+			len(inv) >= 7, fmt.Sprintf("%d 项", len(inv)))
+
+		//: ★ 这组探针**自己的负对照**（每条尺子一条）：喂一个匹配不到任何行的关键词，
+		//: 该形状必须读 **false**（`n > 0` 那一半由此被证明是吃劲的）—— 两条合起来
+		//: 才是"有区分力"的证据：同一个形状，一个关键词给 0 行、另一个给非满行。
+		//: 少了它，一个"筛成空表"的实现（`shown` 恒返回空）会让上面那两条全绿 ——
+		//: 那正是本仓记过的"零行使的绿"。（不写 `!kwAlive(...)`：给定 `n == 0`，
+		//: 它是恒真的，摆上去只会像在办事。）
+		badCh, badSt := chapterKw("zzz绝无此章"), stageKw("zzz绝无此关")
+		check("控件清单负对照：章节屏喂匹配不到的关键词 ⇒ 该形状读 false",
+			badCh == 0, fmt.Sprintf("命中 %d 行", badCh))
+		check("控件清单负对照：关卡屏喂匹配不到的关键词 ⇒ 该形状读 false",
+			badSt == 0, fmt.Sprintf("命中 %d 行", badSt))
+	}
+
 	fmt.Println("== 六 · 环境筛选（取数口径）==")
 	hit := ""
 	for _, z := range zones {
