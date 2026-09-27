@@ -317,9 +317,10 @@ func findFreshPython() string {
 // shouldAutoSetup 判「这次该不该先跑一遍首次运行准备」。
 //
 // 判据两条，都是**必要**的：
-//   · `nflag == 0` —— 玩家双击进来的那条路（无参数）。任何显式开关（`-selftest`、
-//     `-preflight`、`-dump*`…）都不走它，免得判据与排障被"顺手下载几十 MB"污染。
-//   · 计划非空 —— 什么都不缺时 `runSetup` 本来就是哑的，这条只是让调用点读起来清楚。
+//
+//	· `nflag == 0` —— 玩家双击进来的那条路（无参数）。任何显式开关（`-selftest`、
+//	  `-preflight`、`-dump*`…）都不走它，免得判据与排障被"顺手下载几十 MB"污染。
+//	· 计划非空 —— 什么都不缺时 `runSetup` 本来就是哑的，这条只是让调用点读起来清楚。
 //
 // 单独抽成纯函数是为了能被判据直接喂两格走一遍：真跑一遍会去下载（长等待），
 // 不该塞进无终端自检。
@@ -335,15 +336,19 @@ func shouldAutoSetup(nflag int, plan []setupStep) bool {
 // `ranges.json` 也只被 prts 抓取器自己读。它们只在**判据与开发审计**里用
 // （`check_data_ready.py`／`audit_op_notes.py`／`fetch_prts_notes.py`）。
 //
-// 而这三步是硬依赖：
+// 而这四步是硬依赖：
 //
 //	· `akdb.sqlite`    —— 界面取关卡表、干员库（`rios-sim/data`）都读它；
 //	· `stage 表`       —— 关卡索引，顺带产出引擎要的 `gamedata/_level_index.json` 缓存；
+//	· `关卡文件`       —— **逐关 JSON**：引擎的 `load` 只读盘、不下载，而界面问
+//	  「可部署人数上限」走的就是 `load`（派生的 `stage` 表没有这一列）。
+//	  博士 2026-09-27 裁「关卡数据一次性下完」⇒ 进了这份清单（否则发布形态下
+//	  没被谁问过的关一律取不到，屏上会报「取部署人数上限失败：读关卡文件失败」）。
 //	· `enemydb.sqlite` —— 引擎的 `refraction.go` 在读（敌人抗性那一族）。
 //
 // ⇒ 整跑会让玩家白等两段联网抓取（prts 备注与范围页），还顺带把
 // `fetch_prts_notes.py` 拖进安装包 —— 那两件都该只留在开发侧。
-var playerSteps = []string{"akdb.sqlite", "stage 表", "enemydb.sqlite"}
+var playerSteps = []string{"akdb.sqlite", "stage 表", "关卡文件", "enemydb.sqlite"}
 
 // runRebuildData 跑那条「把数据与派生库一次做齐」的命令，**输出实时透传**。
 func runRebuildData(py string) int {
@@ -358,7 +363,7 @@ func runRebuildData(py string) int {
 	fmt.Println()
 	fmt.Printf("开始取数据与建库（这一步要下载，可能要几分钟）：\n")
 	fmt.Printf("  $ %s %s --only %s\n", py, script, only)
-	fmt.Println("  （只跑玩家真正需要的三步：干员库／关卡索引／敌人库；")
+	fmt.Println("  （只跑玩家真正需要的四步：干员库／关卡索引／逐关文件／敌人库；")
 	fmt.Println("   wiki 备注语料与范围索引只有判据与开发工具用得上，不在这里拉）")
 	fmt.Println("  （输出直接打在这里；中途可以 Ctrl+C 停，停了下次双击会接着做）")
 	fmt.Println()

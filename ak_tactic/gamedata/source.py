@@ -176,6 +176,37 @@ class GameDataSource:
         self._mem[key] = text
         return text
 
+    def download_to_cache(self, rel_path: str, *,
+                          validate: bool = True) -> tuple[int, bool]:
+        """把一个文件**只落盘**（不解析、不常驻内存），返回 `(字节数, 是否真下了)`。
+
+        与 `fetch_json` 的差别，正是「一次性取齐上千个关卡文件」这个场景要的三件：
+
+        * **不看 TTL，盘上有就算有** —— 关卡是版本化快照，续跑时不该重下；
+        * **不进 `_mem`** —— `fetch_json` 会把每个解析结果留在内存里，取齐 1500 个
+          关卡文件白占几百 MB，而那些对象这个场景一个都用不上；
+        * **可选校验** —— 先 `json.loads` 过一遍，截断的响应**不落盘**并抛错，
+          免得把一个坏文件当成"已有缓存"永久留在盘上。
+
+        写盘走 `_write_cache`（临时文件 + `replace`，原子），所以多线程取**不同**
+        路径是安全的；同一路径重复取由调用方去重保证。
+        """
+        local = self.local_path(rel_path)
+        if local.exists():
+            with self._lock:
+                self.stats["disk_hits"] += 1
+            return local.stat().st_size, False
+
+        raw = self._download(self._url(rel_path))
+        if validate:
+            try:
+                json.loads(raw.decode("utf-8-sig"))
+            except ValueError as e:
+                raise GamedataError(
+                    f"下载回来的不是合法 JSON（{len(raw)} 字节）：{rel_path}\n  {e}") from e
+        self._write_cache(local, raw)
+        return len(raw), True
+
     def _write_cache(self, local: Path, raw: bytes) -> None:
         local.parent.mkdir(parents=True, exist_ok=True)
         tmp = local.with_suffix(local.suffix + ".part")

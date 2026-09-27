@@ -92,6 +92,16 @@ STEPS: list[Step] = [
         argv=[sys.executable, "-m", "ak_tactic", "db", "stage-fetch"],
     ),
     Step(
+        key="关卡文件", title="逐关 JSON（引擎 load 读它）", kind="online",
+        produces="data/gamedata/<镜像域名>/levels/ 下的逐关 JSON",
+        source="map.ark-nights.com（`levels/<data_path>`，按关卡索引给的路径）",
+        needs="**要联网**；`stage 表` 必须先有（范围＝库里的 distinct level_id）；可续跑",
+        eta="首次约 1~2 分钟（约 1200 个文件、57 MB，8 线程）",
+        fail_looks_like="末尾逐条列 `✗`（镜像里没有 ≠ 网络抖动）；**没它的话**，"
+                        "界面里选到那一关会报「取部署人数上限失败：读关卡文件失败」",
+        argv=[sys.executable, "-m", "ak_tactic", "cache", "--fetch-levels"],
+    ),
+    Step(
         key="enemydb.sqlite", title="敌人库", kind="online",
         produces="data/enemydb.sqlite",
         source="prts.wiki 的「分类:敌人」（约 1800 页）",

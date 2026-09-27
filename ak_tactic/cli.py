@@ -1841,6 +1841,18 @@ def cmd_tui(args: argparse.Namespace) -> int:
 
 def cmd_cache(args: argparse.Namespace) -> int:
     c = default_client()
+    if getattr(args, "fetch_levels", False):
+        #: 引擎（`rios-sim`）的 `load` 只读盘：关卡文件没在缓存里就问不出
+        #: 「可部署人数上限」。这一步按**库里真正有的关卡**把缺的一次取齐。
+        from .gamedata.levels import fetch_levels
+        rep = fetch_levels(workers=args.workers, limit=args.limit,
+                           retries=args.retries)
+        print("取齐：真下 %d 个、%.1f MB、失败 %d 个、重试 %d 次、用时 %.1fs"
+              % (rep.fetched, rep.bytes / 1048576.0, len(rep.failed), rep.retries,
+                 rep.seconds))
+        for dp, err in rep.failed[:20]:
+            print("  ✗ %s\n      %s" % (dp, err))
+        return 0 if rep.ok else 1
     if args.clear:
         n = c.cache.clear()
         print(f"已清空 {n} 个缓存文件：{c.cache.root}")
@@ -2154,6 +2166,15 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--drop-ranges", action="store_true", help="删除攻击范围索引")
     c.add_argument("--clear-gamedata", action="store_true",
                    help="删除 gamedata 缓存（关卡与敌人数据，约 17 MB）")
+    c.add_argument("--fetch-levels", action="store_true",
+                   help="把库里用到的逐关 JSON 一次性取齐（引擎 load 要读它；"
+                        "可续跑，已下过的跳过）")
+    c.add_argument("--workers", type=int, default=4,
+                   help="--fetch-levels 的并发线程数（默认 4）")
+    c.add_argument("--retries", type=int, default=3,
+                   help="--fetch-levels 的瞬时错误重试次数（默认 3；404 不重试）")
+    c.add_argument("--limit", type=int, default=None,
+                   help="--fetch-levels 只取前 N 个（试跑用）")
     c.set_defaults(func=cmd_cache)
     return p
 

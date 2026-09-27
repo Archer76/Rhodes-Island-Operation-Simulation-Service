@@ -1862,6 +1862,21 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 				"与原始 JSON 的 characterLimit 并排核过）",
 				opts.CharacterLimit == 8, fmt.Sprintf("实得 %d", opts.CharacterLimit))
 		}
+		//: ★ 2026-09-27 加第二关，**它就是博士当场报的那一关**：发布形态下
+		//: 「取部署人数上限失败（main_09-12）：★ 桥报错：读关卡文件失败 …The system
+		//: cannot find the path specified.」——根因是**逐关 JSON 没人取**
+		//: （`data/gamedata/<镜像>/levels/` 那一层不在），不是引擎或路径写错。
+		//: 处置是给 `rebuild_data.py` 加了一步「关卡文件」（见 docs 的 12.12）。
+		//: 这一条与上面那条**同一处置**：取不到就具名未核，不判红也不假绿 ——
+		//: 因为"这批 JSON 在不在盘上"是**数据准备**的状态，不是界面代码的性质。
+		if o2, e2 := ec.callLoad("main_09-12"); e2 != nil {
+			fmt.Printf("  （未核：load main_09-12 取不到（博士报过的那一关）。"+
+				"具名原因：%s）\n", firstLineWith(e2.Error(), "★"))
+		} else {
+			check("load main_09-12 的 characterLimit = 8（博士当场报的那一关，"+
+				"它的 JSON 补进缓存后就该答得上来）",
+				o2.CharacterLimit == 8, fmt.Sprintf("实得 %d", o2.CharacterLimit))
+		}
 		if _, nerr := ec.callLoad("__no_such_level__"); nerr == nil {
 			check("负对照：不存在的一关必须具名失败（不许静默给 0）", false,
 				"它竟然答上来了")
@@ -2483,11 +2498,14 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 
 		//: 一键流程**不许**去拉开发审计用的那几样（博士 2026-09-27 问过一次：
 		//: 「为什么 release 包还会拉 wiki 的干员正文和备注」）。判据把它钉住：
-		//: 玩家清单必须**含**那三步硬依赖，且**不含**备注语料／范围索引／外部名册。
+		//: 玩家清单必须**含**那四步硬依赖，且**不含**备注语料／范围索引／外部名册。
+		//: ★ 「关卡文件」是同日博士裁「关卡数据一次性下完」后加进来的第四步：
+		//:   引擎 `load` 只读盘，而界面问部署人数上限走的就是它。
 		joined := strings.Join(playerSteps, ",")
-		check("一键流程只跑玩家必需的三步（不含 wiki 备注语料）",
+		check("一键流程只跑玩家必需的四步（不含 wiki 备注语料）",
 			strings.Contains(joined, "akdb.sqlite") &&
 				strings.Contains(joined, "stage 表") &&
+				strings.Contains(joined, "关卡文件") &&
 				strings.Contains(joined, "enemydb.sqlite") &&
 				!strings.Contains(joined, "prts-notes") &&
 				!strings.Contains(joined, "op-briefs") &&
