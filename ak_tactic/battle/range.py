@@ -24,6 +24,7 @@ from __future__ import annotations
 __all__ = [
     "rotate_cells", "footprint", "normalize_direction",
     "normalize_cells", "RangeProvider",
+    "FORTRESS_SUB_PROFESSION", "fortress_self_cell_of",
 ]
 
 Cell = tuple[int, int]
@@ -92,22 +93,67 @@ def footprint(cells, direction: str, origin: Cell) -> set[Cell]:
     return {(ox + x, oy + y) for x, y in rotate_cells(cells, direction)}
 
 
+#: **要塞**的子职业代号。「攻击范围要不要补自身格」这条判据只认它。
+FORTRESS_SUB_PROFESSION = "fortress"
+
+
+def fortress_self_cell_of(calc):
+    """造一个 ``self_cell_of(char_id, elite) -> bool``：**只有要塞**为真。
+
+    这是「攻击范围要不要补上自身格 ``(0,0)``」的**唯一判据**，Python 侧所有调用方
+    都必须走它（Go 侧是同一份判据：`rios-sim/operators.go` 的
+    `operatorCoversSelfCell`）——两处各写一份迟早会漂，而漂的后果是
+    「搜索用的范围」与「模拟器执行用的范围」不再是同一个集合。
+
+    :param calc: `ak_tactic.operator.OperatorCalculator`，也可以是任何提供
+        ``character(char_id) -> dict`` 的对象（读的就是 `character_table` 那份）
+
+    **为什么不是「阻挡数 > 0」**（这是这条判据原来那版，是错的）：阻挡数刻画的是
+    「能挡几个人」，与「攻击范围盖不盖自己脚下」是两件事，而且它**双向**都错——
+
+    * 它把自身格发给了**所有近战**，只是其中大多数范围代号本来就含 ``(0,0)``
+      （73 个里 64 个），**补了看不出来**，所以一直没暴露；
+    * **攻城手**的阻挡数也是 1（> 0）⇒ 它还给攻城手**多补**了一格，与游戏行为相反。
+
+    **为什么只有要塞**：
+
+    * **要塞**（号角／火哨／灰毫）：prts.wiki 三位的页面都写着
+      *※通常情况下，该干员的攻击范围为自身所在地块＋常规攻击范围组成的复合攻击范围*。
+      「自身所在地块」在范围里，所以补。（注意：要塞是近战，敌人会被它挡在
+      **面前一格**，并不会站到它脚下——所以这一格**不是**「打自己挡住的人」用的，
+      阻挡数那条旧判据编出来的正是这个理由，它站不住。）
+    * **攻城手**（提丰／早露／熔泉／埃拉托／铅踝／矩）：页面**没写**这一条，
+      特性只有「优先攻击重量最重的敌人」；数据侧一致——``4-3``／``4-4`` 的
+      ``grids`` 不含 ``(0,0)``。机制上也讲得通：**高台格上出现敌人只有一种情形，
+      就是飞行敌人**，而**攻城手打不到飞过自己头顶的敌人**。
+    """
+    def self_cell_of(char_id: str, elite: int) -> bool:
+        entry = calc.character(char_id) or {}
+        return entry.get("subProfessionId") == FORTRESS_SUB_PROFESSION
+    return self_cell_of
+
+
 class RangeProvider:
     """把「干员 + 精英阶段 + 朝向 + 位置」换算成实际的攻击格集合。
 
     :param registry: `ak_tactic.prts.RangeRegistry`，也可以是任何提供 `get(code)` 的对象
     :param range_id_of: `(char_id, elite) -> rangeId`，通常取自
         `character_table.phases[elite].rangeId`
+    :param self_cell_of: `(char_id, elite) -> bool`，**这一位的攻击范围要不要补上
+        自身格 ``(0,0)``**。传 ``None`` 表示一例都不补。现成的判据是
+        `fortress_self_cell_of`（只有**要塞**为真）——理由与「为什么不是阻挡数」
+        都写在那里的 docstring 里，这里不重复。
 
-    近战（``block_cnt > 0``）会**额外补上自身格**：prts.wiki 的格集合只标攻击覆盖格，
-    而 ``1-1`` 这类近战范围只有 ``[(1,0)]``、不含自身格——但近战必须能打自己
-    挡住的敌人，否则模拟器里会出现「挡住了却打不到」的怪象。
+    ⚠ 73 个范围代号里 64 个的 ``grids`` 本来就含 ``(0,0)``
+    （``1-5``/``2-7``/``3-16``/``4-13``/``4-3``/``4-4``/``4-5``/``4-6``/``4-7``
+    这 9 个不含），所以补格对绝大多数干员是**恒等**的，真正被改动的只有
+    ``4-5``/``4-6``（要塞）与 ``4-3``/``4-4``（攻城手）这些。
     """
 
-    def __init__(self, registry, range_id_of, *, block_of=None):
+    def __init__(self, registry, range_id_of, *, self_cell_of=None):
         self.registry = registry
         self.range_id_of = range_id_of
-        self.block_of = block_of
+        self.self_cell_of = self_cell_of
         self._cache: dict[str, set[Cell]] = {}
         self.missing: set[str] = set()
 
@@ -137,6 +183,6 @@ class RangeProvider:
                       "Up": (0, -1), "Down": (0, 1)}[normalize_direction(direction)]
             ox, oy = position
             return {(ox, oy)} | {(ox + fx * i, oy + fy * i) for i in (1, 2, 3)}
-        if self.block_of is not None and self.block_of(char_id, elite) > 0:
+        if self.self_cell_of is not None and self.self_cell_of(char_id, elite):
             cells = cells | {(0, 0)}
         return footprint(cells, direction, position)

@@ -9,7 +9,14 @@
 """
 
 from .damage import DamageResult, DamageType, arts, physical, resolve_damage, true_damage
-from .range import RangeProvider, footprint, normalize_cells, normalize_direction, rotate_cells
+from .range import (
+    RangeProvider,
+    footprint,
+    fortress_self_cell_of,
+    normalize_cells,
+    normalize_direction,
+    rotate_cells,
+)
 from .sim import BattleResult, BattleSimulator, Deployment, SkillUse
 from .unit import (
     DIRECTIONS,

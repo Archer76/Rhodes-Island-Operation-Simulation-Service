@@ -437,6 +437,81 @@ func operatorRangeCode(charID string, elite int) (string, error) {
 	return code, nil
 }
 
+// fortressSubProfession 是**要塞**的子职业代号。
+//
+// 它是「这一位的攻击范围要不要补上自身格」这条判据的唯一依据。
+const fortressSubProfession = "fortress"
+
+// operatorCoversSelfCell 判这一位的攻击范围要不要**补上自身格 `(0,0)`**。
+//
+// 判据：**子职业 == `fortress`（要塞）**。其余一律不补。数据驱动，
+// **不按干员名硬编码**。
+//
+// # 为什么不是「阻挡数 > 0」
+//
+// 曾经用过 `blockCnt > 0` 那条判据（Python 侧写成 `block_of=lambda c, e: 1`）。
+// 它是**错的**，而且是**双向**错的：
+//
+//   - 要塞（`fortress`）的阻挡数确实 > 0，但**普通近战也 > 0**——
+//     那条判据把「补自身格」发给了所有近战，只是其中大多数范围代号
+//     （73 个里的 64 个）本来就含 `(0,0)`，**补了也看不出来**，所以一直没暴露；
+//   - 攻城手（`siegesniper`）的阻挡数也是 **1**（> 0）⇒ 那条判据还让攻城手
+//     **多补**了一格，而与游戏行为相反（见下）。数据与判据在这一点上原本就是矛盾的。
+//
+// 阻挡数刻画的是「能挡几个人」，与「攻击范围盖不盖自己脚下」是两件事。
+//
+// # 为什么只有要塞补
+//
+//   - **要塞**：prts.wiki 那 3 位（号角／火哨／灰毫）的页面都写着
+//     *※通常情况下，该干员的攻击范围为自身所在地块＋常规攻击范围组成的复合攻击范围*。
+//     「自身所在地块」入范围，所以补。要塞是**近战**（`position == "MELEE"`），
+//     而敌人会被它挡在**面前一格**、并不会站到它脚下——所以这一格**不是**
+//     「打自己挡住的人」用的（那是阻挡数那条旧判据编出来的理由），
+//     它就是 wiki 明写的复合范围本身。
+//   - **攻城手**：那 6 位（提丰／早露／熔泉／埃拉托／铅踝／矩）的页面**都没写**这一条，
+//     特性只有「优先攻击重量最重的敌人」；数据侧一致——`4-3`／`4-4` 的 `grids` 不含 `(0,0)`。
+//     机制上也讲得通：**高台格上出现敌人只有一种情形——飞行敌人**，
+//     而**攻城手打不到飞过自己头顶的敌人** ⇒ 自身格确实不该在范围里。
+//
+// ⇒ 于是 `4-5`／`4-6`（要塞）补、`4-3`／`4-4`（攻城手）不补。
+//
+// # 为什么读 character_table 而不读 `data/akdb.sqlite` 的 `sub_profession_id`
+//
+// 两处数据**实测一致**（9 位逐个比过，含装置那条），但这里必须走
+// `character_table.json`：
+//
+//  1. **与 Python 同源**。Python 侧读的就是 `calc.character(cid)["subProfessionId"]`
+//     （同一份 `character_table.json`）⇒ 两侧判据**不可能漂**；
+//     换成 sqlite 就多了「库与 JSON 版本不一致」这一条分叉路。
+//  2. **保住引擎不链 sqlite 这条性质**。`rios-sim/plan.go:16-18` 明确记着：
+//     引擎 exe 里 `go version -m` **没有** `modernc.org/sqlite`
+//     （链了数据层的 TUI 才有），实测 5,077,504 vs 10,720,000 字节。
+//     根包一行都不 import `rios-sim/data`（只有 `cmd/rios-tui/*`、`maa/*` 用）——
+//     为了读一列子职业把那 5.6 MB 与启动开销捡回来，是拿最热的路径替最冷的付钱。
+//  3. `loadCharTable()` **只留 `char_` 前缀**（`operator.go:191`）⇒ 装置／召唤物
+//     （`trap_*` / `token_*`）在这里查不到，与 `loadout.go:169` 同一道闸。
+//     顺带把 `notchar2`（`TRAP`）那条分支**结构性地**关掉：装置也引用这 9 个代号里的
+//     `2-7`/`4-13`/`4-6`（`trap_099_mhflsb` 眩光手雷 / `trap_316_ubtower` 警戒塔 /
+//     `trap_493_xbabal` 追猎发射台，`4-6` 还与要塞**共用**），
+//     但它们根本走不到干员路径上。
+func operatorCoversSelfCell(charID string) (bool, error) {
+	tbl, err := loadCharTable()
+	if err != nil {
+		return false, err
+	}
+	raw, ok := tbl[charID]
+	if !ok || string(raw) == "null" {
+		return false, fmt.Errorf("character_table 里没有 %q", charID)
+	}
+	var c struct {
+		SubProfessionID string `json:"subProfessionId"`
+	}
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return false, fmt.Errorf("%s 的 subProfessionId 解析失败：%w", charID, err)
+	}
+	return c.SubProfessionID == fortressSubProfession, nil
+}
+
 // facingVector 复刻 `geometry.facing`：认不出的一律朝右。
 func facingVector(direction string) [2]int {
 	switch direction {
@@ -480,14 +555,29 @@ func sortRangeCells(cells [][2]int) {
 // operatorRange 复刻 `RangeProvider.__call__` ＋ `geometry.range_of`：
 //
 //	code = range_id or range_id_of(char_id, elite)
-//	cells = 表[code]（本表自身格恒 (0,0)，不必平移）
+//	cells = 表[code]（⚠ 不是「表里恒含自身格」——73 个代号里 9 个不含）
 //	if 取不到 code: 退化范围（自身格 ＋ 前方三格）
-//	cells ∪ {(0,0)}          ← block_of 恒为 1（`verify.py:210` 的 lambda）
+//	if coversSelf: cells ∪ {(0,0)}   ← 判据见 `operatorCoversSelfCell`（只有要塞）
 //	footprint(cells, direction, position)   ← 旋转 ＋ 平移
 //
-// 返回值第二个是**行使计数**用的两个标记：代号在不在表里、以及这一次是不是
-// 靠 `∪ {(0,0)}` 补上的（实测 64 人次里有 1 次真的靠它——`4-3` 那张表不含自身格）。
-func operatorRange(code, direction string, pos [2]int) ([][2]int, bool, bool, error) {
+// ★ `coversSelf` 是**由调用方传进来的**，判据只有一份（`operatorCoversSelfCell`）：
+// 这里原来写死「无条件补」，`candidates.go` 那边则是「一例都不补」——
+// 同一个干员的**搜索用范围**与**执行用范围**因此是两个集合。
+//
+// ⚠ 这是一次**语义修正**，不是重构：本函数产出的 `OperatorOut.Range` 就是模拟器
+// 选靶吃的那个 `spec.Range`（`sim.go:2747` 的 `inRangeOf`、`:2568` 的医疗选目标、
+// `:3648` 的圣山祝福）。原先的无条件补**让攻城手能打自己头顶的飞行单位**，
+// 与游戏行为相反（攻城手打不到飞过自己头顶的敌人，见 `operatorCoversSelfCell`）。
+//
+// ★ 当前语料上**零影响**（已实测，别再重查）：28 份夹具里只有
+// `fixtures/hsex8_max.json:66` 部署了一位攻城手（提丰 @ `act31side_ex08`、
+// 位置 `[7,2]`、Right、elite 2），而该格 `dwell = 0`
+// （`ArrivalIndex` 里没有任何敌人经过它）⇒ 现有夹具的模拟读数一条都不变。
+//
+// 返回值第二、三个是**行使计数**用的两个标记：代号在不在表里、以及这一次是不是
+// 真的靠 `∪ {(0,0)}` 补上了（只有要塞、且那张表不含自身格时才为真）。
+func operatorRange(code, direction string, pos [2]int,
+	coversSelf bool) ([][2]int, bool, bool, error) {
 	switch direction {
 	case "Right", "Up", "Left", "Down":
 	default:
@@ -510,8 +600,13 @@ func operatorRange(code, direction string, pos [2]int) ([][2]int, bool, bool, er
 	for _, c := range raw {
 		rel[c] = true
 	}
-	added := !rel[Cell{0, 0}]
-	rel[Cell{0, 0}] = true
+	//: 只有要塞补；`added` 的含义是「**这一次真的补上了**」——表里本来就有
+	//: `(0,0)` 时它是 false（73 个代号里 64 个属于这种，补了也是恒等）。
+	added := false
+	if coversSelf && !rel[Cell{0, 0}] {
+		rel[Cell{0, 0}] = true
+		added = true
+	}
 	list := make([]Cell, 0, len(rel))
 	for c := range rel {
 		list = append(list, c)
@@ -605,7 +700,13 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 	if err != nil {
 		return OperatorOut{}, err
 	}
-	cells, inTable, originAdded, err := operatorRange(code, r.Direction, r.Position)
+	//: 自身格的判据只有一份（`operatorCoversSelfCell`），与 `candidates.go` 共用。
+	coversSelf, err := operatorCoversSelfCell(e.CharID)
+	if err != nil {
+		return OperatorOut{}, err
+	}
+	cells, inTable, originAdded, err := operatorRange(code, r.Direction, r.Position,
+		coversSelf)
 	if err != nil {
 		return OperatorOut{}, fmt.Errorf("%s（%s）：%v", r.Operator, e.CharID, err)
 	}

@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .battle import BattleSimulator, Deployment, RangeProvider
+from .battle import BattleSimulator, Deployment, RangeProvider, fortress_self_cell_of
 #: ⚠ **排程的载体**，住 `frontend/`（不依赖 `battle/`）。本轮起 `run()` 把排程
 #: **同时**写进它和模拟器：迁移期两边都对得上（`Schedule.diff` 可核），
 #: 切过去之后只留它。见 `frontend/schedule.py` 的模块文档串。
@@ -211,8 +211,11 @@ class Verifier:
             e = max(0, min(elite, len(phases) - 1))
             return phases[e].get("rangeId") or "1-1"
 
+        #: 自身格判据只有一份（`fortress_self_cell_of`，只有要塞为真）；
+        #: 原先传的是 `block_of=lambda c, e: 1` ⇒ 每一位干员都补，
+        #: 连带让攻城手多了一格（见 `battle/range.py` 的 docstring）。
         return RangeProvider(self.range_table, range_id_of,
-                             block_of=lambda c, e: 1)
+                             self_cell_of=fortress_self_cell_of(calc))
 
     def is_melee(self, char_id: str) -> bool:
         """`position == "MELEE"` 即近战（站地面），否则高台。"""
