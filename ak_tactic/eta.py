@@ -189,6 +189,23 @@ class Visit:
         return max(0.0, self.exit - self.enter)
 
 
+#: `visits()` 的排序键：**全序**（格坐标与身份字段一并入键），不是只按 `enter`。
+#:
+#: ★ 为什么必须是全序（2026-09-27 博士裁 A，根因定位见下）：拼接序由**调用方
+#: 给的格序**定，而 `_range_cells` 返回 `frozenset` ⇒ 那是哈希序。只按 `enter`
+#: 稳定排序时，**两条 `enter` 相等的 visit 谁在前仍由那个哈希序决定**；`dwell`
+#: 是浮点累加、加法不满足结合律 ⇒ 末位差 1 ulp。Go 侧的格序是 `Footprint` 序，
+#: 与哈希序本来就不同 ⇒ 两侧 `dwell` 逐位不等，而 `value = dwell × atk` 拿它
+#: 排序 ⇒ 平局判反，`per_op` 截断边界上留下的可能不是同六条 —— 这不是观感
+#: 问题，是真功能分歧。入键之后序只由数据定，两侧逐位可达；Go 侧同一个键在
+#: `rios-sim/arrivals.go` 的 `visitLess`。
+#:
+#: 尾部的 `exit` 是收口用的：前六项全等的两条 visit，`a + b` 与 `b + a` 在 IEEE
+#: 下相等，所以剩下的稳定序不影响浮点结果。
+def visit_order(v: "Visit") -> tuple:
+    return (v.enter, v.cell, v.name, v.enemy_id, v.route, v.exit)
+
+
 @dataclass
 class EnemyArrival:
     """一只敌人从入场到抵达终点（或离场）的全过程。"""
@@ -358,7 +375,7 @@ class ArrivalIndex:
         out: list[Visit] = []
         for c in cells:
             out.extend(self._by_cell.get(c, ()))
-        out.sort(key=lambda v: v.enter)
+        out.sort(key=visit_order)
         return out
 
     def names(self, cells: Iterable[Cell]) -> dict[str, int]:

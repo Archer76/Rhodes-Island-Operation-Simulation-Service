@@ -41,8 +41,12 @@ const defaultPerOp = 6
 
 // CandidateRow 是一个候选落位（`search.py:48` 的 `Candidate`）。
 //
-// `cells` 在 Python 那边是 `frozenset` ⇒ **顺序无意义**；这里排过序只是为了
-// 输出确定（判据要按集合比，不能逐元素比顺序）。
+// `cells` 在 Python 那边是 `frozenset` ⇒ 这里的顺序对 `dwell` **无影响**：
+// `ArrivalIndex.Dwell` 内部的 visit 序由 `visitLess` 那个**全序键**定，与调用方
+// 给的格序无关（2026-09-27 博士裁 A 之后成立；在此之前它**是有影响的**——同
+// `enter` 的两条 visit 按格序分平局，浮点累加差 1 ulp，会经 `value = dwell×atk`
+// 漏进排序，把 `perOp` 截断边界上的候选换掉）。
+// 这里排过序只是为了输出确定 —— 判据按集合比，不逐元素比顺序。
 type CandidateRow struct {
 	Operator  string   `json:"operator"`
 	CharID    string   `json:"char_id"`

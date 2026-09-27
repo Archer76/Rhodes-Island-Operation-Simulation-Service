@@ -28,6 +28,9 @@ import (
 //     对浮点是 Neumaier 补偿求和，朴素 `+=` 会在末位差出来。
 //   - **排序一律 `sort.SliceStable`**：Python 的 `list.sort` 稳定，而 `sort.Slice`
 //     不稳定 —— 同 `enter` 的两条 visit 换个顺序，下游按序切片的产物就变了。
+//   - **`Visits` 的键是 `visitLess` 那个全序，不是只按 `enter`**（2026-09-27
+//     博士裁 A）：稳定只是"不额外打乱"，它救不了"拼接序本来就不同"——那个平局
+//     顺序最后由调用方给的格序定，而两侧格序不同，`Dwell` 会差 1 ulp。
 //
 // ## 起点那半格为什么要算
 //
@@ -368,13 +371,51 @@ func (idx *ArrivalIndex) First(cell [2]int) (float64, bool) {
 	return best, true
 }
 
+// visitLess 是 `visits()` 的排序键：**全序**（格坐标与身份字段一并入键），
+// 不是只按 `Enter`。Python 侧同一个键是 `eta.py` 的 `visit_order`。
+//
+// ★ 为什么必须是全序（2026-09-27 博士裁 A）：拼接序由**调用方给的格序**定 ——
+// Python 侧是 `_range_cells` 的 `frozenset` 哈希序、Go 侧是 `Footprint` 序，
+// 两者本来就不同。只按 `Enter` 稳定排序时，两条 `Enter` 相等的 visit 谁在前
+// 仍由那个格序决定；`Dwell` 是浮点累加、加法不满足结合律 ⇒ 末位差 1 ulp。
+// 后果不是观感：`value = dwell × atk` 拿它排序 ⇒ 平局判反，`perOp` 截断边界上
+// 留下的可能不是同六条。入键之后序只由数据定，两侧逐位可达。
+//
+// 尾部的 `Exit` 是收口用的：前六项全等的两条 visit，`a + b` 与 `b + a` 在 IEEE
+// 下相等，所以剩下的稳定序不影响浮点结果。
+func visitLess(a, b Visit) bool {
+	if a.Enter != b.Enter {
+		return a.Enter < b.Enter
+	}
+	if a.Cell != b.Cell {
+		if a.Cell[0] != b.Cell[0] {
+			return a.Cell[0] < b.Cell[0]
+		}
+		return a.Cell[1] < b.Cell[1]
+	}
+	if a.Name != b.Name {
+		return a.Name < b.Name
+	}
+	if a.EnemyID != b.EnemyID {
+		return a.EnemyID < b.EnemyID
+	}
+	if a.Route != b.Route {
+		return a.Route < b.Route
+	}
+	return a.Exit < b.Exit
+}
+
 // Visits 是一片格子上的全部 visit，按 enter 排序（`eta.py:357`）。
+//
+// 「按 enter 排序」是**全序**：同 `enter` 的按格坐标与身份字段接着比 —— 见
+// `visitLess`。这不是锦上添花：只看 `enter` 时，平局顺序由调用方给的格序定，
+// 而两侧的格序本来就不同，`Dwell` 会因此差 1 ulp。
 func (idx *ArrivalIndex) Visits(cells [][2]int) []Visit {
 	out := []Visit{}
 	for _, c := range cells {
 		out = append(out, idx.byCell[c]...)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Enter < out[j].Enter })
+	sort.SliceStable(out, func(i, j int) bool { return visitLess(out[i], out[j]) })
 	return out
 }
 
