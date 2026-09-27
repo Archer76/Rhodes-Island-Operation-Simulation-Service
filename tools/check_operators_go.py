@@ -719,7 +719,11 @@ def py_operators_expect(name: str) -> dict:
 
     ★ `ak_tactic` 的 import 全在函数体里：冻结档下本函数不会被调到。
     """
-    from ak_tactic.battle.range import RangeProvider
+    from ak_tactic.battle.range import (
+        FORTRESS_SUB_PROFESSION,
+        RangeProvider,
+        fortress_self_cell_of,
+    )
     from ak_tactic.gamedata.range import RangeTable
     from ak_tactic.operator import OperatorCalculator
     from ak_tactic.plan import Plan, Roster
@@ -735,7 +739,8 @@ def py_operators_expect(name: str) -> dict:
         return (phases[e].get("rangeId") if phases else None) or "1-1"
 
     rtbl = RangeTable()
-    prov = RangeProvider(rtbl, range_id_of, block_of=lambda c, e: 1)
+    prov = RangeProvider(rtbl, range_id_of,
+                         self_cell_of=fortress_self_cell_of(calc))
     out = {"want_ok": want_spec is not None, "live_raised": False, "why": "",
            "live_spec_ok": False, "n_rows": 0,
            "want_ops": list((want_spec or {}).get("operators") or []),
@@ -760,7 +765,15 @@ def py_operators_expect(name: str) -> dict:
         try:
             cells = rtbl.cells(code)
             code_ok = True
-            origin_added = (0, 0) not in cells
+            #: ★ 期望值跟着裁定走（**不是** Go 改错了）：Go 的 `originAdded` 是
+            #: 「这一次**真的**补上了自身格」，而补格判据已收窄为
+            #: 「子职业 == fortress」（`operators.go` 的 `operatorCoversSelfCell`）。
+            #: 原先这里只写 `(0, 0) not in cells`（＝裸表缺自身格），
+            #: 那是「无条件补」时代的口径——两者在旧行为下恒同，收窄后必须分开：
+            #: 攻城手（`4-3`/`4-4`）裸表缺自身格但**不补**，真值应为 False。
+            origin_added = (0, 0) not in cells and (
+                calc.character(op.char_id).get("subProfessionId")
+                == FORTRESS_SUB_PROFESSION)
         except Exception:                                      # noqa: BLE001
             code_ok, origin_added = False, False
         for k, v in live_counters(op, d, prov, code_ok, origin_added).items():

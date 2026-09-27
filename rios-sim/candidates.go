@@ -149,6 +149,61 @@ func atkOf(st *OperatorStats) (float64, error) {
 // CandidatesFor 给每个干员挑出最值钱的若干落位 × 朝向（`search.py:114`）。
 //
 // 关卡走 `level` 或合成关卡的 `path`（与 `arrivals`／`spots` 同口径）。
+// withSelfCell 按 `coversSelf` 决定要不要在相对格表上补**自身格 `(0,0)`**。
+// 返回一份**新**切片（不改 `range_tabl` 缓存里那份）；表里已经有 `(0,0)`
+// 就原样返回——**不加倍**，所以 73 个范围代号里本来就含自身格的那 64 个是恒等。
+//
+// `coversSelf` 由**唯一那份判据** `operatorCoversSelfCell` 给出（只有要塞为真）。
+//
+// # 为什么这里必须与 `operators.go` 一致
+//
+// 这三行原本两边**不一致**：`candidates.go` 用 `range_table.json` 的**裸表**
+// （一例都不补），`operators.go` 无条件补。于是同一个干员的
+// **搜索用范围**（这里，算 `dwell` 挑落位、决定剪掉哪些候选）与
+// **执行用范围**（`OperatorOut.Range`，模拟器 `inRangeOf` 拿它判「这格打不打得到」）
+// 是两个不同的集合——搜索按前者剪枝、模拟器按后者判命中。
+// 那比「差一格」严重得多：**剪枝的口径与执行的口径必须只有一个**。
+//
+// # 补谁不补谁，见 `operatorCoversSelfCell`
+//
+// 只有要塞（`4-5`/`4-6`）补；攻城手（`4-3`/`4-4`）**不补**——
+// 高台格上的敌人只有飞行敌人一种，而攻城手打不到飞过自己头顶的敌人。
+// ⇒ 原先那种「无条件补」不是"多补一格"这么轻，它让攻城手多了打头顶飞行单位的能力。
+//
+// # 那条 118 的读数怎么读（别再读反）
+//
+// 我曾用「敌人会不会踩到高台格」来论证攻城手**需要**自身格：抽 122 关
+// （缓存在场的常规档）做过只读扫描（`ArrivalIndex.cells()` ∩ `stage.map.ranged_spots`），
+// **15 关有交集、合计 118 个格**，dwell 不小（`main_14-19` 3698.175 秒、
+// `main_11-06` 323.333 秒、`main_05-05` 317.778 秒、`easy_11-05` 267.977 秒；
+// 另 `main_00-04`、`main_01-08`、`sub_02-08`、`main_10-12`、`main_11-09`、
+// `easy_11-11`、`main_12-15`、`main_14-13`、`main_14-16`）。
+//
+// 那个推论是**错的**：高台格上会出现敌人，正是因为那是**飞行敌人**，
+// 而攻城手恰恰**打不到**它们 ⇒ 这 118 处交集是「攻城手不该有自身格」的**佐证**，
+// 不是反证。数据（`4-3`/`4-4` 的 grids 不含 `(0,0)`）与 wiki（攻城手页面没写复合范围）
+// 与机制（打不到头顶）三者一致。
+//
+// ⚠ 装置那条仍然成立、且仍然够不着：`notchar2`（`TRAP`）也引用这 9 个代号里的
+// `2-7`/`4-13`/`4-6`（`trap_099_mhflsb` 眩光手雷 / `trap_316_ubtower` 警戒塔 /
+// `trap_493_xbabal` 追猎发射台），`4-6` 还与要塞**共用**。它们被
+// `loadout.go:169`（`Profession != "TRAP" && != "TOKEN"`）与 `operator.go:191`
+// （只留 `char_` 前缀）挡在干员路径之外 ⇒ 判据按子职业写也不会碰到它们。
+func withSelfCell(raw []Cell, coversSelf bool) []Cell {
+	if !coversSelf {
+		return raw
+	}
+	for _, c := range raw {
+		if c == (Cell{0, 0}) {
+			return raw
+		}
+	}
+	out := make([]Cell, 0, len(raw)+1)
+	out = append(out, raw...)
+	out = append(out, Cell{0, 0})
+	return out
+}
+
 func CandidatesFor(level, path, difficulty string, q CandidatesQuery) (CandidatesOut, error) {
 	out := CandidatesOut{Rows: []CandidateRow{},
 		Params: map[string]any{"level": level, "path": path,
@@ -275,12 +330,20 @@ func CandidatesFor(level, path, difficulty string, q CandidatesQuery) (Candidate
 			stats.UnitFailed++
 			continue
 		}
-		base, ok := rangeTbl[code]
+		raw, ok := rangeTbl[code]
 		if !ok {
 			//: Python 那边 `_range_cells` 吞掉异常给空集合 ⇒ 这一位一个候选都没有
 			stats.RangeMissing++
 			continue
 		}
+		//: 自身格：判据与 `operators.go` **共用一份**（`operatorCoversSelfCell`，只有要塞补）。
+		//: 补错这一格，「搜索用范围」与「模拟器执行用范围」就是两个集合。
+		coversSelf, cerr := operatorCoversSelfCell(cid)
+		if cerr != nil {
+			stats.UnitFailed++
+			continue
+		}
+		base := withSelfCell(raw, coversSelf)
 
 		slot, mastery := 0, 0
 		if v, ok := q.Skills[name]; ok {

@@ -35,7 +35,12 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from ak_tactic.battle import BattleSimulator, Deployment, RangeProvider  # noqa: E402
+from ak_tactic.battle import (                                            # noqa: E402
+    BattleSimulator,
+    Deployment,
+    RangeProvider,
+    fortress_self_cell_of,
+)
 from ak_tactic.operator.attack_speed import attack_speed_bonus            # noqa: E402
 from ak_tactic.battle.unit import OperatorUnit                            # noqa: E402
 from ak_tactic.battle.talents import squad_cost_bonus                      # noqa: E402
@@ -109,7 +114,10 @@ def main() -> int:
         e = max(0, min(elite, len(phases) - 1))
         return phases[e].get("rangeId") or "1-1"
 
-    provider = RangeProvider(table, range_id_of, block_of=lambda c, e: 1)
+    #: 自身格判据只有一份（只有要塞补，见 `fortress_self_cell_of`）；
+    #: 原先是 `block_of=lambda c, e: 1` ⇒ 每一位干员都补（含攻城手，那是错的）。
+    provider = RangeProvider(table, range_id_of,
+                             self_cell_of=fortress_self_cell_of(calc))
 
     print(f"=== {stage.code}  {stage.map.width}×{H}  生命 {stage.options.max_life_point}"
           f"  初始费用 {stage.options.initial_cost:g}"

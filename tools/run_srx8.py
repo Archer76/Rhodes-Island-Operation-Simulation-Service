@@ -32,7 +32,12 @@ TOOLS = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS.parent))
 sys.path.insert(0, str(TOOLS))
 
-from ak_tactic.battle import BattleSimulator, Deployment, RangeProvider   # noqa: E402
+from ak_tactic.battle import (                                             # noqa: E402
+    BattleSimulator,
+    Deployment,
+    RangeProvider,
+    fortress_self_cell_of,
+)
 from ak_tactic.battle.talents import squad_cost_bonus                     # noqa: E402
 from ak_tactic.gamedata import (                                          # noqa: E402
     EnemyLibrary, GameDataSource, RangeTable, load_stage,
@@ -92,13 +97,12 @@ def make_provider(calc, table):
         ph = calc.character(cid).get("phases") or []
         return ph[max(0, min(elite, len(ph) - 1))].get("rangeId") or "1-1"
 
-    def block_of(cid, elite):
-        ph = calc.character(cid).get("phases") or []
-        i = max(0, min(elite, len(ph) - 1))
-        kf = (ph[i].get("attributesKeyFrames") or [{}])[-1].get("data") or {}
-        return int(kf.get("blockCnt") or 1)
-
-    return RangeProvider(table, rid, block_of=block_of)
+    #: ★ 这里原本是全仓**唯一一份真的按阻挡数判**的实现
+    #: （`attributesKeyFrames[-1].data.blockCnt`），而那条判据是错的：
+    #: **攻城手的阻挡数也是 1（> 0）** ⇒ 照样补自身格，与游戏行为相反
+    #: （攻城手打不到飞过自己头顶的飞行单位）。现在与其余调用方共用
+    #: 唯一那份判据（只有要塞补），不再另立一套。
+    return RangeProvider(table, rid, self_cell_of=fortress_self_cell_of(calc))
 
 
 class PlanError(RuntimeError):

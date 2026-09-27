@@ -97,7 +97,16 @@ func SnowOf(st *Stage, rows []DeployRow, freeze bool) (json.RawMessage, int, err
 		}
 		//: `current_range_id()` 在**跑之前**恒 None（技能未开），所以代号就是
 		//: 干员自己那一档——与 `operators.go` 取规格时同一条口径。
-		cells, _, _, err := operatorRange(code, r.Direction, r.Position)
+		//:
+		//: ★ 自身格也走**同一份判据**（`operatorCoversSelfCell`，只有要塞补）：
+		//: 上面那句「同一条口径」本来就是这个意思，只是原先两边都写死成
+		//: 「无条件补」所以看不出来。这里若自己另判一次，雪田的格集合就会
+		//: 与模拟器选靶用的 `spec.Range` 漂开。
+		coversSelf, err := operatorCoversSelfCell(r.Entry.CharID)
+		if err != nil {
+			return nil, 0, err
+		}
+		cells, _, _, err := operatorRange(code, r.Direction, r.Position, coversSelf)
 		if err != nil {
 			return nil, 0, err
 		}
