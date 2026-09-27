@@ -666,7 +666,13 @@ def visit_field_diff(level):
     if level in _VISIT_CMP:
         return _VISIT_CMP[level]
     out = None
-    if GB.mode == GB.CHECK:
+    if GB.mode() == GB.CHECK:
+        #: ★★ 这一行曾经写成 `GB.mode`（**函数对象**）`== GB.CHECK`（字符串）——
+        #: 恒为假 ⇒ 冻结档照样走 else 去 import `ak_tactic` ⇒ 被冻结档的
+        #: ImportError 拦下、runner 以 rc=6（未转完）收场，**盖掉判据自己的
+        #: 结论码**，而那一支死得悄无声息。2026-09-27 由重录子代理当场抓到。
+        #: ⚠ 本仓的正确写法只有两种：`G.mode`（`Channel` 实例的属性）或
+        #:   `GB.mode()`（模块级函数）。`GB.mode` 不带括号是**函数对象**。
         if not _ATTR_FROZEN_NOTED:
             _ATTR_FROZEN_NOTED.append(1)
             ATTR_NOTES.append(
@@ -1914,6 +1920,11 @@ def main() -> int:                                             # noqa: C901
             print("    · %s" % _s)
         for _s in ATTR_NOTES[:4]:
             print("    ⚠ 归因取证未完成：%s" % _s)
+        print("  ★ 归因档：**%s** —— 这是判据**实际走的那一支**，印出来是为了让"
+              "「分支写死了」这件事看得见（冻结档绝不许 import `ak_tactic`）。"
+              % ("冻结档：只走「只依赖 Go」的忠实求和"
+                 if GB.mode() == GB.CHECK
+                 else "live：忠实求和 ＋ 两侧 visit 逐条比对（具名证据）"))
         print("  历史形状（2026-09-27 裁 A 之前，留档）：`dwell` 的累加序 = visit 的"
               "**拼接序**；两侧都按 `enter` **稳定**排序，可一旦有多条 visit 的 "
               "`enter` 相等，稳定排序保留的就是**拼接序**，而拼接序由**格集合的迭代序**"
@@ -1941,6 +1952,22 @@ def main() -> int:                                             # noqa: C901
         print()
 
     # ------------------------------------------------------ 守卫与结论
+    #: ★★ 守卫：**模式分支必须是活的**（2026-09-27 由重录子代理当场抓到的那一类）。
+    #: `visit_field_diff` 里曾是 `GB.mode == GB.CHECK`（函数对象比字符串）⇒ 恒为假
+    #: ⇒ 冻结档照样去 import `ak_tactic` ⇒ 被拦成 rc=6、盖掉判据自己的结论码，
+    #: 而那一支**死得没有任何读数**。判别式：冻结档下 ATTR_NOTES 里**只该有**
+    #: 那条「不做两侧比对」的说明，出现「归因取证失败＋Import」就是分支写错了。
+    #: ★ 位置要紧：这一条排在所有早退之前 —— 摆在后头会被「判据自己瞎」那一类
+    #:   早退挡住（负对照实测过：挡住时它一声不响，等于又一把打不响的尺子）。
+    if GB.mode() == GB.CHECK:
+        _badbranch = [s for s in ATTR_NOTES
+                      if "归因取证失败" in s and "Import" in s]
+        if _badbranch:
+            bad += 1
+            print("结论：**不成立** —— 冻结档下归因那一支的**模式分支写错了**"
+                  "（正本清源：本仓只有 `G.mode`（实例属性）与 `GB.mode()`（函数）"
+                  "两种写法，`GB.mode` 不带括号是函数对象、恒不等于字符串）：%s"
+                  % _badbranch[0])
     if mutate:
         for k in MUT_KEYS:
             print("  变异「%s」：注入=%s 判红=%s"
