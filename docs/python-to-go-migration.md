@@ -860,6 +860,8 @@ git -C <仓外>\wt-rebase rebase --onto origin/rewrite/paths-2026-09-26 main
 
 **基线**：`fixtures/golden/候选生成.json` 必须按新口径**重录**（`eta.py` 动了，冻着的期望值就是旧累加序的）。重录与冻结档复跑的读数另记。
 
+**重录的读数与一处差额的查证**（2026-09-27）：旧 642 值 / 5,547,548 B / sha16 `7A2A32FE17C552D0` ⇒ 新 641 值 / 5,545,328 B / sha16 `98689D09570E331D`；`同键不同值 35`（与「只动了几关的 dwell」相符）、**新增 0 键 / 消失 1 键**。消失那把是 `["candidates","py0","act31side_01",…]` —— ★ **它不是分母缩水，是旧键形状的遗物**：现行键一律是 4 元组 `["candidates:<用例名>", 关卡, 关卡sha, 名册sha]`，而它是 **5 元组、用例名落在第 1 位、关卡在第 2 位**，正是判据文件头记过的「第一版键形状」那次缺陷的形状；`covered_set` 的 live 键是 4 元组，与它求交**恒为空** ⇒ 它从未参与覆盖面，掉它是**清理**。旁证三条：`sections_total/frozen=10/10、uncovered=0` 未变；那一支的 4 元组键 `candidates:perop0/act31side_01` **新旧都在**；`batch_consumed` 与 `input_identity` 两份逐字相同（`False` / `True`，未变）。⇒ 差额的判别式是**看键的形状**，不是看值的条数 —— 条数少 1 与「少覆盖一个对象」是两件事，混起来会把一次清理读成一次静默缩水。取证脚本 `out/acceptance/_candgold_diff.py` 与 `_candgold_meta.py`（只读）。
+
 **★ 同批踩出来的第二个判据级教训：一条写死的模式分支（`ec07f14`）**
 
 重录子代理当场抓到本套自己的一处缺陷：新写的归因那一支写的是 `if GB.mode == GB.CHECK:`，而 `freeze_baseline.mode` 是**模块级函数** —— 函数对象比字符串**恒为假** ⇒ 冻结档照样走 else 去 `import ak_tactic` ⇒ 被冻结档的 ImportError 拦下、runner 以 **rc=6（未转完）收场、盖掉判据自己的结论码**，而那一支**死得没有任何读数**。全仓扫过：27 套里只有这一处写 `GB.mode`（其余是 `G.mode` 或 `GB.mode()`）。修是一个字符。
