@@ -25,6 +25,11 @@ data/*.sqlite
 data/*.sqlite-journal
 data/*.sqlite-wal
 
+# 数据包装入后留下的标记（2026-09-27）。★ 它必须显式列出来：这份 .gitignore 是
+# **按具体路径**列的，不是整目录忽略 ⇒ 新文件会以 `?? data/` 露出来，最容易被
+# 顺手 `git add -A` 提交进产品仓（本仓记过同类事故：新内部件没登记就冒充未提交源码）。
+data/datapack.json
+
 # ---- 隐私：森空岛名册含 uid / 昵称 / 完整练度 ----
 # data/skland/ 是算符口径的 json；docs/roster-*.md 是同一份数据的人读导出。
 # 原先只挡住了前者，后者因此跟进了提交（2026-09-17 已从历史摘除）。
