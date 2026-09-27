@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"rios-sim/mech"
+	"rios-sim/num"
 )
 
 // : 与原版同源的两个常量（`unit.py` 27-40）。攻击间隔的下限与攻速下限一起用。
@@ -1600,7 +1601,7 @@ func setRoute(e *enemy, points [][2]float64) {
 	}
 	length := 0.0
 	for i := 1; i < len(points); i++ {
-		length += math.Hypot(points[i][0]-points[i-1][0], points[i][1]-points[i-1][1])
+		length += num.Hypot(points[i][0]-points[i-1][0], points[i][1]-points[i-1][1])
 	}
 	e.spec.Legs = []LegSpec{{Kind: "walk", Points: points, Length: length}}
 }
@@ -1652,7 +1653,7 @@ func pileDiverTick(enemies []*enemy, ops []*operator, t float64, c *simCtx) {
 		}
 		dx := target.cell[0] - e.position[0]
 		dy := target.cell[1] - e.position[1]
-		if math.Hypot(dx, dy) <= 0.5 {
+		if num.Hypot(dx, dy) <= 0.5 {
 			// 已经贴到目标格：钉住——换成单点路线，免得"走到路线终点"被判成漏怪
 			setRoute(e, [][2]float64{target.cell})
 			dmg := resolveDamage(e.spec.ATK, e.spec.DamageType, 1.0,
@@ -1683,7 +1684,7 @@ func nearestAliveOperator(ops []*operator, from [2]float64) *operator {
 		if !op.alive() {
 			continue
 		}
-		d := math.Hypot(op.cell[0]-from[0], op.cell[1]-from[1])
+		d := num.Hypot(op.cell[0]-from[0], op.cell[1]-from[1])
 		if d < bestD {
 			bestD = d
 			best = op
@@ -1729,7 +1730,7 @@ func attachMark(diver *enemy, target *operator, ops []*operator,
 		if !op.alive() {
 			continue
 		}
-		if math.Hypot(op.cell[0]-cell[0], op.cell[1]-cell[1]) <= radius {
+		if num.Hypot(op.cell[0]-cell[0], op.cell[1]-cell[1]) <= radius {
 			m.attached = append(m.attached, op)
 		}
 	}
@@ -1985,7 +1986,7 @@ func pointAt(points [][2]float64, travelled float64) [2]float64 {
 	acc := 0.0
 	for i := 0; i+1 < len(points); i++ {
 		a, b := points[i], points[i+1]
-		seg := math.Hypot(b[0]-a[0], b[1]-a[1])
+		seg := num.Hypot(b[0]-a[0], b[1]-a[1])
 		if seg <= 0 {
 			continue
 		}
@@ -2390,7 +2391,7 @@ func splashTiles(center [2]float64, radius float64) [][2]int {
 			tx, ty := baseX+dx, baseY+dy
 			gx := math.Max(math.Abs(x-float64(tx))-0.5, 0)
 			gy := math.Max(math.Abs(y-float64(ty))-0.5, 0)
-			if math.Hypot(gx, gy) <= radius+1e-9 {
+			if num.Hypot(gx, gy) <= radius+1e-9 {
 				out = append(out, [2]int{tx, ty})
 			}
 		}
@@ -3068,7 +3069,7 @@ func enemyTarget(e *enemy, ops []*operator, ranged bool) *operator {
 		if !op.alive() {
 			continue
 		}
-		if math.Hypot(e.position[0]-op.cell[0], e.position[1]-op.cell[1]) <=
+		if num.Hypot(e.position[0]-op.cell[0], e.position[1]-op.cell[1]) <=
 			e.spec.AttackRange {
 			picked = op
 		}

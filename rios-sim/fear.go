@@ -1,6 +1,10 @@
 package main
 
-import "math"
+import (
+	"math"
+
+	"rios-sim/num"
+)
 
 // 【恐惧】与【诱导】的移动（诱发移动）——几何与选择那一层。
 //
@@ -80,7 +84,7 @@ func fearSectorHit(hit, source, center [2]float64) bool {
 	// 加 1e-12 是给"恰好 45°"留余量：边界上两侧算出来的余弦不会逐位相等，
 	// 不留余量会让边界格的结果取决于浮点误差（本项目栽过"边界差一个"）。
 	dot := dx*ox + dy*oy
-	cosAngle := dot / (math.Hypot(dx, dy) * math.Hypot(ox, oy))
+	cosAngle := dot / (num.Hypot(dx, dy) * num.Hypot(ox, oy))
 	return cosAngle >= math.Cos(fearHalfAngle)-1e-12
 }
 

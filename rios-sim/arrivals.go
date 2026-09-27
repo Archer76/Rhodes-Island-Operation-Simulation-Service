@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"sort"
+
+	"rios-sim/num"
 )
 
 // # 到达表：`ak_tactic/eta.py:176-405` 的 Go 侧对应物
@@ -121,7 +123,7 @@ func walkVisits(pts [][2]float64, t0, speed float64, name, enemyID string,
 	cum := 0.0
 	for i, p := range pts {
 		if i == 0 {
-			seg := math.Hypot(pts[1][0]-p[0], pts[1][1]-p[1])
+			seg := num.Hypot(pts[1][0]-p[0], pts[1][1]-p[1])
 			if seg == 0 {
 				seg = 1.0 //: 权威的 `or 1.0`
 			}
@@ -134,7 +136,7 @@ func walkVisits(pts [][2]float64, t0, speed float64, name, enemyID string,
 				Name: name, EnemyID: enemyID, Route: route})
 			continue
 		}
-		seg := math.Hypot(p[0]-pts[i-1][0], p[1]-pts[i-1][1])
+		seg := num.Hypot(p[0]-pts[i-1][0], p[1]-pts[i-1][1])
 		cum += seg
 		if speed <= 0 {
 			continue
@@ -166,7 +168,7 @@ func (p RoutePlan) Length() float64 {
 	}
 	xs := make([]float64, 0, len(p.Points))
 	for i := 1; i < len(p.Points); i++ {
-		xs = append(xs, math.Hypot(p.Points[i][0]-p.Points[i-1][0],
+		xs = append(xs, num.Hypot(p.Points[i][0]-p.Points[i-1][0],
 			p.Points[i][1]-p.Points[i-1][1]))
 	}
 	return sumLikePython(xs)

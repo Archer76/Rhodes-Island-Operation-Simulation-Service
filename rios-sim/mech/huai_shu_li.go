@@ -41,6 +41,8 @@ import (
 	"math"
 	"sort"
 	"strings"
+
+	"rios-sim/num"
 )
 
 // FarmlandID 是这一层的机制名（Python 与 Go 之间的契约，改名等于改协议）。
@@ -436,7 +438,7 @@ func (m *farmlandMech) diverTick(ctx Ctx, u *pileUnit, dt, t float64) {
 			continue
 		}
 		p := [2]float64{float64(op.Cell[0]), float64(op.Cell[1])}
-		d := math.Hypot(p[0]-pos[0], p[1]-pos[1])
+		d := num.Hypot(p[0]-pos[0], p[1]-pos[1])
 		if d < best {
 			best, target, targetPos = d, op.Index, p
 		}
@@ -500,7 +502,7 @@ func (m *farmlandMech) attachMark(ctx Ctx, diver *pileUnit, tmpl json.RawMessage
 			continue
 		}
 		p := [2]float64{float64(op.Cell[0]), float64(op.Cell[1])}
-		if math.Hypot(p[0]-cell[0], p[1]-cell[1]) <= radius {
+		if num.Hypot(p[0]-cell[0], p[1]-cell[1]) <= radius {
 			attached = append(attached, op.Index)
 		}
 	}
@@ -768,7 +770,7 @@ func cellsInRadius(x, y int, radius float64) []Cell {
 	out := make([]Cell, 0, (2*span+1)*(2*span+1))
 	for dy := -span; dy <= span; dy++ {
 		for dx := -span; dx <= span; dx++ {
-			if math.Hypot(float64(dx), float64(dy)) <= radius+1e-9 {
+			if num.Hypot(float64(dx), float64(dy)) <= radius+1e-9 {
 				out = append(out, Cell{x + dx, y + dy})
 			}
 		}
