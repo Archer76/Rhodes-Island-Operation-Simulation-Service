@@ -264,40 +264,158 @@ func (s *envScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
 
 // ---- [4] 选关卡 -----------------------------------------------------------
 
+// stageDiffOption 是难度下拉的一档（对应 Python `Select #diff` 的 options）。
+type stageDiffOption struct {
+	label string //: 显示名 —— **带关数**，照 Python 的「普通（三星）（19 关）」
+	value string //: 传给 `data.StageFilter.Difficulty` 的值；空 = 全部
+}
+
 type stageScreen struct {
 	heading string
-	rows    []data.StageRecord
-	cursor  int
+	//: **基数**：`pushStage` 已经按 zone／env 筛过的那一批。关键词与难度都在它
+	//: 之上再筛 —— 顺序与 Python 一致（`#diff` 与 `#kw` 都是屏上的二次筛选）。
+	rows   []data.StageRecord
+	cursor int
+	box    filterBox //: 零值可用，见 `filterBox`
+	diff   string    //: 当前难度档的**值**（""=全部），不是标签
+	//: 下拉的展开态（照 Python 的 `Select`：不是循环键，是"开菜单→选→确认"）
+	picking bool
+	pickAt  int
 }
 
 func (*stageScreen) title() string { return "选关卡" }
 func (*stageScreen) help() string {
-	return "↑/↓ 移动 · Enter 选定 · Esc 返回 · Q 退出"
+	return "输关键词筛 · D 难度（全部／普通／突袭）· ↑/↓ 移动 · Enter 选定 · Esc 清空／返回 · Q 退出"
+}
+
+// diffOptions 是难度下拉的三档 —— 与 Python `Select #diff`（`app.py:1425-1429`）
+// 逐项对齐，**标签带关数**（那是它在参照实现里就有的一栏，不是我们加的）。
+//
+// ★ 关数的口径：对**基数**数（已按 zone／env 筛过、还没按关键词／难度筛）——
+// 与 Python 一致：它那两个数是「这一部里普通档几关、突袭档几关」。
+// ★ 六星（险地作战）**不单列一档**：参照实现那个下拉也只有三档，`#s` 行只在
+// 「全部」里出现。这一条如实登记 —— 要单列是一行代码的事，但那会与参照不同。
+// ★ 第一档的显示名参照实现给的是**空串**（`Select` 的 NULL 档，靠占位符
+// 「难度」显示"没选"）。这里显式写成「全部（N 关）」：空标签在终端里是一行
+// 看不出所以然的空白，而这一档就是"不按难度筛"。
+func (s *stageScreen) diffOptions() []stageDiffOption {
+	nNormal, nFour := 0, 0
+	for _, st := range s.rows {
+		switch st.Difficulty {
+		case "NORMAL":
+			nNormal++
+		case "FOUR_STAR":
+			nFour++
+		}
+	}
+	return []stageDiffOption{
+		{label: fmt.Sprintf("全部（%d 关）", len(s.rows)), value: ""},
+		{label: fmt.Sprintf("普通（三星）（%d 关）", nNormal), value: "NORMAL"},
+		{label: fmt.Sprintf("突袭（四星）（%d 关）", nFour), value: "FOUR_STAR"},
+	}
+}
+
+func (s *stageScreen) diffIndex() int {
+	for i, o := range s.diffOptions() {
+		if o.value == s.diff {
+			return i
+		}
+	}
+	return 0
+}
+
+// shown 是当前筛选下真正列出的关卡。
+//
+// ★ 筛选**走数据层的 `data.ListStages`**（`StageFilter.Keyword` / `Difficulty`），
+// 不在这里自己写一遍匹配 —— 「同一件事只许一份实现」。关键词在这里只做
+// **折半角**：参照实现也是 UI 层先 NFKC 归一、再由 `list_stages` 做字面量匹配。
+func (s *stageScreen) shown() []data.StageRecord {
+	s.box.ensure()
+	return data.ListStages(s.rows, data.StageFilter{
+		Keyword:    narrowHalf(strings.TrimSpace(s.box.text())),
+		Difficulty: s.diff,
+	})
 }
 
 func (s *stageScreen) view(c *appCtx) string {
-	rows := make([]string, 0, len(s.rows))
-	for _, st := range s.rows {
-		rows = append(rows, pad(st.Code, 12)+pad(st.Name, 22)+pad(st.Difficulty, 10)+
-			pad(st.DiffGroup, 8)+st.LevelID)
+	rows := s.shown()
+	lines := make([]string, 0, len(rows))
+	for _, st := range rows {
+		lines = append(lines, pad(st.Code, 12)+pad(st.Name, 22)+
+			pad(st.Difficulty, 10)+pad(st.DiffGroup, 8)+st.LevelID)
 	}
-	return renderList(c, s.heading, rows, s.cursor)
+	opts := s.diffOptions()
+	head := styleDim.Render("难度：") + opts[s.diffIndex()].label
+	if s.picking {
+		//: 展开态：三档列出来、当前项高亮（照 Python 的 `SelectOverlay`）。
+		var b strings.Builder
+		b.WriteString("难度：\n")
+		for i, o := range opts {
+			line := "  " + o.label
+			if i == s.pickAt {
+				line = styleCursor.Render("> " + o.label)
+			}
+			b.WriteString(line + "\n")
+		}
+		head = strings.TrimRight(b.String(), "\n")
+	}
+	return s.box.view(c) + "\n" + head + "\n" +
+		renderList(c, s.heading, lines, s.cursor)
 }
 
 func (s *stageScreen) update(_ *appCtx, k tea.KeyMsg) (screen, action) {
-	if n, ok := moveCursor(k, s.cursor, len(s.rows)); ok {
+	opts := s.diffOptions()
+	if s.picking {
+		//: 下拉展开时**独占方向键与回车** —— 这正是参照实现记过的那条坑：
+		//: 回车在下拉上是「确认这一档」，**不是**「开始解算」/「选定这一关」。
+		switch {
+		case keyIs(k, "up"):
+			s.pickAt = max(0, s.pickAt-1)
+		case keyIs(k, "down"):
+			s.pickAt = min(len(opts)-1, s.pickAt+1)
+		case keyIs(k, "enter"):
+			s.diff = opts[s.pickAt].value
+			s.picking = false
+			s.cursor = 0
+		case keyIs(k, "esc"):
+			s.picking = false
+		}
+		return s, action{kind: actNone}
+	}
+	rows := s.shown()
+	//: 筛选一变可见条数就变 ⇒ 光标先夹回范围内（否则会"指到别的关"）。
+	if s.cursor >= len(rows) {
+		s.cursor = max(0, len(rows)-1)
+	}
+	if n, ok := moveCursor(k, s.cursor, len(rows)); ok {
 		s.cursor = n
 		return s, action{kind: actNone}
 	}
 	switch {
+	case keyIs(k, "d"):
+		s.picking = true
+		s.pickAt = s.diffIndex()
+		return s, action{kind: actNone}
 	case keyIs(k, "enter"):
-		if s.cursor < len(s.rows) {
-			return s, action{kind: actBack, res: &s.rows[s.cursor]}
+		if s.cursor >= 0 && s.cursor < len(rows) {
+			return s, action{kind: actBack, res: &rows[s.cursor]}
 		}
-	case keyIs(k, "esc"), keyIs(k, "backspace"):
+	case keyIs(k, "esc"):
+		if s.box.text() != "" {
+			s.box.clear()
+			s.cursor = 0
+			return s, action{kind: actNone}
+		}
+		return s, action{kind: actBack}
+	case keyIs(k, "backspace"):
+		if s.box.text() != "" {
+			return s, action{kind: actNone, cmd: s.box.key(k)}
+		}
 		return s, action{kind: actBack}
 	case keyIs(k, "q"):
 		return s, action{kind: actQuit}
+	default:
+		return s, action{kind: actNone, cmd: s.box.key(k)}
 	}
 	return s, action{kind: actNone}
 }

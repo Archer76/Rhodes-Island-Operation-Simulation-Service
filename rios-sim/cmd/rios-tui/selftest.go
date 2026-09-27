@@ -295,6 +295,103 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		}
 	}
 
+	fmt.Println("== 五之四 · 关卡屏的搜索框与难度下拉（Python `#kw` ＋ `Select #diff`）==")
+	//: ★ 2026-09-27 新加：参照实现在这一屏有两件交互件 —— `Select #diff`
+	//: （`app.py:1425-1429`，三档、**标签带关数**）与 `Input #kw`
+	//: （`app.py:1430`）；Go 这一版此前**连字段都没有**。
+	//: 这里盯四件事：三档的关数对得上、切档真的换集合、关键词能筛（含全角）、
+	//: 以及那条参照实现记过的坑 —— **回车在下拉上是"确认这一档"，不是"选定关卡"**。
+	{
+		r6 := newRoot(newAppCtx(stages, zones), welcomeScreen{})
+		r6.Update(tea.WindowSizeMsg{Width: 90, Height: 26})
+		press(r6, "enter") //: → 选章屏
+		press(r6, "enter") //: →（选部／环境）→ 关卡屏
+		for i := 0; i < 3 && (screenName(r6.top()) == "*main.partScreen" ||
+			screenName(r6.top()) == "*main.envScreen"); i++ {
+			press(r6, "enter")
+		}
+		ss, ok := r6.top().(*stageScreen)
+		if !ok {
+			check("（前置）走到关卡屏", false, screenName(r6.top()))
+		} else {
+			base := len(ss.rows)
+			nNormal, nFour := 0, 0
+			for _, st := range ss.rows {
+				switch st.Difficulty {
+				case "NORMAL":
+					nNormal++
+				case "FOUR_STAR":
+					nFour++
+				}
+			}
+			opts := ss.diffOptions()
+			check("难度下拉恰是三档，且**关数写进标签**（照参照的「普通（三星）（19 关）」）",
+				len(opts) == 3 &&
+					strings.Contains(opts[0].label, fmt.Sprintf("%d 关", base)) &&
+					strings.Contains(opts[1].label, fmt.Sprintf("%d 关", nNormal)) &&
+					strings.Contains(opts[2].label, fmt.Sprintf("%d 关", nFour)),
+				fmt.Sprintf("%v", []string{opts[0].label, opts[1].label, opts[2].label}))
+			//: 正对照：基数里两档都要有货，否则下面切档那两条是零行使的绿。
+			check("（前置）这一部里普通档与突袭档都有货", nNormal > 0 && nFour > 0,
+				fmt.Sprintf("普通 %d、突袭 %d、共 %d", nNormal, nFour, base))
+			check("全选（默认档）⇒ 列出的就是基数", len(ss.shown()) == base,
+				fmt.Sprintf("%d / %d", len(ss.shown()), base))
+
+			//: 切「突袭（四星）」：下拉必须**开→选→确认**，且展开时回车归它。
+			depth0 := len(r6.stack)
+			press(r6, "d")
+			check("D 打开难度下拉（展开态）", ss.picking, fmt.Sprintf("picking=%v", ss.picking))
+			press(r6, "enter") //: 回车 = 确认当前档（第一档=全部），**不是**选定关卡
+			check("★ 下拉展开时回车**只确认难度**、不选定关卡（对照实现记过的那条坑）",
+				!ss.picking && len(r6.stack) == depth0,
+				fmt.Sprintf("picking=%v 栈深 %d→%d", ss.picking, depth0, len(r6.stack)))
+			press(r6, "d")
+			press(r6, "down")
+			press(r6, "down")
+			press(r6, "enter") //: 确认「突袭（四星）」
+			four := ss.shown()
+			allFour := true
+			for _, st := range four {
+				if st.Difficulty != "FOUR_STAR" {
+					allFour = false
+				}
+			}
+			check("选「突袭（四星）」⇒ 列出的每一条都是 FOUR_STAR，且条数 = 标签里那个数",
+				allFour && len(four) == nFour,
+				fmt.Sprintf("实得 %d 条（标签写 %d）", len(four), nFour))
+			ss.diff = "" //: 回到全部，接着测关键词
+			ss.cursor = 0
+
+			//: 关键词：先拿基数里第一条的代号当关键词（必然命中它自己）。
+			if base > 0 {
+				code := ss.rows[0].Code
+				press(r6, code)
+				hit := ss.shown()
+				check("关键词 = 第一条的代号 ⇒ 至少筛出它自己",
+					len(hit) >= 1 && len(hit) < base,
+					fmt.Sprintf("命中 %d / %d", len(hit), base))
+				press(r6, "esc") //: 清空
+			}
+			//: 全角：中文输入法全角模式下打出来的是全角字母／数字。
+			if base > 0 {
+				code := ss.rows[0].Code
+				press(r6, widenHalfForTest(code))
+				fwHit := len(ss.shown())
+				check("全角写法的同一个代号 ⇒ 同样筛得出来（折半角生效）",
+					fwHit >= 1 && fwHit < base,
+					fmt.Sprintf("命中 %d / %d", fwHit, base))
+				press(r6, "esc")
+			}
+			//: 负对照：筛不着时不许乱选。
+			press(r6, "绝不可能存在的关卡代号")
+			none := len(ss.shown())
+			d1 := len(r6.stack)
+			press(r6, "enter")
+			check("负对照：筛不着时可见 0 条、按 Enter 不推进", none == 0 && len(r6.stack) == d1,
+				fmt.Sprintf("可见 %d、栈深 %d→%d", none, d1, len(r6.stack)))
+		}
+	}
+
 	fmt.Println("== 六 · 环境筛选（取数口径）==")
 	hit := ""
 	for _, z := range zones {
@@ -2006,6 +2103,21 @@ func keyMsg(s string) tea.KeyMsg {
 }
 
 func screenName(s screen) string { return fmt.Sprintf("%T", s) }
+
+// widenHalfForTest 把 ASCII 可见字符写成**全角** —— 模拟中文输入法全角模式打出来的
+// 那一串（`narrowHalf` 的反向）。判据用它来证「全角也能筛」（用户全角模式下按了
+// 也白按，是他看不到的那种坏）。
+func widenHalfForTest(s string) string {
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		if r >= 0x21 && r <= 0x7E {
+			out = append(out, r+0xFEE0)
+			continue
+		}
+		out = append(out, r)
+	}
+	return string(out)
+}
 
 func firstLineWith(s, needle string) string {
 	for _, ln := range strings.Split(s, "\n") {
