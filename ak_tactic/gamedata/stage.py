@@ -775,6 +775,167 @@ class Stage:
 
 # ------------------------------------------------------------------- 解析
 
+#: `heightType` 的整数形态 → 字符串。**序数枚举**（名字里是 Type 不是 Mask）。
+#:
+#: 依据（2026-09-27 实测全量缓存 1764 个关卡文件，整数形态共 7553 个格子）：
+#: 字符串形态 `HIGHLAND 82022 / LOWLAND 70911`（53.6% / 46.4%）与整数形态
+#: `1: 4062 / 0: 3491`（53.8% / 46.2%）**占比逐项吻合** ⇒ 1 是 HIGHLAND、0 是 LOWLAND。
+_HEIGHT_BY_INT = {0: "LOWLAND", 1: "HIGHLAND"}
+
+#: `buildableType` 的整数形态 → 字符串。同样是序数枚举。
+#:
+#: 依据：字符串 `NONE 97740 / MELEE 36230 / RANGED 16469 / ALL 2494`
+#: （66% / 24% / 11% / 1.7%）与整数 `0: 4812 / 1: 1816 / 2: 870 / 3: 55`
+#: （64% / 24% / 11.6% / 0.7%）**逐项吻合** ⇒ 序数 0/1/2/3 = NONE/MELEE/RANGED/ALL。
+_BUILDABLE_BY_INT = {0: "NONE", 1: "MELEE", 2: "RANGED", 3: "ALL"}
+
+
+def normalize_height_type(v: object) -> str:
+    """`heightType` 归一（字符串原样；整数按 `_HEIGHT_BY_INT`；认不出留空）。"""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, bool) or not isinstance(v, int):
+        return ""
+    return _HEIGHT_BY_INT.get(v, "")
+
+
+def normalize_buildable_type(v: object) -> str:
+    """`buildableType` 归一（字符串原样；整数按 `_BUILDABLE_BY_INT`；认不出留空）。"""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, bool) or not isinstance(v, int):
+        return ""
+    return _BUILDABLE_BY_INT.get(v, "")
+
+
+#: `routes[].motionMode` 的整数形态 → 字符串。
+#:
+#: 依据：字符串形态 `WALK 330 / E_NUM 30`（92% / 8%）与整数形态 `0: 467 / 1: 20`
+#: （96% / 4%）**优势项一致** ⇒ 0=WALK、1=E_NUM。代码只对 `WALK` 分支（其余原样带回），
+#: 所以这一条的风险面很小。
+_MOTION_BY_INT = {0: "WALK", 1: "E_NUM"}
+
+#: `waves[].fragments[].actions[].actionType` 的整数形态 → 字符串。
+#:
+#: 依据：字符串形态 `SPAWN 1216/1402 = 86.7%` 与整数形态 `0: 1585/1741 = 91%`
+#: **优势项一致** ⇒ **0=SPAWN**。三处代码都只判 `!= "SPAWN"`，所以只需要这一个映射。
+#: ⚠ 其余取值（1/2/4/5/6）**不猜** —— 它们不影响我们的取数（会被当作"不是 SPAWN"跳过）。
+_ACTION_BY_INT = {0: "SPAWN"}
+
+
+#: `routes[].checkpoints[].type` 的整数形态 → 字符串（旧版枚举编码）。
+#:
+#: ★ 映射是**拿结构证据推出来的**，不是按占比猜（2026-09-27，169 个旧编码关卡）：
+#:
+#:   · `0` → `MOVE`：13022 个**带真坐标**的检查点，落点全在可走格
+#:     （tile_road 6433 / tile_floor 5157 / …）——只有"沿路线移动"才这样。
+#:   · `6` → `APPEAR_AT_POS`：469 个带真坐标，其中 **467 个落在 `tile_telout`**
+#:     （传送落点）——这正是 `APPEAR_AT_POS` 的语义。
+#:   · `5` → `DISAPPEAR`：469 次，与 `6` 的次数**一一配对**（先消失、再在别处出现）。
+#:   · `1` → `WAIT_FOR_SECONDS`：3558 个 (0,0) 占位；字符串侧它也是等待类里的多数。
+#:   · `3` → `WAIT_CURRENT_FRAGMENT_TIME`、`4` → `WAIT_CURRENT_WAVE_TIME`：
+#:     都是纯 (0,0) 占位；按字符串词表里剩下的等待类归位。
+#:
+#: ★ 我们**只对 `MOVE`／`APPEAR_AT_POS` 分支**（`etaroutes.go:24` 的 `has_move`），
+#: 而这两个恰好是被证据钉死的那两个；其余取值只影响 `type` 那一栏的字面
+#: （两侧用同一张表 ⇒ 一致），不影响任何计算。
+#: ★ `PATROL_MOVE`／`MAP_OFFSET_MOVE` 在整数形态里**一次都没出现** ⇒ 不列。
+_CHECKPOINT_BY_INT = {
+    0: "MOVE",
+    1: "WAIT_FOR_SECONDS",
+    3: "WAIT_CURRENT_FRAGMENT_TIME",
+    4: "WAIT_CURRENT_WAVE_TIME",
+    5: "DISAPPEAR",
+    6: "APPEAR_AT_POS",
+}
+
+
+def normalize_checkpoint_type(v: object) -> str:
+    """`checkpoints[].type` 归一（字符串原样；整数按 `_CHECKPOINT_BY_INT`）。
+
+    认不出的整数返回 `""` —— 调用方把空串当 `MOVE`（与 Go 侧 `if ctype == ""`
+    同一处置：两边都是"缺省即 MOVE"）。
+    """
+    if isinstance(v, str):
+        return v
+    if isinstance(v, bool) or not isinstance(v, int):
+        return ""
+    return _CHECKPOINT_BY_INT.get(v, "")
+
+
+class StageFormatError(RuntimeError):
+    """关卡 JSON 的**编码形态**是本参照还没有权威映射的那一种。"""
+
+
+def normalize_motion_mode(v: object) -> str:
+    if isinstance(v, str):
+        return v
+    if isinstance(v, bool) or not isinstance(v, int):
+        return ""
+    return _MOTION_BY_INT.get(v, "")
+
+
+def normalize_action_type(v: object) -> str:
+    """`actionType` 归一。★ 只认能证的 `0=SPAWN`；**认不出的整数一律返回空串** ——
+    空串不等于 `"SPAWN"`，调用方那三处 `!= "SPAWN"` 会把它跳过，与旧行为一致。"""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, bool) or not isinstance(v, int):
+        return ""
+    return _ACTION_BY_INT.get(v, "")
+
+
+def check_legacy_enum_route(cp_types: list) -> None:
+    """旧编码检查点类型的**可识别性自检**（不再拒绝，只保证认得出）。
+
+    ★ 2026-09-27 的历史：这里原先**拒绝**（抛 `StageFormatError`），因为当时
+    `checkpoints[].type` 的整数映射只有占比证据、对不齐到可信程度。后来用
+    **结构证据**（带真坐标的落在什么地块上）把映射钉死了（见 `_CHECKPOINT_BY_INT`），
+    于是改成"认得出就过、认不出仍拒绝"——保留这条兜底，是为了将来出现**新的**
+    整数取值时不会被静默当成缺省 MOVE。
+    """
+    unknown = sorted({v for v in cp_types
+                      if isinstance(v, int) and not isinstance(v, bool)
+                      and v not in _CHECKPOINT_BY_INT})
+    if unknown:
+        raise StageFormatError(
+            "这一关的路线里出现了**没见过的**检查点整数取值 %s ——"
+            "已知映射见 `_CHECKPOINT_BY_INT`（0=MOVE/1=WAIT_FOR_SECONDS/"
+            "3,4=等待类/5=DISAPPEAR/6=APPEAR_AT_POS）。新取值必须**显式裁定**后再放行："
+            "猜错会静默改变路线与到达时刻。" % unknown[:6])
+
+
+def normalize_passable_mask(v: object) -> str:
+    """把 `passableMask` 归一成字符串（`ALL` / `FLY_ONLY` / `NONE` / 空）。
+
+    ★ 2026-09-27：**新地图里它是整数掩码**。实测全量缓存 1764 个关卡文件：
+    152933 个格子是字符串、**7553 个格子是整数**，取值只有 `2` 与 `3`
+    （例关 `activities/act10d5/level_act10d5_01.json` —— 就是当天新加回来的
+    故事集那一族）。
+
+    旧写法直接把它当字符串用，于是 `"ALL" in 2` 抛
+    `TypeError: argument of type 'int' is not a container or iterable`：
+    冻结档整批录不下去（`check_stagepath_go.py` 跑到第 40 个对象就崩），
+    **而引擎那边同样解不开**（Go 把同一字段声明成 `string`，`json.Unmarshal`
+    直接报「cannot unmarshal number into … of type string」）⇒ 那些关卡
+    在界面里根本 load 不出来。
+
+    位义（与字符串词表对齐，按实测取值定）：**bit0 地面可走 ⇒ `ALL`；
+    bit1 仅飞行 ⇒ `FLY_ONLY`；两位都没有 ⇒ `NONE`**。
+    认不出的形状（None／布尔／别的类型）一律返回空串 —— 与旧行为一致，
+    **不猜**。
+    """
+    if isinstance(v, str):
+        return v
+    if isinstance(v, bool) or not isinstance(v, int):
+        return ""
+    if v & 1:
+        return "ALL"
+    if v & 2:
+        return "FLY_ONLY"
+    return "NONE"
+
+
 def _parse_map(map_data: dict) -> StageMap:
     rows: list[list[int]] = map_data["map"]
     flat: list[dict] = map_data["tiles"]
@@ -789,9 +950,9 @@ def _parse_map(map_data: dict) -> StageMap:
             t = flat[idx]
             row.append(Tile(
                 key=t.get("tileKey", ""),
-                height=t.get("heightType", ""),
-                buildable=t.get("buildableType", ""),
-                passable=t.get("passableMask", ""),
+                height=normalize_height_type(t.get("heightType", "")),
+                buildable=normalize_buildable_type(t.get("buildableType", "")),
+                passable=normalize_passable_mask(t.get("passableMask", "")),
             ))
         grid.append(row)
     return StageMap(width=width, height=height, tiles=grid)
@@ -811,11 +972,28 @@ def _parse_routes(raw_routes: list[dict] | None,
     def flip(pos: dict) -> tuple[int, int]:
         return (int(pos.get("col", 0)), height - 1 - int(pos.get("row", 0)))
 
+    #: ★ 旧版枚举编码的**拒绝点**：`checkpoints[].type` 是整数时我们没有权威映射
+    #: （见 `check_legacy_enum_route` 的说明）。放在**解析之前**统一判一次，
+    #: 免得"部分路线按猜的算、部分不算"这种更坏的结果。
+    check_legacy_enum_route([c.get("type") for r in (raw_routes or []) if r is not None
+                             for c in (r.get("checkpoints") or [])])
+
     for i, r in enumerate(raw_routes or []):
+        if r is None:
+            #: ★ `routes` 里可以有 `null`（实测 98 个关卡、位置任意：
+            #: 0/1/2/6/9/11/35…）。**必须保留序号空间** —— `routeIndex` 是**下标**，
+            #: 跳过一条会让它后面所有路线的下标整体前移，那不是"少一条"，
+            #: 而是"所有引用都对错了人"。
+            #: Go 侧（`json.Unmarshal` 进结构体）天然得到零值占位，这里照它对齐：
+            #: mode 空、起终点都落在 (0, height-1)、没有检查点。
+            out.append(Route(index=i, mode="",
+                             start=(0, height - 1), end=(0, height - 1),
+                             checkpoints=[]))
+            continue
         sp, ep = r.get("startPosition") or {}, r.get("endPosition") or {}
         cps: list[Checkpoint] = []
         for c in (r.get("checkpoints") or []):
-            ctype = c.get("type") or "MOVE"
+            ctype = normalize_checkpoint_type(c.get("type")) or "MOVE"
             pos = c.get("position") or {}
             if ctype in ("MOVE", "APPEAR_AT_POS"):
                 # 这两种的坐标是真的。APPEAR_AT_POS 是传送落点——SR-EX-8
@@ -834,7 +1012,7 @@ def _parse_routes(raw_routes: list[dict] | None,
                 ))
         out.append(Route(
             index=i,
-            mode=r.get("motionMode", ""),
+            mode=normalize_motion_mode(r.get("motionMode", "")),
             start=flip(sp),
             end=flip(ep),
             checkpoints=cps,
@@ -849,7 +1027,7 @@ def _fragment_span(fragment: dict) -> float:
     """
     end = 0.0
     for a in fragment.get("actions", []):
-        if a.get("actionType") != "SPAWN":
+        if normalize_action_type(a.get("actionType")) != "SPAWN":
             continue
         span = a.get("preDelay", 0.0) + max(0, a.get("count", 1) - 1) * a.get("interval", 1.0)
         end = max(end, span)
@@ -874,7 +1052,7 @@ def _parse_spawns(waves: list[dict], refs: list[dict]) -> list[EnemySpawn]:
             t += float(frag.get("preDelay", 0.0) or 0.0)
             start = t
             for ai, a in enumerate(frag.get("actions", [])):
-                if a.get("actionType") != "SPAWN":
+                if normalize_action_type(a.get("actionType")) != "SPAWN":
                     continue
                 eid = a.get("key", "")
                 out.append(EnemySpawn(
@@ -919,7 +1097,7 @@ def _parse_branches(raw: dict) -> dict[str, list[BranchAction]]:
         acts: list[BranchAction] = []
         for ph in ((blk or {}).get("phases") or []):
             for a in (ph.get("actions") or []):
-                if (a.get("actionType") or "").upper() != "SPAWN":
+                if normalize_action_type(a.get("actionType")).upper() != "SPAWN":
                     continue
                 acts.append(BranchAction(
                     branch=name,

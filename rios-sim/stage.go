@@ -30,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -302,14 +303,173 @@ func ParseStage(raw map[string]json.RawMessage, levelID, code, difficulty string
 	}, nil
 }
 
+// checkpointByInt / motionByInt / actionByInt：**旧版枚举编码**的整数 → 字符串。
+//
+// ★ 2026-09-27：实测缓存里 169 个关卡文件用旧编码（`mapData.tiles[].passableMask`
+// 是整数），它们的 `routes[].checkpoints[].type`、`routes[].motionMode`、
+// `waves[].fragments[].actions[].actionType` 也一并是整数。映射**不是猜的**：
+//
+//	checkpoints.type  0→MOVE（13022 个带真坐标、全落在可走格）
+//	                  6→APPEAR_AT_POS（469 个里 467 个落在 tile_telout 传送落点）
+//	                  5→DISAPPEAR（469 次，与 6 一一配对：先消失再在别处出现）
+//	                  1→WAIT_FOR_SECONDS（3558 个 (0,0) 占位，等待类里的多数）
+//	                  3/4→两个等待类（纯占位）
+//	motionMode        0→WALK（字符串侧 92%、整数侧 96%，优势项一致）
+//	actionType        0→SPAWN（字符串侧 86.7%、整数侧 91%；三处代码都只判 SPAWN）
+//
+// ★ 我们只对 `MOVE`／`APPEAR_AT_POS` 分支（`etaroutes.go` 的 `has_move`），
+// 而这两个恰好被证据钉死；其余取值只影响 `type` 那一栏的字面。
+// 与 `ak_tactic/gamedata/stage.py` 的三张表**同一份口径**。
+var (
+	checkpointByInt = map[int]string{
+		0: "MOVE", 1: "WAIT_FOR_SECONDS", 3: "WAIT_CURRENT_FRAGMENT_TIME",
+		4: "WAIT_CURRENT_WAVE_TIME", 5: "DISAPPEAR", 6: "APPEAR_AT_POS",
+	}
+	motionByInt = map[int]string{0: "WALK", 1: "E_NUM"}
+	actionByInt = map[int]string{0: "SPAWN"}
+)
+
+// checkpointTypeOf 归一检查点类型。**认不出的整数报错**（不静默当 MOVE）——
+// 与参照实现同处置：新取值必须先显式裁定。
+func checkpointTypeOf(raw json.RawMessage) (string, error) {
+	if isJSONString(raw) {
+		return rawString(raw), nil
+	}
+	n := rawInt(raw)
+	if s, ok := checkpointByInt[n]; ok {
+		return s, nil
+	}
+	return "", fmt.Errorf("路线里出现没见过的检查点整数取值 %d"+
+		"（已知映射见 stage.go 的 checkpointByInt；新取值要显式裁定后再放行，"+
+		"猜错会静默改变路线与到达时刻）", n)
+}
+
+func motionModeOf(raw json.RawMessage) string {
+	if isJSONString(raw) {
+		return rawString(raw)
+	}
+	return motionByInt[rawInt(raw)]
+}
+
+func actionTypeOf(raw json.RawMessage) string {
+	if isJSONString(raw) {
+		return rawString(raw)
+	}
+	return actionByInt[rawInt(raw)]
+}
+
+// passableOf 把 `passableMask` 归一成字符串。
+//
+// ★ 2026-09-27：**新地图里它是整数掩码**。实测全量缓存 1764 个关卡文件里
+// 7553 个格子的 `passableMask` 是整数，取值只有 `2` 与 `3`（例关
+// `activities/act10d5/level_act10d5_01.json` —— 当天新加回来的故事集那一族）。
+// 旧写法把这个字段声明成 `string`，`json.Unmarshal` 会直接报
+// 「cannot unmarshal number into Go struct field … of type string」⇒
+// **那些关卡整个解不开**（界面里 load 不出来、部署人数上限也取不到）。
+//
+// 位义（与 `ak_tactic/gamedata/stage.py` 的 `normalize_passable_mask` 同一份口径）：
+// bit0 地面可走 ⇒ `ALL`；bit1 仅飞行 ⇒ `FLY_ONLY`；两位都没有 ⇒ `NONE`。
+// 认不出的形状返回空串（与旧行为一致，**不猜**）。
+// heightOf / buildableOf 把这两个字段也归一成字符串（**序数枚举**，名字里是 Type
+// 不是 Mask）。
+//
+// 依据（2026-09-27 实测全量缓存 1764 个关卡文件，整数形态共 7553 个格子，都在
+// `act10d5`／`act10mini` 这些新加回来的故事集关卡里）：
+//
+//	heightType    字符串 HIGHLAND 53.6% / LOWLAND 46.4%
+//	              整数      1: 53.8% / 0: 46.2%      ⇒ 1=HIGHLAND、0=LOWLAND
+//	buildableType 字符串 NONE 66% / MELEE 24% / RANGED 11% / ALL 1.7%
+//	              整数   0: 64% / 1: 24% / 2: 11.6% / 3: 0.7% ⇒ 序数一一对应
+//
+// 与 `ak_tactic/gamedata/stage.py` 的 `normalize_height_type` /
+// `normalize_buildable_type` 是同一份口径。
+func heightOf(raw json.RawMessage) string {
+	if s := rawString(raw); s != "" || isJSONString(raw) {
+		return s
+	}
+	switch rawInt(raw) {
+	case 0:
+		return "LOWLAND"
+	case 1:
+		return "HIGHLAND"
+	}
+	return ""
+}
+
+func buildableOf(raw json.RawMessage) string {
+	if s := rawString(raw); s != "" || isJSONString(raw) {
+		return s
+	}
+	switch rawInt(raw) {
+	case 0:
+		return "NONE"
+	case 1:
+		return "MELEE"
+	case 2:
+		return "RANGED"
+	case 3:
+		return "ALL"
+	}
+	return ""
+}
+
+// isJSONString 判这个原始值是不是 JSON 字符串（空串也是合法字符串，所以不能只看
+// `rawString` 返不返空）。
+func isJSONString(raw json.RawMessage) bool {
+	s := strings.TrimSpace(string(raw))
+	return len(s) > 0 && s[0] == '"'
+}
+
+func rawString(raw json.RawMessage) string {
+	var out string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return ""
+	}
+	return out
+}
+
+func rawInt(raw json.RawMessage) int {
+	n, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+func passableOf(raw json.RawMessage) string {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return ""
+	}
+	if s[0] == '"' { //: 字符串形态：原样解出来
+		var out string
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return ""
+		}
+		return out
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return ""
+	}
+	switch {
+	case n&1 != 0:
+		return "ALL"
+	case n&2 != 0:
+		return "FLY_ONLY"
+	default:
+		return "NONE"
+	}
+}
+
 func parseMap(mdRaw json.RawMessage) (StageMap, error) {
 	var md struct {
 		Map   [][]int `json:"map"`
 		Tiles []struct {
-			TileKey       string `json:"tileKey"`
-			HeightType    string `json:"heightType"`
-			BuildableType string `json:"buildableType"`
-			PassableMask  string `json:"passableMask"`
+			TileKey       string          `json:"tileKey"`
+			HeightType    json.RawMessage `json:"heightType"`
+			BuildableType json.RawMessage `json:"buildableType"`
+			PassableMask  json.RawMessage `json:"passableMask"`
 		} `json:"tiles"`
 	}
 	if err := json.Unmarshal(mdRaw, &md); err != nil {
@@ -335,8 +495,9 @@ func parseMap(mdRaw json.RawMessage) (StageMap, error) {
 					y, x, i, len(md.Tiles))
 			}
 			t := md.Tiles[i]
-			row[x] = Tile{Key: t.TileKey, Height: t.HeightType,
-				Buildable: t.BuildableType, Passable: t.PassableMask}
+			row[x] = Tile{Key: t.TileKey, Height: heightOf(t.HeightType),
+				Buildable: buildableOf(t.BuildableType),
+				Passable:  passableOf(t.PassableMask)}
 		}
 		grid[y] = row
 	}
@@ -348,7 +509,7 @@ func parseRoutes(routesRaw json.RawMessage, height int) ([]Route, error) {
 		return []Route{}, nil
 	}
 	var raws []struct {
-		MotionMode    string `json:"motionMode"`
+		MotionMode    json.RawMessage `json:"motionMode"`
 		StartPosition struct {
 			Col *int `json:"col"`
 			Row *int `json:"row"`
@@ -358,8 +519,8 @@ func parseRoutes(routesRaw json.RawMessage, height int) ([]Route, error) {
 			Row *int `json:"row"`
 		} `json:"endPosition"`
 		Checkpoints []struct {
-			Type     string  `json:"type"`
-			Time     float64 `json:"time"`
+			Type     json.RawMessage `json:"type"`
+			Time     float64         `json:"time"`
 			Position struct {
 				Col *int `json:"col"`
 				Row *int `json:"row"`
@@ -384,7 +545,10 @@ func parseRoutes(routesRaw json.RawMessage, height int) ([]Route, error) {
 	for i, r := range raws {
 		cps := make([]Checkpoint, 0, len(r.Checkpoints))
 		for _, c := range r.Checkpoints {
-			ctype := c.Type
+			ctype, err := checkpointTypeOf(c.Type)
+			if err != nil {
+				return nil, err
+			}
 			if ctype == "" {
 				ctype = "MOVE"
 			}
@@ -397,7 +561,7 @@ func parseRoutes(routesRaw json.RawMessage, height int) ([]Route, error) {
 			}
 		}
 		out = append(out, Route{
-			Index: i, Mode: r.MotionMode,
+			Index: i, Mode: motionModeOf(r.MotionMode),
 			Start:       flip(r.StartPosition.Col, r.StartPosition.Row),
 			End:         flip(r.EndPosition.Col, r.EndPosition.Row),
 			Checkpoints: cps,
@@ -410,7 +574,7 @@ func parseRoutes(routesRaw json.RawMessage, height int) ([]Route, error) {
 func fragSpan(frag waveFragment) float64 {
 	end := 0.0
 	for _, a := range frag.Actions {
-		if a.ActionType != "SPAWN" {
+		if actionTypeOf(a.ActionType) != "SPAWN" {
 			continue
 		}
 		span := a.PreDelay + float64(maxInt(0, a.count()-1))*a.interval()
@@ -422,13 +586,13 @@ func fragSpan(frag waveFragment) float64 {
 }
 
 type waveAction struct {
-	ActionType    string   `json:"actionType"`
-	Key           string   `json:"key"`
-	Count         *int     `json:"count"`
-	Interval      *float64 `json:"interval"`
-	RouteIndex    *int     `json:"routeIndex"`
-	PreDelay      float64  `json:"preDelay"`
-	BlockFragment bool     `json:"blockFragment"`
+	ActionType    json.RawMessage `json:"actionType"`
+	Key           string          `json:"key"`
+	Count         *int            `json:"count"`
+	Interval      *float64        `json:"interval"`
+	RouteIndex    *int            `json:"routeIndex"`
+	PreDelay      float64         `json:"preDelay"`
+	BlockFragment bool            `json:"blockFragment"`
 	HiddenGroup   *string  `json:"hiddenGroup"`
 }
 
@@ -483,7 +647,7 @@ func parseSpawns(wavesRaw, refsRaw json.RawMessage) ([]EnemySpawn, error) {
 			t += frag.PreDelay
 			start := t
 			for ai, a := range frag.Actions {
-				if a.ActionType != "SPAWN" {
+				if actionTypeOf(a.ActionType) != "SPAWN" {
 					continue
 				}
 				ri := 0
@@ -521,7 +685,7 @@ func parseBranches(raw json.RawMessage) (map[string][]BranchAction, error) {
 		acts := []BranchAction{}
 		for _, ph := range blk.Phases {
 			for _, a := range ph.Actions {
-				if strings.ToUpper(a.ActionType) != "SPAWN" {
+				if strings.ToUpper(actionTypeOf(a.ActionType)) != "SPAWN" {
 					continue
 				}
 				ri := 0

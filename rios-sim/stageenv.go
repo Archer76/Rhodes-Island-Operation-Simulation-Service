@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
 )
 
 // stageenv.go：构建规格要用的**关卡静态 8 项**（丙阶段四·第十六批）。
@@ -54,13 +55,47 @@ type Rune struct {
 	Blackboard     []BlackboardEntry `json:"blackboard"`
 }
 
+// difficultyMaskOf 把 `difficultyMask` 归一成字符串。
+//
+// ★ 2026-09-27：旧编码关卡里它是**整数位掩码**（实测缓存 169 个文件里
+// `2: 238 / 3: 4`），而字符串形态是 `FOUR_STAR / NORMAL / ALL`。位义按证据定：
+// 字符串侧 FOUR_STAR 73 / NORMAL 3 / ALL 1（95%/4%/1%）与整数侧 `2: 98% / 3: 2%`
+// **优势项一致**，且字段名就叫 Mask ⇒ **bit0=NORMAL、bit1=FOUR_STAR、两位都有=ALL**。
+//
+// 认不出的取值返回一个「谁都不匹配」的串（`#<n>`），**不回 nil** ——
+// `maskApplies(nil)` 是"对所有难度都适用"，回 nil 会把一条来路不明的 rune
+// 应用得到处都是，那是比"漏用一条 rune"更坏的结果。
+func difficultyMaskOf(raw json.RawMessage) *string {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return nil
+	}
+	if isJSONString(raw) {
+		v := rawString(raw)
+		return &v
+	}
+	n := rawInt(raw)
+	out := ""
+	switch {
+	case n&1 != 0 && n&2 != 0:
+		out = "ALL"
+	case n&2 != 0:
+		out = "FOUR_STAR"
+	case n&1 != 0:
+		out = "NORMAL"
+	default:
+		out = fmt.Sprintf("#%d", n)
+	}
+	return &out
+}
+
 func parseRunes(raw json.RawMessage) ([]Rune, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
 	var arr []struct {
-		Key            string  `json:"key"`
-		DifficultyMask *string `json:"difficultyMask"`
+		Key            string          `json:"key"`
+		DifficultyMask json.RawMessage `json:"difficultyMask"`
 		Blackboard     []struct {
 			Key      string          `json:"key"`
 			Value    json.RawMessage `json:"value"`
@@ -72,7 +107,7 @@ func parseRunes(raw json.RawMessage) ([]Rune, error) {
 	}
 	out := make([]Rune, 0, len(arr))
 	for _, r := range arr {
-		rn := Rune{Key: r.Key, DifficultyMask: r.DifficultyMask}
+		rn := Rune{Key: r.Key, DifficultyMask: difficultyMaskOf(r.DifficultyMask)}
 		for _, b := range r.Blackboard {
 			rn.Blackboard = append(rn.Blackboard, BlackboardEntry{
 				Key: b.Key, Value: b.Value, ValueStr: b.ValueStr})
