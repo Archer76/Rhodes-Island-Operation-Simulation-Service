@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2535,6 +2536,77 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		check("那条「一次做齐」的命令定位得到，且与桥脚本同一个根",
 			rs != "" && strings.HasSuffix(filepath.ToSlash(rs), "/tools/rebuild_data.py"),
 			rs)
+	}
+
+	fmt.Println("== 二十二 · 首次运行的进度条（每项任务一条）==")
+	//: ★ 2026-09-27 新加（博士要求：「初次运行时的下载不用逐条给出在下载什么东西，
+	//: 每项任务渲染一个进度条就行了」）。
+	//:
+	//: 这一段的**主判据不是"画得好看"，是"子进程的原话不许漏到屏幕上"** ——
+	//: 那条要求如果只靠"我改成了 quiet"，下一个人换个传参方式就会漏回去。
+	//: 所以喂几行**子进程散文**进去，断言渲染结果里一个字节都不许出现。
+	{
+		dir, derr := os.MkdirTemp("", "rios-selftest-bars-")
+		if derr != nil {
+			check("临时目录建得出来（这一段的前置）", false, derr.Error())
+			dir = "."
+		}
+		defer func() { _ = os.RemoveAll(dir) }()
+		pf := filepath.Join(dir, "prog.jsonl")
+		lines := []string{
+			`{"ev":"plan","steps":[{"key":"akdb.sqlite","title":"干员库"},` +
+				`{"key":"关卡文件","title":"逐关文件"}]}`,
+			`{"ev":"step","key":"akdb.sqlite","state":"run"}`,
+			//: ↓ 子进程散文：必须被丢掉
+			`取到 2674 个关卡（2242 个关卡号），耗时 0.4 秒`,
+			`  [25/1765] 已下 25 个、1.5 MB、失败 0、重试 0`,
+			`{"ev":"step","key":"akdb.sqlite","state":"ok","sec":13.9}`,
+			`{"ev":"step","key":"关卡文件","state":"run"}`,
+			`{"ev":"tick","key":"关卡文件","done":50,"total":200}`,
+			`{"ev":"unknown_future_event","x":1}`,
+			`{"ev":"summary","ok":1,"failed":0}`,
+		}
+		if err := os.WriteFile(pf, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+			check("进度文件写得出来（这一段的前置）", false, err.Error())
+		}
+		bars := &setupBars{}
+		var off int64
+		bars.pollProgress(pf, &off)
+		check("plan 解析出 2 步", len(bars.steps) == 2,
+			fmt.Sprintf("%d 步", len(bars.steps)))
+		check("步状态：干员库 ok、逐关文件 run",
+			bars.steps[0].State == "ok" && bars.steps[1].State == "run",
+			fmt.Sprintf("%q / %q", bars.steps[0].State, bars.steps[1].State))
+		check("tick 落到**正在跑**的那一步（tick 事件不带 key 也能对上）",
+			bars.steps[1].Done == 50 && bars.steps[1].Total == 200,
+			fmt.Sprintf("%d/%d", bars.steps[1].Done, bars.steps[1].Total))
+		check("summary 计数拿到了", bars.haveSum && bars.ok == 1 && bars.failed == 0,
+			fmt.Sprintf("ok=%d failed=%d", bars.ok, bars.failed))
+		check("负对照：认不出的 ev 不改任何状态（前向兼容，不炸）",
+			!bars.apply([]byte(`{"ev":"unknown_future_event","x":1}`)), "忽略")
+
+		var out bytes.Buffer
+		bars.render(&out)
+		rendered := out.String()
+		check("★ 主判据：子进程的原话**一个字节都没漏到屏幕上**",
+			!strings.Contains(rendered, "取到 2674 个关卡") &&
+				!strings.Contains(rendered, "[25/1765]") &&
+				!strings.Contains(rendered, "已下 25 个"),
+			fmt.Sprintf("渲染 %d 字节", len(rendered)))
+		check("每项任务一行（2 步 ＋ 汇总行）",
+			strings.Count(rendered, "\n") == 3,
+			fmt.Sprintf("%d 行", strings.Count(rendered, "\n")))
+		check("正例：带总数的运行中那一步画出真实百分比（50/200 ⇒ 25%）",
+			strings.Contains(rendered, "25%"), firstLineWith(rendered, "25%"))
+		check("已完成的画满格、未开始的画空格",
+			strings.Contains(rendered, strings.Repeat("█", barWidth)) &&
+				!strings.Contains(rendered, "x"), "格数对")
+		//: 负对照：坏 JSON 不许把已解析出来的东西打乱
+		before := len(bars.steps)
+		check("负对照：截断的 JSON 行被丢掉，不影响已解析的状态",
+			!bars.apply([]byte(`{"ev":"step","key":"关卡`)) && len(bars.steps) == before,
+			"忽略")
+		_ = os.Remove(pf)
 	}
 
 	fmt.Println()

@@ -34,6 +34,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -62,6 +63,10 @@ class Step:
     fail_looks_like: str
     argv: list[str] | None = None      # 直接跑的 CLI
     func: str = ""                     # 或本脚本内的函数名
+    #: 这一步的子命令支不支持 `--progress-file`（往进度文件里写 tick）。
+    #: ★ 只有声明了才给它加这个参数：给别的子命令加上去，它们会当场以
+    #: 「unrecognized arguments」失败 —— 那是一处会**静默毁掉整个首次运行**的写法。
+    wants_progress: bool = False
 
     def describe(self) -> str:
         net = {"offline": "不联网", "online": "**要联网**", "external": "外部输入"}[self.kind]
@@ -100,6 +105,7 @@ STEPS: list[Step] = [
         fail_looks_like="末尾逐条列 `✗`（镜像里没有 ≠ 网络抖动）；**没它的话**，"
                         "界面里选到那一关会报「取部署人数上限失败：读关卡文件失败」",
         argv=[sys.executable, "-m", "ak_tactic", "cache", "--fetch-levels"],
+        wants_progress=True,
     ),
     Step(
         key="enemydb.sqlite", title="敌人库", kind="online",
@@ -292,7 +298,51 @@ class Result:
     message: str
 
 
-def _run_step(step: Step, *, offline_only: bool) -> Result:
+class Progress:
+    """把「哪一步在跑、跑到哪了」写成 **JSONL 文件** —— 给界面渲染进度条用。
+
+    ★ 为什么是**文件**而不是管道：本仓记过一条硬约束 —— 本机沙箱下用管道捕获
+    子进程输出会 **EPERM**（`_run_step` 那条注释就是它）。所以父子之间的进度
+    通道走**普通文件**：子进程 append 一行、父进程按偏移量增量读，谁也不碰管道。
+
+    事件形状（一行一个 JSON）：
+        {"ev":"plan","steps":[{"key":…,"title":…}, …]}
+        {"ev":"step","key":…,"state":"run"}
+        {"ev":"tick","key":…,"done":N,"total":M}
+        {"ev":"step","key":…,"state":"ok|fail|skip","sec":1.2,"msg":"…"}
+        {"ev":"summary","ok":N,"failed":N}
+    """
+
+    def __init__(self, path: str | None) -> None:
+        self.path = path
+
+    def _w(self, obj: dict) -> None:
+        if not self.path:
+            return
+        try:
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        except OSError:
+            pass                       #: 进度写不进去不该让建库失败
+
+    def plan(self, steps: list) -> None:
+        self._w({"ev": "plan",
+                 "steps": [{"key": s.key, "title": s.title} for s in steps]})
+
+    def run(self, key: str) -> None:
+        self._w({"ev": "step", "key": key, "state": "run"})
+
+    def done(self, key: str, state: str, sec: float, msg: str = "") -> None:
+        self._w({"ev": "step", "key": key, "state": state,
+                 "sec": round(sec, 1), "msg": msg[:300]})
+
+    def summary(self, ok: int, failed: int) -> None:
+        self._w({"ev": "summary", "ok": ok, "failed": failed})
+
+
+def _run_step(step: Step, *, offline_only: bool,
+              progress: "Progress | None" = None,
+              logs_dir: Path | None = None, quiet: bool = False) -> Result:
     if step.kind == "online" and offline_only:
         return Result(step.key, "skipped", 0.0, "--offline：需要联网，未跑")
     if step.kind == "external":
@@ -311,15 +361,36 @@ def _run_step(step: Step, *, offline_only: bool) -> Result:
                           f"内部函数返回了不认识的状态 {status!r}")
         return Result(step.key, status, time.time() - t0, msg)
 
-    # ⚠ 子进程**让它的 stdout/stderr 直接继承**（不抓管道）：
-    #   本机沙箱下用管道捕获子进程输出会 EPERM；继承还有个好处——进度实时可见。
+    # ⚠ 子进程**不抓管道**（本机沙箱下会 EPERM）。两种处置：
+    #   · 平时：stdout/stderr **继承**，进度实时可见；
+    #   · 给界面渲染进度条时（`--progress-file`）：输出**改写成日志文件**
+    #     （文件重定向不是管道，不受那条限制），失败时把日志尾部打出来 ——
+    #     既不刷屏，诊断也不丢。
+    argv = list(step.argv)
+    log_path = None
+    if progress is not None and progress.path:
+        #: 让子步骤也往同一个进度文件里写 tick（只有声明支持的那一步会拿到这个参数）
+        if step.wants_progress:
+            argv += ["--progress-file", progress.path]
+        if logs_dir is not None:
+            log_path = logs_dir / ("%s.log" % step.key.replace(" ", "_"))
     try:
-        cp = subprocess.run(step.argv, cwd=str(ROOT), check=False)
+        if log_path is not None:
+            with open(log_path, "w", encoding="utf-8", errors="replace") as lf:
+                cp = subprocess.run(argv, cwd=str(ROOT), check=False,
+                                    stdout=lf, stderr=subprocess.STDOUT)
+        else:
+            cp = subprocess.run(argv, cwd=str(ROOT), check=False)
     except Exception as e:                                         # noqa: BLE001
         return Result(step.key, "failed", time.time() - t0, f"{type(e).__name__}: {e}")
     rc = cp.returncode
-    return Result(step.key, "ok" if rc == 0 else "failed", time.time() - t0,
-                  f"rc={rc}")
+    msg = f"rc={rc}"
+    if rc != 0 and log_path is not None and log_path.is_file():
+        tail = log_path.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+        if tail:
+            msg += "｜日志尾部：" + " / ".join(t.strip() for t in tail[-3:])[:400]
+        msg += "｜完整日志：%s" % log_path
+    return Result(step.key, "ok" if rc == 0 else "failed", time.time() - t0, msg)
 
 
 # ---------------------------------------------------------------- 逐表对账
@@ -485,6 +556,11 @@ def main() -> int:
     ap.add_argument("--only", metavar="KEYS",
                     help="只跑这些步骤（逗号分隔；用 --list 看有哪些 key）。"
                          "用于按需放行联网步骤，不必整跑")
+    ap.add_argument("--progress-file", metavar="PATH",
+                    help="把进度写成 JSONL 到该文件（界面据此渲染每步一条进度条）；"
+                         "同时把各子步骤的输出改写成日志文件，失败时打印日志尾部")
+    ap.add_argument("--quiet", action="store_true",
+                    help="少说话（配 --progress-file 时用：屏幕交给进度条）")
     args = ap.parse_args()
 
     wanted: set[str] | None = None
@@ -536,19 +612,40 @@ def main() -> int:
             print(f"  [{mark}] {s.key:<18} {s.kind:<9} {s.eta:<12} {s.produces}")
         return 0
 
-    print("\n== 步骤 ==")
-    print("  ⚠ 本脚本**只加不删**：它不删除任何文件；重建 = 覆盖写。")
+    progress = Progress(args.progress_file)
+    if args.progress_file:
+        #: 每次都从头写（旧事件留着会让界面把上一次的进度也画出来）
+        try:
+            with open(args.progress_file, "w", encoding="utf-8"):
+                pass
+        except OSError as e:
+            print(f"⚠ 进度文件写不了（{e}）—— 照常跑，只是界面没有进度条", file=sys.stderr)
+            progress = Progress(None)
+    logs_dir: Path | None = None
+    if args.progress_file:
+        logs_dir = Path(tempfile.mkdtemp(prefix="rios-rebuild-logs-"))
+    to_run = [s for s in STEPS if wanted is None or s.key in wanted]
+    progress.plan(to_run)
+
+    if not args.quiet:
+        print("\n== 步骤 ==")
+        print("  ⚠ 本脚本**只加不删**：它不删除任何文件；重建 = 覆盖写。")
     results: list[Result] = []
-    for s in STEPS:
-        if wanted is not None and s.key not in wanted:
-            continue
-        print(f"\n---- {s.key}｜{s.title} ----")
-        print(f"     来源：{s.source}")
-        print(f"     前提：{s.needs}　预计：{s.eta}")
-        r = _run_step(s, offline_only=args.offline)
+    for s in to_run:
+        if not args.quiet:
+            print(f"\n---- {s.key}｜{s.title} ----")
+            print(f"     来源：{s.source}")
+            print(f"     前提：{s.needs}　预计：{s.eta}")
+        progress.run(s.key)
+        r = _run_step(s, offline_only=args.offline, progress=progress,
+                      logs_dir=logs_dir, quiet=args.quiet)
         results.append(r)
+        progress.done(s.key, {"ok": "ok", "failed": "fail",
+                              "skipped": "skip"}[r.status], r.seconds, r.message)
         icon = {"ok": "✅", "failed": "⛔", "skipped": "⏭"}[r.status]
         print(f"  {icon} {r.status}（{r.seconds:.1f}s）{r.message}")
+    progress.summary(sum(1 for r in results if r.status == "ok"),
+                     sum(1 for r in results if r.status == "failed"))
 
     print("\n" + "=" * 78)
     print("== 逐表行数（★ 空表必须给出原因，否则「跑通」就是「静默少表」） ==")

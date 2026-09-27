@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -350,7 +351,13 @@ func shouldAutoSetup(nflag int, plan []setupStep) bool {
 // `fetch_prts_notes.py` 拖进安装包 —— 那两件都该只留在开发侧。
 var playerSteps = []string{"akdb.sqlite", "stage 表", "关卡文件", "enemydb.sqlite"}
 
-// runRebuildData 跑那条「把数据与派生库一次做齐」的命令，**输出实时透传**。
+// runRebuildData 跑那条「把数据与派生库一次做齐」的命令。
+//
+// ★ 2026-09-27 改：**每项任务一条进度条**（博士要求：「初次运行时的下载不用逐条
+// 给出在下载什么东西，每项任务渲染一个进度条就行了」）。做法是
+// `--progress-file` ＋ `--quiet`：子进程把进度写成 JSONL 到文件、把各步的原话
+// 改写成日志文件；这边按偏移量增量读那个文件、原地重画进度条。
+// 失败时那一步的 msg 里已经带着日志尾部（Python 侧拼好的），照旧具名。
 func runRebuildData(py string) int {
 	script := rebuildScript()
 	if script == "" {
@@ -360,18 +367,37 @@ func runRebuildData(py string) int {
 	}
 	root := filepath.Dir(filepath.Dir(script))
 	only := strings.Join(playerSteps, ",")
+	pf := filepath.Join(os.TempDir(), fmt.Sprintf("rios-progress-%d.jsonl", os.Getpid()))
+	defer func() { _ = os.Remove(pf) }()
+
 	fmt.Println()
-	fmt.Printf("开始取数据与建库（这一步要下载，可能要几分钟）：\n")
-	fmt.Printf("  $ %s %s --only %s\n", py, script, only)
+	fmt.Printf("开始取数据与建库（%d 步，每步一条进度条）：\n", len(playerSteps))
 	fmt.Println("  （只跑玩家真正需要的四步：干员库／关卡索引／逐关文件／敌人库；")
 	fmt.Println("   wiki 备注语料与范围索引只有判据与开发工具用得上，不在这里拉）")
-	fmt.Println("  （输出直接打在这里；中途可以 Ctrl+C 停，停了下次双击会接着做）")
+	fmt.Println("  （中途可以 Ctrl+C 停，停了下次双击会接着做）")
 	fmt.Println()
-	rc := runStreaming(py, []string{script, "--only", only}, root)
+
+	err := waitWithBars(func(progressFile string) error {
+		c := exec.Command(py, script, "--only", only,
+			"--progress-file", progressFile, "--quiet")
+		c.Dir = root
+		//: **继承 stdio，不抓管道**（本机沙箱下抓管道会 EPERM；见 progress.go 的文件头）
+		c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+		return c.Run()
+	}, pf)
+
+	rc := 0
+	if err != nil {
+		rc = 1
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			rc = ee.ExitCode()
+		}
+	}
 	if rc != 0 {
 		fmt.Println()
 		fmt.Printf("★ 这一步没跑成（退出码 %d）。\n", rc)
-		fmt.Println("  手动重试：")
+		fmt.Println("  手动重试（原样输出，能看到每一步的细节）：")
 		fmt.Printf("    cd /d \"%s\"\n", root)
 		fmt.Printf("    %s tools\\rebuild_data.py --only %s\n", py, only)
 		fmt.Println("  它的输出里会写明是哪一步、缺什么（本仓的规矩是缺件具名）。")

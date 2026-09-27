@@ -156,14 +156,29 @@ def fetch_one(src: GameDataSource, data_path: str, *,
 
 def fetch_levels(*, db_path: Path | str | None = None,
                  workers: int = 4, limit: int | None = None,
-                 retries: int = 3, log=print) -> FetchReport:
-    """按库的范围把缺的关卡文件取下来。返回报告（**不打印结论、不 sys.exit**）。"""
+                 retries: int = 3, log=print,
+                 progress_file: str | None = None) -> FetchReport:
+    """按库的范围把缺的关卡文件取下来。返回报告（**不打印结论、不 sys.exit**）。
+
+    `progress_file` 给定时，每 25 个往那个文件追加一行 JSON（`{"ev":"tick",…}`）——
+    界面拿它渲染进度条。★ 走**文件**不走管道：本机沙箱下管道会 EPERM（见 `rebuild_data.py`）。
+    """
     t0 = time.time()
     src = GameDataSource()
     ids = level_ids_from_db(db_path)
     index = src.level_index()
     plan = plan_levels(src, ids, index)
     objs = plan.missing if limit is None else plan.missing[:limit]
+
+    def tick(done: int, total: int, fetched: int, failed: int) -> None:
+        if not progress_file:
+            return
+        try:
+            with open(progress_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"ev": "tick", "done": done, "total": total},
+                                   ensure_ascii=False) + "\n")
+        except OSError:
+            pass
 
     log("范围：库里 %d 个 level_id → 去重后 %d 个 data_path"
         % (len(ids), plan.total))
@@ -179,6 +194,7 @@ def fetch_levels(*, db_path: Path | str | None = None,
     rep = FetchReport(asked=len(objs), unknown=list(plan.unknown))
     if not objs:
         rep.seconds = time.time() - t0
+        tick(0, 0, 0, 0)
         log("  没有要下的（已经齐了）")
         return rep
 
@@ -201,6 +217,7 @@ def fetch_levels(*, db_path: Path | str | None = None,
                 rep.bytes += n
             done += 1
             if done % 25 == 0 or done == len(objs):
+                tick(done, len(objs), rep.fetched, len(rep.failed))
                 log("  [%d/%d] 已下 %d 个、%.1f MB、失败 %d、重试 %d"
                     % (done, len(objs), rep.fetched, rep.bytes / 1048576.0,
                        len(rep.failed), retry_ctr[0]))

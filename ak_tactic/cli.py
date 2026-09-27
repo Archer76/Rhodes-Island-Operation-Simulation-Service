@@ -1850,7 +1850,8 @@ def cmd_cache(args: argparse.Namespace) -> int:
         #: 「可部署人数上限」。这一步按**库里真正有的关卡**把缺的一次取齐。
         from .gamedata.levels import fetch_levels
         rep = fetch_levels(workers=args.workers, limit=args.limit,
-                           retries=args.retries)
+                           retries=args.retries,
+                           progress_file=getattr(args, "progress_file", None))
         print("取齐：真下 %d 个、%.1f MB、失败 %d 个、重试 %d 次、用时 %.1fs"
               % (rep.fetched, rep.bytes / 1048576.0, len(rep.failed), rep.retries,
                  rep.seconds))
@@ -2194,6 +2195,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="--fetch-levels 的并发线程数（默认 4）")
     c.add_argument("--retries", type=int, default=3,
                    help="--fetch-levels 的瞬时错误重试次数（默认 3；404 不重试）")
+    c.add_argument("--progress-file", metavar="PATH", default=None,
+                   help="--fetch-levels：把进度写成 JSONL 到该文件（界面渲染进度条用）")
     c.add_argument("--limit", type=int, default=None,
                    help="--fetch-levels 只取前 N 个（试跑用）")
     c.set_defaults(func=cmd_cache)
