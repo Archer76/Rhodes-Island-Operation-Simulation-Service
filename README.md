@@ -124,7 +124,7 @@ Python 侧仍是本仓库的 `ak_tactic/`。**Release 里只有代码与二进�
 
 ## 终端界面
 
-**Go 版是主界面**（`rios-sim/cmd/rios-tui`，bubbletea）。安装包装好的目录里双击 `启动.cmd`；
+**Go 版是主界面**（`rios-sim/cmd/rios-tui`，bubbletea）。安装包装好的目录里双击 `rios-tui.exe`；
 从克隆自己建也可以：
 
 ```bash

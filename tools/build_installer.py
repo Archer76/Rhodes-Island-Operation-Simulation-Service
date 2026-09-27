@@ -2,7 +2,7 @@
 """编译安装器，并把判据 7 的**四件**逐件验成读数。
 
 四件（迁移图 §12.5）：
-  1. **依赖自检**：装完就能用启动器自查，缺件**具名**（不是跑到一半才炸）；
+  1. **依赖自检**：装完就能用入口自查，缺件**具名**（不是跑到一半才炸）；
   2. **不覆盖已有 `data/`**：玩家自己取过数据就不许动它；
   3. **卸载干净**：程序文件走干净，而玩家的数据**先问再删**（无人值守时不弹框、按保留处理）；
   4. **可重复安装／升版本**：就地覆盖，第二次装照样成功。
@@ -112,7 +112,7 @@ def smoke(version: str, exe: Path) -> None:
                                               work / "install1.log"))
     print("      实得 rc=0")
 
-    want = ["rios-tui.exe", "rios-sim.exe", "启动.cmd",
+    want = ["rios-tui.exe", "rios-sim.exe",
             "eng/ak_tactic/__init__.py", "eng/tools/rios_bridge.py"]
     missing = [w for w in want if not (target / w).is_file()]
     if missing:
@@ -128,9 +128,11 @@ def smoke(version: str, exe: Path) -> None:
     print("      玩家数据活过了安装（判据 7 第 2 件）")
 
     print("  · 装完自查（缺件要具名，不是跑到一半才炸）")
-    #: ⚠ **不要**在这里跑 `启动.cmd`：它现在的第一步是 `-setup`，而空树上 `-setup`
+    #: ⚠ **不要**在这里跑入口的**无参数**那条路：它会先跑 `-setup`，而空树上 `-setup`
     #: 会**真的去下载** 94 MB 数据 —— 那会把这条冒烟变成十几分钟（上一版就是撞了超时）。
-    #: 所以分成两问：能不能自己说清缺什么（跑 `-preflight`），以及接线对不对（内容断言）。
+    #: 也**不要**直接跑界面：实测以 NUL 作 stdin 起 TUI 会**挂住**（bubbletea 无 TTY 不退出）。
+    #: 所以分成两问：能不能自己说清缺什么（跑 `-preflight`），以及入口是不是 rios-tui.exe
+    #: （点名在位 ＋ 树里不该再有那个 .cmd）。
     rc2, out2, err2 = sh([str(target / "rios-tui.exe"), "-preflight"], cwd=target,
                          timeout=600)
     text = out2 + err2
@@ -142,12 +144,12 @@ def smoke(version: str, exe: Path) -> None:
         die("没有派生库时应当报「起不来」或「待办」，实得：\n%s" % text[-1500:])
     print("      实得 rc=%d，报告里点了名（致命缺件 0 件）" % rc2)
 
-    cmd_text = (target / "启动.cmd").read_text(encoding="utf-8", errors="replace")
-    i_setup = cmd_text.find("-setup")
-    i_ui = cmd_text.find("rios-tui.exe", i_setup + 1)
-    if i_setup < 0 or i_ui < 0:
-        die("启动器里找不到「先 -setup 再起界面」这两步：\n%s" % cmd_text)
-    print("      启动器接线：-setup 在裸 rios-tui.exe 之前 ✓")
+    #: 接线断言（原先是读 `启动.cmd` 的文本）：入口就是 `rios-tui.exe` 自己，
+    #: 所以这里问的是"装出来的目录里**没有**那个 .cmd"——它已经不进包了（§12.9）。
+    if (target / "启动.cmd").exists():
+        die("装出来的目录里还有 启动.cmd —— 入口已经是 rios-tui.exe（博士 2026-09-27 裁），"
+            "它不该再进包")
+    print("      入口 rios-tui.exe 在位且能跑预检；装出来的目录里没有 启动.cmd ✓")
 
     print("  · 静默卸载（玩家数据不许被带走，且不许弹框挂住）")
     rc3, out3, err3 = uninstall(target, work / "uninstall1.log")

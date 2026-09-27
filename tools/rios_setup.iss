@@ -36,7 +36,7 @@
 #define AppName "R.I.O.S. 作战演算"
 #define AppPublisher "Archer76"
 #define AppURL "https://github.com/Archer76/Rhodes-Island-Operation-Simulation-Service"
-#define AppExeName "启动.cmd"
+#define AppExeName "rios-tui.exe"
 
 [Setup]
 ; AppId 是「同一个程序」的身份证：换掉它 = 变成另一个程序（升级会装成两份、卸载卸不干净）。
@@ -75,7 +75,10 @@ Source: "{#SrcDir}\*"; DestDir: "{app}"; \
     Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Run]
-; 装完可以让玩家直接起一次（首启那几步的提示由启动器自己的预检打印）。
+; 装完可以让玩家直接起一次（首启那几步由入口**自己**完成：无参数运行时它先跑一遍准备，
+; 缺什么、怎么补都由它自己打印 —— 发布形态里没有启动器这一类中间件了，§12.9）。
+; ★ 保留 `shellexec`：它与"双击"同一条路（走 ShellExecute，控制台窗口该有就有），
+;   换成 exe 之后这一条依然对；`skipifsilent` 让静默安装（判据用的那种）不弹这个窗口。
 Filename: "{app}\{#AppExeName}"; Description: "现在启动 R.I.O.S."; \
     Flags: postinstall nowait skipifsilent shellexec
 
@@ -92,7 +95,7 @@ begin
     '安装包只放运行时必须的文件：游戏数据与 Python 都不在里面。',
     '1) 装 Python（若机器上还没有）—— 到 python.org 自行下载；' + #13#10 +
     '   扫码登录还要 pip install qrcode，其余功能不受影响。' + #13#10 + #13#10 +
-    '2) 其余两步**不用你操心**：双击目录里的 启动.cmd 之后，它会自己' + #13#10 +
+    '2) 其余两步**不用你操心**：双击目录里的 rios-tui.exe 之后，它会自己' + #13#10 +
     '   取游戏数据（要下载，几分钟到十几分钟）并建好派生库，' + #13#10 +
     '   做完直接进界面。缺 Python 时它会问一句要不要替你装。' + #13#10 + #13#10 +
     '数据与说明见：{#AppURL}/blob/main/docs/data-sources.md');

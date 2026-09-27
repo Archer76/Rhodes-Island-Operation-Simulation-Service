@@ -1,19 +1,37 @@
 # -*- coding: utf-8 -*-
-"""把 R.I.O.S. 打成**拆分目录**（迁移图 §12.2）＋ 写出 `启动.cmd`。
+"""把 R.I.O.S. 打成**拆分目录**（迁移图 §12.2）。
 
 判据（§12.6）：**一个文件进包 ⟺ 删掉它，程序跑不起来、或首次运行走不下去。**
 逐个候选问一遍「删掉它会怎样」，答不出后果的一律不进包。所以这里进包的只有：
 
-    rios-tui.exe        界面本体（删了没有入口）
+    rios-tui.exe        界面本体，也是**唯一入口**（删了没有入口）
     rios-sim.exe        引擎（界面是**子进程**调它）
-    启动.cmd            一键入口，且启动器自检落在它身上（§12.3）
     eng/ak_tactic/      登录／名册／建库走 Python 子进程（§11.4）
     eng/tools/*.py      桥与首次运行第 3 步要用的那几个（见 REQUIRED_TOOLS）
 
 不进包：`docs/` 全树、`tools/` 的全部判据、`fixtures/`、`out/`、Go 源码、
 仓根文件、`data/`（玩家自取）、Python 运行时（玩家自装）。
 
-## 三件必须记在这里的事（都会让包"装出来才炸"）
+## 为什么不再写 `启动.cmd`（博士 2026-09-27 裁，迁移图 §12.9）
+
+原先那个壳只干三件事，其中两件在 Go 里**早已解决**：
+
+1. **`cd /d "%~dp0"` —— 不需要**：路径解析三处全走 `os.Executable()`
+   （`main.go` 的 `dataDirCandidates`／`engclient.go` 的 `findBridgeScript`／
+   `engpipe.go` 的 `findEngineExe`），cwd 在哪都不影响取数与找桥。
+2. **先 `-setup` 再起界面 —— 不需要壳**：`-setup` 是**同一个程序自己的参数**，
+   而 `main.go` 在无参数时（`flag.NFlag()==0`）自己先跑一遍准备（判据是纯函数
+   `shouldAutoSetup`）。壳去串"两步"这件事本身多余。
+3. **`chcp 65001` 与失败时 `pause` —— 已进 Go**：`console_windows.go` 用 syscall 调
+   kernel32 的 `Set/GetConsoleOutputCP` 把代码页切成 UTF-8、退出前恢复原值；
+   `pauseIfInteractive` 只在 stdin 是字符设备时停（管道／重定向不停，判据友好）。
+
+⇒ 双击 `rios-tui.exe` 就是入口，**发布形态里不再有启动器这类中间件**。所以本文件
+既不生成它，`smoke()` 里那条「`-setup` 必须在裸 exe 之前」的**顺序断言也一并删掉**
+（没有 .cmd 可断言了）；那条性质改由「缺 `eng/` 时 `rios-tui.exe -setup` 必须具名
+失败且非零退出」来守 —— 后者验的是**程序自己**的行为，比验一份脚本文本更结实。
+
+## 两件必须记在这里的事（都会让包"装出来才炸"）
 
 1. **`tools/fetch_prts_notes.py` 不在 git 索引里**（它是内部件，被 `.gitignore` 摘出过），
    而首次运行第 3 步要用它 ⇒ 只能从**工作树**取。缺了必须**当场具名报错**，
@@ -23,9 +41,6 @@
    `ak_tactic/tui/data.py:239`），而 `ak_tactic` 在 `eng/` 下 ⇒ `parents[2]` 就是 `eng/`。
    Go 侧跟着 `RIOS_DB` 走，且 `dataDirCandidates()` 已经把 `eng/data` 列进候选
    （2026-09-27 加），所以两侧指向同一处。
-3. **`启动.cmd` 保持纯 ASCII**：cmd.exe 是按**当前代码页**逐行读批处理的，
-   `chcp 65001` 生效前的行若含中文就会变乱码。给玩家看的中文一律由 `rios-tui.exe
-   -preflight` 打印（那一步已经 chcp 过了）。
 
 用法：
 
@@ -41,6 +56,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,50 +74,19 @@ REQUIRED_TOOLS = {
     #: 对玩家那条路，答案是"跑得起来"。开发要用它，仓库里有。
 }
 
-#: `启动.cmd`。纯 ASCII、CRLF、无 BOM —— 三条都是 cmd.exe 的脾气，不是风格。
-LAUNCHER = "\r\n".join([
-    "@echo off",
-    "rem R.I.O.S. launcher - double-click this file.",
-    "rem Keep this file ASCII-only: cmd.exe parses a batch file with the *current*",
-    "rem code page, so non-ASCII above the chcp line would come out as mojibake.",
-    "rem All player-facing text comes from 'rios-tui.exe -preflight'.",
-    "chcp 65001 >nul",
-    'cd /d "%~dp0"',
-    #: 别让 Python 往安装目录里写 __pycache__：装到 Program Files 之类没写权限的地方时
-    #: 那些写失败是无害的噪音，但会把目录弄脏（哈希清单、卸载残留都要跟着解释）。
-    "set PYTHONDONTWRITEBYTECODE=1",
-    #: 先跑首次运行准备：缺数据／缺派生库就自动补（装 Python 会问一句），
-    #: 什么都不缺时它一个字节都不打印、立刻返回 —— 所以每次启动都调它是安全的。
-    "rios-tui.exe -setup",
-    "if errorlevel 1 (",
-    "  echo.",
-    "  echo Setup did not finish - read the messages above.",
-    "  echo Press any key to close.",
-    "  pause >nul",
-    "  exit /b 1",
-    ")",
-    "rios-tui.exe",
-    "set RIOS_RC=%ERRORLEVEL%",
-    'if not "%RIOS_RC%"=="0" (',
-    "  echo.",
-    '  echo The UI exited with code %RIOS_RC%.',
-    "  echo Press any key to close.",
-    "  pause >nul",
-    ")",
-    "exit /b %RIOS_RC%",
-    "",
-])
-
-
-def sh(cmd, cwd=None, timeout=None, stdin_nul=False):
+def sh(cmd, cwd=None, timeout=None, stdin_nul=False, env=None):
     """跑一条命令并把两条流都收回来（检查类脚本**零重定向**）。
 
-    `stdin_nul` 把 stdin 接到 NUL：批处理里那句 `pause` 在无人值守时会一直等，
-    接 NUL 就立刻返回（这正是"启动器能不能被自动验"的关键）。
+    `stdin_nul` 把 stdin 接到 NUL：入口在真终端里会 `pauseIfInteractive` 停住等按键
+    （那是给双击的人看的），接 NUL 就不是字符设备 ⇒ 它不停 ——
+    这正是"入口能不能被自动验"的关键。
+    `env` 用来给某一条判据换一份环境（例如摘掉 `RIOS_DB`，见 `smoke()`）。
     """
     kw = {}
     if stdin_nul:
         kw["stdin"] = subprocess.DEVNULL
+    if env is not None:
+        kw["env"] = env
     p = subprocess.run(cmd, cwd=str(cwd) if cwd else None, capture_output=True,
                        text=True, encoding="utf-8", errors="replace", timeout=timeout,
                        **kw)
@@ -162,17 +147,13 @@ def copy_eng(tree: Path) -> None:
         die("\n".join(lines))
 
 
-def write_launcher(tree: Path) -> None:
-    (tree / "启动.cmd").write_bytes(LAUNCHER.encode("ascii"))
-
-
 def assert_only_runtime_files(tree: Path) -> list:
     """判据（§12.6）：树里除了运行时必须的那几件，不许有别的东西。
 
     这条是**反着判**的：白名单之外的任何文件都要拦下来 —— 否则「顺手把 docs 拷进来」
     或「把 out/ 拖进来」不会被任何人发现。
     """
-    allowed_exact = {"rios-tui.exe", "rios-sim.exe", "启动.cmd", "SHA256SUMS.txt"}
+    allowed_exact = {"rios-tui.exe", "rios-sim.exe", "SHA256SUMS.txt"}
     bad = []
     files = []
     for p in sorted(tree.rglob("*")):
@@ -185,6 +166,12 @@ def assert_only_runtime_files(tree: Path) -> list:
                 bad.append((rel, "编译缓存，运行时用不着"))
             continue
         if len(rel.parts) == 1 and rel.name in allowed_exact:
+            continue
+        if len(rel.parts) == 1 and rel.suffix.lower() in (".cmd", ".bat"):
+            #: 入口已经是 `rios-tui.exe` 自己（§12.9），所以这一族文件回来就是**回归**。
+            #: 单独具名是为了让下一个看到红的人一眼知道"这不是漏拷了一个文件"。
+            bad.append((rel, "启动器已取消（博士 2026-09-27 裁，迁移图 §12.9）——"
+                            "入口是 rios-tui.exe 自己，不再有 .cmd/.bat 这一类中间件"))
             continue
         bad.append((rel, "不在运行时必须的白名单里（§12.6 判据：删掉它程序跑不起来吗）"))
     if bad:
@@ -227,8 +214,15 @@ def sha256(p: Path) -> str:
 
 
 def run_preflight(tree: Path):
-    """在**发布树里**跑启动器自检（cwd 就是树本身，免得读到开发树的东西）。"""
-    rc, out, err = sh([str(tree / "rios-tui.exe"), "-preflight"], cwd=tree, timeout=300)
+    """在**发布树里**跑启动前自检（cwd 就是树本身，免得读到开发树的东西）。
+
+    ★ 这一条问的是"**这棵树自己**缺不缺件"，所以显式摘掉 `RIOS_DB`：
+    本机环境变量一进来，开发树的库就会被当成"在位"，全新树的读数直接变假绿。
+    """
+    env = dict(os.environ)
+    env.pop("RIOS_DB", None)
+    rc, out, err = sh([str(tree / "rios-tui.exe"), "-preflight"], cwd=tree, timeout=300,
+                      env=env)
     return rc, out + err
 
 
@@ -269,35 +263,44 @@ def smoke(tree: Path, data_dir: Path | None) -> None:
             % (rc3, out3))
     print("      实得 rc=2，报告里点名了工程侧 Python")
 
-    #: 启动器自己也要真跑一次 —— 但**不能**在"数据齐全之前"跑那种会去下载的路径：
-    #: 现在 `启动.cmd` 的第一步是 `-setup`，而空树上它会真的开始取 94 MB 数据
-    #: （上一版就是这样撞了 300 秒超时）。所以这里换个问法：
-    #:   ① 把 `eng/` 拿掉 ⇒ `-setup` 找不到那条重建命令，**当场具名失败**、
-    #:      启动器必须停住（同时验到 `.cmd` 里的分支确实是"setup 失败就不启动"）；
-    #:   ② 顺序用内容断言钉住（`-setup` 必须在裸 `rios-tui.exe` **之前**）。
-    #: ⚠ 未核：装完之后双击真的进界面这一条，只有真终端能验（这里没有 TTY）。
-    print("  · 启动器 启动.cmd：真跑一次「准备失败就该停住」那条路（stdin 接 NUL）")
+    #: 入口自己也要真跑一次 —— 但**不能**跑"数据齐全之前"那种会去下载的路径：
+    #: 无参数运行会先跑 `-setup`，而空树上它会真的开始取 94 MB 数据（上一版撞了 300 秒超时）；
+    #: 直接跑界面更不行 —— 实测以 NUL 作 stdin 起 TUI 会**挂住**（bubbletea 无 TTY 不退出）。
+    #: 所以换个问法：**把 `eng/` 拿掉 ⇒ `-setup` 找不到那条重建命令，必须当场具名失败、
+    #: 非零退出**。这一条同时守三件事：
+    #:   ① 缺件要具名（§12.6 的口径，不许静默退化成"跑一半才炸"）；
+    #:   ② 缺件时**不许**返回 0（否则入口会接着去起界面）；
+    #:   ③ stdin 是 NUL（不是字符设备）时**不许暂停** —— 若它停了，这里会直接撞超时炸掉，
+    #:      所以"在超时以内返回了"本身就是"没暂停"的读数。
+    #: （旧的「顺序断言：-setup 在裸 rios-tui.exe 之前」随 `启动.cmd` 一起删掉：没有 .cmd
+    #:   就没有那份文本可断言了；等价性质现在落在下面这条，且验的是程序自己而非脚本。）
+    print("  · 入口 rios-tui.exe -setup：缺 eng/ 时必须具名失败（stdin 接 NUL，不许暂停）")
+    env_setup = dict(os.environ)
+    #: 与 run_preflight 同理：摘掉 RIOS_DB，让这条判据只问"树自己缺不缺件"。
+    env_setup.pop("RIOS_DB", None)
     eng_dir2 = tree / "eng"
     bak_dir2 = tree / "eng.bak2"
     eng_dir2.rename(bak_dir2)
     try:
-        rc4, out4, err4 = sh(["cmd", "/c", "启动.cmd"], cwd=tree, timeout=300,
-                             stdin_nul=True)
+        t0 = time.monotonic()
+        rc4, out4, err4 = sh([str(tree / "rios-tui.exe"), "-setup"], cwd=tree,
+                             timeout=300, stdin_nul=True, env=env_setup)
+        dt4 = time.monotonic() - t0
     finally:
         bak_dir2.rename(eng_dir2)
     if rc4 == 0:
-        die("少了 eng/ 时启动器**不该**返回 0（它应当停下来并说明）")
+        die("少了 eng/ 时 `-setup`**不该**返回 0（它应当停下来并说明）")
     txt4 = out4 + err4
     if "首次运行准备" not in txt4:
-        die("启动器没有先跑 -setup（输出里没有「首次运行准备」）：\n%s" % txt4[-1200:])
-    print("      实得 rc=%d，且确实先跑了 -setup" % rc4)
-
-    cmd_text = (tree / "启动.cmd").read_text(encoding="utf-8", errors="replace")
-    i_setup = cmd_text.find("-setup")
-    i_ui = cmd_text.find("rios-tui.exe", i_setup + 1)
-    if i_setup < 0 or i_ui < 0:
-        die("启动器里找不到「先 -setup 再起界面」这两步：\n%s" % cmd_text)
-    print("      顺序断言：-setup 在裸 rios-tui.exe 之前 ✓")
+        die("`-setup` 没报准备计划（输出里没有「首次运行准备」）：\n%s" % txt4[-1200:])
+    #: 具名说法的两条：机器上有 Python ⇒ 走到"找不到工程侧脚本"；没有 ⇒ 报"没有可用的
+    #: Python"。两条都是**具名**的，都算过；一条都没有才是"没说清缺什么"。
+    named = [s for s in ("找不到工程侧脚本", "没有可用的 Python") if s in txt4]
+    if not named:
+        die("缺 eng/ 时 `-setup` 没有具名说出缺在哪（两条具名说法都不在输出里）：\n%s"
+            % txt4[-1200:])
+    print("      实得 rc=%d（%.1fs 内返回 ⇒ 没暂停），具名说法：%s"
+          % (rc4, dt4, named[0]))
 
     if data_dir is None:
         print("  · 跳过后半段：没有可用的 data 目录（拿它才跑得动全量自检）")
@@ -348,24 +351,22 @@ def main() -> int:
         shutil.rmtree(tree)
     tree.mkdir(parents=True)
 
-    print("[1/6] 建两个 exe")
+    print("[1/5] 建两个 exe")
     build_exes(tree)
 
-    print("[2/6] 拷工程侧 Python 到 eng/")
+    print("[2/5] 拷工程侧 Python 到 eng/")
     copy_eng(tree)
 
-    print("[3/6] 写 启动.cmd")
-    write_launcher(tree)
-
-    print("[4/6] 判据：树里只有运行时必须的文件（§12.6）")
+    print("[3/5] 判据：树里只有运行时必须的文件（§12.6）")
     files = assert_only_runtime_files(tree)
-    print("      树里共 %d 个文件，全部在白名单内" % len(files))
+    print("      树里共 %d 个文件，全部在白名单内（入口 rios-tui.exe 自己；无 .cmd）"
+          % len(files))
 
-    print("[5/6] 装完自查（正例 ＋ 两条负对照）")
+    print("[4/5] 装完自查（正例 ＋ 两条负对照 ＋ 入口缺件那条）")
     data_dir = ROOT / "data"
     smoke(tree, None if args.no_selftest else data_dir)
 
-    print("[6/6] 清掉自查留下的 Python 编译缓存，然后逐件点名 sha256")
+    print("[5/5] 清掉自查留下的 Python 编译缓存，然后逐件点名 sha256")
     n_pyc = clean_pycache(tree)
     print("      清掉 %d 个 __pycache__/*.pyc（可重建；自查那一步真起过桥，Python 会写）"
           % n_pyc)
