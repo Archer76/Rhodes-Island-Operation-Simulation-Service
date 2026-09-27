@@ -392,6 +392,114 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		}
 	}
 
+	fmt.Println("== 五之五 · 鼠标通道 ＋ 分类行命中表（Python `PickerRow`）==")
+	//: ★ 2026-09-27 新加。博士报「这版 TUI 不能用鼠标点击了」，并要「和之前完全一样」。
+	//: 根因是**两道闸**：`main.go` 没开鼠标选项（终端根本不产生 `MouseMsg`），
+	//: 且 `screen` 接口的 `update` 在**编译期**只收 `tea.KeyMsg`。处置：开选项 ＋ 加一个
+	//: **可选**的窄接口 `mouseScreen`（认的屏实现它，不认的一个字节不用改）。
+	//:
+	//: 这一节盯四件事：通道通（屏实现了那个接口）、键盘 ←/→ 能切、**真发一个鼠标
+	//: 按下事件**能切到点中的那一项、以及折行后**第二行上的项照样点得到**
+	//: （最后那条是参照实现记过的性质：`_boxes` 带行号就是为了它）。
+	{
+		//: 自带一份最小名册：本节用的 `fake` 在**下面**才声明（Go 不能先用后声明），
+		//: 而且这一节要的正是"每个职业各一人 ＋ 有重复职业"，自己写清更直接。
+		roster7 := &rosterData{Source: "selftest", Complete: true, Count: 5,
+			Operators: []RosterOperator{
+				{CharID: "char_1", Name: "甲", Profession: "PIONEER", Elite: 0, Level: 1},
+				{CharID: "char_2", Name: "乙", Profession: "WARRIOR", Elite: 1, Level: 1},
+				{CharID: "char_3", Name: "丙", Profession: "MEDIC", Elite: 1, Level: 45},
+				{CharID: "char_4", Name: "丁", Profession: "CASTER", Elite: 2, Level: 90},
+				{CharID: "char_5", Name: "戊", Profession: "MEDIC", Elite: 0, Level: 30},
+			}}
+		ctx := &appCtx{w: 90, h: 26, roster: roster7, mode: "auto"}
+		r7 := newRoot(ctx, newSquadPickScreen(ctx, nil))
+		r7.Update(tea.WindowSizeMsg{Width: 90, Height: 26})
+		ss7, ok := r7.top().(*squadPickScreen)
+		if !ok {
+			check("（前置）选人屏在栈顶", false, screenName(r7.top()))
+		} else {
+			_, isMouse := any(ss7).(mouseScreen)
+			check("选人屏实现了 mouseScreen（鼠标消息送得到它）", isMouse,
+				"mouseScreen 接口断言")
+			items, vals := ss7.profOptions()
+			check("分类行 = 「全部」＋ 名册里真有的职业（按游戏序）",
+				len(items) == 5 && items[0] == "全部" && vals[0] == "" &&
+					vals[1] == "PIONEER" && vals[2] == "WARRIOR",
+				fmt.Sprintf("%v", items))
+			r7.View() //: 先画一次 —— 命中表是"画的时候"填的
+			before := len(ss7.visible())
+			press(r7, "right")
+			after := ss7.visible()
+			profOK := len(after) > 0 && len(after) < before
+			for _, op := range after {
+				if op.Profession != ss7.prof {
+					profOK = false
+				}
+			}
+			check("→ 切职业：列出的每一条都属于该职业，且比「全部」少",
+				profOK, fmt.Sprintf("全部 %d → %s %d", before, ss7.prof, len(after)))
+
+			//: 鼠标：点某一项的**格子中间**（照参照的 `click_offset`），落到那一项上。
+			r7.View()
+			medic := -1
+			for i, v := range vals {
+				if v == "MEDIC" {
+					medic = i
+				}
+			}
+			box, found := hitBox{}, false
+			for _, b := range ss7.profRow.boxes {
+				if b.idx == medic {
+					box, found = b, true
+				}
+			}
+			if medic < 0 || !found {
+				check("（前置）医疗那一项在命中表里", false, fmt.Sprintf("idx=%d", medic))
+			} else {
+				clickY, clickX := box.line+r7.bodyTop(), box.x+box.w/2
+				r7.Update(tea.MouseMsg{Action: tea.MouseActionPress,
+					Button: tea.MouseButtonLeft, X: clickX, Y: clickY})
+				check("★ 鼠标点分类行 ⇒ 切到点中的那一项（博士原来的操作方式）",
+					ss7.prof == "MEDIC",
+					fmt.Sprintf("点 (%d,%d) → %q", clickX, clickY, ss7.prof))
+				keep := ss7.prof
+				r7.Update(tea.MouseMsg{Action: tea.MouseActionPress,
+					Button: tea.MouseButtonLeft, X: 0, Y: 0})
+				check("负对照：点在格子之外 ⇒ 筛选不变", ss7.prof == keep,
+					fmt.Sprintf("%q → %q", keep, ss7.prof))
+			}
+			//: 折行：窄窗口下这一行会折成两行，**第二行上的项照样点得到**。
+			r7.Update(tea.WindowSizeMsg{Width: 30, Height: 26})
+			ss7.prof, ss7.profIdx, ss7.cursor = "", 0, 0
+			r7.View()
+			wrapped, secondLineIdx := false, -1
+			for _, b := range ss7.profRow.boxes {
+				if b.line > 0 {
+					wrapped, secondLineIdx = true, b.idx
+				}
+			}
+			if !wrapped {
+				fmt.Println("  （未核：窄窗口下这一行没折行，第二行那条性质这次没行使）")
+			} else {
+				b2 := ss7.profRow.boxes[0]
+				for _, b := range ss7.profRow.boxes {
+					if b.idx == secondLineIdx {
+						b2 = b
+					}
+				}
+				r7.Update(tea.MouseMsg{Action: tea.MouseActionPress,
+					Button: tea.MouseButtonLeft,
+					X: b2.x + b2.w/2, Y: b2.line + r7.bodyTop()})
+				check("折行后**第二行上的项照样点得到**（格子带行号的理由）",
+					ss7.prof == vals[secondLineIdx],
+					fmt.Sprintf("点第二行第 %d 项 → %q（应 %q）",
+						secondLineIdx, ss7.prof, vals[secondLineIdx]))
+			}
+			r7.Update(tea.WindowSizeMsg{Width: 90, Height: 26})
+		}
+	}
+
 	fmt.Println("== 六 · 环境筛选（取数口径）==")
 	hit := ""
 	for _, z := range zones {

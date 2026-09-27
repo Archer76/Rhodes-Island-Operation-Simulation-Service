@@ -104,7 +104,13 @@ func run() int {
 		return 0
 	}
 
-	p := tea.NewProgram(newRoot(newAppCtx(stages, zones), welcomeScreen{}), tea.WithAltScreen())
+	//: ★ 2026-09-27：开鼠标（博士要「和之前完全一样」——旧界面是 Textual，
+	//: 那一排分类行他是拿鼠标点的）。`WithMouseCellMotion` 是**按格**上报，
+	//: 够用且比 `AllMotion` 省事件；不认鼠标的屏在 `stack.go` 里被静默忽略。
+	//: ⚠ 代价登记：终端里的鼠标从此被程序接管 ⇒ 想用鼠标**选文本**要按住 Shift
+	//: （Textual 同理，所以这不是新引入的差异）。
+	p := tea.NewProgram(newRoot(newAppCtx(stages, zones), welcomeScreen{}),
+		tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "★ 界面退出：%v\n", err)
 		pauseIfInteractive("")

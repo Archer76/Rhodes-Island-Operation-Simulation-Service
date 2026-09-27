@@ -83,6 +83,22 @@ type msgScreen interface {
 	onMsg(r *root, msg tea.Msg) action
 }
 
+// mouseScreen 是「认鼠标」的屏。
+//
+// ★ 为什么单列一个接口、而不是改 `screen`：`screen` 的 `update` 是**编译期**只收
+// `tea.KeyMsg` 的（14 个屏都实现了它）。把 `MouseMsg` 塞进同一个方法要动所有屏，
+// 而绝大多数屏**不需要**认鼠标（纯文本屏点了也没意义）⇒ 用可选的窄接口：
+// 认的屏实现它，不认的一个字节都不用改，而"这个屏认不认鼠标"在类型上一眼可见。
+//
+// ★ 也**不是** `msgScreen`：那个收的是**异步消息**（一轮解算回来、扫码结果），
+// 语义与"用户在屏上点了一下"是两回事，混在一起两条链会互相干扰。
+//
+// ★ 坐标：`m.Y` 已被 `root.Update` 换算成**这一屏 body 内**的行号（终端坐标减掉
+// 顶栏那几行）—— 屏自己不必知道顶栏在不在、占几行，那件事只有 `root` 知道。
+type mouseScreen interface {
+	onMouse(c *appCtx, m tea.MouseMsg) (screen, action)
+}
+
 // appCtx 是整个向导共享的一份状态。照 Python 的 `State`，只留现在已经用得到的那些；
 // 名册、计划、解算结果等后面按需加，不预先摆一堆没人读的字段。
 type appCtx struct {
@@ -174,6 +190,22 @@ func newRoot(c *appCtx, first screen) *root {
 
 func (r *root) top() screen { return r.stack[len(r.stack)-1].scr }
 
+// bodyTop 是「当前这一屏的 body 从终端第几行开始」。
+//
+// 必须与 `View()` 的拼装**逐字对应**，否则鼠标点击会整体错行：
+//
+//	View = [顶栏 + "\n"] + "\n" + body + "\n" + foot + "\n"
+//
+// 顶栏在矮窗口下会被收掉（`tinyHeight`），所以这里要照着同一条判据算。
+// ★ 这是"布局与命中必须共用同一份坐标"那条纪律的落点：`View` 一改，这里跟着改；
+// 判据里有一条真点一次、断言筛出来的集合变了 —— 错行会当场红。
+func (r *root) bodyTop() int {
+	if r.ctx.h == 0 || r.ctx.h >= tinyHeight {
+		return 2 //: 顶栏 1 行 ＋ 它后面那个空行
+	}
+	return 1 //: 没有顶栏，body 前面只有一个空行
+}
+
 func (r *root) push(s screen, done func(*root, any)) {
 	r.stack = append(r.stack, frame{scr: s, done: done})
 }
@@ -216,6 +248,23 @@ func (r *root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return r, tea.Quit
 		}
 		cmd = r.apply(act)
+	case tea.MouseMsg:
+		//: 鼠标交给**实现 `mouseScreen` 的栈顶屏**（不实现就什么也不做 —— 静默丢弃
+		//: 是刻意的：纯文本屏点了本来就没有含义）。
+		//: 坐标换算在一处：终端行号 − 本屏 body 的起始行 = 屏内行号。
+		m := msg
+		m.Y -= r.bodyTop()
+		if ms, ok := r.top().(mouseScreen); ok {
+			next, act := ms.onMouse(r.ctx, m)
+			if next != nil {
+				r.stack[len(r.stack)-1].scr = next
+			}
+			if act.kind == actQuit {
+				return r, tea.Quit
+			}
+			cmd = r.apply(act)
+		}
+		return r, cmd
 	default:
 		//: 异步消息交给**栈里第一个**实现 `msgScreen` 的屏（从栈顶往下找）。
 		//:

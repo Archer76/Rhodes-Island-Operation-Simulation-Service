@@ -208,6 +208,70 @@ func (f *filterBox) view(c *appCtx) string {
 	return "> " + f.in.View()
 }
 
+// # 可点的一排标签（命中表）
+//
+// 对应参照实现的 `PickerRow`（`ak_tactic/tui/app.py:1599-1763`）的四件：
+// `_layout`（怎么排）／`_boxes`（每项占哪几格）／`_hit`（点在哪一项上）／
+// `on_click`（点中之后干什么）。
+//
+// 为什么非要有它：那一排分类标签在旧界面里是**鼠标操作的入口**
+// （`tools/check_tui.py:1932` 的原文写着「**鼠标**：点分类行上的某一项
+// （**博士是拿鼠标挑的**）」）。bubbletea 不白送命中测试 —— 每项落在哪几列，
+// 只有画的时候知道 ⇒ **画的时候把格子记下来**，点击时按内容坐标查表。
+//
+// ★ 布局与画图**共用同一个循环**：参照实现踩过一次真 bug —— `_layout` 按 gap
+// 推进坐标、`render()` 却没把那几格空格写进 Text，于是 `_boxes` 越往右偏得越多
+// （第 k 项偏 k*gap 列），**点左边几项就点错人**（`check_tui.py:1822-1838` 记着）。
+// 这里把"拼这一行"与"记这一格"写在一起，物理上不给它们分叉的机会。
+type hitBox struct {
+	line, x, w, idx int //: 行、起始列、宽（都是**这一屏 body 内**的内容坐标）
+}
+
+type hitRow struct{ boxes []hitBox }
+
+// hit 把 body 内的（行, 列）换算成命中的项下标；没命中返回 -1。
+func (h hitRow) hit(line, x int) int {
+	for _, b := range h.boxes {
+		if b.line == line && x >= b.x && x < b.x+b.w {
+			return b.idx
+		}
+	}
+	return -1
+}
+
+// renderHitRow 画出「一排标签」并**同时**记下每项的格子。
+//
+// `topLine` 是这一排**在 body 里的起始行**（调用方给，省得它自己加偏移时算错）。
+// `width` 是可用宽度，超出就折到下一行 —— 折行后第二行上的项**照样点得到**
+// （格子带着自己的行号，那正是 `_hit` 认行号的理由）。
+// 每项两侧各留一格空格，并把这一格也算进它的命中框（点在名字旁边的空格上也算）：
+// 「缝」是这类控件最容易出问题的地方 —— 点上去没反应的列会让人觉得"点不动"。
+func renderHitRow(items []string, cursor, width, topLine int) (string, hitRow) {
+	row := hitRow{boxes: make([]hitBox, 0, len(items))}
+	if width < 8 {
+		width = 8
+	}
+	var b strings.Builder
+	line, col := topLine, 0
+	for i, it := range items {
+		cell := " " + it + " "
+		w := ansi.StringWidth(cell)
+		if col > 0 && col+w > width {
+			b.WriteString("\n")
+			line++
+			col = 0
+		}
+		if i == cursor {
+			b.WriteString(styleCursor.Render(cell))
+		} else {
+			b.WriteString(cell)
+		}
+		row.boxes = append(row.boxes, hitBox{line: line, x: col, w: w, idx: i})
+		col += w
+	}
+	return b.String(), row
+}
+
 // centerBlock 把一段文本在 w×h 的窗口里居中（对应 Python 的 `align: center middle`）。
 //
 // 宽度按**视觉宽度**算（`x/ansi`，见文件头那条依据），不是按字节数 ——

@@ -354,12 +354,90 @@ type squadPickScreen struct {
 	cursor int
 	rows   []RosterOperator
 	picked map[string]bool //: 键是**干员名**（与 Python 的 `_picked: set[str]` 同口径）
+	//: ★ 2026-09-27 加回：主职业分类行（参照实现的 `PickerRow #prof-row`）。
+	//: `prof` 是筛选值（""=全部），`profIdx` 是这一行的高亮项，`profRow` 是
+	//: **上一次画出来的命中表** —— 鼠标点击靠它把坐标换算成项（见 `hitRow`）。
+	prof    string
+	profIdx int
+	profRow hitRow
 }
 
 func (*squadPickScreen) title() string { return "选人" }
 
 func (*squadPickScreen) help() string {
-	return "↑/↓ 移动 · 空格 勾选 · T 助战（用／不用）· Enter 进入下一步 · M 切换模式 · Esc 返回 · Q 退出"
+	return "↑/↓ 移动 · 空格 勾选 · ←/→ 或点分类行 切职业 · T 助战（用／不用）· " +
+		"Enter 进入下一步 · M 切换模式 · Esc 返回 · Q 退出"
+}
+
+// professionOrder 是分类行的**排列顺序**（照 `ak_tactic/tui/data.py:446-447` 的
+// `PROFESSION_ORDER`）：游戏里的职业顺序，而不是名册里碰巧出现的顺序 ——
+// 否则同一份名册换个排序，这一行的顺序就变了，鼠标点位也跟着变。
+var professionOrder = []string{"PIONEER", "WARRIOR", "TANK", "SNIPER",
+	"CASTER", "MEDIC", "SUPPORT", "SPECIAL", "TOKEN", "TRAP"}
+
+// profOptions 返回分类行的「显示名」与「筛选值」两份表（下标一一对应）。
+//
+// ★ 只列**名册里真有的**职业（照参照的 `professions_in`）＋ 永远在第一位的
+// 「全部」（值为空串 = 不按职业筛，与参照的 `active=""` 同口径）。
+func (s *squadPickScreen) profOptions() ([]string, []string) {
+	inRoster := map[string]bool{}
+	for _, op := range s.rows {
+		if op.Profession != "" {
+			inRoster[op.Profession] = true
+		}
+	}
+	items := []string{"全部"}
+	vals := []string{""}
+	for _, p := range professionOrder {
+		if inRoster[p] {
+			items = append(items, professionCN(p))
+			vals = append(vals, p)
+		}
+	}
+	return items, vals
+}
+
+// visible 是当前职业筛选下真正列出的干员。
+func (s *squadPickScreen) visible() []RosterOperator {
+	if s.prof == "" {
+		return s.rows
+	}
+	out := make([]RosterOperator, 0, len(s.rows))
+	for _, op := range s.rows {
+		if op.Profession == s.prof {
+			out = append(out, op)
+		}
+	}
+	return out
+}
+
+// setProf 切到第 i 档。★ **一切就生效**，不需要再按回车 —— 照参照实现的
+// `PickerRow.action_move`（它 `post_message(Changed)` 之后屏立刻重筛，理由写在
+// `app.py:1619-1623`：回车在那个控件上是「开始解算」的优先级绑定，压在分类行上
+// 会直接开跑）。所以这里也不占用回车。
+func (s *squadPickScreen) setProf(i int) {
+	_, vals := s.profOptions()
+	if i < 0 || i >= len(vals) {
+		return
+	}
+	s.profIdx = i
+	s.prof = vals[i]
+	s.cursor = 0
+}
+
+// onMouse 认这一屏的鼠标：**点分类行的那一项就切到那一项**。
+//
+// 这是博士原来的操作方式（`tools/check_tui.py:1932` 原文：「**鼠标**：点分类行上的
+// 某一项（**博士是拿鼠标挑的**）」）。坐标已由 `root.Update` 换算成这一屏 body 内的
+// 行／列 ⇒ 直接查上一次画出来的命中表。
+func (s *squadPickScreen) onMouse(_ *appCtx, m tea.MouseMsg) (screen, action) {
+	if m.Action != tea.MouseActionPress || m.Button != tea.MouseButtonLeft {
+		return s, action{kind: actNone}
+	}
+	if i := s.profRow.hit(m.Y, m.X); i >= 0 {
+		s.setProf(i)
+	}
+	return s, action{kind: actNone}
 }
 
 // newSquadPickScreen 造一张新的选人屏。`keep` 是「重建时要把哪些勾带过来」
@@ -411,8 +489,15 @@ func (s *squadPickScreen) view(c *appCtx) string {
 	head = append(head, c.supportLine()+"　按 T 切换助战（用 ⇒ 去挑一位）")
 	head = append(head, c.rosterLine())
 
+	//: ★ 分类行（主职业）—— 画出来的**同时**记下每项的格子，鼠标点击靠它。
+	//: 行号 = 上面那几行 head 的条数（`renderPickList` 是一行 head 一行文本地拼的）。
+	items, _ := s.profOptions()
+	rowText, row := renderHitRow(items, s.profIdx, max(20, c.w-2), len(head))
+	s.profRow = row
+	head = append(head, rowText)
+
 	rows := make([]string, 0, len(s.rows))
-	for _, op := range s.rows {
+	for _, op := range s.visible() {
 		box := "[ ]"
 		if s.picked[op.Name] {
 			box = "[x]"
@@ -425,14 +510,29 @@ func (s *squadPickScreen) view(c *appCtx) string {
 }
 
 func (s *squadPickScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
-	if n, ok := moveCursor(k, s.cursor, len(s.rows)); ok {
+	vis := s.visible()
+	//: 换了职业筛选，可见人数就变 ⇒ 光标先夹回范围内（否则会"指到别人"）。
+	if s.cursor >= len(vis) {
+		s.cursor = max(0, len(vis)-1)
+	}
+	if n, ok := moveCursor(k, s.cursor, len(vis)); ok {
 		s.cursor = n
+		return s, action{kind: actNone}
+	}
+	//: ←/→ 切职业分类 —— **一切就生效**，不占回车（照参照 `PickerRow.action_move`；
+	//: 回车在那个控件上是「开始解算」的优先级绑定，压在分类行上会直接开跑）。
+	switch {
+	case keyIs(k, "left"):
+		s.setProf(s.profIdx - 1)
+		return s, action{kind: actNone}
+	case keyIs(k, "right"):
+		s.setProf(s.profIdx + 1)
 		return s, action{kind: actNone}
 	}
 	switch {
 	case keyIs(k, " ") || k.Type == tea.KeySpace:
-		if s.cursor < len(s.rows) {
-			name := s.rows[s.cursor].Name
+		if s.cursor >= 0 && s.cursor < len(vis) {
+			name := vis[s.cursor].Name
 			if s.picked[name] {
 				delete(s.picked, name)
 			} else {
