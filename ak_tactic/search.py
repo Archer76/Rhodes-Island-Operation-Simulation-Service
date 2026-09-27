@@ -111,6 +111,20 @@ def _range_cells(verifier: Verifier, stage, char_id: str, elite: int,
         return frozenset()
 
 
+#: 每位干员保留的候补落位数（**六个**，博士 2026-09-27 裁的口径）。
+#:
+#: ★ `per_op <= 0`（没给／显式给 0／给负数）**一律按这个数**，不做别的解释。
+#: 引擎侧 `rios-sim/candidates.go` 的 `defaultPerOp = 6` 是同一条口径（0 ⇒ 6），
+#: 两侧必须一致 —— 同一个输入在两边得到不同的候选数，是"两份实现"最典型的漂移。
+#:
+#: ⚠ 修的是这一处**曾经的**行为：这个循环是"先 append 再判 `len(kept) >= per_op`"，
+#: 于是 `per_op=0` 时第一次 append 之后 `1 >= 0` 立刻成立 ⇒ 每位只留 1 条。
+#: 那让"0"变成了两种意思（Go 当"没给"、Python 当"只要一个"），已按裁定统一。
+#: 现在 0 与 6 走同一条路；判据里有一条就是拿这两个值对两侧各跑一次、
+#: 要求**四个读数两两相等**。
+DEFAULT_PER_OP = 6
+
+
 def candidates_for(
     verifier: Verifier,
     stage_id: str,
@@ -119,7 +133,7 @@ def candidates_for(
     *,
     index: ArrivalIndex | None = None,
     cells: Iterable[tuple[int, int]] | None = None,
-    per_op: int = 6,
+    per_op: int = DEFAULT_PER_OP,
     directions: Sequence[str] = DIRECTIONS,
     skill_of: Callable[[str], tuple[int, int]] | None = None,
 ) -> list[Candidate]:
@@ -130,6 +144,9 @@ def candidates_for(
     乘攻击力是把它粗化成"能打出多少伤害"，否则一个高台奶妈会和
     一个术师排在同样的名次上。
     """
+    #: 见 `DEFAULT_PER_OP`：0／负数一律按六个候补位（与引擎同口径）。
+    if per_op <= 0:
+        per_op = DEFAULT_PER_OP
     stage = verifier.stage(stage_id)
     if index is None:
         index = ArrivalIndex(enemy_arrivals(stage, verifier.library(stage).get))
