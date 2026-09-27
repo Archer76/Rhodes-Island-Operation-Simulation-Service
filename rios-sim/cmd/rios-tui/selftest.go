@@ -202,6 +202,46 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 	check("逐层 Esc 能退回准备屏", screenName(r.top()) == "main.welcomeScreen",
 		screenName(r.top()))
 
+	fmt.Println("== 五之二 · 退回的落点：关卡屏 esc／解算屏 q 都退到「选章节」==")
+	//: ★ 2026-09-27 新加。此前**没有任何断言**盯这两处 —— 旧自检只断言了
+	//: 「章屏 esc ⇒ 回准备屏」（上面第四节），而博士实测报的恰恰是这两处：
+	//: 关卡屏按 esc 弹回了准备屏、解算屏按 q 也是。
+	//:
+	//: 根因是导航模型：屏交结果时**弹掉自己**、由回调压下一屏 ⇒ 走到关卡屏时
+	//: **选章屏不在栈里**（实测栈是 [welcomeScreen, stageScreen]），`actBack`
+	//: 一弹就到准备屏。所以「退回选章节」只能**把选章屏压回来**，
+	//: 且必须落在「弹掉自己之后的回调」里（否则来回打转）。
+	//: 这条判据盯的就是那个落点 —— 不是文案、不是栈深，是**顶上那一屏是谁**。
+	{
+		r3 := newRoot(newAppCtx(stages, zones), welcomeScreen{})
+		r3.Update(tea.WindowSizeMsg{Width: 90, Height: 26})
+		press(r3, "enter") //: 准备屏 → 选章屏
+		press(r3, "enter") //: 选章屏 →（选部／环境）→ 关卡屏
+		for i := 0; i < 3 && (screenName(r3.top()) == "*main.partScreen" ||
+			screenName(r3.top()) == "*main.envScreen"); i++ {
+			press(r3, "enter")
+		}
+		if screenName(r3.top()) != "*main.stageScreen" {
+			check("（前置）走到关卡屏", false, screenName(r3.top()))
+		} else {
+			press(r3, "esc")
+			check("关卡屏 esc ⇒ 退回**选章节**（不是准备屏）",
+				screenName(r3.top()) == "*main.chapterScreen", screenName(r3.top()))
+			check("退回后栈里是 [准备屏, 选章节]（关卡屏已被弹掉，栈深 2）",
+				len(r3.stack) == 2, fmt.Sprintf("栈深 %d", len(r3.stack)))
+		}
+	}
+	{
+		r4 := newRoot(newAppCtx(stages, zones), welcomeScreen{})
+		r4.Update(tea.WindowSizeMsg{Width: 90, Height: 26})
+		press(r4, "enter") //: 准备屏 → 选章屏（好让「退回选章节」有章可指）
+		r4.push(newSolveScreen(solveParams{levelID: "main_01-07"}, []int{4}),
+			onSolveClosed)
+		press(r4, "q") //: 解算屏的中止键
+		check("解算屏按 q（中止）⇒ 退回**选章节**（不是准备屏，也不是「问编队」）",
+			screenName(r4.top()) == "*main.chapterScreen", screenName(r4.top()))
+	}
+
 	fmt.Println("== 六 · 环境筛选（取数口径）==")
 	hit := ""
 	for _, z := range zones {

@@ -652,9 +652,19 @@ func (r *root) enterSolve(picked []RosterOperator, src solveSource) solveVerdict
 	} else {
 		scr.log(fmt.Sprintf("取不到本关的可部署人数，按编队上限 %d 人封顶", squadCap))
 	}
-	r.push(scr, nil)
+	r.push(scr, onSolveClosed)
 	r.pending = runSolveRoundCmd(params, scr.currentDepth())
 	return v
+}
+
+// onSolveClosed 是解算屏的关屏回调 —— **只有「中止」那条路会调到它**。
+//
+// 正常结束是解算屏自己**压结果屏**（这一屏留在下面），而结果屏的 R／H 走
+// `actPopTo`，那条路**不回调**被弹掉的屏（见 `stack.go` 的 `popTo`）。
+// 中止（`q`／`esc`）⇒ 退回**选章节**（博士 2026-09-27 要的落点；此前是弹回
+// 「问编队」那一屏，因为屏栈里根本没有更上一层可选）。
+func onSolveClosed(r *root, _ any) {
+	backToChapters(r)
 }
 
 // onSquadAsked 是问编队屏的回调。Esc（res 不是 bool）已经弹回上一层，什么都不做。

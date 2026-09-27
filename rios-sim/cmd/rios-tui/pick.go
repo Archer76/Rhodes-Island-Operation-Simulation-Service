@@ -77,6 +77,30 @@ const listHelp = "↑/↓ 移动 · Enter 进入 · Esc 返回 · Q 退出"
 
 type chapterScreen struct{ cursor int }
 
+// backToChapters 退回「选章节」那一屏（能保留当前章的光标位）。
+//
+// ★ 为什么是「**把选章屏压回来**」而不是「弹一层」：本仓的导航模型是「屏交结果时
+// **弹掉自己**、由回调压下一屏」（`stack.go:11-23` 登记过这次简化）⇒ 走进关卡屏时
+// **选章节屏根本不在栈里**（实测：栈是 `[welcomeScreen, stageScreen]`），
+// `actBack` 一弹就到准备屏。要退到选章节，只能把选章屏压回来。
+//
+// ★ 调用点必须在「**弹掉自己之后**的回调」里（`done` 收到 nil 的那一支）。
+// 在屏自己的 `update` 里直接 `actPush` 会把这一屏留在栈里 —— 再按一次 esc 又弹
+// 回来，来回打转。两处调用点：`onStagePicked`（关卡屏 esc）与 `onSolveClosed`
+// （解算屏 q／esc 中止）。
+func backToChapters(r *root) {
+	scr := &chapterScreen{}
+	if c := r.ctx; c.chapter != nil {
+		for i := range c.chapters {
+			if c.chapters[i].Key == c.chapter.Key {
+				scr.cursor = i
+				break
+			}
+		}
+	}
+	r.push(scr, onChapterPicked)
+}
+
 func (*chapterScreen) title() string { return "选章节" }
 func (*chapterScreen) help() string  { return listHelp }
 
@@ -340,6 +364,9 @@ func (r *root) pushStage() {
 func onStagePicked(r *root, res any) {
 	st, _ := res.(*data.StageRecord)
 	if st == nil {
+		//: Esc（`res` 是 nil）⇒ 退回**选章节**，不是准备屏（博士 2026-09-27 要的落点）。
+		//: 落点为什么在这里而不是关卡屏自己的 `update` 里 —— 见 `backToChapters`。
+		backToChapters(r)
 		return
 	}
 	c := r.ctx
