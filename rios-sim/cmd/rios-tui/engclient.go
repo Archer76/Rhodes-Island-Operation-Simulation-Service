@@ -70,15 +70,20 @@ const (
 
 // RosterOperator 是名册里一名干员的**界面侧**字段（桥上只给这几个）。
 //
-// ⚠ 与 Python 的 `ak_tactic.tui.data.Operator` 差一截：那边还有 `potential` /
-// `trust` / `skills` / 模组。选人屏这一版只用得到名字与练度（那条拦截规则判的就是
-// 精英段与等级），所以**没带**；要显示潜能／专精时得先给 `cmd_roster` 加字段。
+// ⚠ 与 Python 的 `ak_tactic.tui.data.Operator` 还差一截：那边还有 `potential` /
+// `trust` / `skills` / 模组 —— 要显示潜能／专精时得再给 `cmd_roster` 加字段。
+//
+// ★ 2026-09-27 补 `SubProfession`：选人屏的**子职业行**（参照 `app.py:1838` 的
+// `PickerRow #sub-row`）要靠它 —— 那一行只列出**当前职业下真有的**子职业。
+// ⚠ 两条名册来源的完整度不同（skland 带、OperBox 未必）⇒ 拿不到时是空串，
+// 界面按参照的口径**整行隐藏**，不是显示一排空白项。
 type RosterOperator struct {
-	CharID     string `json:"char_id"`
-	Name       string `json:"name"`
-	Profession string `json:"profession"`
-	Elite      int    `json:"elite"`
-	Level      int    `json:"level"`
+	CharID        string `json:"char_id"`
+	Name          string `json:"name"`
+	Profession    string `json:"profession"`
+	SubProfession string `json:"sub_profession"`
+	Elite         int    `json:"elite"`
+	Level         int    `json:"level"`
 }
 
 // rosterData 是一次 `roster` 命令的应答（非协议字段：`ok` / `error` 由 call 处理）。

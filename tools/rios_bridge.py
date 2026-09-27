@@ -299,8 +299,17 @@ def cmd_roster(req: dict) -> dict:
     按桥的纪律必须**具名失败**：静默回一个空列表，界面就会显示成「这个号一个干员
     都没有」——那是最坏的一类错，看着正常、内容是假的。
 
-    字段只给界面要用的那几个（`char_id` / `name` / `profession` / `elite` / `level`）；
-    潜能、信赖、专精、模组等级这次没带（选人屏用不到，且 OperBox 那条来源本来就没有）。
+    字段只给界面要用的那几个（`char_id` / `name` / `profession` / `sub_profession` /
+    `elite` / `level`）；潜能、信赖、专精、模组等级这次没带（选人屏用不到，且
+    OperBox 那条来源本来就没有）。
+
+    ★ 2026-09-27 补 `sub_profession`：参照实现的选人屏有**子职业行**
+    （`app.py:1838` 的 `PickerRow #sub-row`，只列出当前职业下真有的子职业），
+    没有这个字段那排就只能是空的 —— 而 Go 侧此前连字段都没有。
+    ⚠ 两条来源的完整度不同：skland 那份名册带 `subProfession`，MAA 的 OperBox
+    导出未必有 ⇒ 拿不到时这里是空串，界面按参照的口径**整行隐藏**
+    （`app.py:1878-1881`：取不到任何子职业名就 `display="none"`），
+    而不是显示一排空白项。
     """
     from ak_tactic.tui import data as D
 
@@ -314,6 +323,7 @@ def cmd_roster(req: dict) -> dict:
             "tools/operbox_path.py 指的位置。")
     operators = [{"char_id": op.char_id, "name": op.name,
                   "profession": op.profession or "",
+                  "sub_profession": getattr(op, "sub_profession", "") or "",
                   "elite": int(op.elite), "level": int(op.level)}
                  for op in r.operators]
     return {"source": r.source,

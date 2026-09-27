@@ -490,7 +490,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 				}
 				r7.Update(tea.MouseMsg{Action: tea.MouseActionPress,
 					Button: tea.MouseButtonLeft,
-					X: b2.x + b2.w/2, Y: b2.line + r7.bodyTop()})
+					X:      b2.x + b2.w/2, Y: b2.line + r7.bodyTop()})
 				check("折行后**第二行上的项照样点得到**（格子带行号的理由）",
 					ss7.prof == vals[secondLineIdx],
 					fmt.Sprintf("点第二行第 %d 项 → %q（应 %q）",
