@@ -340,8 +340,20 @@ class Progress:
         self._w({"ev": "summary", "ok": ok, "failed": failed})
 
 
-def _run_step(step: Step, *, offline_only: bool,
-              progress: "Progress | None" = None,
+def skipped_by_datapack(step: Step) -> bool:
+    """这一步能不能因为"数据包已装入"而跳过。
+
+    只对 **enemydb.sqlite** 成立：它整库来自数据包（纯 prts 派生）。别的步骤不能跳
+    ——`akdb.sqlite`／`stage 表` 的主体是游戏本体数据（不在包里），`关卡文件`同理。
+    地块字典那一份不需要在这里判：它是**缓存文件**，装包时已刷过 mtime，
+    `db build` 自己会用它。
+    """
+    if step.key != "enemydb.sqlite":
+        return False
+    return (DATA / "datapack.json").is_file() and (DATA / "enemydb.sqlite").is_file()
+
+
+def _run_step(step: Step, *, offline_only: bool,              progress: "Progress | None" = None,
               logs_dir: Path | None = None, quiet: bool = False) -> Result:
     if step.kind == "online" and offline_only:
         return Result(step.key, "skipped", 0.0, "--offline：需要联网，未跑")
@@ -632,6 +644,16 @@ def main() -> int:
         print("  ⚠ 本脚本**只加不删**：它不删除任何文件；重建 = 覆盖写。")
     results: list[Result] = []
     for s in to_run:
+        #: ★ 数据包已装入 ⇒ 跳过"抓 prts.wiki 建敌人库"这一步（2026-09-27）。
+        #: 判据是**标记文件 + 库在位**两条都成立；少一条就照常自己抓。
+        #: 不跳的话，装进来的库下一轮会被重抓覆盖 —— 那个包就白装了。
+        if skipped_by_datapack(s):
+            r = Result(s.key, "skipped", 0.0,
+                       "来自数据包（要自己重抓就删掉 data/datapack.json）")
+            results.append(r)
+            progress.done(s.key, "skip", 0.0, r.message)
+            print(f"  ⏭ skipped（{r.seconds:.1f}s）{r.message}")
+            continue
         if not args.quiet:
             print(f"\n---- {s.key}｜{s.title} ----")
             print(f"     来源：{s.source}")

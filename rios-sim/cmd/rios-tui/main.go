@@ -50,8 +50,16 @@ func run() int {
 		dumpEnv   = flag.String("envs", "", "打印该 zone 的环境分层后退出")
 		dumpSt    = flag.String("stages", "", "打印该 zone 的关卡列表后退出（可配 -env 再筛）")
 		env       = flag.String("env", "", "与 -stages 连用：按环境分层筛（EASY/NORMAL/TOUGH/ALL）")
+		pack      = flag.String("install-datapack", "",
+			"装入数据包（prts/theresa 派生，CC BY-NC-SA 4.0）：给 zip 或解开的目录")
 	)
 	flag.Parse()
+
+	//: 数据包可以在**没有任何数据**的树上装（它本身就是来补数据的）⇒ 同样排在
+	//: `resolveDataDir` 之前，与会话里的其它前置一个处置。
+	if *pack != "" {
+		return runInstallDatapack(*pack)
+	}
 
 	//: ★ 自检与首次运行准备都要跑在 `resolveDataDir` **之前**：新装好的树本来就没有
 	//: sqlite（§12.5：data 不随包），先跑那个的话会在它们有机会动手之前就退出。

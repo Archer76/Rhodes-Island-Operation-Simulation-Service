@@ -351,6 +351,47 @@ func shouldAutoSetup(nflag int, plan []setupStep) bool {
 // `fetch_prts_notes.py` 拖进安装包 —— 那两件都该只留在开发侧。
 var playerSteps = []string{"akdb.sqlite", "stage 表", "关卡文件", "enemydb.sqlite"}
 
+// runInstallDatapack 装入数据包（`-install-datapack <zip|目录>`）。
+//
+// ★ 这个包是**可选**的：它只装 prts.wiki 与 theresa.wiki 那两块派生数据
+// （许可是 CC BY-NC-SA 4.0，见仓里的 THIRD-PARTY.md）。装上就不必再去抓那两站。
+// 游戏本体数据**不在包里**（那部分不可再分发），照样要自己取。
+//
+// 走的就是 Python 那条命令（校验逻辑只有一份，在 `ak_tactic/datapack.py` 里：
+// 先验包内五份许可/来源文件齐不齐、有没有夹带本体数据，缺一件就拒装）。
+func runInstallDatapack(pack string) int {
+	if _, err := os.Stat(pack); err != nil {
+		fmt.Printf("★ 找不到数据包：%s\n", pack)
+		return 3
+	}
+	script := rebuildScript()
+	if script == "" {
+		fmt.Println("★ 找不到工程侧脚本（tools/rebuild_data.py）—— 发布树里它在 eng/tools/ 下。")
+		return 3
+	}
+	root := filepath.Dir(filepath.Dir(script))
+	py, ver := probeInterpreter()
+	if py == "" {
+		fmt.Printf("★ 没有可用的 Python（%s）⇒ 这一步做不了。\n", pythonURL)
+		return 3
+	}
+	_ = ver
+	fmt.Println("装入数据包（会先校验包内许可与来源文件，并拒绝含游戏本体数据的包）：")
+	fmt.Printf("  $ %s -m ak_tactic datapack --install \"%s\"\n", py, pack)
+	fmt.Println()
+	rc := runStreaming(py, []string{"-m", "ak_tactic", "datapack",
+		"--install", pack}, root)
+	if rc != 0 {
+		fmt.Println()
+		fmt.Printf("★ 没装成（退出码 %d）。上面的输出写了是哪一条不满足。\n", rc)
+		return 3
+	}
+	fmt.Println()
+	fmt.Println("装好了。注意：游戏本体数据（关卡地图／敌人数值／源表）不在这个包里，")
+	fmt.Println("      那部分仍要自己取 —— 直接双击 rios-tui.exe，缺什么它会自己补。")
+	return 0
+}
+
 // runRebuildData 跑那条「把数据与派生库一次做齐」的命令。
 //
 // ★ 2026-09-27 改：**每项任务一条进度条**（博士要求：「初次运行时的下载不用逐条

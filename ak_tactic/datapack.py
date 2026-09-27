@@ -320,6 +320,16 @@ def install_pack(src: Path | str, *, data_dir: Path | str | None = None,
                dst.stat().st_size / 1048576.0))
 
     log("[3/3] 读数")
+    #: ★ 留一个**标记**：建库脚本看到它 + 库在位，就跳过"抓 prts.wiki 建敌人库"
+    #: 这一步 —— 不写这个标记的话，装进来的库下一轮会被重抓覆盖，这个包等于白装。
+    marker = data / "datapack.json"
+    marker.write_text(json.dumps({
+        "installed_at": _now(), "pack": man.get("version"),
+        "snapshot": man.get("snapshot"), "license": man.get("license"),
+        "items": [d[0] for d in done],
+        "note": "删掉本文件即恢复为「自己去抓 prts.wiki / theresa.wiki」",
+    }, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    log("      标记：%s（建库脚本据此跳过二次抓取）" % marker)
     log("      装入 %d 项；接下来跑 rebuild_data.py 时会直接用它们"
         "（敌人库不必再抓 prts.wiki，地块字典不必再抓 theresa.wiki）" % len(done))
     log("      ⚠ 游戏本体数据（关卡地图/敌人数值/源表）**不在这个包里**，"
