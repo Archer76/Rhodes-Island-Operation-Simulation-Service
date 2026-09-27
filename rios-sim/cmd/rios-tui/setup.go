@@ -314,6 +314,24 @@ func findFreshPython() string {
 	return hits[0]
 }
 
+// playerSteps 是**玩家真正需要的**那几步（`rebuild_data.py --only` 的 key，精确匹配）。
+//
+// ★ 为什么不是整跑（博士 2026-09-27 问「为什么 release 包还会拉 wiki 的干员正文和备注」）：
+// 实测「谁在读这些产物」——Go 运行时与 `ak_tactic` 的**产品路径**里，
+// `prts-notes.sqlite`（wiki 干员备注）与 `op-briefs.txt`（备注语料展平）**零命中**，
+// `ranges.json` 也只被 prts 抓取器自己读。它们只在**判据与开发审计**里用
+// （`check_data_ready.py`／`audit_op_notes.py`／`fetch_prts_notes.py`）。
+//
+// 而这三步是硬依赖：
+//
+//	· `akdb.sqlite`    —— 界面取关卡表、干员库（`rios-sim/data`）都读它；
+//	· `stage 表`       —— 关卡索引，顺带产出引擎要的 `gamedata/_level_index.json` 缓存；
+//	· `enemydb.sqlite` —— 引擎的 `refraction.go` 在读（敌人抗性那一族）。
+//
+// ⇒ 整跑会让玩家白等两段联网抓取（prts 备注与范围页），还顺带把
+// `fetch_prts_notes.py` 拖进安装包 —— 那两件都该只留在开发侧。
+var playerSteps = []string{"akdb.sqlite", "stage 表", "enemydb.sqlite"}
+
 // runRebuildData 跑那条「把数据与派生库一次做齐」的命令，**输出实时透传**。
 func runRebuildData(py string) int {
 	script := rebuildScript()
@@ -323,18 +341,21 @@ func runRebuildData(py string) int {
 		return 3
 	}
 	root := filepath.Dir(filepath.Dir(script))
+	only := strings.Join(playerSteps, ",")
 	fmt.Println()
-	fmt.Printf("开始取数据与建库（这一步要下载，可能要几分钟到十几分钟）：\n")
-	fmt.Printf("  $ %s %s\n", py, script)
+	fmt.Printf("开始取数据与建库（这一步要下载，可能要几分钟）：\n")
+	fmt.Printf("  $ %s %s --only %s\n", py, script, only)
+	fmt.Println("  （只跑玩家真正需要的三步：干员库／关卡索引／敌人库；")
+	fmt.Println("   wiki 备注语料与范围索引只有判据与开发工具用得上，不在这里拉）")
 	fmt.Println("  （输出直接打在这里；中途可以 Ctrl+C 停，停了下次双击会接着做）")
 	fmt.Println()
-	rc := runStreaming(py, []string{script}, root)
+	rc := runStreaming(py, []string{script, "--only", only}, root)
 	if rc != 0 {
 		fmt.Println()
 		fmt.Printf("★ 这一步没跑成（退出码 %d）。\n", rc)
 		fmt.Println("  手动重试：")
 		fmt.Printf("    cd /d \"%s\"\n", root)
-		fmt.Printf("    %s tools\\rebuild_data.py\n", py)
+		fmt.Printf("    %s tools\\rebuild_data.py --only %s\n", py, only)
 		fmt.Println("  它的输出里会写明是哪一步、缺什么（本仓的规矩是缺件具名）。")
 		return 3
 	}

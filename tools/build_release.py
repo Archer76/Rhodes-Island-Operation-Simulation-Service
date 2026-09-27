@@ -49,8 +49,13 @@ ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_TOOLS = {
     "rios_bridge.py": "登录／名册那条链的桥（§11.4）——删了这三件事全废",
     "rebuild_data.py": "首次运行第 3 步要跑它（§12.5）",
-    "fetch_prts_notes.py": "首次运行第 3 步要跑它（§12.5）；★ 不在 git 索引里，只能从工作树取",
     "operbox_path.py": "名册的降级来源（OperBox 位置）；ak_tactic/tui/data.py 按路径加载它",
+    #: ⚠ `fetch_prts_notes.py` **不进包**（2026-09-27 起）：它只被 `rebuild_data.py` 的
+    #: 「干员备注库」那一步用（`tools/rebuild_data.py` 里它是那一步的 argv），
+    #: 而玩家的一键流程现在只跑三步（干员库／关卡索引／敌人库，见
+    #: `rios-sim/cmd/rios-tui/setup.go` 的 `playerSteps`）—— 备注语料 Go 与 Python 的
+    #: 产品路径**零命中**，只有判据与开发审计用得上。§12.6 的判据是「删掉它程序跑不起来吗」：
+    #: 对玩家那条路，答案是"跑得起来"。开发要用它，仓库里有。
 }
 
 #: `启动.cmd`。纯 ASCII、CRLF、无 BOM —— 三条都是 cmd.exe 的脾气，不是风格。

@@ -1795,6 +1795,20 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		check("真环境（开发树）：解释器与数据都在 ⇒ 计划为空",
 			realKeys == "", "实得："+realKeys)
 
+		//: 一键流程**不许**去拉开发审计用的那几样（博士 2026-09-27 问过一次：
+		//: 「为什么 release 包还会拉 wiki 的干员正文和备注」）。判据把它钉住：
+		//: 玩家清单必须**含**那三步硬依赖，且**不含**备注语料／范围索引／外部名册。
+		joined := strings.Join(playerSteps, ",")
+		check("一键流程只跑玩家必需的三步（不含 wiki 备注语料）",
+			strings.Contains(joined, "akdb.sqlite") &&
+				strings.Contains(joined, "stage 表") &&
+				strings.Contains(joined, "enemydb.sqlite") &&
+				!strings.Contains(joined, "prts-notes") &&
+				!strings.Contains(joined, "op-briefs") &&
+				!strings.Contains(joined, "ranges.json") &&
+				!strings.Contains(joined, "operbox"),
+			joined)
+
 		//: 工程侧根与那条命令的定位（发布树里必须是 eng/tools/）
 		rs := rebuildScript()
 		check("那条「一次做齐」的命令定位得到，且与桥脚本同一个根",

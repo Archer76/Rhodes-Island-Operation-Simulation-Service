@@ -513,7 +513,16 @@ def main() -> int:
     if args.dry_run:
         print("\n== 计划（--dry-run，不动手） ==")
         for s in STEPS:
-            mark = "跳过" if (args.offline and s.kind == "online") else "要跑"
+            #: ★ 干跑必须认 `--only`：真跑那条循环（下面 L52x）会跳过不在清单里的步骤，
+            #: 而干跑原先**不看** wanted ⇒ 明明只用跑三步，它把八步全印成「要跑」。
+            #: 仪器说错话比不说话坏：2026-09-27 我就是照它那行读数差点裁定
+            #: 「`--only` 没生效」。标记分三档，与真跑的行为一一对应。
+            if wanted is not None and s.key not in wanted:
+                mark = "不在 --only 里"
+            elif args.offline and s.kind == "online":
+                mark = "跳过"
+            else:
+                mark = "要跑"
             print(f"  [{mark}] {s.key:<18} {s.kind:<9} {s.eta:<12} {s.produces}")
         return 0
 
