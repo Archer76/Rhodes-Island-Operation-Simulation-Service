@@ -75,7 +75,26 @@ const listHelp = "↑/↓ 移动 · Enter 进入 · Esc 返回 · Q 退出"
 
 // ---- [3] 选章 -------------------------------------------------------------
 
-type chapterScreen struct{ cursor int }
+type chapterScreen struct {
+	cursor int
+	box    filterBox //: 零值可用，见 `filterBox` 的说明
+}
+
+// shown 是**当前筛选下可见的那些章**（返回的是 `c.chapters` 的下标）。
+//
+// ★ 光标是**可见列表**里的位置，不是 `c.chapters` 里的位置 —— 筛选一变，
+// 同一个光标指的可能是另一章。所有取值都走这里，屏上就不会出现「看到的行
+// 与选中的行不是同一条」那种最容易被当成"随机"的错。
+func (s *chapterScreen) shown(c *appCtx) []int {
+	s.box.ensure()
+	out := make([]int, 0, len(c.chapters))
+	for i, ch := range c.chapters {
+		if s.box.match(ch.Key, ch.Title, ch.Subtitle) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
 
 // backToChapters 退回「选章节」那一屏（能保留当前章的光标位）。
 //
@@ -102,11 +121,15 @@ func backToChapters(r *root) {
 }
 
 func (*chapterScreen) title() string { return "选章节" }
-func (*chapterScreen) help() string  { return listHelp }
+func (*chapterScreen) help() string {
+	return "输关键词筛 · ↑/↓ 移动 · Enter 选定 · Esc 清空／返回 · Q 退出"
+}
 
 func (s *chapterScreen) view(c *appCtx) string {
-	rows := make([]string, 0, len(c.chapters))
-	for _, ch := range c.chapters {
+	idx := s.shown(c)
+	rows := make([]string, 0, len(idx))
+	for _, i := range idx {
+		ch := c.chapters[i]
 		sub := ch.Subtitle
 		if sub == "" {
 			sub = "—"
@@ -114,23 +137,46 @@ func (s *chapterScreen) view(c *appCtx) string {
 		rows = append(rows, pad(ch.Key, 12)+pad(ch.Title, 24)+pad(sub, 18)+
 			fmt.Sprintf("关数 %3d", ch.Levels))
 	}
-	return renderList(c, "选择章节／活动", rows, s.cursor)
+	return s.box.view(c) + "\n" + renderList(c, "选择章节／活动", rows, s.cursor)
 }
 
 func (s *chapterScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
-	if n, ok := moveCursor(k, s.cursor, len(c.chapters)); ok {
+	idx := s.shown(c)
+	//: 筛选一变，可见条数就变 ⇒ 光标要先夹回范围内，否则「第 40 行」在一份
+	//: 只剩 2 行的列表上会让取值越界（本仓判据里 `cursor < len(rows)` 那种
+	//: 守卫只防越界，不防"指到了别的章"）。
+	if s.cursor >= len(idx) {
+		s.cursor = max(0, len(idx)-1)
+	}
+	if n, ok := moveCursor(k, s.cursor, len(idx)); ok {
 		s.cursor = n
 		return s, action{kind: actNone}
 	}
 	switch {
 	case keyIs(k, "enter"):
-		if s.cursor < len(c.chapters) {
-			return s, action{kind: actBack, res: &c.chapters[s.cursor]}
+		if s.cursor >= 0 && s.cursor < len(idx) {
+			return s, action{kind: actBack, res: &c.chapters[idx[s.cursor]]}
 		}
-	case keyIs(k, "esc"), keyIs(k, "backspace"):
+	case keyIs(k, "esc"):
+		//: Esc 分两级：**有关键词先清空**（这是「我刚打错了」最常见的意图），
+		//: 没关键词才返回上一层。Python 侧 `Input` 的 Esc 也是先清自己。
+		if s.box.text() != "" {
+			s.box.clear()
+			s.cursor = 0
+			return s, action{kind: actNone}
+		}
+		return s, action{kind: actBack}
+	case keyIs(k, "backspace"):
+		if s.box.text() != "" {
+			return s, action{kind: actNone, cmd: s.box.key(k)}
+		}
 		return s, action{kind: actBack}
 	case keyIs(k, "q"):
 		return s, action{kind: actQuit}
+	default:
+		//: 其余按键交给输入框（可打印字符、左右移动、删除…）。它不认的键
+		//: 什么也不做 —— 于是"打字"与"翻列表"两件事不会互相抢键。
+		return s, action{kind: actNone, cmd: s.box.key(k)}
 	}
 	return s, action{kind: actNone}
 }

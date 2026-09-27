@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -132,6 +133,79 @@ func narrowHalf(s string) string {
 		}
 	}
 	return string(out)
+}
+
+// # 搜索框（列表屏头顶那一个）
+//
+// Python 侧有两处：章节屏 `Input #kw`（`app.py:1222`）与关卡屏 `Input #kw`
+// （`app.py:1430`），行为一致 —— **边打边筛**、匹配是「折半角 ＋ 忽略大小写的
+// **字面量**子串」。`check_tui.py` 还钉了一条：输全角 `ＡＣＴ５４ＳＩＤＥ`
+// 必须筛出 `act54side`（中文输入法全角模式是常态，不归一的话用户按了也白按）。
+//
+// ★ 抽成一份共用：两个屏各写一份筛选口径，迟早会漂（本仓的老毛病）。
+//
+// ★ **零值可用**：`filterBox{}` 第一次用时自己初始化 —— 于是
+// `&chapterScreen{}`／`&stageScreen{}` 这些既有构造点一个都不用改，
+// 判据里那些直接构造屏的地方也不会因为漏调构造函数而崩。
+type filterBox struct {
+	in    textinput.Model
+	ready bool
+}
+
+func (f *filterBox) ensure() {
+	if f.ready {
+		return
+	}
+	in := textinput.New()
+	in.Prompt = ""
+	in.Placeholder = "输关键词筛（Esc 清空）"
+	in.CharLimit = 64
+	in.Focus()
+	*f = filterBox{in: in, ready: true}
+}
+
+// key 把一次按键交给输入框（只有它认得的那几种才吃：可打印字符、退格、左右）。
+func (f *filterBox) key(k tea.KeyMsg) tea.Cmd {
+	f.ensure()
+	var cmd tea.Cmd
+	f.in, cmd = f.in.Update(k)
+	return cmd
+}
+
+func (f *filterBox) text() string {
+	f.ensure()
+	return f.in.Value()
+}
+
+func (f *filterBox) clear() {
+	f.ensure()
+	f.in.SetValue("")
+	f.in.CursorEnd()
+}
+
+// match 是**唯一的筛选口径**：关键词与候选都折半角、忽略大小写，做字面量子串匹配。
+//
+// 空关键词一律命中（等于不筛）—— 与 Python 的 `Input` 初值行为一致。
+// 多个候选字段之间是**或**（章节屏给 key／title／subtitle，关卡屏给
+// code／name／level_id／zone_id，与 `StageFilter.Keyword` 的四列同口径）。
+func (f *filterBox) match(fields ...string) bool {
+	f.ensure()
+	kw := strings.ToUpper(narrowHalf(strings.TrimSpace(f.in.Value())))
+	if kw == "" {
+		return true
+	}
+	for _, s := range fields {
+		if strings.Contains(strings.ToUpper(narrowHalf(s)), kw) {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *filterBox) view(c *appCtx) string {
+	f.ensure()
+	f.in.Width = max(20, c.w-4)
+	return "> " + f.in.View()
 }
 
 // centerBlock 把一段文本在 w×h 的窗口里居中（对应 Python 的 `align: center middle`）。

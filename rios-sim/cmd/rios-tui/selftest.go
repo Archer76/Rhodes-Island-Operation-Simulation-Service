@@ -242,6 +242,59 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			screenName(r4.top()) == "*main.chapterScreen", screenName(r4.top()))
 	}
 
+	fmt.Println("== 五之三 · 章节屏的搜索框（Python `Input #kw` 的等价物）==")
+	//: ★ 2026-09-27 新加：Python 的 `ChapterPickScreen` 有 `Input #kw`
+	//: （`app.py:1222`），Go 这一版此前**连字段都没有**（博士实测报「搜索框没了」）。
+	//: 这里盯四件事：空关键词不筛、能筛出唯一一条、**全角也筛得出来**
+	//: （`narrowHalf` 那条：中文输入法全角是常态）、筛不着时**不乱选**。
+	{
+		r5 := newRoot(newAppCtx(stages, zones), welcomeScreen{})
+		r5.Update(tea.WindowSizeMsg{Width: 90, Height: 26})
+		press(r5, "enter") //: → 选章屏
+		cs, ok := r5.top().(*chapterScreen)
+		if !ok {
+			check("（前置）走到选章屏", false, screenName(r5.top()))
+		} else {
+			all := len(cs.shown(r5.ctx))
+			check("空关键词 = 不筛（可见条数 = 全部章节）",
+				all == len(r5.ctx.chapters),
+				fmt.Sprintf("可见 %d / 全部 %d", all, len(r5.ctx.chapters)))
+			press(r5, "月行水上")
+			hits := cs.shown(r5.ctx)
+			keys := make([]string, 0, len(hits))
+			for _, i := range hits {
+				keys = append(keys, r5.ctx.chapters[i].Key)
+			}
+			check("输「月行水上」筛出唯一一条 act54side",
+				len(keys) == 1 && keys[0] == "act54side",
+				fmt.Sprintf("命中 %v", keys))
+			//: 全角：中文输入法全角模式下打出来的是 `ＡＣＴ５４ＳＩＤＥ`。
+			//: 不折半角的话用户按了也白按，而他只看到「这个框坏了」。
+			press(r5, "esc") //: 先清空
+			press(r5, "ＡＣＴ５４ＳＩＤＥ")
+			fw := cs.shown(r5.ctx)
+			fwKeys := make([]string, 0, len(fw))
+			for _, i := range fw {
+				fwKeys = append(fwKeys, r5.ctx.chapters[i].Key)
+			}
+			check("全角「ＡＣＴ５４ＳＩＤＥ」筛出同一章（折半角生效）",
+				len(fwKeys) == 1 && fwKeys[0] == "act54side",
+				fmt.Sprintf("命中 %v", fwKeys))
+			//: 负对照：筛不着时**不许乱选** —— 按 Enter 什么都不该发生。
+			press(r5, "esc")
+			press(r5, "不存在的章节名")
+			none := len(cs.shown(r5.ctx))
+			depth0 := len(r5.stack)
+			press(r5, "enter")
+			check("负对照：筛不着时可见 0 条、按 Enter 不推进（不乱选）",
+				none == 0 && len(r5.stack) == depth0,
+				fmt.Sprintf("可见 %d、栈深 %d→%d", none, depth0, len(r5.stack)))
+			press(r5, "esc") //: 清空
+			check("Esc 先清关键词、再按一次才返回",
+				len(cs.shown(r5.ctx)) == len(r5.ctx.chapters), "清空后不筛")
+		}
+	}
+
 	fmt.Println("== 六 · 环境筛选（取数口径）==")
 	hit := ""
 	for _, z := range zones {
