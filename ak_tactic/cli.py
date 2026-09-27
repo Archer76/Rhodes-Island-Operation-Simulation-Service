@@ -1902,15 +1902,20 @@ def cmd_datapack(args: argparse.Namespace) -> int:
     """数据包：导出（我们发版用）／装入（玩家省掉 prts 与 theresa 两次抓取）。"""
     from pathlib import Path
 
-    from .datapack import export_pack, install_pack
+    from .datapack import export_pack, fetch_latest_pack, install_pack, selftest
+    if getattr(args, "selftest", False):
+        return selftest()
     if args.export:
         export_pack(Path(args.export), version=args.version)
         return 0
     if args.install:
         return install_pack(Path(args.install))
+    if getattr(args, "fetch_latest", False):
+        return fetch_latest_pack()
     print("用法：\n"
           "  python -m ak_tactic datapack --export out/rios-data-v0.1.0.zip\n"
           "  python -m ak_tactic datapack --install <zip 或解开的目录>\n"
+          "  python -m ak_tactic datapack --fetch-latest     # 从数据仓拉最新版并装入\n"
           "  python -m ak_tactic datapack --selftest        # 离线自检")
     return 2
 
@@ -2206,6 +2211,9 @@ def build_parser() -> argparse.ArgumentParser:
     dp.add_argument("--export", metavar="ZIP", help="导出到这个 zip")
     dp.add_argument("--install", metavar="ZIP_OR_DIR", help="装入这个包")
     dp.add_argument("--version", default="data-v0.1.0", help="包版本（也是 release tag）")
+    dp.add_argument("--fetch-latest", action="store_true",
+                    help="从数据仓拉最新版并装入（打开工具时自动请求的那条路）")
+    dp.add_argument("--selftest", action="store_true", help="离线自检")
     dp.set_defaults(func=cmd_datapack)
     return p
 

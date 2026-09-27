@@ -2644,6 +2644,34 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		}
 	}
 
+	fmt.Println("== 二十四 · 打开工具时的自动更新检查（纯函数判定）==")
+	//: ★ 2026-09-27 博士：「让用户打开本工具的时候程序自动请求数据文件」。
+	//: 判定抽成纯函数 `updateActions`，判据直接喂六格 —— 不必真联网。
+	//: 最要紧的一条是**负对照**：查不到（未核）时绝不动手，因为把"没问到"
+	//: 说成"有新版本"会让人白下几十 MB。
+	{
+		cases := []struct {
+			name string
+			in   *updateInfo
+			want string
+		}{
+			{"没查成 ⇒ 什么都不做（哪怕两个标志都是真）",
+				&updateInfo{Checked: false, DataUpdate: true, PackUpdate: true}, ""},
+			{"都一致 ⇒ 什么都不做", &updateInfo{Checked: true}, ""},
+			{"只游戏数据旧 ⇒ 重建", &updateInfo{Checked: true, DataUpdate: true}, "rebuild"},
+			{"只数据包旧 ⇒ 拉包", &updateInfo{Checked: true, PackUpdate: true}, "pack"},
+			{"都旧 ⇒ 先重建、后拉包（顺序即执行顺序）",
+				&updateInfo{Checked: true, DataUpdate: true, PackUpdate: true},
+				"rebuild,pack"},
+			{"nil ⇒ 不炸、不动手", nil, ""},
+		}
+		for _, c := range cases {
+			got := strings.Join(updateActions(c.in), ",")
+			check("自动更新："+c.name, got == c.want,
+				fmt.Sprintf("实得 %q，期望 %q", got, c.want))
+		}
+	}
+
 	fmt.Println()
 	if bad > 0 {
 		fmt.Printf("结论：**%d 条红** —— TUI 自检不通过\n", bad)

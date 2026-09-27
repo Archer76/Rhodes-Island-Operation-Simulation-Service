@@ -116,6 +116,14 @@ type bridgeResp struct {
 	DataPath string `json:"data_path"`
 	Cached   bool   `json:"cached"`
 	Bytes    int    `json:"bytes"`
+	//: `check_updates`：上游数据与数据包各要不要更新。
+	Checked    bool   `json:"checked"`
+	DataUpdate bool   `json:"data_update"`
+	DataLocal  string `json:"data_local"`
+	DataRemote string `json:"data_remote"`
+	PackLocal  string `json:"pack_local"`
+	PackLatest string `json:"pack_latest"`
+	PackUpdate bool   `json:"pack_update"`
 	//: 扫码登录那两条（`login_start` / `login_poll`）。
 	Phase    string   `json:"phase"`
 	URL      string   `json:"url"`
@@ -349,6 +357,59 @@ func tailLines(s string, n int) string {
 		return "（空）"
 	}
 	return strings.Join(ls, " / ")
+}
+
+// updateInfo 是 `check_updates` 的应答：上游数据与我们数据包各要不要更新。
+type updateInfo struct {
+	Checked    bool   `json:"checked"`
+	Note       string `json:"note"`
+	DataUpdate bool   `json:"data_update"`
+	DataLocal  string `json:"data_local"`
+	DataRemote string `json:"data_remote"`
+	PackLocal  string `json:"pack_local"`
+	PackLatest string `json:"pack_latest"`
+	PackUpdate bool   `json:"pack_update"`
+}
+
+// checkUpdates 问一次桥：上游数据与数据包有没有新版。
+func checkUpdates() (*updateInfo, error) {
+	b, err := newBridgeClient()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.call("check_updates", 1, nil, 60*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return &updateInfo{
+		Checked:    resp.Checked,
+		Note:       resp.Note,
+		DataUpdate: resp.DataUpdate,
+		DataLocal:  resp.DataLocal,
+		DataRemote: resp.DataRemote,
+		PackLocal:  resp.PackLocal,
+		PackLatest: resp.PackLatest,
+		PackUpdate: resp.PackUpdate,
+	}, nil
+}
+
+// updateActions 是**纯函数**：一次检查结果 ⇒ 该做哪几件事（顺序即执行顺序）。
+//
+// ★ 抽成纯函数的理由与别处一样：判据要能喂两格直接验，不必真联网。
+// 顺序：先更新游戏数据（它才决定关卡表与干员库），再更新数据包
+// （包里的敌人库是独立的一份，先后都不影响正确性，但先数据后包更符合直觉）。
+func updateActions(u *updateInfo) []string {
+	if u == nil || !u.Checked {
+		return nil //: 没查成 ⇒ 什么都不做（取不到 ≠ 有新版）
+	}
+	out := []string{}
+	if u.DataUpdate {
+		out = append(out, "rebuild")
+	}
+	if u.PackUpdate {
+		out = append(out, "pack")
+	}
+	return out
 }
 
 // ensureLevelFile 让桥**确保某一关的关卡 JSON 在本地**（不在就取一个）。

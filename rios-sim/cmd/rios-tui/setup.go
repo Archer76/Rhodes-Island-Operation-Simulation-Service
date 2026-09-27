@@ -352,6 +352,121 @@ func shouldAutoSetup(nflag int, plan []setupStep) bool {
 // `fetch_prts_notes.py` 拖进安装包 —— 那两件都该只留在开发侧。
 var playerSteps = []string{"akdb.sqlite", "stage 表", "enemydb.sqlite"}
 
+// runCheckUpdates 只查一次更新并打印读数，**不动手**（`-check-updates`）。
+//
+// 这一条是给排障与发布前核对用的：它把「本地记的是哪一版、上游是哪一版、
+// 该不该动手」原样摆出来，而 `maybeAutoUpdate` 是它的自动版（查完就做）。
+func runCheckUpdates() int {
+	info, err := checkUpdates()
+	if err != nil {
+		fmt.Printf("★ 查更新失败：%s\n", err)
+		return 3
+	}
+	pl, lt := info.PackLocal, info.PackLatest
+	if pl == "" {
+		pl = "（没装）"
+	}
+	if lt == "" {
+		lt = "（没查到）"
+	}
+	fmt.Println("== 上游游戏数据 ==")
+	fmt.Printf("  本地（我们库里记的）：%s\n", lastLineOf(info.DataLocal))
+	fmt.Printf("  上游（现读）        ：%s\n", lastLineOf(info.DataRemote))
+	fmt.Printf("  结论：%s\n", info.Note)
+	fmt.Println("== 数据包 ==")
+	fmt.Printf("  已装：%s｜最新：%s\n", pl, lt)
+	if info.PackUpdate {
+		fmt.Println("  结论：有新版")
+	} else {
+		fmt.Println("  结论：无更新或未核")
+	}
+	if acts := updateActions(info); len(acts) == 0 {
+		fmt.Println("⇒ 不需要更新。")
+	} else {
+		fmt.Printf("⇒ 该做：%s（打开工具时会自动做）\n", strings.Join(acts, "、"))
+	}
+	return 0
+}
+
+// lastLineOf 取多行版本串的最后一行（`data_version.txt` 的第三行才是版本号）。
+func lastLineOf(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "（未记）"
+	}
+	lines := strings.Split(s, "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
+}
+
+// maybeAutoUpdate 在**打开工具时**自动请求一次数据文件（博士 2026-09-27 要求）：
+// 「让用户打开本工具的时候程序自动请求数据文件」。
+//
+// 三件性质：
+//   - **便宜**：两条很小的请求（上游版本戳几百字节 ＋ 一次 releases API）；
+//   - **不误报**：查不到（离线、被墙）就**静默跳过**，绝不把"没问到"说成"有新版本"；
+//   - **不动手就没损失**：真要更新时走的是既有的那两条流程（重建 / 拉数据包），
+//     它们本来就"只加不删、缺件具名、每项任务一条进度条"。
+func maybeAutoUpdate() int {
+	info, err := checkUpdates()
+	if err != nil || info == nil || !info.Checked {
+		return 0 //: 查不到当无事发生；不打印、不拦路
+	}
+	acts := updateActions(info)
+	if len(acts) == 0 {
+		return 0
+	}
+	fmt.Println()
+	fmt.Println("检测到有更新，自动处理（本程序打开时会自己查一次）：")
+	if info.DataUpdate {
+		fmt.Printf("  · 游戏数据：%s → %s\n",
+			lastLineOf(info.DataLocal), lastLineOf(info.DataRemote))
+	}
+	if info.PackUpdate {
+		fmt.Printf("  · 数据包：%s → %s\n", info.PackLocal, info.PackLatest)
+	}
+	for _, a := range acts {
+		switch a {
+		case "rebuild":
+			py, _ := probeInterpreter()
+			if py == "" {
+				fmt.Printf("★ 要重建数据但没有可用的 Python（%s）—— 这一步做不了。\n", pythonURL)
+				return 3
+			}
+			if rc := runRebuildData(py); rc != 0 {
+				return rc
+			}
+		case "pack":
+			if rc := runDatapackFetch(); rc != 0 {
+				return rc
+			}
+		}
+	}
+	fmt.Println("更新完成。")
+	return 0
+}
+
+// runDatapackFetch 从数据仓拉最新数据包并装入（`datapack --fetch-latest`）。
+func runDatapackFetch() int {
+	script := rebuildScript()
+	if script == "" {
+		fmt.Println("★ 找不到工程侧脚本（tools/rebuild_data.py）—— 发布树里它在 eng/tools/ 下。")
+		return 3
+	}
+	root := filepath.Dir(filepath.Dir(script))
+	py, _ := probeInterpreter()
+	if py == "" {
+		fmt.Printf("★ 没有可用的 Python（%s）⇒ 数据包这一步做不了。\n", pythonURL)
+		return 3
+	}
+	fmt.Println("  拉数据包（我们的公开数据仓，约 2.5 MB）：")
+	rc := runStreaming(py, []string{"-m", "ak_tactic", "datapack", "--fetch-latest"}, root)
+	if rc != 0 {
+		fmt.Printf("★ 数据包没更新成（退出码 %d）—— 游戏数据那部分不受影响。\n", rc)
+		return 3
+	}
+	return 0
+}
+
 // runInstallDatapack 装入数据包（`-install-datapack <zip|目录>`）。
 //
 // ★ 这个包是**可选**的：它只装 prts.wiki 与 theresa.wiki 那两块派生数据

@@ -52,6 +52,10 @@ func run() int {
 		env       = flag.String("env", "", "与 -stages 连用：按环境分层筛（EASY/NORMAL/TOUGH/ALL）")
 		pack      = flag.String("install-datapack", "",
 			"装入数据包（prts/theresa 派生，CC BY-NC-SA 4.0）：给 zip 或解开的目录")
+		chkUpd = flag.Bool("check-updates", false,
+			"只查「上游数据与数据包有没有新版」并打印，不动手")
+		noUpd = flag.Bool("no-update-check", false,
+			"打开时不做那次自动检查（离线排障用）")
 	)
 	flag.Parse()
 
@@ -59,6 +63,9 @@ func run() int {
 	//: `resolveDataDir` 之前，与会话里的其它前置一个处置。
 	if *pack != "" {
 		return runInstallDatapack(*pack)
+	}
+	if *chkUpd {
+		return runCheckUpdates()
 	}
 
 	//: ★ 自检与首次运行准备都要跑在 `resolveDataDir` **之前**：新装好的树本来就没有
@@ -81,6 +88,15 @@ func run() int {
 	if flag.NFlag() == 0 {
 		if code := runSetup(); code != 0 {
 			pauseIfInteractive("准备没有做完（上面写了缺什么、怎么补）。做完再双击一次就行。")
+			return code
+		}
+		//: ★ 博士 2026-09-27：「让用户打开本工具的时候程序自动请求数据文件」。
+		//: 数据齐了不代表是新的 —— 打开时顺手查一次（两条很小的请求），
+		//: 有更新就按既有的那两条流程自动处理。查不到（离线）静默跳过。
+		if *noUpd {
+			fmt.Println("（-no-update-check：这次不查上游更新）")
+		} else if code := maybeAutoUpdate(); code != 0 {
+			pauseIfInteractive("更新没有做完（上面写了缺什么、怎么补）。")
 			return code
 		}
 	}

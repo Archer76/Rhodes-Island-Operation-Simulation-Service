@@ -201,7 +201,52 @@ python tools/rebuild_data.py --list     # 逐项列出来源 / 耗时 / 是否�
   `可抵抗状态`、`数值范围`、`随机数`、`特殊地形`、`特殊地形/sandbox`、`特殊机制`…
 * `分类:敌人`（300+ 项，敌人库的取数入口）、`分类:干员`（300+ 项）。
 
-## 七、相关文档导航
+## 七、游戏更新之后怎么办（2026-09-27 立的一页清单）
+
+游戏每隔几周更新一次，上游数据就变了。**"有没有变"这件事已经在手**：
+
+| 判据 | 怎么读 | 现读（2026-09-27） |
+| --- | --- | --- |
+| 游戏数据 | 上游 `excel/data_version.txt` ↔ 我们 `akdb.sqlite` 的 `meta.data_version` | 两边都是 `VersionControl:77.4.0` ⇒ 一致 |
+| 数据包 | `api.github.com/repos/Archer76/rios-data/releases/latest` 的 `tag_name` ↔ `data/datapack.json` 的 `pack` | 都是 `data-v0.1.0` ⇒ 一致 |
+
+一条命令看全部（读得动、不动手）：
+
+```powershell
+rios-tui.exe -check-updates          # 打开工具时也会自己查一次（离线则静默跳过）
+python -m ak_tactic.updates --json   # 同一份判据，机读
+```
+
+### 7.1 玩家侧：打开工具即自动请求
+
+`rios-tui.exe` 无参数启动时（即双击那条路）在准备流程之后**顺手查一次**：
+
+* 两条都是很小的请求（版本戳几百字节 ＋ 一次 releases API）；
+* **查不到就静默跳过**（离线是常态）—— 把"没问到"说成"有新版本"会让人白下几十 MB；
+* 真有更新时按既有那两条流程自动走：**游戏数据旧 ⇒ 重建**（源表 ＋ 干员库 ＋ 关卡索引 ＋ 敌人库，
+  每项任务一条进度条）、**数据包旧 ⇒ 拉包并装入**（约 2.5 MB）；
+* 排障时用 `-no-update-check` 跳过那次检查。
+
+### 7.2 我们（发布侧）每次游戏更新后的动作
+
+顺序不能颠倒，前一步的输出是后一步的输入：
+
+1. **重取 ＋ 重建**：`python tools/rebuild_data.py`（或 `--only akdb.sqlite,stage 表,enemydb.sqlite`）；
+   关卡地图**随用随取**，不必在这里全量下（判据与开发侧要全量时用 `cache --fetch-levels`）。
+2. **重登棘轮**：`python tools/check_data_ready.py --write-ratchet` —— 数据一变分母就变
+   （stage／zone／level_files／章节数），这一步**不许跳**；写完逐项 diff 一遍再提交。
+3. **重录金标**：受影响的那几套冻结档要按 `check_go_all.cached_levels()` 的顺序重录
+   （2026-09-27 那次章数 69→91，`out/zz_golden.txt` 的 CH 段就是重录的）。
+4. **重跑全闸**：`python tools/check_go_all.py --selfcheck`（小时级），红一条归因一条。
+5. **发两个包**：程序（`tools/build_release.py` ＋ `tools/build_zip.py`）与
+   **数据包**（`python -m ak_tactic datapack --export out/release/rios-data-<版本>.zip`，
+   再发到 <https://github.com/Archer76/rios-data>）。
+6. **更新本页的两个"现读"**（上面那张表）—— 它是下一次核对时的对照物。
+
+⚠ 两条红线：**只加不删**（重建是覆盖写，不清理）；**缺件具名**（不许静默少表、
+不许静默少关）。
+
+## 八、相关文档导航
 
 | 主题 | 文档 |
 |---|---|

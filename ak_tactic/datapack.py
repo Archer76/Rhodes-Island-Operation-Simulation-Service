@@ -38,6 +38,7 @@ import shutil
 import sys
 import tempfile
 import time
+import urllib.request
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -431,12 +432,53 @@ def selftest(log=print) -> int:
     return 0 if bad == 0 else 1
 
 
+def fetch_latest_pack(*, data_dir: Path | str | None = None,
+                      log=print) -> int:
+    """从我们的数据仓拉**最新**的包并装入（打开工具时自动请求的那一条路）。
+
+    ★ 为什么这一步在 Python 而不是 Go：取数（含代理解析、重定向、许可校验）在
+    Python 侧只有一份实现；Go 再来一份就是两份，迟早会漂（本仓那条老账）。
+    博士 2026-09-27 也说了「不是非要 tui 直连，怎么方便怎么来」。
+    """
+    from .updates import PACK_API, PACK_REPO, _default_fetcher
+
+    log("查数据包最新版：%s" % PACK_REPO)
+    try:
+        rel = json.loads(_default_fetcher(PACK_API))
+    except Exception as e:                                    # noqa: BLE001
+        raise SystemExit("★ 查数据包最新版失败：%s: %s" % (type(e).__name__, e))
+    tag = str(rel.get("tag_name") or "")
+    assets = rel.get("assets") or []
+    zip_url = ""
+    for a in assets:
+        if str(a.get("name") or "").endswith(".zip"):
+            zip_url = str(a.get("browser_download_url") or "")
+            break
+    if not tag or not zip_url:
+        raise SystemExit("★ 最新 release 里没有 zip 资产（tag=%r）—— 仓里是不是还没发？" % tag)
+
+    with tempfile.TemporaryDirectory(prefix="rios-pack-dl-") as td:
+        dst = Path(td) / "pack.zip"
+        log("  下载 %s" % zip_url)
+        try:
+            req = urllib.request.Request(zip_url, headers={
+                "User-Agent": "rios-datapack-fetch"})
+            with urllib.request.urlopen(req, timeout=120) as r, dst.open("wb") as f:
+                shutil.copyfileobj(r, f)
+        except Exception as e:                                # noqa: BLE001
+            raise SystemExit("★ 下载数据包失败：%s: %s" % (type(e).__name__, e))
+        log("  下到 %.2f MB（%s）" % (dst.stat().st_size / 1048576.0, tag))
+        return install_pack(dst, data_dir=data_dir, log=log)
+
+
 def _main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="python -m ak_tactic datapack",
         description="数据包（prts/theresa 派生，CC BY-NC-SA 4.0）：导出与装入")
     ap.add_argument("--export", metavar="ZIP", help="导出到这个 zip")
     ap.add_argument("--install", metavar="ZIP_OR_DIR", help="装入这个包")
+    ap.add_argument("--fetch-latest", action="store_true",
+                    help="从数据仓拉最新版并装入（打开工具时自动请求的那条路）")
     ap.add_argument("--version", default="data-v0.1.0", help="包版本（也是 release tag）")
     ap.add_argument("--selftest", action="store_true", help="离线自检")
     a = ap.parse_args(argv)
@@ -447,6 +489,8 @@ def _main(argv: list[str] | None = None) -> int:
         return 0
     if a.install:
         return install_pack(Path(a.install))
+    if a.fetch_latest:
+        return fetch_latest_pack()
     ap.print_help()
     return 2
 

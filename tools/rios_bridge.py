@@ -354,6 +354,21 @@ def cmd_ensure_level(req: dict) -> dict:
             "cached": bool(r["cached"]), "bytes": int(r["bytes"])}
 
 
+def cmd_check_updates(req: dict) -> dict:
+    """检查「上游数据有没有更新」与「我们的数据包有没有新版」。
+
+    博士 2026-09-27：「让用户打开本工具的时候程序自动请求数据文件」。
+    这里只**报结论**，不动手 —— 动手的是 rebuild_data 那条既有流程
+    （只加不删、缺件具名、每项任务一条进度条）与 `datapack --fetch-latest`。
+
+    取不到不算"有新版"（`checked=False` 如实带出来）：把断网说成有更新，
+    会让人白下几十 MB。
+    """
+    from ak_tactic.updates import check_updates
+
+    return check_updates()
+
+
 HANDLERS = {
     "ping": cmd_ping,
     "accounts": cmd_accounts,
@@ -364,6 +379,7 @@ HANDLERS = {
     "logout": cmd_logout,
     "roster": cmd_roster,
     "ensure_level": cmd_ensure_level,
+    "check_updates": cmd_check_updates,
 }
 
 
