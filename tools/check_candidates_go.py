@@ -1177,31 +1177,46 @@ def compare_case(tag, level, want, got, seen, printed) -> tuple[int, set]:
                     #: 只有 ③（累加序／口径）是本套的账；②（上游 visit 字段 1 ulp）
                     #: 具名报出去，不吞掉也不记在本套头上。`dwell` 判一次就够，
                     #: `value` 是它的派生量（同一份 `atk` 乘上去）。
+                    #:
+                    #: ★ 判据用**只依赖 Go** 的那一条：Go 自报的 `dwell` 是否等于
+                    #:   「用 Go 自己的 visit 按本口径复算」。等于 ⇒ 它的 dwell 是
+                    #:   自己输入的忠实求和 ⇒ 差只能来自输入（②）；不等 ⇒ 复算
+                    #:   口径与它对不上 ⇒ **③，本套的账**。这样**冻结档也判得了因**
+                    #:   （那条路不 import `ak_tactic`），具名证据才需要两侧比对。
                     if f == "dwell" and cells_same:
-                        _vd = visit_field_diff(level)
-                        _explained = False
-                        if _vd is not None and _vd["条数"]:
-                            try:
-                                _explained = (go_dwell_from_own_visits(
-                                    level, w.get("cells") or [])
-                                    == float(g.get("dwell") or 0.0))
-                            except Exception as _e:              # noqa: BLE001
-                                ATTR_NOTES.append(
-                                    "%s：忠实求和复算失败（%s：%s）"
-                                    % (level, type(_e).__name__, _e))
-                                _explained = False
-                        if _explained:
-                            seen["归因：上游 visit 字段 1 ulp"] += 1
+                        _faithful = False
+                        try:
+                            _faithful = (go_dwell_from_own_visits(
+                                level, w.get("cells") or [])
+                                == float(g.get("dwell") or 0.0))
+                        except Exception as _e:                  # noqa: BLE001
+                            ATTR_NOTES.append(
+                                "%s：忠实求和复算失败（%s：%s）—— 按**本套的账**记"
+                                % (level, type(_e).__name__, _e))
+                            _faithful = False
+                        if _faithful:
+                            seen["归因：上游 visit 字段"] += 1
+                            _vd = visit_field_diff(level)
                             if len(UPSTREAM_SAMPLES) < 6:
-                                UPSTREAM_SAMPLES.append(
-                                    "%s/%s %r：本关 visit 字段逐位不同 %d 处"
-                                    "（enter=%d、exit=%d）；Go 自报 dwell=%.17g "
-                                    "与「用 Go 自己的 visit 复算」逐位相同 ⇒ 差在"
-                                    "**输入**，不在累加序。例：%s"
-                                    % (tag, level, k[:3], _vd["条数"],
-                                       _vd["enter"], _vd["exit"],
-                                       float(g.get("dwell") or 0.0),
-                                       "；".join(_vd["样例"][:1]) or "（无样例）"))
+                                if _vd is not None and _vd["条数"]:
+                                    UPSTREAM_SAMPLES.append(
+                                        "%s/%s %r：本关 visit 字段逐位不同 %d 处"
+                                        "（enter=%d、exit=%d）；Go 自报 dwell=%.17g "
+                                        "与「用 Go 自己的 visit 复算」逐位相同 ⇒ "
+                                        "差在**输入**，不在累加序。例：%s"
+                                        % (tag, level, k[:3], _vd["条数"],
+                                           _vd["enter"], _vd["exit"],
+                                           float(g.get("dwell") or 0.0),
+                                           "；".join(_vd["样例"][:1]) or "（无样例）"))
+                                else:
+                                    UPSTREAM_SAMPLES.append(
+                                        "%s/%s %r：Go 自报 dwell=%.17g 与「用 Go "
+                                        "自己的 visit 复算」逐位相同 ⇒ 差在**输入**；"
+                                        "本关的具名证据取不到（%s）"
+                                        % (tag, level, k[:3],
+                                           float(g.get("dwell") or 0.0),
+                                           "冻结档不做两侧比对"
+                                           if _vd is None else "两侧比对无差异"))
                         else:
                             seen["累加序／口径（本套的账）"] += 1
             bad += 1
@@ -1332,7 +1347,7 @@ def blank_seen() -> dict:
          "dwell 逐位不同的条数": 0, "其中 cells 也不同": 0,
          "其中 cells 相同": 0, "ulp 距离 <= 2": 0,
          #: ★ dwell 差的**归因**：本套的账 vs 上游 visit 字段的账。
-         "归因：上游 visit 字段 1 ulp": 0, "累加序／口径（本套的账）": 0,
+         "归因：上游 visit 字段": 0, "累加序／口径（本套的账）": 0,
          #: ★ per_op=0 与 per_op=6 两侧一致的断言（S8）
          "perop_zero": 0}
     for k in COVER_KEYS:
@@ -1828,7 +1843,7 @@ def main() -> int:                                             # noqa: C901
                        "天赋折算的候选条数", "判不了的例数", "自身格分歧条数",
                        "自身格分歧并带动 dwell/visits", "dwell 逐位不同的条数",
                        "其中 cells 也不同", "其中 cells 相同",
-                       "ulp 距离 <= 2", "归因：上游 visit 字段 1 ulp",
+                       "ulp 距离 <= 2", "归因：上游 visit 字段",
                        "累加序／口径（本套的账）", "perop_zero")))
     print()
     #: ★★ 这一处**已裁定并已修**（两侧只给 `fortress` 补）⇒ 这一族是**棘轮**：
@@ -1882,7 +1897,7 @@ def main() -> int:                                             # noqa: C901
               "与 eta 移植的账 —— 判据证明了「Go 的 dwell 是它自己输入的忠实求和」，"
               "所以差在输入）。"
               % (seen["累加序／口径（本套的账）"],
-                 seen["归因：上游 visit 字段 1 ulp"]))
+                 seen["归因：上游 visit 字段"]))
         print("  ★ 浮点两栏（`dwell` ＋ `value`）**全部比较**里逐位不同 **%d** 条；"
               "最大相对差 **%.6g**。口径：**逐位比，没有容差**。"
               % (FLOAT_STATS["逐位不同条目"], FLOAT_STATS["最大相对差"]))
@@ -1994,7 +2009,7 @@ def main() -> int:                                             # noqa: C901
                  "是，见下一族" if seen["dwell 逐位不同的条数"]
                  or FLOAT_STATS["逐位不同条目"] else "否 ⇒ 查稳定排序／插入序"))
     if seen["累加序／口径（本套的账）"] or (
-            seen["dwell 逐位不同的条数"] and not seen["归因：上游 visit 字段 1 ulp"]):
+            seen["dwell 逐位不同的条数"] and not seen["归因：上游 visit 字段"]):
         print("结论：**不成立** —— %d 条候选的 `dwell` 逐位不同"
               "（其中 %d 条 `cells` 相同、%d 条 `cells` 也不同）；"
               "归因落到**本套的账**（累加序／口径）**%d** 条 —— "
@@ -2003,12 +2018,12 @@ def main() -> int:                                             # noqa: C901
                  seen["其中 cells 相同"],
                  seen["其中 cells 也不同"],
                  seen["累加序／口径（本套的账）"]))
-    if seen["归因：上游 visit 字段 1 ulp"]:
+    if seen["归因：上游 visit 字段"]:
         print("★ 归因（**不是本套的账，但照报**）：%d 条 `dwell` 差的根因在**上游 "
               "`visit` 字段**本身 1 ulp（`_walk_visits`／出怪时刻表的算术序）—— "
               "`arrivals` 那一套与 eta 移植的账。判据已证：用 Go 自己的 visit 按本"
               "口径复算，与 Go 自报的 `dwell` 逐位相同 ⇒ 差在**输入**，不在累加序。"
-              % seen["归因：上游 visit 字段 1 ulp"])
+              % seen["归因：上游 visit 字段"])
     if FLOAT_STATS["逐位不同条目"] and not seen["dwell 逐位不同的条数"]:
         print("结论：**不成立** —— 浮点两栏逐位不同 %d 条，但 `dwell` 全等 ⇒ "
               "差异只在 `value` 一栏（派生量：查 `atk` 折算那一支）"
