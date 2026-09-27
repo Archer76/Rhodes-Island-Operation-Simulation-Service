@@ -21,14 +21,22 @@ beam 切出来的状态就跟着错**。所以本套把「顺序」也当成被�
 * `value = dwell × 攻击力`（面板 `total["atk"]`）——Go 侧 `atkOf()` 明写「类型不认识
   就报错，不兜底」（第一版用 `asF` 静默取 0，于是 `value` 恒 0、排序整个失效，
   而候选条数／dwell／visits 全是对的：最难发现的一类假绿）。判据把 `value`
-  **逐位比**，另有一条自检要求它确实是 `dwell ×` 权威自己拿到的那个 atk。
+  **按 dwell 的同一口径比**（浮点逐位相等，累加序那一处按同一个相对容差 ——
+  `value` 是 `dwell` 的派生量，**容差不许只开给 dwell 一栏**），另有一条自检
+  要求它确实是 `dwell ×` 权威自己拿到的那个 atk。
 * `cells` 在 Python 那边是 `frozenset` ⇒ **按集合比，不逐元素比顺序**
   （Go 侧排过序只是为了输出确定）。
-* `dwell` / `value` 是浮点 ⇒ **精确相等，没有容差**。这是本仓既有的口径
-  （`check_stagepath_go.py` 明写「比的是 float 精确相等，加了容差就再也看不见
+* `dwell` / `value` 是浮点 ⇒ 默认**精确相等**（本仓既有的口径：
+  `check_stagepath_go.py` 明写「比的是 float 精确相等，加了容差就再也看不见
   那 1 ulp」；`check_stage_go.py` 的 `diff()` 也是 `!=`）。两侧都是同一个式子
   （`eta.py:379-384` 与 `arrivals.go:354-363`，都按 `enter` 稳定排序后的 visit 序
-  `total += hi - lo`）⇒ 逐位相等是可达的，不是苛求。
+  `total += hi - lo`）⇒ 在**同一个累加序**下逐位相等是可达的，不是苛求。
+
+  ★ **唯一的例外是「累加序」那一处已登记的分歧**（2026-09-27 博士裁定；机制与
+  读数见下面 ③ 那一节与 `FLOAT_REL_TOL`）：两侧的累加序**本来就不同**（Python 按
+  `frozenset` 的哈希序、Go 按 (x, y) 排序），所以那两栏**按相对容差比**。
+  ⚠ 那个口子**只对这两栏**开，且容差**随 visit 条数增长**（见 `_float_tol`）——
+  它不是「浮点一律放水」：超容差照旧计入 `bad` 并印出条数。
 
 ## 顺序（「稳定排序」那件事的判据）
 
@@ -64,12 +72,22 @@ Go 侧一律 `sort.SliceStable`。判据的做法是**逐索引比**（不是按
 跳过。三者在现数据上都是 0，所以这条口径差**没有被行使**；一旦非 0，
 本判据会先把它报成「结构零变成可达」而不是「判据红」，处置是补一份样本。
 
-## 两条**已登记的分歧**（不算对拍失败，但必须「两种行为同时成立」）
+## `per_op <= 0`：★ 2026-09-27 已裁定 ⇒ 从「登记分歧」改成「两侧一致」的断言
 
-**`per_op <= 0`**：引擎的契约是「0 ⇒ 缺省 6」（`candidates.go:217-220`），
+**`per_op <= 0`（六个候补位）。**
+历史上这里是一处**登记分歧**：引擎的契约是「0 ⇒ 缺省 6」（`candidates.go:217-220`），
 而 Python 的 `candidates_for` 显式收下 0 会**每位只留 1 条**
 （`if len(kept) >= per_op: break` 在 0 上立刻成立；-1 同理）。
-判据要求「Go 按缺省 6 条/位 ∧ Python 每位 1 条」**同时成立**才算这条被登记到。
+**博士 2026-09-27 裁定：六个候补位** —— `per_op <= 0`（没给／给 0／给负数）
+在**两侧一律按 6**。Python 入口已并到 `DEFAULT_PER_OP`（`ak_tactic/search.py`），
+引擎侧本来就是 `defaultPerOp`。
+⇒ 判据这一支现在是**断言**：`per_op=0` 与 `per_op=6` 各问一次两侧，
+要求**候选条数／kept／顺序／逐字段**四个读数两两相等；并配一条**负对照**
+（把 Python 的旧行为装回去，这条断言必须当场判红）。
+⚠ 那一支的浮点**不吃** `FLOAT_REL_TOL`：它比的是同一位实现的两个输入，
+累加序没变 ⇒ 精确相等在这里是可达的。
+★ 冻结档**不必重录**：它复用的是**已经冻着**的 `per_op=6` 那一份期望值
+（裁定的内容本身就是「这两个输入同解」，由断言现算，不另存答案）。
 
 ## 两条坑的处置（本仓踩过，写在这里防止再犯）
 
@@ -108,27 +126,28 @@ Go 侧一律 `sort.SliceStable`。判据的做法是**逐索引比**（不是按
 
 ## 反向守卫（`--mutate`）
 
-十一处**互相独立**的变异，各自必须「注入过 ＋ 判红过」，缺一不算成立。
+十二处**互相独立**的变异，各自必须「注入过 ＋ 判红过」，缺一不算成立。
 ★ 每处落在**不同的一条候选**上，所以**一关之内**就能全部注入完 ——
 这一点是必需的：`check_go_all --selfcheck` 给「要喂清单」的套只喂 `lvls[:1]`。
 
 | 变异 | 打在哪 | 证明什么 |
 |---|---|---|
 | 条数 | Go 的 rows 砍掉最后一条 | 条数比较是活的 |
-| dwell 末位 | 第 i 条 `dwell` **加 1 ulp** | dwell **逐位**比（贴边界） |
-| value 末位 | 第 i 条 `value` **加 1 ulp** | value 是**比**的，不是被重算掉的 |
+| dwell 末位 | 第 i 条 `dwell` **加 1 ulp** | dwell **逐位**比（贴边界，且**没被**累加序那个容差吃掉） |
+| value 末位 | 第 i 条 `value` **加 1 ulp** | value 是**比**的，不是被重算掉的（容差也没吃掉它） |
 | position | 第 i 条落点 x+1 | 身份键变了 ⇒ 报「候选集合不同」 |
 | direction | 第 i 条朝向换一个 | 同上，另一条键 |
 | skill | 第 i 条技能槽 +1 | 技能槽那一栏是活的 |
-| visits | 第 i 条 visits +1 | 进入次数那一栏是活的 |
+| visits | 第 i 条 visits +1 | 进入次数那一栏是活的（整数栏**没有容差**） |
 | cells 少一格 | 第 i 条 `cells` 少一个格 | **按集合比**且集合比较是活的 |
 | 同价值两条的顺序 | 交换一对**同价值**的相邻候选 | 顺序那一栏是活的（字段全等、只有序变） |
 | covered 计数 | Go 自报的 `visits_zero` +1 | 行使计数比较是活的（与尺子那一份独立） |
 | 期望值 dwell 末位 | **Python 的**期望值 `dwell` 加 1 ulp | 「故意改一个期望值必须判红」 |
+| per_op<=0 负对照 | 把 Python 的 `per_op<=0` 装回旧行为（**每位只留 1 条**） | 「`per_op=0` 与 `per_op=6` 同解」那条断言是活的（ISSUE-③ 的后半） |
 
-## ★ 这一段对拍的实际结论（两处**真分歧**：一处已登记、一处没有）
+## ★ 这一段对拍的实际结论（一处**已登记**分歧、一处**未裁定**）
 
-判据跑起来会红，红的是**两处**，都不是「判据自己写错」：
+判据跑起来会红，红的是**一处**，不是「判据自己写错」：
 
 **① 天赋面板攻击力倍率（已登记 ⇒ 口径统一后不比红）。**
 Go 把天赋的面板倍率折进了 `total`（`rios-sim/talentpanel.go`），Python 一个都不折
@@ -139,7 +158,7 @@ Go 把天赋的面板倍率折进了 `total`（`rios-sim/talentpanel.go`），Py
 处置照那一套：比例取自 Go 自己的 `opstats`，把两边统一到同一个量再比，
 **除不掉仍报红**（登记不等于放水）。
 
-**② 自身格（**未裁定 ⇒ 判红**）。**
+**② 自身格（**仍未裁定 ⇒ 照旧判红**）。**
 `excel/range_table.json` 73 个范围代号里有 **9 个**的 `grids` **不含自身格 `(0,0)`**：
 `1-5`、`2-7`、`3-16`、`4-13`、`4-3`、`4-4`、`4-5`、`4-6`、`4-7`。
 Python 的 `RangeProvider.__call__`（`battle/range.py:140-141`）在 `block_of(...) > 0`
@@ -151,16 +170,39 @@ grids 里」——那句话对这 9 个代号**不成立**。
 后果**不止差一个格**：实测 `main_02-01` 上号角与火哨因此**在 `per_op` 里留下了
 不同的落位**（判据报「选出来的候选集合不同」）——也就是会改变搜索的输入。
 本判据把它**原样判红**（未裁定的事不许由判据自己拍板），并在读数里给出根因原文。
+★ 这条**另有子代理在改**，本套这边一个字都不动它。
 
-**③ `dwell` 的累加序（**未裁定 ⇒ 判红**）—— 差 1～2 ulp，相对差 ~2.6e-16。**
+**③ `dwell` 的累加序（★ 2026-09-27 博士裁定：按登记走，不修产品 ⇒ 不再是判红）。**
 `ArrivalIndex.dwell` 的累加序 = visit 的**拼接序**；两侧都按 `enter` **稳定**排序，
 可一旦有多条 visit 的 `enter` 相等，稳定排序保留的就是拼接序，而拼接序由
 **格集合的迭代序**决定：Python 的 `_range_cells` 返回 `frozenset`（哈希序），
-Go 的 `candidates.go` 把格去重后**按 (x, y) 排序**。⇒ 浮点累加结果差 1～2 ulp。
+Go 的 `candidates.go` 把格去重后**按 (x, y) 排序**。⇒ 浮点累加结果逐位不同。
 实测（同一格集合、两种迭代序各累加一遍）：
 `easy_10-11` 阿米娅 (6,1) Down `frozenset=434.14285714285671` / 排序 `=434.1428571428566`；
 `act31side_ex08` 能天使 (7,3) Left `frozenset=854.91414134972536` / 排序 `=854.91414134972513`。
 ⇒ `candidates.go` 文件头那句「`frozenset` ⇒ 顺序无意义」对**浮点累加**不成立。
+
+**处置（登记口径，逐条写死在这里）**：
+
+* **容差用相对，不用绝对**。理由：这一处的**绝对**差随 visit 条数增长（同一个格
+  上叠几千条 visit 时能累到几千 ulp 量级），而承载它的 `dwell` 本身也同尺度地
+  变大 —— 换成 `abs <= 1e-9` 这种绝对口径，等于把「大 dwell 的小相对漂移」和
+  「小 dwell 的大相对漂移」判成同一件事，两头都会看错。相对差是本征稳定的量；
+  本次跑出来的最大相对差（读数里现印）就是这条口径的实证。
+* 容差**随 visit 条数线性放大**：`FLOAT_REL_TOL × max(1, visits)`（见 `_float_tol`）。
+  这不是随手乘的系数，它正是「n 项求和的累加序差」的误差量级；乘法让它对
+  visit 特别多的格也留得住余量，对 visit 少的格则收得很紧。
+* **开口只在「`cells` 完全相同」时成立**。登记的就是「同一个格集合、两种迭代序」
+  那一条；`cells` 都不同了，浮点差就不再能用累加序解释 ⇒ 照旧判红。
+  这条范围限制是**故意的**：它让「自身格」那一处仍然占着红（不会被容差收掉），
+  也让「将来出现一个大的数值改动」照旧判红。
+* **超容差照旧判红，并且必须印出最大相对差与超出条数** —— 登记不等于不看不报。
+  读数里超容差与「收下」分开记，且超容差再按 `cells` 相同／不同拆开，
+  免得「容差收不下」与「不在登记范围」被读成同一件事。
+* **`value` 与 `dwell` 同一条口径**。`value = dwell × 攻击力` ⇒ dwell 的 ulp 差会
+  **原样派生到 value**；只给 dwell 开口会让红从一栏挪到另一栏（假绿）。
+* 两侧读数的**真值差**（`frozenset` 与排序两种累加序）已由纯 Python 复算证死，
+  不依赖本判据自己：`frozenset=434.14285714285671` / `排序=434.1428571428566`。
 
 ## ★ 冻结模式的键形状（**踩过一次，写在这里**）
 
@@ -278,12 +320,15 @@ MUT_CELLS = "cells 少一格"
 MUT_ORDER = "同价值两条的顺序"
 MUT_COVER = "covered 计数"
 MUT_WANT = "期望值 dwell 末位"
+MUT_PEROP0 = "per_op<=0 负对照"
 MUT_KEYS = (MUT_COUNT, MUT_DWELL, MUT_VALUE, MUT_POS, MUT_DIR, MUT_SKILL,
-            MUT_VISITS, MUT_CELLS, MUT_ORDER, MUT_COVER, MUT_WANT)
+            MUT_VISITS, MUT_CELLS, MUT_ORDER, MUT_COVER, MUT_WANT, MUT_PEROP0)
 #: 每处变异应该撞出来的**字段名**（判「这一处真的被判红」的依据）。
 #: ★ `position` / `direction` 改的是**身份键**，所以它们撞出来的是
 #:   「候选集合」那一栏（键对不上），不是同名的那一栏——这不是放水：
 #:   身份键变了本来就该报「选出来的候选集合不同」。
+#: ★ `MUT_PEROP0` 撞出来的是「per_op 两侧一致」那一栏，名字由它自己的
+#:   负对照直接 `guard.caught`（见 S8 那一支），不在这里。
 MUT_FIELD = {MUT_COUNT: "条数", MUT_DWELL: "dwell", MUT_VALUE: "value",
              MUT_POS: "候选集合", MUT_DIR: "候选集合", MUT_SKILL: "skill",
              MUT_VISITS: "visits", MUT_CELLS: "cells", MUT_ORDER: "顺序",
@@ -652,6 +697,33 @@ def py_bad_roster(path) -> dict:
     return {"accept": True, "why": ""}
 
 
+#: `per_op<=0` 那条负对照用的**旧行为**：在已经排好序的 `rows` 上按「每位只留
+#: 1 条」剪一遍。它**忠于历史语义**，且**不动 `ak_tactic`**（负对照不许改被测方
+#: 的源码，只许改喂进去的那一份）：
+#:
+#: 旧循环是「先 append 再判 `len(kept) >= per_op`」⇒ `per_op=0` 时第一次
+#: append 之后 `1 >= 0` 立刻成立 ⇒ 每位只留 1 条；`per_op=1` 同解。
+#: 注意**顺序**：`local` 是按 `-value` 稳定排过的，所以「前 n 条」就是它留下的
+#: 那 n 条（`out.sort` 之后相对次序不变）——这就是为什么可以在这份投影上剪。
+def legacy_py0_rows(rows: list) -> list:
+    """把 `per_op<=0` 的旧行为（每位只留 `n=0` 条 ⇒ 实际 1 条）装回去。"""
+    return _clip_first_per_operator(rows, 0)
+
+
+def _clip_first_per_operator(rows: list, per_op: int) -> list:
+    seen: set = set()
+    kept: list = []
+    for r in rows:
+        key = _row_key(r)
+        if key[:3] in seen:                     #: 旧代码按**落点**去重（position）
+            continue
+        seen.add(key[:3])
+        kept.append(r)
+        if len(kept) >= per_op:                 #: ★ 旧代码的 bug 就在这一行
+            break
+    return kept
+
+
 # --------------------------------------------------------------- 变异守卫
 
 class Guard:
@@ -661,6 +733,13 @@ class Guard:
         self.on = on
         self.applied: dict[str, str] = {}
         self.caught: dict[str, bool] = {}
+        #: ★ 变异**槽位**计数：`inject()` 每见到一处变异就 +1，**不管它注在不在
+        #: `applied` 里**。「行号 = 已注入的处数」这个口径要求它数的是**槽位**，
+        #: 不是 `len(applied)`：有的变异（如 `per_op<=0` 的负对照）不在 Go 的应答
+        #: 上注入任何东西，用 `len(applied)` 会让它**占不到行号** ⇒ 后面每一处都
+        #: 往前挪一格、最后一处与别人**压在同一行**上（「各自落在不同候选」这条
+        #: 前提就静默破了，而读数上看不出来）。
+        self.slots = 0
 
     def want(self, key: str) -> bool:
         return self.on and key not in self.applied
@@ -679,15 +758,16 @@ class Guard:
 def inject(guard: Guard, got: dict, where) -> str | None:
     """在 Go 的**应答**上注入一处不一致。每次调用最多注入一处。
 
-    ★ 每处落在**不同的一条候选**上（行号 = 已注入的处数）：十一条变异在一关
-    之内就能全部注入完，所以 `check_go_all --selfcheck` 只喂一关也够
+    ★ 每处落在**不同的一条候选**上（行号 = 已经见过的**变异槽位**数）：十二处变异
+    在一关之内就能全部注入完，所以 `check_go_all --selfcheck` 只喂一关也够
     （它给「要喂清单」的套只喂 `lvls[:1]`）。
     """
     if not guard.on:
         return None
     rows = got.get("rows") or []
     cov = got.get("covered") or {}
-    i = len(guard.applied)                      #: 每条变异一个不同的行号
+    i = guard.slots                             #: 每条变异一个不同的行号
+    guard.slots += 1
 
     def row():
         if not rows:
@@ -775,7 +855,7 @@ def _short(v) -> str:
 
 
 def _field_same(g, w, f: str) -> bool:
-    """一栏比不比得上。★ 浮点**逐位**，`cells` **按集合**。"""
+    """一栏比不比得上。★ 浮点**逐位**（唯一例外见 `FLOAT_REL_TOL`），`cells` **按集合**。"""
     if f == "cells":
         return ({tuple(c) for c in (g.get("cells") or [])}
                 == {tuple(c) for c in (w.get("cells") or [])})
@@ -786,6 +866,88 @@ def _field_same(g, w, f: str) -> bool:
         except (TypeError, ValueError):
             return False
     return gv == wv
+
+
+# ------------------------------------------------ 浮点容差：只对「累加序」开口
+#
+#: 相对容差的**基**。只有 `dwell` / `value` 两栏用它（见文件头 ③）。
+#:
+#: ★ **为什么是相对、不是绝对**：这一处的**绝对**差随 visit 条数增长
+#: （同一个格上叠几千条 visit 时能累到几千 ulp 量级），承载它的 `dwell` 本身
+#: 也同尺度地变大 ⇒ `abs <= 1e-9` 这种绝对口径会把「大 dwell 的小相对漂移」
+#: 与「小 dwell 的大相对漂移」判成同一件事，两头都看错。
+#:
+#: ★ **为什么乘 visits**：n 项的累加序差，误差量级就是 n 个舍入单位
+#: （单次 ≈ 2.22e-16 / 单位舍入）。乘法让 visit 特别多的格留得住余量，
+#: 让 visit 少的格收得很紧。挂在 `visits` 这一栏上而不是「整个应答一个系数」。
+FLOAT_REL_TOL = 1e-12
+
+#: 累计读数（`:mod:` 级，只给人读）：超出容差的条数、最大相对差、以及
+#: **被容差收下**的条数（其中 `cells` 相同／不同分开数）。
+FLOAT_STATS: dict = {"超容差条目": 0, "最大相对差": 0.0, "最大相对差样例": "",
+                     "收下条目": 0, "收下且cells相同": 0,
+                     "超容差且cells相同": 0, "超容差且cells不同": 0,
+                     "收下样例": []}
+
+
+def _ulps(a: float, b: float) -> int:
+    """两个浮点之间隔几个 ulp（封顶 64；判据只关心量级）。"""
+    lo, hi = (a, b) if a <= b else (b, a)
+    n, x = 0, lo
+    while x < hi and n < 64:
+        x = math.nextafter(x, math.inf)
+        n += 1
+    return n
+
+
+def _float_gap(g, w, f: str) -> tuple[float, int] | None:
+    """这一栏的浮点差：`(相对差, ulp 距离)`。
+
+    相对差 = |Go − Python| / max(|Go|, |Python|)（两侧都是 0 ⇒ 相对差记 0）。
+    ★ `value` 与 `dwell` 用同一个式子 —— 不因为谁大谁小换口径。
+    """
+    try:
+        a, b = float(g.get(f) or 0.0), float(w.get(f) or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if a == b:
+        return None
+    if not (math.isfinite(a) and math.isfinite(b)):
+        return (math.inf, _ulps(a, b))
+    den = max(abs(a), abs(b))
+    return ((abs(a - b) / den) if den else math.inf, _ulps(a, b))
+
+
+def _float_tol(row) -> float:
+    """这一条候选的容差 = `FLOAT_REL_TOL × max(1, visits)`。"""
+    try:
+        n = int(row.get("visits") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return FLOAT_REL_TOL * max(1, n)
+
+
+def _rows_bit_equal(a: list, b: list) -> bool:
+    """两个 `rows` 逐字段**精确**相等（浮点也精确；`cells` 按集合）。
+
+    这一份是给「同一位实现的两个输入」用的（`per_op` 那条断言）——
+    那里**不许**吃 `FLOAT_REL_TOL`：跨实现的累加序差才有容差这一说。
+    """
+    if len(a) != len(b):
+        return False
+    for x, y in zip(a, b):
+        for f in ROW_FIELDS:
+            if not _field_same(x, y, f):
+                return False
+    return True
+
+
+def _first_key_diff(a: list, b: list):
+    """两串身份键第一个不同的下标（没有就 None）。只用于印读数。"""
+    for i, (x, y) in enumerate(zip(a, b)):
+        if x != y:
+            return i
+    return None if len(a) == len(b) else min(len(a), len(b))
 
 
 #: 前几处 1 ulp 分歧的样例（只给人读）。
@@ -861,10 +1023,76 @@ def compare_case(tag, level, want, got, seen, printed) -> tuple[int, set]:
     for k in sorted(set(gmap) & set(wmap), key=repr):
         g, w = gmap[k][0], wmap[k][0]
         row_diff: set[str] = set()
+        cells_same = _field_same(g, w, "cells")
         for f in ROW_FIELDS:
             seen["字段比较"] += 1
             if _field_same(g, w, f):
                 continue
+            #: ---- ★ **已登记分歧的开口**：`dwell` / `value` 两栏，**相对容差**
+            #: 随 visit 条数增长（见文件头 ③ 与 `FLOAT_REL_TOL`）。
+            #: ⚠ **开口只在「`cells` 完全相同」时成立** —— 登记的就是**纯累加序**
+            #:   那一条（同一个格集合、两种迭代序）；`cells` 都不同了，浮点差就
+            #:   不再有「累加序」这个解释 ⇒ 照旧判红。这条范围限制是**故意的**：
+            #:   它让「自身格」那处仍占红，不会因为容差被静默收掉。
+            #: ⚠ 这里只决定「算不算判红」；**无论收不收下，读数都照记**
+            #:   （超容差条数、最大相对差、被收下的条数与样例）——登记不等于不报。
+            if f in FLOAT_FIELDS:
+                gp = _float_gap(g, w, f)
+                if gp is not None:
+                    rel, n_ulp = gp
+                    tol = _float_tol(w)
+                    if cells_same and rel <= tol:
+                        FLOAT_STATS["收下条目"] += 1
+                        FLOAT_STATS["收下且cells相同"] += 1
+                        if len(FLOAT_STATS["收下样例"]) < 6:
+                            FLOAT_STATS["收下样例"].append(
+                                "%s/%s %r %s：Go=%.17g Python=%.17g"
+                                "（相对差 %.3g、%d ulp；容差 %.3g、visits=%r）"
+                                % (tag, level, k[:3], f, float(g.get(f) or 0.0),
+                                   float(w.get(f) or 0.0), rel, n_ulp, tol,
+                                   w.get("visits")))
+                        if f == "dwell" and len(DWELL_SAMPLES) < 4:
+                            #: 纯累加序那一族的样例（只给人读）
+                            DWELL_SAMPLES.append(
+                                "%s/%s %r dwell：Go=%.17g Python=%.17g"
+                                "（差 %d ulp、相对差 %.3g；容差 %.3g、visits=%r）"
+                                % (tag, level, k[:3], float(g.get("dwell") or 0.0),
+                                   float(w.get("dwell") or 0.0), n_ulp, rel, tol,
+                                   w.get("visits")))
+                        #: ★ 浮点两栏的「收下」**不影响** `visits` 的判红：
+                        #: `visits` 是整数，它不同就是不同，没有容差这一说。
+                        if f == "dwell":
+                            seen["其中 cells 相同（纯累加序）"] += 1
+                            if n_ulp <= 2:
+                                seen["ulp 距离 <= 2"] += 1
+                            seen["容差内收下"] += 1
+                            seen["dwell 逐位不同的条数"] += 1
+                        continue
+                    #: 到这里有两种形状，**都算红的**：① 相对差超容差；② `cells`
+                    #: 本来就不同（登记不覆盖它）。下列读数把两者分开记，
+                    #: 免得「容差收不下」与「不在登记范围」被读成同一件事。
+                    FLOAT_STATS["超容差条目"] += 1
+                    if not cells_same:
+                        FLOAT_STATS["超容差且cells不同"] += 1
+                    elif rel > tol:
+                        FLOAT_STATS["超容差且cells相同"] += 1
+                    if rel > FLOAT_STATS["最大相对差"]:
+                        FLOAT_STATS["最大相对差"] = rel
+                        FLOAT_STATS["最大相对差样例"] = (
+                            "%s/%s %r %s：Go=%.17g Python=%.17g（相对差 %.6g、"
+                            "%d ulp；容差 %.3g、visits=%r；cells %s）"
+                            % (tag, level, k[:3], f, float(g.get(f) or 0.0),
+                               float(w.get(f) or 0.0), rel, n_ulp, tol,
+                               w.get("visits"),
+                               "相同" if cells_same else "不同"))
+                    if f == "dwell":
+                        seen["dwell 逐位不同的条数"] += 1
+                        if cells_same:
+                            seen["其中 cells 相同（纯累加序）"] += 1
+                        else:
+                            seen["其中 cells 也不同"] += 1
+                        if n_ulp <= 2:
+                            seen["ulp 距离 <= 2"] += 1
             bad += 1
             fields.add(f)
             row_diff.add(f)
@@ -892,16 +1120,13 @@ def compare_case(tag, level, want, got, seen, printed) -> tuple[int, set]:
         #: ★ **1 ulp 分歧**的定性：`dwell` 是浮点累加，累加序 = visit 的拼接序，
         #: 而拼接序由格集合的迭代序定（Python 是 frozenset 的哈希序、Go 是按 (x,y)
         #: 排序的切片）⇒ 一旦有多条 visit 的 `enter` 相等，两侧的累加序就不同。
-        #: 定性**不影响判红**（它照旧算在 `bad` 里）；它只是把红印成一句可读的话。
+        #: ⚠ `row_diff` 里已经**不含**被容差收下的那一族（它们不判红）；收下那一族
+        #: 的条数与样例在上面那一段里照记（`dwell 逐位不同的条数` 也照计）。
         if "dwell" in row_diff:
             seen["dwell 逐位不同的条数"] += 1
             gd = float(g.get("dwell") or 0.0)
             wd = float(w.get("dwell") or 0.0)
-            lo, hi = (gd, wd) if gd <= wd else (wd, gd)
-            n_ulp, x = 0, lo
-            while x < hi and n_ulp < 64:
-                x = math.nextafter(x, math.inf)
-                n_ulp += 1
+            n_ulp = _ulps(gd, wd)
             if n_ulp <= 2:
                 seen["ulp 距离 <= 2"] += 1
             if "cells" in row_diff:
@@ -989,9 +1214,14 @@ def blank_seen() -> dict:
          "天赋折算的候选条数": 0, "判不了的例数": 0,
          #: ★ 自身格分歧的两栏（见 `compare_case` 里那一支）
          "自身格分歧条数": 0, "自身格分歧并带动 dwell/visits": 0,
-         #: ★ 累加序那一处（见 `compare_case` 里那一支）：按**两种因**分开数
+         #: ★ 累加序那一处（见 `compare_case` 里那一支）：按**两种因**分开数。
+         #: `dwell 逐位不同的条数` = **全部**浮点不同的条数（收下的 ＋ 超容差的），
+         #: `容差内收下` 是其中**没**判红的那一份 ⇒ 差值就是超容差的那一份。
          "dwell 逐位不同的条数": 0, "其中 cells 也不同": 0,
-         "其中 cells 相同（纯累加序）": 0, "ulp 距离 <= 2": 0}
+         "其中 cells 相同（纯累加序）": 0, "ulp 距离 <= 2": 0,
+         "容差内收下": 0,
+         #: ★ per_op=0 与 per_op=6 两侧一致的断言（S8）
+         "perop_zero": 0}
     for k in COVER_KEYS:
         d[k] = 0
     return d
@@ -1075,13 +1305,14 @@ def main() -> int:                                             # noqa: C901
     diverged: list[str] = []
     want_cache: dict[tuple, dict] = {}
     cov_reports: list[str] = []
+    #: 「断言真的活过」的留证（**不受 `printed` 的 60 行上限**，见它的使用点）。
+    perop_notes: list[str] = []
     _cov: dict[tuple, set] = {}
 
     #: 每个用例的**对象集**（用例名 → 关卡身份列表）。判据用不到它做判定，
     #: 但覆盖面对账要用它**现读**「这一次问了哪些对象」。
     case_pairs: dict[str, list] = {"main": batch_pairs,
                                    "perop0": sample_pairs[:1],
-                                   "py0": sample_pairs[:1],
                                    "synroster": sample_pairs[:2],
                                    "selfcell": sample_pairs[:2]}
     for (vt, _o, _p, _d, _s, _od) in variant_cases():
@@ -1324,40 +1555,125 @@ def main() -> int:                                             # noqa: C901
                     go_spec(sc_ops, 6, DIRECTIONS, {}, roster=sc),
                     roster_path=sc, rsha=sc_sha)
 
-    # ------------------------------------------------------ S8 per_op<=0 的分歧
+    # --------------------------------- S8 per_op<=0：两侧统一到「六个候补位」
+    #: ★ **2026-09-27 博士裁定：六个候补位。** `per_op <= 0`（没给／显式给 0／
+    #: 给负数）在**两侧一律按 6**，不再有第二种解释。
+    #:
+    #: 在此之前这里登记的是一处**分歧**：引擎的契约本来就是「0 ⇒ 缺省 6」
+    #: （`candidates.go:217-220` 的 `defaultPerOp`），而 Python 的 `candidates_for`
+    #: 是「先 append 再判 `len(kept) >= per_op`」⇒ 显式收下 0 时**每位只留 1 条**。
+    #: 同一个输入在两边得到不同的候选数，是「两份实现」最典型的漂移形状。
+    #:
+    #: 现在 Python 入口也把它并到 `DEFAULT_PER_OP`（`ak_tactic/search.py`）
+    #: ⇒ 这一支从「登记分歧」改成**断言**：拿 `per_op=0` 与 `per_op=6` 各问一次
+    #: 两侧，要求**四个读数两两相等** ——
+    #:
+    #:     Go@0 的候选条数 == Go@6 的候选条数      （引擎侧真的按 6）
+    #:     Go@0 的 kept     == Go@6 的 kept        （自报的行使计数也一致）
+    #:     顺序（身份键序列）逐索引相同             （稳定排序那条没被搅动）
+    #:     逐字段**精确**相等                       （value 也是 —— 排序键就是这个量）
+    #:
+    #: ⚠ 这里的浮点**不吃** `FLOAT_REL_TOL`：它比的是**同一位实现的两个输入**，
+    #: 不是跨实现的累加序，所以「精确相等」在这里是可达的，加容差就是放水。
+    #:
+    #: ★ **冻结档不吃新键**：右侧的期望值用的是**已经冻着的那一份**（`per_op=6`
+    #: 的 key），不是新造一个 `per_op=0` 的 key。理由是裁定的内容本身就是
+    #: 「这两个输入同解」——它由这一条断言**现算**，不需要另存一份答案；
+    #: 另存一份反而会把「同解」这个结论冻成数据，将来两侧一起漂走也看不见。
     lv0 = sample[0]["level"] if sample else None
     if lv0 is not None and not skip_in_check("perop0", lv0, roster_sha):
-        #: 引擎的契约：`per_op` 0（或负）⇒ **缺省 6**（`candidates.go:217-220`）。
-        #: 所以这一支的期望值取的是「权威在 per_op=6 下的产物」——**不是**权威
-        #: 在 per_op=0 下的产物（那是另一半，见下）。
-        fields, _w = run_one("perop0", lv0, MAIN_OPS, 6, DIRECTIONS, {},
-                             go_spec(MAIN_OPS, 0, DIRECTIONS, {}))
-        if fields:
-            diverged.append("per_op=0 与权威的缺省口径不一致（撞出的字段：%s）"
-                            % "、".join(sorted(fields)))
-        #: 另一半：权威**显式**收下 0（或 -1）会每位只留 1 条。
-        #: 两条同时成立才算这条分歧被登记到。
-        try:
-            py0 = G.expect(("candidates", "py0", lv0, sha_of.get(lv0), roster_sha),
-                           lambda: py_rows_only(lv0, MAIN_OPS, 0, DIRECTIONS))
-        except Exception as exc:                               # noqa: BLE001
-            py0 = []
-            data_missing.append("per_op<=0 那一支的期望值取不到：%s: %s"
-                                % (type(exc).__name__, str(exc)[:90]))
-        py6 = (want_cache.get(("main", lv0)) or {}).get("rows") or []
-        counts = {}
-        for r in py0:
-            counts[r["operator"]] = counts.get(r["operator"], 0) + 1
-        if py0 and py6 and max(counts.values()) <= 1 and len(py6) > len(py0):
-            diverged.append(
-                "`per_op<=0`：**Go 按缺省 6 条/位、Python 显式传 0（或 -1）"
-                "每位只留 1 条**（Python %d 条 → Go 口径下同一批是 %d 条）"
-                "—— 具名分歧，两侧定义不同，不算对拍失败" % (len(py0), len(py6)))
-        else:
+        zero_fields, zero_want = run_one(
+            "perop0", lv0, MAIN_OPS, 6, DIRECTIONS, {},
+            go_spec(MAIN_OPS, 0, DIRECTIONS, {}))
+        if zero_fields:
             bad += 1
-            printed.append("✗ 登记分歧那一支没跑成「Python 每位只留 1 条」："
-                           "py0=%d 条、每位条数=%r、per_op=6 下是 %d 条"
-                           % (len(py0), counts, len(py6)))
+            printed.append("✗ perop0/%s `per_op=0` 与权威的**缺省口径**（六个候补位）"
+                           "不一致（撞出的字段：%s）"
+                           % (lv0, "、".join(sorted(zero_fields))))
+        #: 期望值那一份 = **per_op=6**（同一关、同一名册 ⇒ 同一个 key，且**已冻**）。
+        six_want = want_cache.get(("main", lv0)) or {}
+        six_rows = six_want.get("rows") or []
+        six_cov = six_want.get("covered") or {}
+        ok0, res0 = go_candidates(lv0, go_spec(MAIN_OPS, 0, DIRECTIONS, {}))
+        ok6, res6 = go_candidates(lv0, go_spec(MAIN_OPS, 6, DIRECTIONS, {}))
+        if not (ok0 and ok6):
+            bad += 1
+            printed.append("✗ perop0/%s 这一支问不动引擎：per_op=0 → %r；per_op=6 → %r"
+                           % (lv0, str(res0)[:90], str(res6)[:90]))
+        elif not (six_rows and six_cov):
+            #: 主对拍的期望值缺 ⇒ 这一条**判不了**（不是判红）。具名登记。
+            data_missing.append("perop0/%s 两侧一致的断言取不到参照（per_op=6 的"
+                                "期望值不在手上）" % lv0)
+        else:
+            r0 = res0.get("rows") or []
+            r6 = res6.get("rows") or []
+            c0 = res0.get("covered") or {}
+            c6 = res6.get("covered") or {}
+            seen["perop_zero"] += 1
+            #: ---- ① 四个读数两两相等（就在这一条里现算，不写死）
+            eq = [
+                ("候选条数", len(r0) == len(r6), "%d vs %d" % (len(r0), len(r6))),
+                ("kept", int(c0.get("kept", -1)) == int(c6.get("kept", -1)),
+                 "%r vs %r" % (c0.get("kept"), c6.get("kept"))),
+                ("顺序", [_row_key(r) for r in r0] == [_row_key(r) for r in r6],
+                 "第 %s 条" % _first_key_diff(
+                     [_row_key(r) for r in r0], [_row_key(r) for r in r6])),
+                ("逐字段", _rows_bit_equal(r0, r6), ""),
+            ]
+            for _what, _good, _detail in eq:
+                if _good:
+                    continue
+                bad += 1
+                printed.append(
+                    "✗ perop0/%s `per_op=0` 与 `per_op=6` 的**%s**不同（%s）—— "
+                    "「六个候补位」这条口径在引擎自己身上就没成立"
+                    % (lv0, _what, _detail))
+            #: ---- ② 两侧（Go@0 ↔ Go@6 ↔ 权威@6）确实落在同一批对象上。
+            #: 权威那一侧只用 `len`/键序，**不逐字段**：逐字段已经在
+            #: `run_one("perop0", …)` 里比过（那次比的就是 Go@0 ↔ 权威@6）。
+            wkeys = [_row_key(r) for r in six_rows]
+            if len(r0) != len(six_rows) or [_row_key(r) for r in r0] != wkeys:
+                bad += 1
+                printed.append(
+                    "✗ perop0/%s Go@0 与**权威**@6 不是同一批：%d 条 vs %d 条"
+                    "（键序首个不同在第 %s 条）"
+                    % (lv0, len(r0), len(six_rows),
+                       _first_key_diff([_row_key(r) for r in r0], wkeys)))
+            else:
+                diverged.append(
+                    "`per_op <= 0`（**2026-09-27 裁定：六个候补位**）：`per_op=0` 与 "
+                    "`per_op=6` 在**两侧都同解** —— Go 候选 %d 条 / kept=%r、"
+                    "Python 同样 %d 条（顺序逐索引相同、逐字段精确相等；"
+                    "Python 入口把它并到 `DEFAULT_PER_OP`，"
+                    "引擎侧本来就是 `defaultPerOp`）。"
+                    "从「登记分歧」改成断言：不成立即红。"
+                    % (len(r0), c0.get("kept"), len(six_rows)))
+            #: ---- ③ **负对照**：把 Python 侧的老行为（0 ⇒ 每位只留 1 条）人为
+            #: 装回去，上面那条断言必须当场判红。装不回来也判红——没有负对照的
+            #: 「相等」证明不了任何事（本仓那条「两把相同的尺子互证」）。
+            if guard.want(MUT_PEROP0):
+                old_py0 = legacy_py0_rows(six_rows)
+                if len(old_py0) >= len(six_rows):
+                    bad += 1
+                    printed.append("✗ 负对照「%s」没装成：旧行为下 %d 条、"
+                                   "现口径下 %d 条（没有变短 ⇒ 这个对照作废）"
+                                   % (MUT_PEROP0, len(old_py0), len(six_rows)))
+                else:
+                    guard.put(MUT_PEROP0, "perop0/%s" % lv0)
+                    if old_py0 == six_rows:
+                        bad += 1
+                        printed.append("✗ 负对照「%s」装了却**判不出来**："
+                                       "旧行为与现口径的 rows 完全相同"
+                                       % MUT_PEROP0)
+                    else:
+                        guard.caught[MUT_PEROP0] = True
+                        #: ⚠ 这一行走**独立通道**（直接 print，不进 `printed`）：
+                        #: `printed` 有 60 行上限，负对照落在整篇的哪个位置不确定，
+                        #: 被挤掉就等于「判红」这条读数没有留证。
+                        perop_notes.append(
+                            "负对照「%s」：把 Python 的 `per_op<=0` 装回旧行为"
+                            "（每位只留 1 条）⇒ %d 条 ≠ 现口径 %d 条 ⇒ 这一条断言"
+                            "当场判红 ✓" % (MUT_PEROP0, len(old_py0), len(six_rows)))
 
     for line in printed:
         print(line)
@@ -1365,6 +1681,9 @@ def main() -> int:                                             # noqa: C901
         print("（上面 %d 行是失配样例；整篇最多印 %d 行，"
               "**另 %d 处已判红但没印** —— 完整计数见下面那几行读数）"
               % (len(printed), PRINT_CAP, printed.dropped))
+    #: ★ 下面这几行**不受印数上限**：它们是「断言真的活过 ＋ 真的判得红」的留证。
+    for _n in perop_notes:
+        print("  " + _n)
     print()
 
     #: ★ 天赋面板倍率那一处**已登记的口径差**：两条腿都要成立 ——
@@ -1396,7 +1715,7 @@ def main() -> int:                                             # noqa: C901
                        "天赋折算的候选条数", "判不了的例数", "自身格分歧条数",
                        "自身格分歧并带动 dwell/visits", "dwell 逐位不同的条数",
                        "其中 cells 也不同", "其中 cells 相同（纯累加序）",
-                       "ulp 距离 <= 2")))
+                       "ulp 距离 <= 2", "容差内收下", "perop_zero")))
     print()
     #: ★★ 这一处**没有裁定过**，所以它是**判红**（不是登记分歧）。
     #: 把根因、两侧的原文出处、影响面一次讲清——红要红得能直接照着改。
@@ -1431,15 +1750,41 @@ def main() -> int:                                             # noqa: C901
     _sum = GB.channel_summary()
     if _sum:
         print(_sum)
-    if seen["dwell 逐位不同的条数"]:
-        print("★ 累加序分歧（**未裁定 ⇒ 判红**）：%d 条候选的 `dwell` **逐位**不同；"
-              "其中 **%d 条连 `cells` 都完全相同**（纯累加序所致）、"
-              "%d 条是自身格那一处带来的；%d 条差的 ulp 距离 ≤ 2"
-              "（相对差 ~1e-16，`value` 跟着同量级地差）。"
+    #: ★★ 累加序那一处**已登记**（2026-09-27 裁定：按登记走、不修产品）。
+    #: 但**登记 ≠ 不看不报**：无论收不收下，最大相对差与超出条数都要印出来，
+    #: 将来真出现一个「大的数值改动」（不是累加序那种量级）这条仍然判红。
+    _over = seen["dwell 逐位不同的条数"] - seen["容差内收下"]
+    if seen["dwell 逐位不同的条数"] or FLOAT_STATS["超容差条目"]:
+        print("★ 累加序分歧（**已登记 ⇒ 按相对容差比**）：%d 条候选的 `dwell` "
+              "**逐位**不同；其中 **%d 条连 `cells` 都完全相同**（纯累加序所致）、"
+              "%d 条是自身格那一处带来的；%d 条差的 ulp 距离 ≤ 2。"
               % (seen["dwell 逐位不同的条数"],
                  seen["其中 cells 相同（纯累加序）"],
                  seen["其中 cells 也不同"],
                  seen["ulp 距离 <= 2"]))
+        print("  ★ **超容差与最大相对差**（登记不等于不报）：dwell 这一族超容差 "
+              "**%d** 条（dwell 共 %d 条逐位不同、其中 %d 条落在容差里）；"
+              "浮点两栏（dwell ＋ value）**全部比较**里超容差 **%d** 条"
+              "（其中 `cells` 相同、纯粹是差得太大 %d 条；`cells` 本来就不同、"
+              "不在登记范围 %d 条）、最大相对差 **%.6g**。"
+              % (_over, seen["dwell 逐位不同的条数"], seen["容差内收下"],
+                 FLOAT_STATS["超容差条目"], FLOAT_STATS["超容差且cells相同"],
+                 FLOAT_STATS["超容差且cells不同"], FLOAT_STATS["最大相对差"]))
+        if FLOAT_STATS["最大相对差样例"]:
+            print("    最大相对差那一条：%s" % FLOAT_STATS["最大相对差样例"])
+        print("  容差口径（写死在这里）：`相对差 <= %g × max(1, visits)`，"
+              "**两栏同一条**（`dwell` 与 `value`；`value = dwell × 攻击力`，"
+              "dwell 的 ulp 差会原样派生过去 ⇒ 只给一栏开口等于把红挪到另一栏）。"
+              % FLOAT_REL_TOL)
+        print("    ★ 开口的**范围**：只在「`cells` **完全相同**」时成立 —— 登记的就是"
+              "**纯累加序**那一条（同一个格集合、两种迭代序）。`cells` 都不同了，"
+              "浮点差就不再有「累加序」这个解释 ⇒ 照旧判红（自身格那处因此仍占红）。")
+        print("    为什么是**相对**不是绝对：这处的绝对差随 visit 条数增长"
+              "（叠几千条 visit 能累到几千 ulp），而 dwell 本身同尺度地变大 ⇒ "
+              "绝对口径会把「大 dwell 的小相对漂移」与「小 dwell 的大相对漂移」"
+              "判成同一件事。相对差是本征稳定的量。")
+        for _s in FLOAT_STATS["收下样例"][:3]:
+            print("    例（容差内收下）：%s" % _s)
         for _s in DWELL_SAMPLES:
             print("    · %s" % _s)
         print("  根因（**已核实到机制**，不是猜）：`ArrivalIndex.dwell` 的累加序 = visit 的"
@@ -1448,7 +1793,8 @@ def main() -> int:                                             # noqa: C901
         print("    Python：`_range_cells` 返回 `frozenset`（`search.py:109`）⇒ 迭代序是"
               "**哈希序**，`dwell` 就按那个序累加；")
         print("    Go：`candidates.go` 把格去掉重复后**按 (x, y) 排序**再喂 `dwell`。")
-        print("  实测（同一个格集合，两种迭代序各累加一遍；差 1～2 ulp、相对差 ~2.6e-16）：")
+        print("  实测（同一个格集合，两种迭代序各累加一遍；这是**纯 Python 复算**，"
+              "不依赖本判据自己）：")
         print("    easy_10-11 阿米娅 (6,1) Down：frozenset=434.14285714285671 / "
               "排序=434.1428571428566（判据读到 Go=…566、Python=…567；ulp 距离 2）")
         print("    act31side_ex08 能天使 (7,3) Left：frozenset=854.91414134972536 / "
@@ -1457,6 +1803,8 @@ def main() -> int:                                             # noqa: C901
         print("  ⇒ `candidates.go` 文件头那句「`frozenset` ⇒ 顺序无意义，这里排过序只是"
               "为了输出确定」对**浮点累加**不成立：`visits()` 的稳定排序只保证 `enter` "
               "不同的那些有序，`enter` 相同的那些保持拼接序。")
+        print("  ⇒ 2026-09-27 裁定：**按登记走、不修产品**。那条注释仍然误导人，"
+              "但它不是本次施工范围。")
         print()
     for _r in cov_reports:
         print(_r)
@@ -1478,8 +1826,8 @@ def main() -> int:                                             # noqa: C901
             print("反向守卫：不成立 ✗（没做到「注入过并且判红」：%s）"
                   % "、".join(miss))
             return 1
-        print("反向守卫：十一处独立变异（含三处 1 ulp，其一改的是**期望值**）"
-              "各判红 —— 成立 ✓")
+        print("反向守卫：十二处独立变异（含三处 1 ulp，其一改的是**期望值**；"
+              "另一处是 `per_op<=0` 的负对照）各判红 —— 成立 ✓")
         return 0
 
     #: 判据自己瞎不瞎：这几条一 0，下面的「一致」就没有信息量。
@@ -1491,6 +1839,8 @@ def main() -> int:                                             # noqa: C901
                    ("ranged_ops", "远程干员"),
                    ("entry_missing", "名册里没有的名字"),
                    ("被 per_op 截断的关数", "per_op 截断真的发生过"),
+                   ("perop_zero",
+                    "`per_op=0` 与 `per_op=6` 两侧一致那条断言真的跑到了"),
                    ("天赋折算的候选条数",
                     "落在带天赋面板攻击力的干员上的候选（已登记口径差的行使）")):
         if seen.get(k, 0) == 0:
@@ -1519,12 +1869,14 @@ def main() -> int:                                             # noqa: C901
              seen["字段比较"], seen["visits_zero"],
              seen["被 per_op 截断的关数"], seen["顺序不一致"]))
     if bad:
-        if seen["dwell 逐位不同的条数"]:
-            print("结论：**不成立** —— 另有 %d 条候选的 `dwell` 逐位不同"
-                  "（其中 %d 条 `cells` 完全相同 ⇒ 纯累加序所致，差 1～2 ulp，"
-                  "根因见上面那一段）"
-                  % (seen["dwell 逐位不同的条数"],
-                     seen["其中 cells 相同（纯累加序）"]))
+        #: ★ 累加序那一处**已登记**（2026-09-27）⇒ 只有在**超容差**时它才是红的
+        #: 一因；落在容差里的那些不再进 `bad`，因此也不能在这里被念成「不成立」。
+        if seen["dwell 逐位不同的条数"] - seen["容差内收下"]:
+            print("结论：**不成立** —— 另有 %d 条候选的 `dwell` 逐位不同**且超出"
+                  "已登记分歧的容差**（另有 %d 条落在容差里，见上面那一段的"
+                  "最大相对差读数）"
+                  % (seen["dwell 逐位不同的条数"] - seen["容差内收下"],
+                     seen["容差内收下"]))
         if seen["自身格分歧条数"]:
             print("结论：**不成立** —— %d 条候选的 `cells` 差「干员所在的那一格」"
                   "（Python 有、Go 没有，%d 条并带动 dwell/visits）；"
