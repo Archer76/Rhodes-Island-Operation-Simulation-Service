@@ -236,10 +236,16 @@ func EnemyArrivals(st *Stage, lib *EnemyLibrary, speedScale float64,
 		if err != nil {
 			return nil, stats, fmt.Errorf("取敌人 %s（第 %d 档）失败：%w", enemyID, level, err)
 		}
-		name := es.Name
-		if name == "" {
-			name = enemyID
-		}
+		//: ★ 名字走**取名链**（`enemy.go:336` 的 `lib.Name`，复刻 `enemy.py:1124-1139`：
+		//: 图鉴表 → 属性库里**最高的、名字非空的那一档** → id）。
+		//: ⚠ 不许用 `es.Name`（只看出怪那一档）—— 那一档的名字**可能是空的**，
+		//: 于是兜底成 id。实测（2026-09-27，重录子代理在 `main_03-08` 上抓到）：
+		//: `enemy_1500_skulsr`（碎骨）在出怪档上 `Name == ""` ⇒ Go 写
+		//: `enemy_1500_skulsr`、Python 写 `碎骨`，**65 条 visit 上当名字是错的**。
+		//: 它有两重后果：① 玩家看得见（名字印成 id）；② `name` 是
+		//: `visitLess` 那把**全序键的第 3 位** ⇒ 两侧平局顺序分叉 ⇒ `dwell`
+		//: 的求和序不同 ⇒ 差 1～2 ulp（`main_03-08` 上 12 条候选就是这么来的）。
+		name := lib.Name(enemyID)
 		ms := 1.0
 		if es.MoveSpeed != nil {
 			ms = *es.MoveSpeed
