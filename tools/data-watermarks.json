@@ -1,10 +1,10 @@
 {
   "schema": "ak-tactic/data-watermarks@1",
-  "generated_at": "2026-09-24T01:13:50+08:00",
+  "generated_at": "2026-09-27T21:06:39+08:00",
   "tool": "tools/check_data_ready.py --write-ratchet",
   "manifest": {
     "path": "docs/data-sources.md",
-    "at": "2026-09-24T01:13:50+08:00",
+    "at": "2026-09-27T21:06:39+08:00",
     "items": [
       "data/akdb.sqlite",
       "data/cache/",
@@ -36,91 +36,91 @@
   "items": {
     "data/akdb.sqlite/operator": {
       "value": 1164,
-      "at": "2026-09-24T01:13:49+08:00",
+      "at": "2026-09-27T21:06:35+08:00",
       "source": "select count(*) from operator（mode=ro）",
       "floor": true,
       "note": ""
     },
     "data/akdb.sqlite/skill": {
       "value": 1624,
-      "at": "2026-09-24T01:13:49+08:00",
+      "at": "2026-09-27T21:06:35+08:00",
       "source": "select count(*) from skill（mode=ro）",
       "floor": true,
       "note": ""
     },
     "data/akdb.sqlite/stage": {
-      "value": 3055,
-      "at": "2026-09-24T01:13:49+08:00",
+      "value": 2293,
+      "at": "2026-09-27T21:06:35+08:00",
       "source": "select count(*) from stage（mode=ro）",
       "floor": true,
       "note": ""
     },
     "data/akdb.sqlite/zone": {
-      "value": 352,
-      "at": "2026-09-24T01:13:49+08:00",
+      "value": 258,
+      "at": "2026-09-27T21:06:35+08:00",
       "source": "select count(*) from zone（mode=ro）",
       "floor": true,
       "note": ""
     },
     "data/enemydb.sqlite/enemy": {
       "value": 1807,
-      "at": "2026-09-24T01:13:49+08:00",
+      "at": "2026-09-27T21:06:35+08:00",
       "source": "select count(*) from enemy（mode=ro）",
       "floor": true,
       "note": ""
     },
     "data/prts-notes.sqlite/page": {
       "value": 459,
-      "at": "2026-09-24T01:13:50+08:00",
+      "at": "2026-09-27T21:06:35+08:00",
       "source": "select count(*) from page（mode=ro）",
       "floor": true,
       "note": ""
     },
     "data/prts-notes.sqlite/fact": {
       "value": 3247,
-      "at": "2026-09-24T01:13:50+08:00",
+      "at": "2026-09-27T21:06:35+08:00",
       "source": "select count(*) from fact（mode=ro）",
       "floor": true,
       "note": ""
     },
     "upstream/enemydb_enemy_intersection": {
       "value": 1773,
-      "at": "2026-09-24T01:13:50+08:00",
+      "at": "2026-09-27T21:06:36+08:00",
       "source": "enemy_database.json 的名 × enemydb.enemy 的 name 交集",
       "floor": true,
       "note": ""
     },
     "fixtures/referenced_levels": {
       "value": 22,
-      "at": "2026-09-24T01:13:50+08:00",
+      "at": "2026-09-27T21:06:39+08:00",
       "source": "fixtures/**/*.json 的顶层 stage 去重",
       "floor": false,
       "note": "夹具侧的分母，跟着 fixtures/ 走，不作下限"
     },
     "gamedata/level_files": {
-      "value": 21,
-      "at": "2026-09-24T01:13:50+08:00",
+      "value": 326,
+      "at": "2026-09-27T21:06:39+08:00",
       "source": "rglob level_*.json under data/gamedata/map.ark-nights.com/levels",
       "floor": false,
       "note": "按需缓存，只作事故对照，不作为判据下限"
     },
     "data/op-briefs.txt/lines": {
       "value": 3249,
-      "at": "2026-09-24T01:13:50+08:00",
+      "at": "2026-09-27T21:06:39+08:00",
       "source": "op-briefs.txt 行数",
       "floor": true,
       "note": ""
     },
     "data/op-briefs.txt/bytes": {
       "value": 455473,
-      "at": "2026-09-24T01:13:50+08:00",
+      "at": "2026-09-27T21:06:39+08:00",
       "source": "op-briefs.txt 字节数",
       "floor": false,
       "note": "字节数随行尾口径变，只登记"
     },
     "data/ranges.json/codes": {
       "value": 72,
-      "at": "2026-09-24T01:13:50+08:00",
+      "at": "2026-09-27T21:06:39+08:00",
       "source": "ranges.json 顶层代号数",
       "floor": true,
       "note": ""
