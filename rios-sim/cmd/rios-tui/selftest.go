@@ -1196,6 +1196,39 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		}
 	}
 
+	//: ★ 2026-09-27 新加：`load` 那条链 —— 它是 **`deployLimit` 的真值来源**。
+	//:
+	//: 为什么必须有这条尺子：在它之前，`onStagePicked` 里写的是 `c.deployLimit = 0`
+	//: （**写死**），而 `selftest` 里所有 `deployLimit` 都是**测试自己注入**的
+	//: （`pickCtx(slot)`／`deployLimit: 4`／`= 6`…）⇒ 那条写死的 0 **不在任何尺子的
+	//: 视野里**，跑多少次都是绿的。这正是「零行使的绿」：断言全绿，被测行为一次
+	//: 都没被走过。这条判据**真起一次引擎**去问一关的真值，把那条路照亮。
+	//:
+	//: 两条一起：正例（真值 8，与原始 JSON 并排核过）＋ 负对照（关卡不存在 ⇒
+	//: **必须具名失败**，不许静默给 0 —— 0 读起来是「这关能上 0 个人」）。
+	//: 引擎或那一关的 JSON 不在场 ⇒ **具名未核**，不判红也不假绿。
+	if ec, err := newEngineClient(); err != nil {
+		fmt.Printf("  （未核：load 那条链需要引擎 exe，这次找不到。具名原因：%s）\n",
+			firstLineWith(err.Error(), "找不到引擎"))
+	} else {
+		opts, lerr := ec.callLoad("main_01-07")
+		if lerr != nil {
+			fmt.Printf("  （未核：load main_01-07 取不到（引擎在、但那一关的 JSON 不在本地？）。"+
+				"具名原因：%s）\n", firstLineWith(lerr.Error(), "★"))
+		} else {
+			check("load main_01-07 的 characterLimit = 8（deployLimit 的真值，"+
+				"与原始 JSON 的 characterLimit 并排核过）",
+				opts.CharacterLimit == 8, fmt.Sprintf("实得 %d", opts.CharacterLimit))
+		}
+		if _, nerr := ec.callLoad("__no_such_level__"); nerr == nil {
+			check("负对照：不存在的一关必须具名失败（不许静默给 0）", false,
+				"它竟然答上来了")
+		} else {
+			check("负对照：不存在的一关必须具名失败（不许静默给 0）", true,
+				firstLineWith(nerr.Error(), "★"))
+		}
+	}
+
 	fmt.Println("== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==")
 	//: 阶梯：六档**手算**（权威 `depth_ladder` 有两处易错：取不到时按 12 封顶；
 	//: 末端一定落在 `cap` 上，不然"上限 5 人"那一档永远试不到）

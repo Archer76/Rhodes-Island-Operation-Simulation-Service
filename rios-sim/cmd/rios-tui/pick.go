@@ -344,10 +344,23 @@ func onStagePicked(r *root, res any) {
 	}
 	c := r.ctx
 	c.stage = st
-	//: ★ 这一关的**可部署人数**目前取不到（引擎侧的 `options.characterLimit`
-	//: 还没接到界面来），显式写 0 —— **不是**"这一关能上 0 个人"。
-	//: 那条拦截规则遇到 0 会退化，见 `squad.go` 文件头的登记。
+	//: ★ 可部署人数**问引擎**（2026-09-27 接上）。派生库的 `stage` 表没有这一列
+	//: （实测 9 列），只有引擎那份解析器读得到 `options.characterLimit`
+	//: —— 见 `engpipe.go` 的 `callLoad`。
+	//: ⚠ 取不到时**具名记一句**（`c.note`，屏上看得见），**不静默写 0**：
+	//: 「0」读起来是「这一关能上 0 个人」，与「没取到」必须长得不一样。
+	//: 同步调用与 `ensureRoster()` 同一处置（都是读一份数据，不是分钟级的活）。
 	c.deployLimit = 0
+	switch ec, err := newEngineClient(); {
+	case err != nil:
+		c.note = "取部署人数上限失败：" + err.Error()
+	default:
+		if opts, err := ec.callLoad(st.LevelID); err != nil {
+			c.note = "取部署人数上限失败（" + st.LevelID + "）：" + err.Error()
+		} else {
+			c.deployLimit = opts.CharacterLimit
+		}
+	}
 	c.squad = nil
 	c.ensureRoster() //: 进 [2] 时读一次名册并缓存（取不到也只记原因，不拦路）
 	r.push(&squadAskScreen{}, onSquadAsked)

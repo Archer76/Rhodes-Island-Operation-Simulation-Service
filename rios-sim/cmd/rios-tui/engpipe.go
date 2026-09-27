@@ -295,6 +295,48 @@ func (e *engineClient) callSolve(p solveParams, depth int,
 	return raw, nil
 }
 
+// loadOptions 是 `load` 应答里 `stage.options` 中界面要用的那几项。
+//
+// 字段名是**引擎的 JSON 形状**（`rios-sim/stage.go` 的 `StageOptions`，snake_case），
+// 不是库里那套列名 —— 这条链路走的是引擎，不是 sqlite。
+type loadOptions struct {
+	CharacterLimit int `json:"character_limit"` //: 可部署人数上限
+	MaxLifePoint   int `json:"max_life_point"`
+	InitialCost    int `json:"initial_cost"`
+	MaxCost        int `json:"max_cost"`
+}
+
+// callLoad 问引擎要一关的取数结果里那个 `options`。
+//
+// ★ 为什么要**问引擎**而不是自己读（2026-09-27，博士裁「同一件事只许一份实现」）：
+// `options.characterLimit` 只有引擎那份解析器读得到 —— 派生库的 `stage` 表**根本没有
+// 这一列**（实测 9 列），而 Python 参照也是从 `options.character_limit` 取的
+// （`ak_tactic/search.py` 的 `Searcher.deploy_limit`）。界面再写一份 JSON 解析，
+// 就是「同一件事两份实现」，而且两份迟早会漂。
+//
+// 同步调用，与 `ensureRoster()` 同一处置：一次 `load` 是**读一份 JSON**（几十毫秒），
+// 不是解算那种分钟级的活。**取不到就返回具名错误**，由调用方记进 `c.note` ——
+// 不许静默退化成 0：那是「这一关能上 0 个人」，与「没取到」在屏上长得一样。
+func (e *engineClient) callLoad(level string) (loadOptions, error) {
+	var out loadOptions
+	fields, err := e.call("load", 1, level, nil, 20*time.Second)
+	if err != nil {
+		return out, err
+	}
+	raw, ok := fields["stage"]
+	if !ok || len(raw) == 0 {
+		return out, fmt.Errorf("★ 引擎的应答里没有 stage 段（协议变了？）：%s",
+			cut(string(mustJSONKeys(fields)), 200))
+	}
+	var st struct {
+		Options loadOptions `json:"options"`
+	}
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return out, fmt.Errorf("★ stage 段解不开：%v", err)
+	}
+	return st.Options, nil
+}
+
 // mustJSONKeys 只给错误消息用：把应答的顶层键列出来，不 dump 整份（可能很大）。
 func mustJSONKeys(m map[string]json.RawMessage) []byte {
 	keys := make([]string, 0, len(m))
