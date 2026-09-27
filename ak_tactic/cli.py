@@ -1897,6 +1897,23 @@ def cmd_cache(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_datapack(args: argparse.Namespace) -> int:
+    """数据包：导出（我们发版用）／装入（玩家省掉 prts 与 theresa 两次抓取）。"""
+    from pathlib import Path
+
+    from .datapack import export_pack, install_pack
+    if args.export:
+        export_pack(Path(args.export), version=args.version)
+        return 0
+    if args.install:
+        return install_pack(Path(args.install))
+    print("用法：\n"
+          "  python -m ak_tactic datapack --export out/rios-data-v0.1.0.zip\n"
+          "  python -m ak_tactic datapack --install <zip 或解开的目录>\n"
+          "  python -m ak_tactic datapack --selftest        # 离线自检")
+    return 2
+
+
 # ----------------------------------------------------------------- main
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2180,6 +2197,13 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--limit", type=int, default=None,
                    help="--fetch-levels 只取前 N 个（试跑用）")
     c.set_defaults(func=cmd_cache)
+
+    dp = sub.add_parser("datapack",
+                        help="数据包（prts/theresa 派生，CC BY-NC-SA 4.0）：导出与装入")
+    dp.add_argument("--export", metavar="ZIP", help="导出到这个 zip")
+    dp.add_argument("--install", metavar="ZIP_OR_DIR", help="装入这个包")
+    dp.add_argument("--version", default="data-v0.1.0", help="包版本（也是 release tag）")
+    dp.set_defaults(func=cmd_datapack)
     return p
 
 

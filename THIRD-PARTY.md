@@ -112,6 +112,26 @@ status `100/101/102/0` 的语义、deep link 前缀 `hypergryph://scan_login?sca
   它们随 CC BY-NC-SA 4.0 走：署名、非商业、相同方式共享。
 
 本仓库的应对是**干脆不分发**：`data/` 与 `out/` 全部 gitignore，克隆后自行建库。
+
+### 数据在**另一个仓**（2026-09-27 起）
+
+游戏本体数据（关卡地图、敌人数值、`excel/` 源表）**不可再分发**——镜像站未声明许可、
+内容版权属鹰角 ⇒ **本仓照旧不分发任何数据**，MIT 也不覆盖它们。
+
+但那两块来自社区站点、许可明确的**派生数据**可以（非商业），于是单独开了一个
+**公开数据仓**，让玩家省掉抓取 prts.wiki 与 theresa.wiki 这两步：
+
+| | |
+| --- | --- |
+| 仓 | <https://github.com/Archer76/rios-data> —— **整仓按 CC BY-NC-SA 4.0 发布** |
+| 内容 | `enemydb.sqlite`（prts.wiki「分类:敌人」派生）＋ `theresa/tile_info.json`（theresa.wiki 地图数据接口派生） |
+| **不含** | 任何游戏本体数据：无关卡地图 JSON、无 `enemy_database.json`、无 `excel/` |
+| 判据 | 导出与装入**两侧**都有代码判据挡着（`ak_tactic/datapack.py` 的 `offending()`／`missing_decl()`），不是文档里的一句话 |
+| 边界 | 本仓的 MIT **不覆盖**那个仓的内容；**那个仓的内容也不得并入本仓**（一并入，本仓「不含第三方数据」的结论就失真了） |
+
+装入用 `python -m ak_tactic datapack --install <zip>`（或 TUI 的 `-install-datapack`）。
+它**先验**包内五份许可/来源文件齐不齐、有没有夹带本体数据，缺一份或夹带一件都**拒装**。
+
 **如果你要把建好的库随成品分发、或用于商业用途，需要自行评估并取得相应授权。**
 
 ---
