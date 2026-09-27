@@ -82,7 +82,53 @@ Source: "{#SrcDir}\*"; DestDir: "{app}"; \
 Filename: "{app}\{#AppExeName}"; Description: "现在启动 R.I.O.S."; \
     Flags: postinstall nowait skipifsilent shellexec
 
+[UninstallDelete]
+; Python 一 import 我们的包，就往**代码目录旁**写 `__pycache__`（可重建）。
+; 那些文件不是安装器装的 ⇒ Inno 默认不管，不写这一段的话「卸载干净」这条要打折：
+; 玩家卸完会在 eng/ 下看到一堆 .pyc 残骸。
+; ★ 为什么这里只有**两条**：`ak_tactic` 是**有子包**的（battle/db/frontend/gamedata/
+;   operator/prts/simgo/tui，每个都自己写一份 `__pycache__`），而**通配在这里不生效** ——
+;   实测（2026-09-27，装完自查造了三级夹具）：`Name: "{app}\eng\ak_tactic\*\__pycache__"`
+;   这一行**一个都没删掉**，卸载后子包那层的 .pyc 还在（判据具名报的就是它）。
+;   ⇒ 子包那一层改由 `[Code]` 的 `PurgePycache` 递归清（见下），这里留两条**声明式**的
+;   顶层路径：它们与递归那套互为冗余，但让人一眼看得见"卸载会清代码缓存"这件事。
+; ★ 只点 eng/ 下的**代码缓存**：玩家的数据在 `{app}\eng\data`，那一段走
+;   InitializeUninstall 的「先问再删」，这里一条都不许碰到它（`data` 不在下面任何一行里）。
+Type: filesandordirs; Name: "{app}\eng\ak_tactic\__pycache__"
+Type: filesandordirs; Name: "{app}\eng\tools\__pycache__"
+
 [Code]
+// PurgePycache 递归删掉某棵树下的所有 `__pycache__`（可重建的代码缓存）。
+//
+// ★ **只从 `eng\ak_tactic` 与 `eng\tools` 两棵树往下走，绝不从 `eng` 开始**：
+//   玩家的数据就在 `eng\data`（与那两棵同级），从 `eng` 递归就有扫到它的风险，
+//   而那个目录是按「先问再删」处置的 —— 这里连碰一下都不许。从这两棵走，
+//   `eng\data` 在构造上就不可能被访问到（它是兄弟，不是后代）。
+// ★ 为什么不用 `[UninstallDelete]` 的通配：实测它不生效，理由写在上面那一段。
+procedure PurgePycache(const Dir: String);
+var
+  FindRec: TFindRec;
+  Sub: String;
+begin
+  if not FindFirst(Dir + '\*', FindRec) then
+    Exit;
+  repeat
+    //: 不用 `Continue`：Inno 的 Pascal Script 对它支持不稳，改成嵌套判断。
+    if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+    begin
+      Sub := Dir + '\' + FindRec.Name;
+      if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+      begin
+        if CompareText(FindRec.Name, '__pycache__') = 0 then
+          DelTree(Sub, True, True, True)
+        else
+          PurgePycache(Sub);
+      end;
+    end;
+  until not FindNext(FindRec);
+  FindClose(FindRec);
+end;
+
 // 首次运行不是"构建数据"一步，是三步（迁移图 §12.5）。
 // 这段话必须出现在**安装向导里**：装完的目录里一份文档也没有（§12.6），
 // 离线用户拿不到任何别的说明。
@@ -109,6 +155,11 @@ var
   DataDir: String;
 begin
   Result := True;
+  //: ★ 代码缓存先清（`__pycache__`，可重建）—— 它**必须放在前面**：下面玩家数据那段
+  //: 在 `/VERYSILENT` 分支里会 `Exit`，放它后面就等于静默卸载时不清。
+  //: 只从这两棵树往下走，绝不从 `eng`（理由见 `PurgePycache` 的注释）。
+  PurgePycache(ExpandConstant('{app}\eng\ak_tactic'));
+  PurgePycache(ExpandConstant('{app}\eng\tools'));
   DataDir := ExpandConstant('{app}\eng\data');
   if DirExists(DataDir) then
   begin

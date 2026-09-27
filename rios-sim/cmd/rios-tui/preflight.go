@@ -11,8 +11,9 @@ import (
 
 // # 启动前自检（`-preflight`）
 //
-// 发布形态是**拆分目录**（迁移图 §12.2）：`rios-tui.exe` ／ `rios-sim.exe` ／ `eng/` ／
-// `启动.cmd`；而 `data/` 与 Python 运行时**不随包**（§12.5）。拆分的代价是
+// 发布形态是**拆分目录**（迁移图 §12.2）：`rios-tui.exe` ／ `rios-sim.exe` ／ `eng/`；
+// 而 `data/` 与 Python 运行时**不随包**（§12.5）。双击 `rios-tui.exe` 就是入口，
+// 发布形态里没有启动器这一类中间件（2026-09-27 取消，§12.9）。拆分的代价是
 // 「目录少一个文件就跑不起来」—— 单文件 exe 用体积换来的那点好处，拆开就得自己还
 // （§12.3）。所以入口在起界面**之前**逐项检查。
 //
@@ -108,7 +109,7 @@ func printFirstRunSteps() {
 	fmt.Println()
 	fmt.Println("首次运行要做的几件事（按顺序）：")
 	fmt.Println("  1. 装 Python（若上面说没找到解释器）—— 到 https://www.python.org/downloads/ 自行下载")
-	fmt.Println("     装完再跑一次本启动器；扫码登录还要 pip install qrcode。")
+	fmt.Println("     装完再双击一次 rios-tui.exe；扫码登录还要 pip install qrcode。")
 	fmt.Println("  2. 取游戏数据（data/gamedata/）—— 这一步**不能构建，只能下载**。")
 	fmt.Printf("     说明与地址：%s/blob/main/docs/data-sources.md\n", repoURL)
 	fmt.Println("     ★ 安装出来的目录里工程侧 Python 住在 eng/，它的根也是 eng/ ⇒ 数据")
@@ -246,7 +247,7 @@ func interpreterName() string {
 
 // probePython 起一次解释器，问两件事：版本号，以及 qrcode 能不能导入。
 //
-// 用一条 `-c` 而不是两次，是为了少起一个进程（启动器每加一次进程启动，双击后
+// 用一条 `-c` 而不是两次，是为了少起一个进程（入口每加一次进程启动，双击后
 // 到界面出现就多一顿）。
 func probePython(py string) (version string, hasQR bool, err error) {
 	code := strings.Join([]string{
@@ -258,7 +259,13 @@ func probePython(py string) (version string, hasQR bool, err error) {
 		"    qr = False",
 		"print(json.dumps({'v': sys.version.split()[0], 'qrcode': qr}))",
 	}, "\n")
-	out, err := exec.Command(py, "-c", code).Output()
+	cmd := exec.Command(py, "-c", code)
+	//: 版本探针也是 Python 子进程 ⇒ 与桥、与重建命令走**同一份**环境拼装（`pythonEnv`）。
+	//: 它只 import 标准库与 qrcode（都在 site-packages 里），本来就不会往 eng/ 写
+	//: __pycache__；统一成一份是为了让「本包所有 Python 子进程都用 pythonEnv」成为一条
+	//: 可检查的不变式 —— 否则下一个人加第五处 spawn 时，没有东西提醒他还有这一项。
+	cmd.Env = pythonEnv()
+	out, err := cmd.Output()
 	if err != nil {
 		//: 起不来与"起来了但报错"要分开说：前者是没装，后者多半是 RIOS_PYTHON 指错了东西。
 		if ee, ok := err.(*exec.ExitError); ok {

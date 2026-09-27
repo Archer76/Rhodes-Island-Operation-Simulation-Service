@@ -657,14 +657,23 @@ rc=0、结论全绿、✓≥200、且那两条具名未核必须出现。**少�
 * 装完自查会真起一次桥 ⇒ Python 会往**发布树里**写 `__pycache__`。上一版就是这样：
   自查全绿，紧接着哈希那一步判据报"树里有 6 个 .pyc"。处置：哈希前清掉
   （可重建，§12.6 判据也认为它不该进包）。
-  ★ **2026-09-27 补记一处代价**（入口换成 exe 之后，§12.9）：原先 `启动.cmd` 里那句
-  `set PYTHONDONTWRITEBYTECODE=1` **没有落点了** —— Go 起 Python 子进程时只钉了
-  `PYTHONIOENCODING`／`PYTHONUTF8`（`setup.go` 的 `runStreaming`），全仓再无第二处设它
-  （实测：`PYTHONDONTWRITEBYTECODE` 在仓里只剩文档与打包脚本两处提及）。⇒ 玩家一跑，
-  `eng/` 下会长出 `__pycache__`。**判据不受影响**（打包脚本算哈希前会清一次；安装目录在
-  `{localappdata}\Programs` 下、可写，所以「写失败」那一族问题本来也不存在），代价是
-  卸载后目录里可能剩几个 `.pyc`。要在源头关掉，落点是 Go 侧 spawn Python 的两处
-  （`runStreaming` 与桥的 capture）补上这个环境变量 —— **本次只做打包与文档，未改产品侧**。
+  ★ **2026-09-27 补记**（入口换成 exe 之后，§12.9）：原先 `启动.cmd` 里那句
+  `set PYTHONDONTWRITEBYTECODE=1` **一度没有落点** —— 那个壳取消后，Go 起 Python 子进程时
+  只钉了 `PYTHONIOENCODING`／`PYTHONUTF8`，全仓再无第二处设它 ⇒ 玩家一跑 `eng/` 下就会长
+  `__pycache__`。**已补上两处落点**（同日）：
+  ① **Go 侧统一拼装** `pythonEnv()`（`engclient.go`）——「一处拼装、四处调用」：一次性桥
+  （`engclient.go` 的 `call`）、常驻桥（`bridgesession.go`）、重建命令（`setup.go` 的
+  `runStreaming`）、解释器版本探针（`preflight.go` 的 `probePython`）。抽成函数而不是各处
+  `append` 抄几遍，是因为抄几遍迟早会漂，而漂的表现正是「有的路子干净、有的路子脏」。
+  ② **安装器侧面**：`.iss` 里两条声明式的 `[UninstallDelete]`（`{app}\eng\ak_tactic\__pycache__`、`{app}\eng\tools\__pycache__`）
+  ＋ `[Code]` 的 `PurgePycache` 递归清子包那一层 —— 不补这一条，「卸载干净」会被这批残骸打折。
+  ★ **一条实测结论（别再走那条弯路）**：`[UninstallDelete]` 的 `Name` **不支持通配** ——
+  先写的 `Name: "{app}\eng\ak_tactic\*\__pycache__"` **一个都没删掉**，是装完自查那条新判据
+  当场抓到的（它造三级夹具、卸载后逐级点名）。所以子包那一层只能靠 `[Code]` 递归；
+  递归**只从 `ak_tactic` 与 `tools` 两棵树往下**，绝不从 `eng` 开始 —— 玩家的数据
+  `eng\data` 就在同一层，从 `eng` 递归就有扫到它的风险，而它是按「先问再删」处置的。
+  **判据**：`build_installer.py` 的装完自查造三级 `__pycache__` 夹具（ak_tactic 根／子包 battle／tools），
+  卸载后逐级点名要求消失，与「玩家的 `eng\data` 必须活下来」那条**成对**读。
 * `启动.cmd` **纯 ASCII** —— 这条约束**已随入口取消而失效**（§12.9）：cmd.exe 是按
   **当前代码页**逐行读批处理的，`chcp 65001` 生效之前的行若含中文就会乱码。现在代码页由
   `console_windows.go` 用 syscall 自己切、退出前恢复；给玩家看的中文照旧由
@@ -742,10 +751,13 @@ git -C <仓外>\wt-rebase rebase --onto origin/rewrite/paths-2026-09-26 main
 | 文件 | 改了什么 |
 | --- | --- |
 | `tools/build_release.py` | 删掉 `LAUNCHER` 常量与 `write_launcher()`（连同 `[3/6] 写 启动.cmd` 那一步，步骤由 6 步变 5 步）；白名单 `allowed_exact` 去掉 `启动.cmd`，并**新加一条具名拦阻**（树里出现 `.cmd`／`.bat` 就报「启动器已取消」）；`smoke()` 的两条启动器断言按下面的表处置 |
-| `tools/rios_setup.iss` | `AppExeName` ⇒ `rios-tui.exe`；向导正文的「双击目录里的 启动.cmd」跟着改。`[Run]` 那条**不动**：`shellexec` 与「双击」是同一条路（走 ShellExecute，控制台窗口该有就有），换成 exe 之后依然成立；`skipifsilent` 让静默安装不弹它 |
-| `tools/build_installer.py` | `want` 名单去掉 `启动.cmd`；原先「读 `.cmd` 文本做接线断言」那一段换成「装出来的目录里**没有** `启动.cmd`」 |
+| `tools/rios_setup.iss` | `AppExeName` ⇒ `rios-tui.exe`；向导正文的「双击目录里的 启动.cmd」跟着改。`[Run]` 那条**不动**：`shellexec` 与「双击」是同一条路（走 ShellExecute，控制台窗口该有就有），换成 exe 之后依然成立；`skipifsilent` 让静默安装不弹它。**第二轮追加**：`[UninstallDelete]` 删 `eng/` 下的 `__pycache__`（见下） |
+| `tools/build_installer.py` | `want` 名单去掉 `启动.cmd`；原先「读 `.cmd` 文本做接线断言」那一段换成「装出来的目录里**没有** `启动.cmd`」。**第二轮追加**：`--tree` 转绝对路径；新造三级 `__pycache__` 夹具并断言卸载后逐级消失 |
 | `README.md` | 「安装包装好的目录里双击 `启动.cmd`」⇒ `rios-tui.exe` |
-| 本文件 | §12.2 的发布树、§12.3 的入口括注、§12.5 的「安装器装」一行、§12.6 的表、§12.7 的两条补记 —— 同一笔改齐 |
+| 产品侧（**第二轮**，博士扩权后做） | ① `pythonEnv()` 统一 Python 子进程环境（含从 `启动.cmd` 搬进来的 `PYTHONDONTWRITEBYTECODE=1`），四处调用；② 十五处「启动器／`启动.cmd`」字样改完（表见下） |
+| 本文件 | §12.2 的发布树、§12.3 的入口括注、§12.5 的「安装器装」一行、§12.6 的表、§12.7 的两条补记 —— 同一笔改齐；§12.9 本身是这次新增 |
+
+★ **为什么「从壳里搬进 Go」这件事要单独记一笔**：那个壳除了串命令，还**顺带设了一个环境变量**（`PYTHONDONTWRITEBYTECODE=1`）。取消一个入口时最容易漏的就是这一类「壳的副作用」——命令搬到哪、判据换到哪都想到了，而它替我们设过的环境、它替我们摆正过的 cwd，只有**逐条对着壳的正文点一遍**才发现得了。这次是靠「壳里三件事」那张表逐行问「这一行还有谁在做」抓到的。
 
 **判据怎么换（取消一个入口最要紧的部分）**：旧的两条断言里有一条**没有等价物**，不许假装它还在。
 
@@ -767,15 +779,54 @@ git -C <仓外>\wt-rebase rebase --onto origin/rewrite/paths-2026-09-26 main
 | `smoke()` 正例 | rc=3，且点名了 `eng/data/gamedata` |
 | `smoke()` 负对照一（拿掉引擎） | rc=2，点名引擎 |
 | `smoke()` 负对照二（拿掉 `eng/`） | rc=2，点名工程侧 Python |
-| **入口那条新判据** | `rios-tui.exe -setup`（缺 `eng/`，stdin=NUL）⇒ **rc=3，0.6 秒内返回**（⇒ 确实没暂停），具名说法 `找不到工程侧脚本` |
+| **入口那条新判据** | `rios-tui.exe -setup`（缺 `eng/`，stdin=NUL）⇒ **rc=3，0.4 秒内返回**（⇒ 确实没暂停），具名说法 `找不到工程侧脚本` |
 | 文件数变化 | 90 个 / 13.9 MB。与 §12.7 那次 92 个的差正好是这两件：`启动.cmd`（本次取消）、`eng/tools/fetch_prts_notes.py`（早先那笔取消 —— 那棵树里确实没有它） |
-| 安装器四件（装／查／卸／再装） | **未跑**。`python tools/build_installer.py --version 0.3.2 --tree <探针树绝对路径>` 编译到 `[Files]` 那一步撞上下面那条口径问题，随后进程被宿主杀掉 ⇒ **这一轮没有取到读数，不许当已验** |
+| 安装器四件（装／查／卸／再装） | **首轮未取到**（撞上下面那条 `--tree` 口径问题）；修好后补跑 ⇒ 见下面「补跑读数」一表 |
 
-⚠ **顺带撞到一条口径问题（与本裁定无关，本次未改）**：`build_installer.py` 的 `--tree` 传**相对路径**时，ISCC 是**按 `.iss` 所在目录**解析 `Source` 的，于是报
-`No files found matching "…\tools\out\release\rios-v0.3.2-probe\*"`。缺省值（`ROOT/out/release/rios-<版本>`）本来就是绝对路径，所以只有显式传相对路径才会踩。一行可修（`main()` 里 `tree = Path(args.tree).resolve()`），但那是另一处口径，**本次没动**。
+**补跑读数**（同日，`--tree` 之修与 `pythonEnv`／`PurgePycache` 都落地之后）：
 
-⚠ **两条如实登记的代价**（都不是判据红，但下一个人该知道）：
+| 项 | 读数 |
+| --- | --- |
+| `go build ./...` / `go vet ./...` / `go test ./...`（在 `rios-sim/`） | 三个 **rc=0**；`go test` 四个包 `ok`（`rios-sim` 0.49s／`data` 0.82s／`maa` 0.76s／`mech` 0.45s），`cmd/rios-tui`／`core` 无测试 |
+| `rios-tui.exe -selftest`（`RIOS_DB` 指本机数据、`RIOS_SIM_BIN` 指发布树引擎、`RIOS_BRIDGE` 指开发树的桥） | **rc=0、✓=237、结论全绿**；唯一剩下的未核是「应答 id 校验分支（需假引擎才走得到）」 |
+| 同上但**不设** `RIOS_BRIDGE` | ✓=**233**，差的 4 条正是「要真名册」那一族，且有**具名**未核（桥报 `RosterUnavailable`）—— 发布树的 exe 按 `isReleaseTree` 只在自树里找桥，认的是 `eng/data/skland/`，而那是玩家装完才有的。**这不是回归**，是 §12.7 ③ 记的那条环境差异 |
+| 安装器编译（ISCC 6.7.3，`--tree` 传**相对**路径） | **rc=0**，`RIOS-Setup-0.3.2.exe` 5,907,805 B，sha256 `3e8e5d50…`（⇒ `resolve()` 那修实测有效） |
+| 第一次安装 | rc=0；运行时该有的 4 件点名在位；`SHA256SUMS.txt` 没进包；玩家的 `eng\data` 活过安装（判据 7 第 2 件） |
+| 装完自查（`-preflight`） | rc=3，致命缺件 0 件；**入口 rios-tui.exe 在位且能跑预检，装出来的目录里没有 `启动.cmd`** |
+| 静默卸载 | rc=0；程序文件走干净（第 3 件）；玩家数据留下（静默按保留）；**3 处 `__pycache__` 都被带走** |
+| 第二次安装（升版本／就地覆盖） | rc=0，装回去了（第 4 件）；收尾再卸一次并清掉临时目录 |
+| 装机产物 | 跑完即清（探针树与 `RIOS-Setup-0.3.2.exe` 都不留在 `out/release/` 冒充正式版） |
 
-1. **`PYTHONDONTWRITEBYTECODE=1` 没有落点了** —— 详见 §12.7 那条补记：它原先由 `启动.cmd` 设，现在没有任何一层设它 ⇒ 玩家一跑，`eng/` 下会长出 `__pycache__`（判据不受影响，代价是卸载残留可能多几个 `.pyc`）。要关就在 Go 侧 spawn Python 的两处补上（**产品侧，本次未改**）。
-2. **产品侧还剩几处提到启动器／`.cmd` 的正文**（本次只做打包与文档，未改）：`ak_tactic/cli.py:1783` 与 `:1788` 的退役提示、`rios-sim/cmd/rios-tui/preflight.go:111` 与 `setup.go:212`／`:287` 的「再双击一次本启动器」，以及 `main.go:136`／`preflight.go:15` 的注释。前两族是**给人看的话**，改不改都要博士点头。
+⚠ **顺带撞到一条口径问题（已修）**：`build_installer.py` 的 `--tree` 传**相对路径**时，ISCC 是**按 `.iss` 所在目录**解析 `Source` 的，于是报
+`No files found matching "…\tools\out\release\rios-v0.3.2-probe\*"` —— 一条看上去像「树不存在」的错，其实树在、只是基准目录被拼错了。缺省值（`ROOT/out/release/rios-<版本>`）本来就是绝对路径，所以只有显式传相对路径才会踩。
+**处置**：`main()` 里改成 `(Path(args.tree) if args.tree else …).resolve()`，两种写法归一（理由写在那一行的注释里）⇒ 现在传相对路径也对。
+
+⚠ **两条一度登记为「代价」的事，现在都有落点了**（同日改完）：
+
+1. **`PYTHONDONTWRITEBYTECODE=1`** —— 原先由 `启动.cmd` 设，入口取消后一度无人设。**已补两处**：Go 侧统一拼装 `pythonEnv()`（`engclient.go`，四处调用：一次性桥／常驻桥／重建命令／版本探针）＋ `.iss` 的 `[UninstallDelete]` 删 `eng/` 下的 `__pycache__`。逐处落点与配套判据见 §12.7 那条补记。
+2. **产品侧提到启动器／`.cmd` 的正文** —— **已逐处改完**（玩家可见的改成「双击 `rios-tui.exe`」或「再双击一次」，注释顺手改）：
+
+| 文件:行 | 原来 | 现在 |
+| --- | --- | --- |
+| `ak_tactic/cli.py:1783`（docstring） | 发布形态是安装包里的 `启动.cmd` | 安装包里的 `rios-tui.exe`，双击它即入口 |
+| `ak_tactic/cli.py:1788`（**玩家可见**） | 或安装包里的 启动.cmd | 安装包装好后双击它 |
+| `preflight.go:15`（注释） | 发布树里列着 `启动.cmd` | 只列 `rios-tui.exe`／`rios-sim.exe`／`eng/`，并注明双击 exe 就是入口、没有启动器这类中间件 |
+| `preflight.go:111`（**玩家可见**） | 装完再跑一次本启动器 | 装完再双击一次 rios-tui.exe |
+| `preflight.go:249`（注释） | 启动器每加一次进程启动 | 入口每加一次进程启动 |
+| `setup.go:37`（注释） | 启动器每次都会调它 | 入口每次都会调它 |
+| `setup.go:181`（注释） | 同上 | 同上 |
+| `setup.go:212`（**玩家可见**） | 再双击一次本启动器即可 | 再双击一次 rios-tui.exe 即可 |
+| `setup.go:287`（**玩家可见**） | 再双击一次启动器 | 再双击一次 rios-tui.exe |
+| `main.go:136`（注释） | 双击 启动.cmd / exe | 双击 `rios-tui.exe` |
+| `console_windows.go:16`（注释） | 根本不需要启动器 | 根本不需要那个壳 |
+| `engpipe.go:74`（注释） | 启动器自检 | 启动前自检 |
+| `welcome.go:126`（注释） | 启动器自检的第一项 | 启动前自检的第一项 |
+| `rios-sim/data/datadb.go:75`（注释） | 启动器自检的第一项 | 启动前自检的第一项 |
+| `selftest.go:1740`（判据标签） | 启动器每次都会调它 | 入口每次都会调它 |
+
+（`preflight.go`／`setup.go`／`main.go`／`console_windows.go`／`engpipe.go`／`welcome.go`／`selftest.go` 都在 `rios-sim/cmd/rios-tui/` 下。）
+
+⇒ 产品侧（`rios-sim/**` 与 `ak_tactic/**`）现在**零处**把「启动器」当成一个还在的角色来写；剩下的「启动器」字样只出现在**登记它被取消**的正文里（本文件与 `tools/build_release.py` 的说明段）。
+
+⚠ **一处刻意不改**：`tools/build_release.py`／`tools/build_installer.py`／本文件里那些「启动器已取消」的说法，是**取消这件事本身的登记**，删掉它们才是把账抹了。
 

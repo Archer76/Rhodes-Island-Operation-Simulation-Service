@@ -133,7 +133,7 @@ func newAppCtx(stages []data.StageRecord, zones []data.ZoneRecord) *appCtx {
 // resolveDataDir 把 `RIOS_DB` 指到放 sqlite 的那个目录。
 //
 // ★ 这里补的是**取数包的缺口，不是另立口径**：`data.DataDBDir()` 缺省返回
-// 相对的 `data`，那是相对 **cwd** 的 —— 而发布形态是「双击 启动.cmd / exe」，
+// 相对的 `data`，那是相对 **cwd** 的 —— 而发布形态是「双击 `rios-tui.exe`」，
 // cwd 未必等于 exe 所在目录。所以缺省先找「与 exe 同级」的 `data/`，
 // 再退到 cwd 下的 `data/`；**两处都没有就具名失败**（缺件要说清缺什么、
 // 怎么补，不许静默跑出一个空列表 —— 那与「这游戏没有关卡」长得一样）。

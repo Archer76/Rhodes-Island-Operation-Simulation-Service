@@ -34,7 +34,7 @@ import (
 //  3. **无人在场也不挂住**：那条 y/n 问句读 stdin；读不到（EOF，例如从 NUL 启动或无人值守）
 //     就按「不代装」处理 —— 安全的那一侧。
 //
-// ★ 静默的常规路径：什么都不缺时**一个字节都不打印**、立刻返回 0。启动器每次都会调它，
+// ★ 静默的常规路径：什么都不缺时**一个字节都不打印**、立刻返回 0。入口每次都会调它，
 // 所以这条路径必须是哑的（否则每次启动都刷一屏）。
 
 // : winget 里 Python 的候选 id，**从新到旧**试。写死一个版本号迟早会过期，写一串则能撑一段；
@@ -178,7 +178,7 @@ func rebuildScript() string {
 func runSetup() int {
 	plan := setupPlan()
 
-	//: ★ 常规路径：什么都不缺 ⇒ 立刻返回、不打印（启动器每次都会调它）。
+	//: ★ 常规路径：什么都不缺 ⇒ 立刻返回、不打印（入口每次都会调它）。
 	if len(plan) == 0 {
 		return 0
 	}
@@ -209,7 +209,7 @@ func runSetup() int {
 	if needData {
 		if py == "" {
 			fmt.Println("★ 没有可用的 Python ⇒ 数据与派生库都建不出来。")
-			fmt.Printf("  装好之后（%s）再双击一次本启动器即可。\n", pythonURL)
+			fmt.Printf("  装好之后（%s）再双击一次 rios-tui.exe 即可。\n", pythonURL)
 			return 3
 		}
 		if rc := runRebuildData(py); rc != 0 {
@@ -284,7 +284,7 @@ func offerPythonInstall(cur string) string {
 			fmt.Printf("已装好，本次就用它：%s\n", found)
 			return found
 		}
-		fmt.Println("装好了，但本次进程还没看到它（PATH 要刷新）—— 关掉窗口再双击一次启动器。")
+		fmt.Println("装好了，但本次进程还没看到它（PATH 要刷新）—— 关掉窗口再双击一次 rios-tui.exe。")
 		return ""
 	}
 	fmt.Printf("（winget 没装成；请自行安装：%s）\n", pythonURL)
@@ -384,8 +384,9 @@ func runStreaming(exe string, args []string, dir string) int {
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	//: 中文 Windows 缺省 GBK：不钉 UTF-8 的话，子进程一遇中文就编码崩（本仓踩过）。
-	cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
+	//: 环境**一处拼装**（`pythonEnv`）：UTF-8 两项防编码崩，`PYTHONDONTWRITEBYTECODE`
+	//: 防它往 eng/ 里写 __pycache__ —— 那一项原先由 `启动.cmd` 设，现在搬进了 Go（§12.9）。
+	cmd.Env = pythonEnv()
 	cmd.Stdout, cmd.Stderr, cmd.Stdin = os.Stdout, os.Stderr, os.Stdin
 	if err := cmd.Start(); err != nil {
 		fmt.Printf("★ 起不来：%v\n", err)

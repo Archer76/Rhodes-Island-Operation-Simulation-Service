@@ -1737,7 +1737,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		//: 纯函数 `setupPlanFrom` 在这里走遍组合，真跑那一层交给 `tools/build_installer.py`
 		//: 的装完自查（它本来就要装一棵树）。
 		all := setupPlanFrom(true, false, true, true)
-		check("三项齐全 ⇒ 计划为空（启动器每次都会调它，这条路径必须是哑的）",
+		check("三项齐全 ⇒ 计划为空（入口每次都会调它，这条路径必须是哑的）",
 			len(all) == 0, fmt.Sprintf("%d 步", len(all)))
 
 		noPy := setupPlanFrom(false, false, true, true)

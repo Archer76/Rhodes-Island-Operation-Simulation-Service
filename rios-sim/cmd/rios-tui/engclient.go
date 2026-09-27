@@ -13,6 +13,29 @@ import (
 	"time"
 )
 
+// pythonEnv 是**所有** Python 子进程共用的环境拼装（一处拼装、四处调用）。
+//
+// 三项各自防一件事，都不是风格问题：
+//
+//   - `PYTHONIOENCODING`／`PYTHONUTF8`：中文 Windows 的缺省代码页是 GBK，桥上把协议行
+//     按 UTF-8 写，只要有一个字符编不出来，回给我们的就是一个**空管道** —— 而空管道
+//     与「桥死了」长得一模一样。
+//   - `PYTHONDONTWRITEBYTECODE`：★ **这一项是从 `启动.cmd` 搬进来的**（2026-09-27，
+//     迁移图 §12.9）。那个壳原先替我们设了它；入口换成 `rios-tui.exe` 之后**没有任何
+//     一层设**，于是 Python 一 import 就往安装目录里的 `eng/ak_tactic/` 与
+//     `eng/tools/` 写 `__pycache__` —— 可重建、不影响功能，但会把目录弄脏：卸载残留
+//     与哈希清单都要跟着多解释一句。搬进这里之后，"双击 exe"这条路与当初那个壳等价。
+//
+// ★ 为什么抽成一个函数而不是各处 `append(os.Environ(), ...)` 抄三遍：抄三遍迟早会漂，
+// 而漂的表现是「有的路子干净、有的路子脏」——正好是这一项要防的形状。
+func pythonEnv() []string {
+	return append(os.Environ(),
+		"PYTHONIOENCODING=utf-8",
+		"PYTHONUTF8=1",
+		"PYTHONDONTWRITEBYTECODE=1",
+	)
+}
+
 // # Go↔Python 的桥客户端（解释器与脚本都可指定，缺件必须**具名失败**）
 //
 // 为什么是子进程而不是同进程：R.I.O.S. 的方针是「UI 与模拟器转到 Go」（`docs/python-to-go-migration.md`），
@@ -226,11 +249,9 @@ func (b *bridgeClient) call(cmd string, id int, extra map[string]any,
 	defer cancel()
 
 	c := exec.CommandContext(ctx, b.python, b.script)
-	//: 子进程的输出**一律 UTF-8**：桥上已经把协议行按 UTF-8 写（见 rios_bridge.py 的
-	//: `out.reconfigure`），这里再把环境也钉住 —— 中文 Windows 的缺省代码页是 GBK，
-	//: 只要有一个字符编不出来，回给我们的就是一个**空管道**，而空管道与「桥死了」
-	//: 长得一模一样。
-	c.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
+	//: 子进程的环境**一处拼装**（`pythonEnv`）：编码两项的由来见那里，第三项
+	//: `PYTHONDONTWRITEBYTECODE` 是从 `启动.cmd` 搬进来的（§12.9）。
+	c.Env = pythonEnv()
 
 	stdin, err := c.StdinPipe()
 	if err != nil {
