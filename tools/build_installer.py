@@ -1,6 +1,14 @@
 # -*- coding: utf-8 -*-
 """编译安装器，并把判据 7 的**四件**逐件验成读数。
 
+★★ 2026-09-27 博士裁：**下版本起发布物改用 zip，不再用安装包**
+（见 `docs/python-to-go-migration.md` §12.13，工具 `tools/build_zip.py`）。
+这个脚本与 `tools/rios_setup.iss` **只为复现 0.3.0～0.3.2 那三个安装包而保留**，
+不要拿它做新版本 —— 新版本走两条命令：
+
+    python tools/build_release.py --version v0.3.3
+    python tools/build_zip.py     --version v0.3.3 --tree out/release/rios-v0.3.3
+
 四件（迁移图 §12.5）：
   1. **依赖自检**：装完就能用入口自查，缺件**具名**（不是跑到一半才炸）；
   2. **不覆盖已有 `data/`**：玩家自己取过数据就不许动它；
