@@ -3,8 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"rios-sim/core"
 )
@@ -351,6 +354,131 @@ func dedupeKey(state []CandidateRow) string {
 	return out
 }
 
+// scoredState 是「一个状态的评估结果」。
+//
+// ★ **包级**而不是 `Solve` 里的局部类型：并行评估那一段独立成了函数
+// （`evalDepthParallel`），两边得看得见同一个类型。
+type scoredState struct {
+	key   rankKey
+	state []CandidateRow
+	plan  *core.PlayPlan
+	v     *Verdict
+}
+
+// evalDepthParallel 并行评估**同一层**的所有状态，**一出现三星就收工**（博士 2026-09-28 裁）。
+//
+// 三件事一起做，因为它们是同一个问题的三面：
+//
+//  1. **并行**：同一层里每个状态是一份独立模拟（`evalState` 不共享可变状态）⇒ 直接分到多核。
+//     参照那条搜索本来就有 worker 池（`ak_tactic/search.py::Searcher.workers`，实测起 16 个
+//     进程），而 Go 这边一直是串行 —— 实测一层 144 个状态、单次模拟 ≈0.86s ⇒ 串行 124s。
+//  2. **早停**：同一层里已经出现 6 个三星方案，串行却把 144 个全跑完 ⇒ 白等。
+//     一出现三星就置 `stop`，**还没开跑的状态直接不跑**。
+//  3. **先串行热一次**：包里那几张 lazily 加载的表缓存（`rangeTableCache` /
+//     `charTableCache` / `skillTableCache` / `battleEquipCache`）是「空就加载再赋值」，
+//     两个 goroutine 同时首次加载会撞上（并发 map 写＝崩）。第一个状态串行算，
+//     把缓存热起来，之后 worker 只读。
+//
+// ⚠ 两处**登记**（这两条确实改了行为）：
+//   - 返回的不再保证是「这一层排名最好的三星」，而是「最先算出来的那个三星」
+//     —— 博士原话就是「出三星直接给结果」；
+//   - 因此与 Python 参照**不保证逐位相同**（按同日口径：Go 是从零写的独立实现，
+//     这类差异记「与 Python 的差异」，不算欠账）。
+func evalDepthParallel(level, path string, q SolveQuery, st *Stage,
+	states [][]CandidateRow, roster *core.RosterRead) ([]scoredState, SolveStats) {
+	var sub SolveStats
+	pool := make([]scoredState, 0, len(states))
+	if len(states) == 0 {
+		return pool, sub
+	}
+	var stop atomic.Bool
+
+	//: 一个状态算完之后的记账（串行热那一次与 worker 共用同一份逻辑）
+	record := func(s []CandidateRow, plan *core.PlayPlan, v *Verdict, why string,
+		err error) *scoredState {
+		if err != nil {
+			switch why {
+			case "plan_invalid":
+				sub.PlanInvalid++
+			case "spec_failed":
+				sub.SpecFailed++
+			default:
+				sub.SimFailed++
+			}
+			if sub.FirstError == "" {
+				sub.FirstError = why + "：" + err.Error()
+			}
+			return nil
+		}
+		sub.Evaluated++
+		if starsOf(v) == 3 {
+			sub.Stars3++
+			stop.Store(true) //: 出三星直接收工
+		}
+		one := scoredState{key: rankOf(v), state: s, plan: plan, v: v}
+		return &one
+	}
+
+	//: ---- ① 先串行算第一个：把表缓存热起来（并发首次加载会撞）----
+	plan, v, why, err := evalState(level, path, q, st, states[0], roster)
+	if got := record(states[0], plan, v, why, err); got != nil {
+		pool = append(pool, *got)
+	}
+
+	//: ---- ② 其余并行；一出现三星就不再派新活 ----
+	rest := states[1:]
+	if stop.Load() || len(rest) == 0 {
+		return pool, sub
+	}
+	workers := runtime.GOMAXPROCS(0) - 1
+	if workers > len(rest) {
+		workers = len(rest)
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	type outcome struct {
+		state []CandidateRow
+		plan  *core.PlayPlan
+		v     *Verdict
+		why   string
+		err   error
+	}
+	jobs := make(chan []CandidateRow)
+	outc := make(chan outcome, len(rest))
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for s := range jobs {
+				if stop.Load() {
+					return
+				}
+				p, vv, w, e := evalState(level, path, q, st, s, roster)
+				outc <- outcome{state: s, plan: p, v: vv, why: w, err: e}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, s := range rest {
+			if stop.Load() {
+				return
+			}
+			jobs <- s
+		}
+	}()
+	wg.Wait()
+	close(outc)
+	for o := range outc {
+		if got := record(o.state, o.plan, o.v, o.why, o.err); got != nil {
+			pool = append(pool, *got)
+		}
+	}
+	return pool, sub
+}
+
 // Solve 是 beam 搜索主入口（`Searcher.search`）。
 //
 // ⚠ **串行**：Python 那边一层要投几百个状态给进程池（每个 worker 各起一个引擎
@@ -418,15 +546,9 @@ func Solve(level, path string, q SolveQuery) (SolveOut, error) {
 	}
 	maxLife := st.Options.MaxLifePoint
 
-	type scored struct {
-		key   rankKey
-		state []CandidateRow
-		plan  *core.PlayPlan
-		v     *Verdict
-	}
 	var stats SolveStats
-	var beamStates []scored
-	var overall *scored
+	var beamStates []scoredState
+	var overall *scoredState
 	for depth := 1; depth <= maxOps; depth++ {
 		stats.Depths++
 		seeds := [][]CandidateRow{nil}
@@ -456,28 +578,16 @@ func Solve(level, path string, q SolveQuery) (SolveOut, error) {
 			}
 		}
 		stats.StatesBuilt += len(states)
-		pool := make([]scored, 0, len(states))
-		for _, s := range states {
-			plan, v, why, err := evalState(level, path, q, st, s, roster)
-			if err != nil {
-				switch why {
-				case "plan_invalid":
-					stats.PlanInvalid++
-				case "spec_failed":
-					stats.SpecFailed++
-				default:
-					stats.SimFailed++
-				}
-				if stats.FirstError == "" {
-					stats.FirstError = why + "：" + err.Error()
-				}
-				continue
-			}
-			stats.Evaluated++
-			if starsOf(v) == 3 {
-				stats.Stars3++
-			}
-			pool = append(pool, scored{key: rankOf(v), state: s, plan: plan, v: v})
+		//: ★★ 2026-09-28 博士裁：「多线程要做，出三星直接给结果」——见 `evalDepthParallel`
+		//: 的注释（并行 ＋ 出三星即收工 ＋ 先串行热一次表缓存）。
+		pool, sub := evalDepthParallel(level, path, q, st, states, roster)
+		stats.Evaluated += sub.Evaluated
+		stats.Stars3 += sub.Stars3
+		stats.PlanInvalid += sub.PlanInvalid
+		stats.SpecFailed += sub.SpecFailed
+		stats.SimFailed += sub.SimFailed
+		if stats.FirstError == "" {
+			stats.FirstError = sub.FirstError
 		}
 		if len(pool) == 0 {
 			out.Note = fmt.Sprintf("第 %d 人时已经没有可加的位置了（%d 个状态全部丢弃："+
@@ -489,7 +599,7 @@ func Solve(level, path string, q SolveQuery) (SolveOut, error) {
 		//: 按 rank 稳定降序（Python 的 `sort(reverse=True)` 稳定 ⇒ 同分保持插入序）
 		sort.SliceStable(pool, func(i, j int) bool { return pool[i].key.better(pool[j].key) })
 		seen := map[string]bool{}
-		uniq := make([]scored, 0, len(pool))
+		uniq := make([]scoredState, 0, len(pool))
 		for _, it := range pool {
 			k := dedupeKey(it.state)
 			if seen[k] {
