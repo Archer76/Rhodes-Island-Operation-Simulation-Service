@@ -76,14 +76,22 @@ type setupBars struct {
 
 // sampleRate 用**两次 tick 的字节差 ÷ 时间差**算下载速度。
 //
+// ★ 时刻取 tick **自带的** `t`（epoch 秒），不是"读到这一行的时刻"：界面每 150ms
+// 批量读一次文件，同一批里的几行会被打上同一个时刻 ⇒ 时间差≈0 ⇒ 速度永远算不出来
+// （2026-09-28 博士："我也没看到下载速度"）。`t` 缺省（老格式）时才退回当前时刻。
+//
 // ★ 只在字节**真的涨了**且间隔够长时才更新：缓存命中时字节不涨（那本来就没走网络），
 // 报一个"0 B/s"会被读成"卡住了"；间隔太短（同一批里的连续两行）则会算出噪声速度。
-func (b *setupBars) sampleRate(st *progressStep, bytes int64) {
+func (b *setupBars) sampleRate(st *progressStep, bytes int64, atEpoch float64) {
 	st.Bytes = bytes
 	if b.samples == nil {
 		b.samples = map[string]sample{}
 	}
 	now := time.Now()
+	if atEpoch > 0 {
+		sec := int64(atEpoch)
+		now = time.Unix(sec, int64((atEpoch-float64(sec))*1e9))
+	}
 	prev, ok := b.samples[st.Key]
 	b.samples[st.Key] = sample{bytes: bytes, at: now}
 	if !ok || bytes <= prev.bytes {
@@ -114,6 +122,7 @@ func (b *setupBars) apply(line []byte) bool {
 		Done   int     `json:"done"`
 		Total  int     `json:"total"`
 		Bytes  int64   `json:"bytes"`
+		T      float64 `json:"t"` //: tick 自己的时刻（epoch 秒）—— 算速度用它
 		OK     int     `json:"ok"`
 		Failed int     `json:"failed"`
 		Steps  []struct {
@@ -152,7 +161,7 @@ func (b *setupBars) apply(line []byte) bool {
 			return false
 		}
 		st.Done, st.Total = ev.Done, ev.Total
-		b.sampleRate(st, ev.Bytes)
+		b.sampleRate(st, ev.Bytes, ev.T)
 		return true
 	case "summary":
 		b.ok, b.failed, b.haveSum = ev.OK, ev.Failed, true
@@ -317,6 +326,15 @@ func tailOf(st *progressStep) string {
 		}
 		return "进行中…"
 	case "ok":
+		//: ★ 带上下载量：短步骤的实时数字会在"完成"那一刻被这一行取代，
+		//: 不带到这儿就变成"我从没见过速度"（2026-09-28 博士）。
+		if st.Bytes > 0 {
+			s := fmt.Sprintf("完成（%.1fs）· 已下 %s", st.Sec, humanBytes(st.Bytes))
+			if st.Sec > 0.5 {
+				s += fmt.Sprintf("（%s 平均）", humanRate(float64(st.Bytes)/st.Sec))
+			}
+			return s
+		}
 		return fmt.Sprintf("完成（%.1fs）", st.Sec)
 	case "fail":
 		m := st.Msg

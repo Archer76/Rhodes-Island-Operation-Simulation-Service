@@ -543,6 +543,11 @@ func runRebuildData(py string) int {
 		c := exec.Command(py, script, "--only", only,
 			"--progress-file", progressFile, "--quiet")
 		c.Dir = root
+		//: ★ 2026-09-28 补 `c.Env`：不设就继承本进程的环境，而中文 Windows 上
+		//: Python 的 stdout 会是 **cp936**，日志落盘成 GBK、界面按 UTF-8 读 ⇒
+		//: 失败原因那几行全是乱码（博士首启截图里就是"�� gamedata �ؽ���Ա�⡭"）。
+		//: 与桥那条**用同一份** `pythonEnv()`（UTF-8 两项 ＋ 不写 __pycache__）。
+		c.Env = pythonEnv()
 		//: **继承 stdio，不抓管道**（本机沙箱下抓管道会 EPERM；见 progress.go 的文件头）
 		c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 		return c.Run()

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 __all__ = ["ProgressWriter"]
 
@@ -36,5 +37,11 @@ class ProgressWriter:
             pass                       #: 进度写不进去不该让建库失败
 
     def tick(self, key: str, done: int, total: int, *, bytes_: int = 0) -> None:
+        """报一次进度。
+
+        ★ `t`（epoch 秒）**必须带**：界面按 150ms 的节奏批量读这个文件，同一批里
+        的几行会被打上同一个"读到的时刻" ⇒ 相邻取样时间差≈0 ⇒ **算不出速度**。
+        带上各自的时刻，速度就与轮询节奏无关了（2026-09-28 博士："没看到下载速度"）。
+        """
         self._w({"ev": "tick", "key": key, "done": int(done), "total": int(total),
-                 "bytes": int(bytes_)})
+                 "bytes": int(bytes_), "t": round(time.time(), 3)})

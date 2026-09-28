@@ -2676,10 +2676,10 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		rate.steps = []progressStep{
 			{Key: "enemydb.sqlite", Title: "敌人库", State: "run", Done: 421, Total: 1807},
 		}
-		rate.sampleRate(&rate.steps[0], 0) //: 第一次取样：有字节没速度
+		rate.sampleRate(&rate.steps[0], 0, 0) //: 第一次取样：有字节没速度
 		//: 造一段"两秒下了 2 MB"的取样（直接摆样本，不真的 sleep）
 		rate.samples["enemydb.sqlite"] = sample{bytes: 0, at: time.Now().Add(-2 * time.Second)}
-		rate.sampleRate(&rate.steps[0], 2<<20)
+		rate.sampleRate(&rate.steps[0], 2<<20, 0)
 		var rb bytes.Buffer
 		rate.render(&rb)
 		check("★ 运行中的一步报出百分比",
@@ -2693,11 +2693,36 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		//: （报个"0 B/s"会被读成"卡住了"，那是编出来的信息）
 		nost := &progressStep{Key: "x", State: "run", Done: 1, Total: 10}
 		nb := &setupBars{}
-		nb.sampleRate(nost, 5<<20)
+		nb.sampleRate(nost, 5<<20, 0)
 		nb.samples["x"] = sample{bytes: 5 << 20, at: time.Now().Add(-2 * time.Second)}
-		nb.sampleRate(nost, 5<<20)
+		nb.sampleRate(nost, 5<<20, 0)
 		check("负对照：字节没涨（缓存命中）⇒ 不报速度", nost.Rate == 0,
 			fmt.Sprintf("rate=%.0f B/s", nost.Rate))
+		//: ★ 2026-09-28 新增（博士第二次报"没看到下载速度"）：**同一批读进来的两行**
+		//: 也必须算得出速度 —— 关键是时刻取 tick **自带的** `t`，不是"读到它的时刻"。
+		//: 用 `apply()` 走真解析路径（不是直接调 sampleRate），两行连着喂。
+		speed := &setupBars{}
+		speed.steps = []progressStep{{Key: "gamedata 源表", Title: "游戏源表", State: "run"}}
+		base := float64(time.Now().Unix())
+		speed.apply([]byte(fmt.Sprintf(
+			`{"ev":"tick","key":"gamedata 源表","done":0,"total":8,"bytes":0,"t":%.3f}`, base)))
+		speed.apply([]byte(fmt.Sprintf(
+			`{"ev":"tick","key":"gamedata 源表","done":1,"total":8,"bytes":2097152,"t":%.3f}`,
+			base+2)))
+		check("★ 同一批读进来的两行 tick 也算得出速度（时刻取 tick 自带的 t）",
+			speed.steps[0].Rate > 900000 && speed.steps[0].Rate < 1100000,
+			fmt.Sprintf("rate=%.2f MB/s", speed.steps[0].Rate/1048576))
+		var sb bytes.Buffer
+		speed.render(&sb)
+		check("★ 那一行确实印出了速度", strings.Contains(sb.String(), "1.0 MB/s"),
+			firstLineWith(sb.String(), "1.0"))
+		//: ★ 完成之后**不许把数字抹掉**：短步骤的实时数字会被"完成"那一行取代，
+		//: 不带过去就等于"我从没见过速度"。完成行要带已下多少 ＋ 平均速度。
+		done0 := &progressStep{Key: "z", Title: "游戏源表", State: "ok", Sec: 4.0,
+			Bytes: 8 << 20}
+		dl := tailOf(done0)
+		check("★ 完成行带上下载量与平均速度（否则速度一闪就没）",
+			strings.Contains(dl, "已下 8.0 MB") && strings.Contains(dl, "2.0 MB/s 平均"), dl)
 		//: 负对照：给不出总数的那一步**不许编百分比**，只报"已下多少"
 		notot := &progressStep{Key: "y", Title: "干员库", State: "run", Bytes: 3 << 20}
 		tl := tailOf(notot)

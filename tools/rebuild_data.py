@@ -357,9 +357,12 @@ class Progress:
 
         `bytes_` 是**累计已下载字节** —— 界面拿两次 tick 的差 ÷ 时间差算速度。
         给不出就写 0，界面只画百分比、不编速度。
+
+        ★ `t`（epoch 秒）必须带：界面每 150ms **批量**读一次文件，同一批里的几行
+        会被打上同一个时刻 ⇒ 时间差≈0 ⇒ 速度永远算不出来（2026-09-28 踩到）。
         """
         self._w({"ev": "tick", "key": key, "done": int(done), "total": int(total),
-                 "bytes": int(bytes_)})
+                 "bytes": int(bytes_), "t": round(time.time(), 3)})
 
     def summary(self, ok: int, failed: int) -> None:
         self._w({"ev": "summary", "ok": ok, "failed": failed})
