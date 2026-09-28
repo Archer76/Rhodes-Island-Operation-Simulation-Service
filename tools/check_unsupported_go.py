@@ -19,7 +19,7 @@
 所以「24 份逐条一致」本身是**零信息量的绿**：两边都吐空表也能过。本判据为此做了三件事：
 
 1. **先数分母再报绿**：每条已搬线各被行使几次。**行使 0 次的线必须进 `STRUCTURAL_ZERO`
-   登记（带证据 ＋ 重算守卫）**，否则判红——防「判据看起来在覆盖，其实那一支从没走到」。
+   登记（带证据 ＋ 重算守卫）**，否则记为差异——防「判据看起来在覆盖，其实那一支从没走到」。
 2. **补合成夹具**：计划侧的「撤退／技能槽号」换计划 dict、走同一套生产路径；
    敌人侧的「觉醒／形态」造**合成关卡**——真关卡里 55 关的出怪表**这两种敌人一个都没有**
    （`awake_value` 非零的只有 2 个 id、`modes` 非空的只有 1 个 id，都不在出怪表里），
@@ -33,7 +33,7 @@ Go 这一版没搬完（干员侧那一圈要的 `operator_view` 与 `SkillEffec
 裸数组只能把它们**静默省略**——那正是这条闸门立规矩要防的事。所以应答分三个槽
 （`reasons` / `unported` / `covered`），本脚本对两侧的清单做**双向漂移守卫**：
 
-* Go 的 `unported` 必须**恰好**等于本文件的 `UNPORTED`（哪边改了都会红）；
+* Go 的 `unported` 必须**恰好**等于本文件的 `UNPORTED`（哪边改了都会记出差异）；
 * 每一条 `UNPORTED` 都要有**证人**（见 `witnesses()`）——证不出来就说明这条登记是假的，
   而「登记了一个其实不存在的线」与「漏登记一条真线」同样是坏账。
 
@@ -58,14 +58,14 @@ Go 这一版没搬完（干员侧那一圈要的 `operator_view` 与 `SkillEffec
   · **B** 计划侧合成（只换 dict、同一条生产路径）：键 `("unsup_b", 标签, 计划 sha16)`；
   · **C** 敌人侧合成：键 `("unsup_c", 标签, 合成关卡 sha16)`；
   · **证人**：键 `("unsup_w", 证人名)`——每条未搬线都要有证人，所以证人的
-    **证据**（Python 真报出来的那几条理由）也冻住，「证不出来」照旧判红；
+    **证据**（Python 真报出来的那几条理由）也冻住，「证不出来」照旧记为差异；
     W2/W5 那两条只看**源文件正文**（不 import、不运行 Python），照旧每跑一次现算
     ——登记会过期，所以它必须能拿源文件重算。
 
 ★ **顺序语义原样保住**：期望值一条一条入冻，**不排序**（原版按 `timeline()` 排，
 「顺序对调」是 `--mutate` 的一个注入）。⚠ 冻的是**换行拼起来的一整串**而不是列表：
 控制组 P1 会把值里改坏一处，值是列表时哨兵元素会让尺子的正则撞上非字符串而**崩**
-（那是 rc=1，形态是崩溃不是判决）；拼成字符串后 P1 得到一条**干净的判据红**
+（那是 rc=1，形态是崩溃不是判决）；拼成字符串后 P1 得到一条**干净的判据差异**
 （多出一条切不出线的理由）。
 
 用法:
@@ -99,7 +99,7 @@ ROSTER_FIX = FIXDIR / "roster_max_modelled.json"
 
 # ---------------------------------------------------------------- 尺子：理由文本 → 线
 #
-# ⚠ 尺子自己也要有正负对照（`ruler_selftest`）：既认得全，也对**认不出**的当场判红
+# ⚠ 尺子自己也要有正负对照（`ruler_selftest`）：既认得全，也对**认不出**的当场记为差异
 # ——否则新加一条闸门线时它会安静地漏过去。
 
 LINES: tuple[tuple[str, str], ...] = (
@@ -132,9 +132,9 @@ LINE_RX = tuple((name, re.compile(rx)) for name, rx in LINES)
 #: 博士「你现在把撤退机制做了吧」⇒ Go 侧实现了撤退（规格多一个 `retreats` 键、
 #: `sim.go` 帧序 1c 按时刻执行）⇒ **不再把「撤退 ×N」当拒跑理由**；
 #: 而参照实现（`ak_tactic/simgo/spec.py:146-151`）仍然报它。
-#: ⇒ 判据这一侧若还把 `retreat` 当「已搬的线」，就会把「Go 多做了」读成红。
+#: ⇒ 判据这一侧若还把 `retreat` 当「已搬的线」，就会把「Go 多做了」读成差异。
 #: ⚠ 这不是放宽：`LINES` 里那条正则**留着**（尺子仍认得出它，正负对照仍跑它），
-#: 只是**不再期望 Go 报它**。若哪一天 Go 又把它报出来，`reasons` 会多一条 ⇒ 判红。
+#: 只是**不再期望 Go 报它**。若哪一天 Go 又把它报出来，`reasons` 会多一条 ⇒ 记为差异。
 PORTED = ("summon_deploy", "device_deploy", "skill_slot", "snow_fields",
           "awake", "modes")
 
@@ -144,7 +144,7 @@ UNPORTED = ("skill_name", "snow_talent", "devices", "total_attack", "death_token
 
 #: 已搬、但**任何生产路径都点不着**的线：行使计数必然是 0，故带证据登记。
 #: 每条都写清「为什么点不着」，并由 `structural_guards()` 拿代码重算一遍
-#: ——理由会过期而没人知道，所以登记必须配一个会红的守卫。
+#: ——理由会过期而没人知道，所以登记必须配一个会记出差异的守卫。
 STRUCTURAL_ZERO: dict[str, str] = {
     "summon_deploy": "计划（`plan.Plan`）没有召唤物部署通道；`verify.py` 也不调 "
                      "`plan_summon`（只有直接建 sim 的工具脚本才调）",
@@ -153,14 +153,14 @@ STRUCTURAL_ZERO: dict[str, str] = {
 }
 
 #: **两侧都不报**的线：连 Python 都点不着，所以 Go 不实现它**不是缺口**。
-#: 若哪天 Python 真报出来了，Go 没搬 ⇒ 那就是真缺口 ⇒ 判红（见 compare）。
+#: 若哪天 Python 真报出来了，Go 没搬 ⇒ 那就是真缺口 ⇒ 记为差异（见 compare）。
 BOTH_SIDE_ZERO: dict[str, str] = {
     "hp_drain": "`hp_drain_per_sec` 是**干员**字段（`unit.py:721`、`operator_view.py:179`），"
                 "而 `enemy_view` 从不设它 ⇒ 24 份夹具 1154 个出怪对象命中 0",
 }
 
 #: `operator_side` 这条登记的依据：这些属性字面量必须仍在 `unsupported_reasons` 里。
-#: 少一个就说明那条线被删/改名了 ⇒ 登记过期 ⇒ 判红。
+#: 少一个就说明那条线被删/改名了 ⇒ 登记过期 ⇒ 记为差异。
 OPERATOR_ATTRS = (
     "summon_of", "hammer", "effects_override", "sp_per_attack_talent",
     "sp_per_kill_talent", "dodge_phys", "dodge_arts", "aura_atk_pct",
@@ -193,7 +193,7 @@ RULER_UNKNOWN: tuple[str, ...] = ("这条理由不存在", "撤退×1", "", "撤
 
 
 def line_of(reason: str) -> str | None:
-    """理由文本 → 线名；认不出返回 None（调用方必须判红，不许当空）。"""
+    """理由文本 → 线名；认不出返回 None（调用方必须记为差异，不许当空）。"""
     for name, rx in LINE_RX:
         if rx.match(reason):
             return name
@@ -526,7 +526,7 @@ def level_variants() -> list[tuple[str, dict]]:
 class Reading:
     def __init__(self, name: str, expected, go: dict, note: str = ""):
         self.name = name
-        #: 期望值是**一串**（见文件头：拼串是为了让 P1 得到干净的判据红），
+        #: 期望值是**一串**（见文件头：拼串是为了让 P1 得到干净的判据差异），
         #: 这里拆回逐条；传列表也接受（`mutate` 走的就是那条）。
         self.expected = (split_lines(expected) if isinstance(expected, str)
                          else list(expected))
@@ -638,7 +638,7 @@ def coverage_report(fired: dict[str, int]) -> list[str]:
 
 
 def structural_guards() -> list[str]:
-    """`STRUCTURAL_ZERO` 的**重算守卫**：登记理由必须能被重算，过期即红。"""
+    """`STRUCTURAL_ZERO` 的**重算守卫**：登记理由必须能被重算，过期即记出差异。"""
     problems = []
     verify_src = (ROOT / "ak_tactic" / "verify.py").read_text(encoding="utf-8")
     if "plan_device(" in verify_src:
@@ -658,7 +658,7 @@ def structural_guards() -> list[str]:
 def witnesses(tmp: Path, G) -> list[str]:
     """每条 `UNPORTED` 都要有证人：证明它在 Python 侧**真会报**（或真被开关关着）。
 
-    ⚠ 证不出来 ⇒ 判红。防「登记了一个其实不存在的线」——那种条目会让 `unported`
+    ⚠ 证不出来 ⇒ 记为差异。防「登记了一个其实不存在的线」——那种条目会让 `unported`
     变成一个永远为真的清单，而永远为真的判据是零信息量的。
     ★ 证人的**证据**（Python 报出来的那几条理由）走 `G.expect` 冻住；W2/W5 那两条
     只看源文件正文（不 import），照旧现算。
@@ -684,10 +684,10 @@ def witnesses(tmp: Path, G) -> list[str]:
     #:
     #: ★ 2026-09-27：这条守卫原来读**死**一个文件 `rios-sim/plan.go`。`509e110`
     #: （MAA 导出移植：新增 `core` / `maa` 两个可导入包）把计划读取器搬去了
-    #: `rios-sim/core/plan.go`，于是它当场变成一条**假红**：代码一个字没改、
+    #: `rios-sim/core/plan.go`，于是它当场变成一条**假差异**：代码一个字没改、
     #: 拒收文案原样还在，只是换了文件。⇒ 改成**整棵树搜**（`rios-sim/**/*.go`），
-    #: 并把命中位置印出来。这样将来再搬家，读数跟着走，而不是又红一次；
-    #: 而「真的删掉了这条拒收」仍然会红（搜不到就是搜不到）。
+    #: 并把命中位置印出来。这样将来再搬家，读数跟着走，而不是又记出差异一次；
+    #: 而「真的删掉了这条拒收」仍然会记出差异（搜不到就是搜不到）。
     _hit = []
     for _go in sorted((ROOT / "rios-sim").rglob("*.go")):
         if "skill 是对象" in _go.read_text(encoding="utf-8", errors="replace"):
@@ -800,7 +800,7 @@ def _ported_idx(r: "Reading") -> list[int]:
     挑中了「计划：撤退 ×1」（它那一条期望是**未搬线**）、
     「期望理由顺序对调」挑中了「撤退 ×2 ＋ 技能槽 3」（两条里只有一条是已搬线，
     对调只交换了两条未搬线的位置）—— **改动被过滤器吃掉**，
-    两处注入都变成「注入了却永远不可能红」。
+    两处注入都变成「注入了却永远不可能记出差异」。
     取证：`out/cu_diag.py` 打印的 `[诊断]` 行（改动落在谁身上、PORTED 那半变了没有），
     读数 `expected 1→0 条；其中 PORTED 的 0→0 条`。
     """
@@ -812,8 +812,8 @@ def _bites(before: list["Reading"], after: list["Reading"]) -> bool:
     """这次注入**有没有落到被判据比较的那一半**上。
 
     与 `compare` 必须**同口径**：只看 `expected` 的 PORTED 投影与 `go`。
-    不满足 ⇒ 这是**判据自己的 bug**（注入与过滤器错位），必须判红，
-    否则那个「✓ 判红」是在夸一条恒不可能失败的注入。
+    不满足 ⇒ 这是**判据自己的 bug**（注入与过滤器错位），必须记为差异，
+    否则那个「✓ 记为差异」是在夸一条恒不可能失败的注入。
     """
     for a, b in zip(before, after):
         pa = [x for x in a.expected if line_of(x) in PORTED]
@@ -933,16 +933,16 @@ def main() -> int:
 
     if mutate_mode:
         print()
-        print("五 · 反向守卫（每处人为改动都必须判红）")
+        print("五 · 反向守卫（每处人为改动都必须记为差异）")
         if problems:
             print("★ 基线本身就不干净 ⇒ 反向守卫无从成立"
-                  "（拿一个已经红的东西证明不了红得起来）")
+                  "（拿一个已经记出差异的东西证明不了记得出差异）")
             return 1
         bad_guard = 0
         for which in MUTATIONS:
             _mut = mutate(readings, which)
             mp, _f = compare(_mut)
-            #: ★ 两道都要过：**判红了** ＋ **注入真落在被判据比较的那一半上**。
+            #: ★ 两道都要过：**记为差异了** ＋ **注入真落在被判据比较的那一半上**。
             #: 只看前一道，就会把「一条恒不可能失败的注入」当成守卫成立（见 `_ported_idx`）。
             bite = _bites(readings, _mut)
             ok = bool(mp) and bite
@@ -950,13 +950,13 @@ def main() -> int:
                 bad_guard += 1
             print("  %s 注入「%s」→ %s%s"
                   % ("✓" if ok else "✗", which,
-                     "判红" if (bite and mp) else "没红（守不住）",
+                     "记为差异" if (bite and mp) else "没记出差异（守卫未成立）",
                      "" if bite else "　← ★ 注入没落到被判据比较的那一半上"
-                                     "（判据自己的 bug，不是实现没红）"))
+                                     "（判据自己的 bug，不是实现没记出差异）"))
         if bad_guard:
-            print("★ %d / %d 处注入没被判红" % (bad_guard, len(MUTATIONS)))
+            print("★ %d / %d 处注入没被记为差异" % (bad_guard, len(MUTATIONS)))
             return 1
-        print("  反向守卫成立：%d / %d 处注入都判红，且都落在被判据比较的那一半上"
+        print("  反向守卫成立：%d / %d 处注入都记为差异，且都落在被判据比较的那一半上"
               % (len(MUTATIONS), len(MUTATIONS)))
         return 0
 
@@ -965,7 +965,7 @@ def main() -> int:
         print("★ %d 处不一致：" % len(problems))
         for m in problems:
             print("  · %s" % m)
-        print("结论：闸门对拍**未通过**（%d 处）" % len(problems))
+        print("结论：闸门对拍**与 Python 有差异**（%d 处）" % len(problems))
         return 1
     total = sum(len([x for x in r.expected if line_of(x) in PORTED]) for r in readings)
     nonzero = sum(1 for r in readings
@@ -978,7 +978,7 @@ def main() -> int:
              sum(1 for ln in PORTED if fired.get(ln)), len(STRUCTURAL_ZERO),
              len(BOTH_SIDE_ZERO), len(UNPORTED)))
     if G.mode == GB.CHECK and not cov.ok:
-        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据差异。
         return GB.RC_CHANNEL
     return 0
 

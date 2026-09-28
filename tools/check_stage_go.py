@@ -10,8 +10,8 @@
 
 ## 判据
 
-逐字段比，任一处不等即红并打印到字段级；**并给一条正负对照**：
-控制组不许红，且人为改动 Go 的一项必须能变红（`--mutate`）。
+逐字段比，任一处不等即记出差异并打印到字段级；**并给一条正负对照**：
+控制组不许记出差异，且人为改动 Go 的一项必须能记出差异（`--mutate`）。
 
 ## 这一段还比两样别的东西（`load` 之外的**第二条命令**）
 
@@ -24,7 +24,7 @@
   `per_op` 截断与平局取谁都会跟着变。
 * **`covered` 七栏（两个来源）**：Go **自报**的 `covered` ↔ 尺子**独立数**的一份
   `buildable` 计数（`ruler_counts()`，从 Python 那份 tiles 现数，**不调 Go**）。
-  两个来源不等即红——这是本仓那套「Go 自报 vs 尺子独立数」的同一形状。
+  两个来源不等即记出差异——这是本仓那套「Go 自报 vs 尺子独立数」的同一形状。
 * **两条恒等式在 Go 自己那份读数上查**：`melee_spots == melee + all`、
   `ranged_spots == ranged + all`，外加「点列长度 == 自报的那两栏」。它们量的是
   **Go 内部两条代码路径**是不是同一个口径（点列走 `spots()`、计数走
@@ -32,8 +32,8 @@
   整图零可部署格），所以这两条恒等式在 `all` 非零时才有分辨力。
 
 ★ **覆盖面的两个「0」要分开**：`all` 是这一段的靶子（本批 360 格 / 11 关，非零），
-而 `unknown`（第五种取值）在真数据里 0 样本 ⇒ **具名登记为未覆盖**，不判红
-（把它判红＝永久假红，本仓：永久假红等于没有判据）。
+而 `unknown`（第五种取值）在真数据里 0 样本 ⇒ **具名登记为未覆盖**，不记为差异
+（把它记为差异＝永久假差异，本仓：永久假差异等于没有判据）。
 
 ## ★ 这条判据踩过的两条坑（写在这里防止再犯）
 
@@ -41,9 +41,9 @@
 `data/gamedata/map.ark-nights.com/levels/…`（实测：8 个 `tr_*` 关卡在探针跑的
 窗口内落盘）。⇒ 「Go 取不到而 Python 取到了」**不等于** Go 有错，可能只是 Python
 顺手把数据补齐了。处置：Go 失败时**也去调一次 Python**，三种情形分开报——
-两边都取不到 ⇒ 记「数据缺」，**不算红**；Python 取到 ⇒ **复测一次 Go**，
-复测成功记「Python 补齐」（不红），两次都取不到才判红。冻结档下不 import
-`ak_tactic`（核实做不到）⇒ 一律判红：不许拿「可能是数据缺」当免罪符。
+两边都取不到 ⇒ 记「数据缺」，**不算差异**；Python 取到 ⇒ **复测一次 Go**，
+复测成功记「Python 补齐」（没记出差异），两次都取不到才记为差异。冻结档下不 import
+`ak_tactic`（核实做不到）⇒ 一律记为差异：不许拿「可能是数据缺」当免罪符。
 
 **② 引擎的 gamedata 根可以被 `RIOS_DATA` 覆盖，没设它时按 cwd 拼。**
 实测四种组合（同一枚 exe、同一关 `main_01-07`）：
@@ -77,7 +77,7 @@
 ——缓存被别的会话逐章取数时会**长大**（实测 2026-09-24 当晚 72 → 320）。
 于是「现读 ≠ 冻结」有两种**完全不同**的因：
 
-* **Go 漂移了** ⇒ 判据红（rc=1），要人去看实现；
+* **Go 漂移了** ⇒ 判据差异（rc=1），要人去看实现；
 * **对象集/对象内容变了** ⇒ 读数**不可用**（rc=6，印「输入批次对账」），基线该重录。
 
 ⇒ 两个动作：
@@ -147,7 +147,7 @@ def go_load(level: str) -> dict:
 def go_spots(level: str) -> dict:
     """问 Go 要可部署格（`spots` 命令）。**失败不抛**——调用方要把「Go 取不到」分三态。
 
-    ★ 为什么与 `go_load` 不一样：`load` 一失败就是整关读不出来，直接判红没有歧义；
+    ★ 为什么与 `go_load` 不一样：`load` 一失败就是整关读不出来，直接记为差异没有歧义；
       而 `spots` 这一条的失败**先要排除「数据本来就缺」**（坑①：Python 的加载器会
       按需从镜像下载并缓存）。所以这里把错误**原样带出来**给调用方去分类，
       而不是在这里 `raise SystemExit`。
@@ -335,7 +335,7 @@ def _route(r) -> dict:
 
 # --------------------------------------------------------------- 反向守卫与比较
 
-#: 三处**互相独立**的变异（`--mutate` 下三处都要「注入过 ＋ 判红过」）。
+#: 三处**互相独立**的变异（`--mutate` 下三处都要「注入过 ＋ 记出过差异」）。
 MUT_TILE_KEY = "地图键"
 MUT_SPOT_CELL = "可部署格"
 MUT_RULER_CNT = "尺子计数"
@@ -351,7 +351,7 @@ SPOT_IDENTITIES = (("melee_spots", ("melee", "all")),
 
 
 class Guard:
-    """反向守卫：每处变异都要「注入过 ＋ 判红过」，缺一不算成立。"""
+    """反向守卫：每处变异都要「注入过 ＋ 记出过差异」，缺一不算成立。"""
 
     def __init__(self, on: bool):
         self.on = on
@@ -527,7 +527,7 @@ def main() -> int:
         to_cmp = [r for r in batch if (r["level"], r["sha16"]) in covered]
 
     bad = 0
-    #: ★ 判红的关卡用**集合**记，不用布尔位：下面有三处 `continue` 会跳过循环尾，
+    #: ★ 记为差异的关卡用**集合**记，不用布尔位：下面有三处 `continue` 会跳过循环尾，
     #: 布尔位那种写法实测会把它们漏掉 ⇒ 结论行印「N / N 关逐字段一致」而 rc=1
     #: （同一个数两个意思，本仓禁的那种）。
     bad_levels: set = set()
@@ -539,11 +539,11 @@ def main() -> int:
         level = rec["level"]
         got = go_load(level)
         #: ★ 键自带输入身份：缓存内容变了 ⇒ 键配不上 ⇒ 由上面那条对账如实报出，
-        #: 而不是拿一份旧内容的期望值去比新内容（那会造出一条假红）。
+        #: 而不是拿一份旧内容的期望值去比新内容（那会造出一条假差异）。
         want = G.expect(("stage", level, rec["sha16"]),
                         lambda level=level: py_stage_expect(level))
         if guard.want(MUT_TILE_KEY):
-            # 反向守卫：把**期望值**的一格地图键改掉，判据**必须**红。
+            # 反向守卫：把**期望值**的一格地图键改掉，判据**必须**记出差异。
             want["map"]["tiles"][0][0]["key"] = "<mutated>"
             guard.put(MUT_TILE_KEY, (level,))
         out: list[str] = []
@@ -574,13 +574,13 @@ def main() -> int:
                 bad += 1
                 bad_levels.add(level)
                 print("✗ %s spots：Go 取不到，而冻结档**不 import Python**、没法核实"
-                      "「数据在不在」 ⇒ 一律判红（不许拿「可能是数据缺」当免罪符）\n"
+                      "「数据在不在」 ⇒ 一律记为差异（不许拿「可能是数据缺」当免罪符）\n"
                       "      %s" % (level, got_s["why"]))
                 continue
             py_ok, py_why = py_probe(level)
             if not py_ok:
                 seen["数据缺（两侧都取不到）"] += 1
-                print("  · %s spots：**两侧都取不到** ⇒ 记「数据缺」，不算红\n"
+                print("  · %s spots：**两侧都取不到** ⇒ 记「数据缺」，不算差异\n"
                       "      Go     %s\n      Python %s" % (level, got_s["why"], py_why))
                 continue
             again = go_spots(level)
@@ -588,7 +588,7 @@ def main() -> int:
                 seen["Go 两次都取不到·Python 取到"] += 1
                 bad += 1
                 bad_levels.add(level)
-                print("✗ %s spots：**Go 两次都取不到，而 Python 取得到** ⇒ 判红"
+                print("✗ %s spots：**Go 两次都取不到，而 Python 取得到** ⇒ 记为差异"
                       "（原文照抄，两种因分得开）\n"
                       "      Go 第一次 %s\n      Go 第二次 %s\n"
                       "      Python 取到了这一关" % (level, got_s["why"], again["why"]))
@@ -664,18 +664,18 @@ def main() -> int:
         print("   · ★ **未覆盖（具名）**：%s —— 本批 0 个样本" % "、".join(zero))
     if "unknown" in zero:
         print("     · `unknown` 是**第五种取值**那一栏：真数据里没有它 ⇒ 登记为未覆盖，"
-              "**不判红**（判红＝永久假红）。Go 那一栏的比对是活的，只是这一批 0 样本。")
-    for k, label in (("数据缺（两侧都取不到）", "两侧都取不到 ⇒ 数据缺（不算红）"),
+              "**不记为差异**（记为差异＝永久假差异）。Go 那一栏的比对是活的，只是这一批 0 样本。")
+    for k, label in (("数据缺（两侧都取不到）", "两侧都取不到 ⇒ 数据缺（不算差异）"),
                      ("Go 取不到·Python 取到·复测成功（判为 Python 补齐缓存）",
-                      "Go 首取失败、Python 补齐、复测成功（不算红）"),
-                     ("Go 两次都取不到·Python 取到", "两次都取不到而 Python 取到（已判红）"),
-                     ("Go 取不到（冻结档，无法核实）", "冻结档无法核实（已判红）")):
+                      "Go 首取失败、Python 补齐、复测成功（不算差异）"),
+                     ("Go 两次都取不到·Python 取到", "两次都取不到而 Python 取到（已记为差异）"),
+                     ("Go 取不到（冻结档，无法核实）", "冻结档无法核实（已记为差异）")):
         if seen[k]:
             print("   · Go 取不到的分栏「%s」：%d 关" % (label, seen[k]))
 
-    #: ★ `all` 的覆盖守卫**只在全量批次上判红**：单关/抽样调用（脚本文档里那两条
-    #: `python tools\check_stage_go.py main_00-01`）本来就常常没有 ALL 格，在那里判红
-    #: ＝永久假红（本仓：永久假红等于没有判据）。判别式＝这一批是不是**缓存可达的
+    #: ★ `all` 的覆盖守卫**只在全量批次上记为差异**：单关/抽样调用（脚本文档里那两条
+    #: `python tools\check_stage_go.py main_00-01`）本来就常常没有 ALL 格，在那里记为差异
+    #: ＝永久假差异（本仓：永久假差异等于没有判据）。判别式＝这一批是不是**缓存可达的
     #: 全部关卡**（与总入口 `check_go_all` 同一份清单，不在这里抄第二份）。
     try:
         from check_go_all import cached_levels                   # noqa: PLC0415
@@ -683,22 +683,22 @@ def main() -> int:
     except Exception:                                            # noqa: BLE001
         full_batch = False
     if full_batch and seen["covered.all（尺子）"] == 0:
-        print("结论：**全量批次**里 `all` 一个样本都没有 —— 判红"
+        print("结论：**全量批次**里 `all` 一个样本都没有 —— 记为差异"
               "（不是实现错，是这一批不再覆盖它）")
         return 1
 
     if mutate:
         print()
-        print("反向守卫（三处**互相独立**的变异，各自必须「注入过 ＋ 判红过」）：")
+        print("反向守卫（三处**互相独立**的变异，各自必须「注入过 ＋ 记出过差异」）：")
         for k in MUT_KEYS:
-            print("  变异「%s」：注入=%s 判红=%s"
+            print("  变异「%s」：注入=%s 记为差异=%s"
                   % (k, "是" if guard.applied[k] else "否",
                      "是" if guard.caught[k] else "否"))
         miss = [k for k in MUT_KEYS if not (guard.applied[k] and guard.caught[k])]
         if miss:
-            print("反向守卫：不成立 ✗（没做到「注入过并且判红」：%s）" % "、".join(miss))
+            print("反向守卫：不成立 ✗（没做到「注入过并且记为差异」：%s）" % "、".join(miss))
             return 1
-        print("反向守卫：三处变异（地图键／可部署格**一个格**／尺子计数）各判红 —— 成立 ✓")
+        print("反向守卫：三处变异（地图键／可部署格**一个格**／尺子计数）各记为差异 —— 成立 ✓")
         return 0
 
     if cov_mismatch:
@@ -710,14 +710,14 @@ def main() -> int:
     if seen["关卡"] == 0 and len(to_cmp) > 0:
         #: 「零命中」先证明查询跑成功了：一关都没比到 ⇒ 不是绿，是判据自己瞎
         #: （或 Go 侧整批取不到）。
-        print("结论：一关的可部署格都没比到（传入 %d 关）—— 判红"
+        print("结论：一关的可部署格都没比到（传入 %d 关）—— 记为差异"
               "（不是实现错，是判据自己瞎／Go 侧整批取不到）" % len(to_cmp))
         return 1
     _sum = GB.channel_summary()
     if _sum:
         print(_sum)
     if cov_mismatch:
-        print("结论：Go 自报的 covered 与尺子独立数出的不一致 —— 判红"
+        print("结论：Go 自报的 covered 与尺子独立数出的不一致 —— 记为差异"
               "（两个来源必须相等；不等说明 Go 的计数与它的点列不是同一个口径）")
         return 1
     print("结论：%d / %d 关逐字段一致%s"
@@ -725,10 +725,10 @@ def main() -> int:
              "" if not n_missing else "（另有 %d 关**两侧都取不到**，记数据缺、未比）"
              % n_missing))
     if bad:
-        #: 覆盖部分**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+        #: 覆盖部分**真的不一致** ⇒ 判据差异，优先于「基线该重录」。
         return 1
     if G.mode == GB.CHECK and not cov.ok:
-        #: 覆盖部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        #: 覆盖部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据差异。
         return GB.RC_CHANNEL
     return 0
 

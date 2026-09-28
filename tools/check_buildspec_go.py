@@ -40,7 +40,7 @@
 ## 覆盖率纪律
 
 19 个键**逐个**数「有几例非空」。某个键在全部用例里都是空的 ⇒ 那条「一致」是
-零信息量的绿 ⇒ 必须登记（`EMPTY_REGISTRY`），否则判红。
+零信息量的绿 ⇒ 必须登记（`EMPTY_REGISTRY`），否则记为差异。
 
 ## 冻结基线（`tools/freeze_baseline.py`，套名「单一入口」）
 
@@ -102,7 +102,7 @@ SPEC_KEYS = ("stage", "fps", "max_time", "life", "cost_init", "cost_max",
 #: 有雪时**允许**不同的三个键（其余 16 个必须逐键相同）。
 SNOW_DIFF_KEYS = ("mechanisms", "mech_config", "goal_cells")
 
-#: 全部用例里都为空的键 —— 必须在这里具名登记（带证据），否则判红。
+#: 全部用例里都为空的键 —— 必须在这里具名登记（带证据），否则记为差异。
 #: `goal_cells` 在 **Go 口径**下恒空（门是「有雪」而雪判不出），但**期望值**里
 #: 有 2 例非空 ⇒ 它不是「零覆盖」，是「具名口径差」；故不进这张表，
 #: 由 `diff_spec` 的三条断言盯着。
@@ -119,27 +119,27 @@ SECTIONS = [
     {"id": "§二 C 计划侧合成（3 例）", "class": "frozen",
      "why": "check_specgo_go._capture(raw) ↔ Go buildspec（把真夹具零行使的两条支走到）"},
     {"id": "§二·四 槽账 missing_keys／gated_keys／unported", "class": "live_both",
-     "why": "断言打的是**活 Go 记录自己**那三个槽（非空即红、每条来源至少一条）——"
+     "why": "断言打的是**活 Go 记录自己**那三个槽（非空即记差异、每条来源至少一条）——"
             "脚本侧只有结构规则，没有可冻的 Python 期望值；冻住等于把 Go 自己的产物"
             "跟它自己比（恒等假绿）"},
     {"id": "§二 allowance 白名单两侧守卫", "class": "live_both",
      "why": "反向注入用 _deepdrop 删**活 Go 规格**里的一条路径"
-            "（operators[0].max_hp）再看判据红不红 —— 冻住就没有宾语，"
+            "（operators[0].max_hp）再看判据记不记出差异 —— 冻住就没有宾语，"
             "而「有宾语」正是这一段要证的事"},
     {"id": "§三 19 键行使计数", "class": "frozen",
      "why": "计数现算自**冻的**期望值（每个键在全部用例里几例非空）：某个键全空 ⇒ "
-            "那条「一致」是两边都为空的空洞相等 ⇒ 判红（EMPTY_REGISTRY 的纪律）"},
+            "那条「一致」是两边都为空的空洞相等 ⇒ 记为差异（EMPTY_REGISTRY 的纪律）"},
     {"id": "§五 认不得的 spec 键必须具名失败", "class": "live_both",
      "why": "宾语是**活 Go** 的应答（传拼错的 plans 必须拒跑并点到那个键）；"
             "脚本侧没有可取期望值的 Python 产物 ⇒ 冻住没有宾语"},
     {"id": "§六 p3r 可达性", "class": "frozen",
-     "why": "Python 侧 make_total_attack 的**可达关数**（现算值冻住；非 0 即红）"},
+     "why": "Python 侧 make_total_attack 的**可达关数**（现算值冻住；非 0 即记差异）"},
     {"id": "§六·b 积雪 freeze 缺省可达性", "class": "live_both",
      "why": "两次都读**活 Go** 的产物（不送 freeze ↔ 送 freeze=false）＋一次仓库扫描；"
             "冻 Go 自己的产物＝两条同源读数互证，证不了「参数真被读」"},
     {"id": "§七 反向守卫（--mutate）", "class": "frozen",
-     "why": "8 处注入打在**冻的**期望值上，判红来源是活 Go 的逐路径比；"
-            "注入空转即判红"},
+     "why": "8 处注入打在**冻的**期望值上，记为差异来源是活 Go 的逐路径比；"
+            "注入空转即记为差异"},
 ]
 
 
@@ -381,11 +381,11 @@ def _fsd_snapshot() -> dict:
 #: 剩下的两条（`operators[].skill`／`active`）**也没有留**：它们在 80 个用例里
 #: **一次都没被走到**（24 份夹具的 `deploys[].skill` 全是 0，所以规格里根本
 #: 不会出现这两个键）⇒ 留着就是一张**没人走的放行表**，那是真回归最好的藏身处
-#: （「又缺了」与「本来就登记着」长得一模一样）。本文件自己的守卫会判红，
-#: 这次红得对：**表该空**。
+#: （「又缺了」与「本来就登记着」长得一模一样）。本文件自己的守卫会记为差异，
+#: 这次记出差异是对的：**表该空**。
 #:
-#: ⚠ 于是现在**任何**「Go 缺了权威有的键」都判红。哪天真有夹具用上技能槽，
-#: 它会红——那正是要的信号：要么把 `skill` 搬进 Go，要么**连证据一起**登记
+#: ⚠ 于是现在**任何**「Go 缺了权威有的键」都记为差异。哪天真有夹具用上技能槽，
+#: 它会记出差异——那正是要的信号：要么把 `skill` 搬进 Go，要么**连证据一起**登记
 #: （「它在这一例里真的被缺到了」），不许只加一行正则。
 REGISTERED_MISSING: tuple[tuple[str, str], ...] = ()
 REGISTERED_RX = tuple((re.compile(p), src) for p, src in REGISTERED_MISSING)
@@ -407,7 +407,7 @@ REGISTERED_RX = tuple((re.compile(p), src) for p, src in REGISTERED_MISSING)
 #: （`wire.go::OperatorSpec`），`sim.go` 里也没有按秒扣干员血的那一步。
 #: 现修成三段：`operators.go` 送键 → `traitDrainTick` 逐帧扣 → `DRAIN` 痕迹见证。
 #:
-#: ★ 反向守卫与它成对（见 `allowance_guards`）：**没登记的多键必须判红**，
+#: ★ 反向守卫与它成对（见 `allowance_guards`）：**没登记的多键必须记为差异**，
 #: 且这一行必须在真用例里**真的被多出来过**——否则它就是真回归的藏身处。
 REGISTERED_EXTRA: tuple[tuple[str, str], ...] = (
     (r"^\.operators\[\d+\]\.hp_drain_per_sec$",
@@ -461,11 +461,11 @@ REGISTERED_EXTRA: tuple[tuple[str, str], ...] = (
      "特性「击杀敌人后获得 N 点部署费用」（冲锋手那一族，翎羽）。Python 无此机制"),
     #: ★ 2026-09-26：**同一条特性的后半句**（「撤退时返还初始部署费用」）。
     #: 它与上面那条是同族的**两个键**，而 `diff_paths` 是**逐路径**报的 ⇒ 必须各登记一次
-    #: （只登记一个，另一个照样红）。
+    #: （只登记一个，另一个照样记出差异）。
     #: ⚠ **为什么到这一天**才暴露：在这之前**没有任何夹具部署过冲锋手**
     #: （24 份夹具的 `operators.retreat_refund_true` 实测恒为 0）⇒ 这个键一次都没被行使过，
     #: 是一条「没人走到」的登记缺口。新夹具 `plan-main-01-07-refund.json` 部署了三星翎羽，
-    #: 它第一次出现，判据当场红 —— **这正是判据在做它该做的事**（登记缺口被行使照出来）。
+    #: 它第一次出现，判据当场记出差异 —— **这正是判据在做它该做的事**（登记缺口被行使照出来）。
     (r"^\.operators\[\d+\]\.retreat_refund$",
      "特性「撤退时返还初始部署费用」（冲锋手那一族，翎羽）。Python 无此机制；"
      "行使见证见 `fixtures/plan-main-01-07-refund.json`（痕迹 `RETREAT … refund=8`）"),
@@ -474,7 +474,7 @@ REGISTERED_EXTRA: tuple[tuple[str, str], ...] = (
     #: 还要再登记一次：`diff_paths` 会走进 `.retreats` 并按路径报「Go 多出来」。
     #: 独立复核 F3 抓到的正是「只改了顶层那一句、逐路径这一句没改」的后果。
     #: ⚠ 两条登记**指向同一份事实**（`rios-sim/specgo.go::specKeysGoOnly`），
-    #: 三处都具名是**故意的**：少一处就是一条会红的判据。
+    #: 三处都具名是**故意的**：少一处就是一条会记出差异的判据。
     (r"^\.retreats$",
      "撤退请求（时刻 ＋ 干员名）。博士 2026-09-25「你现在把撤退机制做了吧」⇒ "
      "Go 实现了撤退（`sim.go` 帧序 1c 执行），而 Python 侧仍把撤退整条拒跑"
@@ -512,7 +512,7 @@ def lift_talent_panel(py: dict, go: dict) -> tuple[dict, list[str]]:
     做法：按 **Go 自己报出来的** `talent_panel_mods`（判据不猜、不手抄）把 Python 的值
     乘上去、按整数四舍五入（Go 的 `applyRounding` 也取整），再交给 `diff_paths` 去比
     ⇒ **这不是容差，是把两边还原到同一个量**。
-    没有这一栏的干员原样不动；乘不上的（比例在而键不在）原样比、照旧可能判红。
+    没有这一栏的干员原样不动；乘不上的（比例在而键不在）原样比、照旧可能记为差异。
     """
     ops = go.get("operators")
     py_ops = py.get("operators")
@@ -549,7 +549,7 @@ def lift_retreat_unsupported(py: dict, go: dict) -> tuple[dict, list[str]]:
     「撤退时返还初始部署费用」跟着兑现），于是**不再把「撤退 ×N」当拒跑理由**；
     而参照实现（`ak_tactic/simgo/spec.py:146-151`）仍然报它。
     这不是「Go 少了什么」，是**Go 多做了一步**——判据这一侧要跟着改口径，
-    否则会把「多做了」读成红。
+    否则会把「多做了」读成差异。
 
     ⚠ **只摘这一条**：正则锚死 `^撤退 ×\\d+$`，别的理由一条都不动。
     ⚠ 摘了几处**要报出来**（`RETREAT_LIFTED`），否则它就成了一次静默放宽。
@@ -703,7 +703,7 @@ def check_slots(rec: dict, name: str, *, expect_plan: bool) -> list[str]:
     #
     #: ★★ 2026-09-23（第三十九批）**按口径改了这一条**：`mechspec` 那一路（田地 ＋ 雪）
     #: 现在**有排程就全造得出来**，于是带计划的用例里 `mechspec:` **应当一条都没有**。
-    #: 「至少一条」那条老规矩在这里会变成**假红**。改成两条各自可判的：
+    #: 「至少一条」那条老规矩在这里会变成**假差异**。改成两条各自可判的：
     #:   · 带计划（有排程）⇒ `mechspec` 必须**零条**（全造得出来）；
     #:   · 不带计划（`mechspec` 命令那条口径）⇒ 必须**恰有雪那一条**（它确实做不到）。
     #: 这样「合并静默为空」照样盖得住：真静默丢时，前者会出现不该有的条目、
@@ -727,12 +727,12 @@ def check_slots(rec: dict, name: str, *, expect_plan: bool) -> list[str]:
     #: ★★ **2026-09-24 又按口径改了一条**（与上面 `mechspec` 那次同一个理由）：
     #: `operators` 那一族现在**零 unported** —— Go 自己产出了 `skill` / `active`
     #: （`rios-sim/skillbind.go`），`OperatorUnported` 因此清空。
-    #: 老规矩「每个来源至少一条」在这里变成**假红**（实测 27 例全是这一条）。
+    #: 老规矩「每个来源至少一条」在这里变成**假差异**（实测 27 例全是这一条）。
     #: 改成两条各自可判的：
     #:   · 带计划 ⇒ `operators` 那族**必须零条**（全造得出来）；
     #:   · 不带计划 ⇒ 不要求它出现（那时 `BuildOperatorsFor` 根本没被调用）。
     #: ⚠ 「合并静默为空」并没有因此失去覆盖：它现在露在**19 键齐不齐**与**键集逐位比**
-    #: 那两条上（真忘了并，`operators` 那族会出现不该有的条目 —— 即下面这条判红）。
+    #: 那两条上（真忘了并，`operators` 那族会出现不该有的条目 —— 即下面这条记为差异）。
     ops_entries = [u for u in unp if u.startswith("operators: ")]
     if expect_plan and ops_entries:
         bad.append("%s：带计划的用例里 `operators` 还有未搬条目 %s —— "
@@ -779,7 +779,7 @@ def mutate(cases: list[dict], which: str):
         #: ★ 第三十九批：**雪那一支**的两处注入（PM 指定）。
         #: ① 改一个数：`interval` 是「每几秒铺一层」，逐字段比必须看见它；
         #: ② 排序打乱：`ground` 的顺序是**硬约束**（扩散上限先被谁占掉）——
-        #:    它被打乱而判据不红的话，「顺序一致」这句话就没人证过。
+        #:    它被打乱而判据没记出差异的话，「顺序一致」这句话就没人证过。
         if which.startswith("雪 "):
             cfg = (py.get("mech_config") or {}).get(SNOW_ID)
             if not cfg or not cfg.get("fields"):
@@ -823,7 +823,7 @@ def freeze_reachability(cases: list[dict], lv_map: dict) -> tuple[list[str], dic
          这条缺省就得重新证明。
          ⚠ 排除本文件是**必须的**：判据自己的正文里就有这四个字（上面这两行、
          以及下面那条 `git grep` 的实参）—— 不排除的话它**扫到自己**、
-         永远命中，那条断言就成了恒假红。本仓为此记过一条：
+         永远命中，那条断言就成了恒假差异。本仓为此记过一条：
          「在文档里写名字去证明『它不在仓库里』会自指」（`9d74eab8`）。
     """
     import subprocess
@@ -838,7 +838,7 @@ def freeze_reachability(cases: list[dict], lv_map: dict) -> tuple[list[str], dic
                    "要么 24 份里真的没雪，两种都要看）")
         return bad, cov
     #: ③ 仓库面：用 `git grep`（快且只扫在库文件；`data/` 很大不能 rglob）。
-    #: ⚠ **排除本文件**，原因见 docstring 的 ③（不排除就是自指、恒假红）。
+    #: ⚠ **排除本文件**，原因见 docstring 的 ③（不排除就是自指、恒假差异）。
     self_rel = str(Path(__file__).resolve().relative_to(ROOT)).replace("\\", "/")
     p = subprocess.run(["git", "-C", str(ROOT), "grep", "-n", "snow_freeze",
                         "--", "fixtures", "data", "tools"],
@@ -923,15 +923,15 @@ def allowance_guards(cases: list[dict]) -> tuple[list[str], dict]:
     白名单的危险是**长成"谁都能往里加"的静默容差**。所以：
 
       · 反向：把一条**没登记**的缺键造出来（删掉 Go 侧的 `operators[0].max_hp`）
-        ⇒ 必须判红。**它红不了，这张表就是一块万能挡板。**
-      · 正向：**真用例里必须真的出现「登记过、也确实缺」的路径**，而且它**不**判红。
+        ⇒ 必须记为差异。**它记不出差异，这张表就是一块万能挡板。**
+      · 正向：**真用例里必须真的出现「登记过、也确实缺」的路径**，而且它**不**记为差异。
 
     ⚠ 正向那一条**改过一次**（2026-09-23，第三十八批）：原来写的是
     `pretend("operators[0].shield")` —— 那是个**空转守卫**：`shield` 当时在 Go 侧
-    **本来就不存在**（未搬），「从 Go 的规格里删掉它」是**空操作** ⇒ 永远不判红
+    **本来就不存在**（未搬），「从 Go 的规格里删掉它」是**空操作** ⇒ 永远不记为差异
     ⇒ 守卫恒过，两边都没被证过。本文件自己的 docstring 早就写着「空转的守卫比
     没有守卫更坏」，这条正是那个形状。现在改成**要求证据存在**：
-    登记表里至少要有一条路径在真用例里**真的**被用到，否则这条守卫判红
+    登记表里至少要有一条路径在真用例里**真的**被用到，否则这条守卫记为差异
     （空表要么是过期了、要么是没人走 —— 两种都该看，不该绿）。
     """
     problems: list[str] = []
@@ -959,7 +959,7 @@ def allowance_guards(cases: list[dict]) -> tuple[list[str], dict]:
     base = cases[0]
 
     def pretend(drop: str) -> bool:
-        """在 Go 侧删掉一条路径末尾的键，看判据红不红。返回「红了」。"""
+        """在 Go 侧删掉一条路径末尾的键，看判据记不记出差异。返回「记出差异了」。"""
         bad, _c, _s = diff_one(base["py"], _deepdrop(base["go"]["spec"], drop),
                               base["name"])
         return bool(bad)
@@ -970,12 +970,12 @@ def allowance_guards(cases: list[dict]) -> tuple[list[str], dict]:
         cnt["unregistered_red"] = 1
     else:
         problems.append("allowance 反向守卫不成立：造了一条**没登记**的缺键"
-                        "（operators[0].max_hp）却没判红 —— 这张表成了万能挡板")
+                        "（operators[0].max_hp）却没记为差异 —— 这张表成了万能挡板")
     #: 正向：**要证据**。`registered_paths` 是从真用例的 diff 里数出来的，
     #: 它非空才说明这张表**真的被走到过**（而不是空转或过期）。
-    #: ★ 本批清空之后这条反向来写：**表必须空**（空表 = 任何缺键都判红）。
+    #: ★ 本批清空之后这条反向来写：**表必须空**（空表 = 任何缺键都记为差异）。
     #: 谁要往里加一行，就得同时说明「它在哪一例里真的被缺到了」——只加正则不加
-    #: 证据，这条守卫会红。
+    #: 证据，这条守卫会记出差异。
     if REGISTERED_MISSING:
         cnt["registered_vacuous"] = 1
         problems.append("allowance 表非空（%d 条），但 80 个用例里被走到的只有 %s "
@@ -989,7 +989,7 @@ def allowance_guards(cases: list[dict]) -> tuple[list[str], dict]:
     #: 与缺键那张表同一条纪律，但**不能共用**：一类是「Go 少了一条路」，
     #: 一类是「这条通道是 Go 独有」，判词与守卫都不是同一件事。
     #:   · 反向：往**活 Go 的规格**里塞一条**没登记**的多键（`operators[0]` 上
-    #:     一个不存在的字段）⇒ 必须判红。红不了，这张表就是万能挡板。
+    #:     一个不存在的字段）⇒ 必须记为差异。记不出差异，这张表就是万能挡板。
     #:   · 正向：这一行必须在真用例里**真的被多出来过**（`registered_extra > 0`），
     #:     否则它是一张没人走的放行表——真回归最好的藏身处。
     probe = "operators[0].__unregistered_extra_probe__"
@@ -1000,7 +1000,7 @@ def allowance_guards(cases: list[dict]) -> tuple[list[str], dict]:
         cnt["unregistered_extra_red"] = 1
     else:
         problems.append("extra 反向守卫不成立：造了一条**没登记**的 Go 多键"
-                        "（%s）却没判红 —— 这张表成了万能挡板" % probe)
+                        "（%s）却没记为差异 —— 这张表成了万能挡板" % probe)
     if REGISTERED_EXTRA:
         cnt["registered_extra"] = sum(cnt["registered_extra_paths"].values())
         if cnt["registered_extra"] <= 0:
@@ -1069,7 +1069,7 @@ def main() -> int:
     #: ★ 「**问哪些问题**」本身就是 Python 侧的产物：A 的**关卡号**只有
     #: `real_specs()` 算得出来（四星档 `#f#` 住在 id 上，不在显示代号上），
     #: C 的**计划原文**要一起带走才写得出发给 Go 的那份文件。只冻答案不冻问题，
-    #: 冻结档要么当场响，要么有人「顺手」把查询集改小、分母静默缩水而全绿。
+    #: 冻结档要么当场响，要么有人「顺手」把查询集改小、分母静默缩水而零差异。
     live_a = fixture_records()
     fsha = {r["name"]: r["sha16"] for r in live_a}
     cov_a = G.coverage("A_plan", [(r["name"], r["sha16"]) for r in live_a])
@@ -1133,7 +1133,7 @@ def main() -> int:
     #: 但必须**逐关具名**列出来——把它算进「比了 N 例」就是把没比的说成比了。
     #: ★ 对账里的「这一批问过的对象」＝**真的比得到的那些**：具名拒跑是**登记在案的
     #: 结局**，不是覆盖面的洞——把它算成「未覆盖」，这一套在冻结档就永久 rc=6，
-    #: 那正是本仓记过的「永久假红等于没有判据」。
+    #: 那正是本仓记过的「永久假差异等于没有判据」。
     b_levels = [r["level"] for r in batch]
     b_sha = {r["level"]: r["sha16"] for r in batch}
     got_b = go_buildspec_batch(b_levels)
@@ -1150,8 +1150,8 @@ def main() -> int:
             continue
         if G.mode == GB.CHECK and (lv, b_sha[lv]) not in asked_b:
             #: ★ 录基线时**没问过**这个对象（缓存长大了、或那份内容换了）⇒ 判据对它
-            #: **没有期望值**：既不比、也不判红。它的出现由下面的批次对账具名报出
-            #: （rc=6 ＝「读数不可用、该重录」）。把它的 Go 应答当成**判据红**，
+            #: **没有期望值**：既不比、也不记为差异。它的出现由下面的批次对账具名报出
+            #: （rc=6 ＝「读数不可用、该重录」）。把它的 Go 应答当成**判据差异**，
             #: 就是本仓禁的「把两种因压成一个数」——下一个人会去查实现，而真因是
             #: 对象集变了。
             continue
@@ -1216,7 +1216,7 @@ def main() -> int:
     print("  REGISTERED_MISSING 逐路径分组（%d 条）:" % len(acnt["registered_paths"]))
     for path, n in sorted(acnt["registered_paths"].items()):
         print("    %-52s %d 处" % (path, n))
-    print("    两侧守卫：没登记的缺键判红=%s、登记过的缺键不判红=%s"
+    print("    两侧守卫：没登记的缺键记为差异=%s、登记过的缺键不记为差异=%s"
           % ("✓" if acnt["unregistered_red"] else "✗",
              "✓" if acnt["registered_green"] else "✗"))
     #: ★ 多键那一栏**分开印**（方向不同，不许并成一个数）：
@@ -1225,7 +1225,7 @@ def main() -> int:
           % len(acnt["registered_extra_paths"]))
     for path, n in sorted(acnt["registered_extra_paths"].items()):
         print("    %-52s %d 处" % (path, n))
-    print("    两侧守卫：没登记的多键判红=%s、登记过的多键真被多出来过=%s"
+    print("    两侧守卫：没登记的多键记为差异=%s、登记过的多键真被多出来过=%s"
           % ("✓" if acnt["unregistered_extra_red"] else "✗",
              "✓" if acnt["registered_extra_green"] else "✗"))
     print()
@@ -1264,7 +1264,7 @@ def main() -> int:
         print("  D1 传 plans（拼错）→ 具名失败 ✓")
 
     print()
-    print("六 · 仪器的 p3r 可达性（现算；非 0 即红）")
+    print("六 · 仪器的 p3r 可达性（现算；非 0 即记差异）")
     #: ★ 那条可达性是**只有 Python 侧算得出来**的读数（`make_total_attack` 的宾语），
     #: 非冻结档现算、冻结档读冻的那份 —— 它的输入集就是 B 那批缓存关卡，
     #: 那一批变了由上面的批次对账具名报出。
@@ -1287,7 +1287,7 @@ def main() -> int:
 
     if mutate_mode:
         print()
-        print("七 · 反向守卫（每处注入都要独立判红）")
+        print("七 · 反向守卫（每处注入都要独立记为差异）")
         if problems:
             print("★ 基线本身不干净 ⇒ 反向守卫无从成立")
             return 1
@@ -1303,25 +1303,25 @@ def main() -> int:
             if not ok2:
                 bad_guard += 1
             print("  %s 注入「%s」→ %s"
-                  % ("✓" if ok2 else "✗", which, "判红" if ok2 else "没红（守不住）"))
+                  % ("✓" if ok2 else "✗", which, "记为差异" if ok2 else "没记出差异（守卫未成立）"))
         if bad_guard:
-            print("★ %d / %d 处注入没判红或空转" % (bad_guard, len(MUTATIONS)))
+            print("★ %d / %d 处注入没记为差异或空转" % (bad_guard, len(MUTATIONS)))
             return 1
-        print("  反向守卫成立：%d / %d 处注入都判红" % (len(MUTATIONS), len(MUTATIONS)))
+        print("  反向守卫成立：%d / %d 处注入都记为差异" % (len(MUTATIONS), len(MUTATIONS)))
         return 0
 
     #: ★ **先给这一跑定性**：工具（`freeze_baseline.named_reason`）认「输出里第一句 ★
     #: 且提到冻结基线的行」当这一套的原因，而下面那行通道读数正是这种行——不先定性，
-    #: 它会把「判据红」或「该重录」读成同一句话（那正是两个不同的意思压成一个值，
+    #: 它会把「判据差异」或「该重录」读成同一句话（那正是两个不同的意思压成一个值，
     #: 本仓记过的那类假信号）。
     if problems:
-        print("★ 这一跑是**判据红**（rc=1，%d 处不一致）：宾语是活 Go 的应答，"
+        print("★ 这一跑是**判据差异**（rc=1，%d 处不一致）：宾语是活 Go 的应答，"
               "与通道、与对象集对账都无关（那两者各有自己的码与具名消息）"
               % len(problems))
         print()
     elif G.mode == GB.CHECK and not (cov_a.ok and cov_b.ok):
         print("★ 这一跑是**通道自己的 6**（rc=6）：录的是哪一批对象变了 ⇒ 这读数不可用、"
-              "该重录；它与「Go 漂移了」那条判据红分开（对账明细见下）")
+              "该重录；它与「Go 漂移了」那条判据差异分开（对账明细见下）")
         print()
 
     #: 通道自己的读数：record 档「收下 N 个期望值」／check 档「取期望值 N 次全部命中
@@ -1333,7 +1333,7 @@ def main() -> int:
 
     #: ★ **输入批次对账**：只在冻结档、且两边对不齐时印。它把两种因分开：
     #: 「对象集变了（多了／少了／换了内容）」是**读数不可用**（rc=6，该重录），
-    #: 「Go 漂移了」才是判据红（rc=1）——压成一个数，下一个人就无从处置。
+    #: 「Go 漂移了」才是判据差异（rc=1）——压成一个数，下一个人就无从处置。
     if G.mode == GB.CHECK and not (cov_a.ok and cov_b.ok):
         for _tag, _cov, _n in (("A_plan", cov_a, len(live_a)),
                                ("B_plan", cov_b, len(batch))):
@@ -1360,7 +1360,7 @@ def main() -> int:
             print("  · %s" % m)
         if len(problems) > 20:
             print("  · …（另有 %d 条）" % (len(problems) - 20))
-        print("结论：单一入口对拍**未通过**（%d 处）" % len(problems))
+        print("结论：单一入口对拍**与 Python 有差异**（%d 处）" % len(problems))
         return 1
     if G.mode != GB.CHECK:
         #: ⚠ 默认档这一档「一致」的宾语是**现算的 Python 期望值**，不是冻的那份：
@@ -1378,7 +1378,7 @@ def main() -> int:
              cov["_registered_extra"], n_refused,
              G.uncovered_sections_text()))
     if G.mode == GB.CHECK and not (cov_a.ok and cov_b.ok):
-        #: 比过的部分一致，但**对象集/内容变了** ⇒ 读数不可用（rc=6），不是判据红。
+        #: 比过的部分一致，但**对象集/内容变了** ⇒ 读数不可用（rc=6），不是判据差异。
         return GB.RC_CHANNEL
     return 0
 

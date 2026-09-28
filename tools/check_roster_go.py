@@ -161,7 +161,7 @@ def py_roster_expect(path: Path) -> dict:
         msg = "%s: %s" % (type(exc).__name__, exc)
         #: ★ 报错正文里带着**这一次的临时文件路径**（每次跑都不同）——它不是期望值的
         #: 一部分，冻进去等于录了一个「只对那一次成立」的值（实测：不换掉的话
-        #: `--check` 天天报改值 1，那正是本仓记过的「永久假红等于没有判据」）。
+        #: `--check` 天天报改值 1，那正是本仓记过的「永久假差异等于没有判据」）。
         #: ⚠ 只在**这一支**（原版拒收）上换；判据判的是 `accept` 与那几行字段。
         return {"accept": False, "entries": [], "names": [],
                 "why": msg.replace(str(path), "<case>")}
@@ -270,16 +270,16 @@ def main() -> int:
         print()
     if mutate:
         if bad:
-            print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")
+            print("反向守卫：合成一处不一致 → 记为差异 —— 成立 ✓")
             return 0
         print("反向守卫：不成立 ✗")
         return 1
     if unchecked:
-        print("结论：用例表没覆盖到 %s —— 判红（不是实现错，是判据自己瞎）"
+        print("结论：用例表没覆盖到 %s —— 记为差异（不是实现错，是判据自己瞎）"
               % "、".join(unchecked))
         return 1
     if not diverged:
-        print("结论：登记分歧那一例没跑成「Go 拒 ∧ 原版收」—— 判红")
+        print("结论：登记分歧那一例没跑成「Go 拒 ∧ 原版收」—— 记为差异")
         return 1
     print("结论：%d 例逐字段一致（另含 1 例登记分歧、1 例两边都拒）" % compared)
     return 1 if bad else 0

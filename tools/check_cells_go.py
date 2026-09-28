@@ -174,7 +174,7 @@ def main() -> int:
         print(_sum)
     if mutate:
         if bad:
-            print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")
+            print("反向守卫：合成一处不一致 → 记为差异 —— 成立 ✓")
             return 0
         print("反向守卫：不成立 ✗")
         return 1
@@ -182,15 +182,15 @@ def main() -> int:
     must = ["goal_cells 逐格一致", "highland_cells 逐格一致", "有高台格"]
     unchecked = [k for k in must if seen.get(k, 0) == 0]
     if unchecked:
-        print("结论：没覆盖到 %s —— 判红（不是实现错，是判据自己瞎）"
+        print("结论：没覆盖到 %s —— 记为差异（不是实现错，是判据自己瞎）"
               % "、".join(unchecked))
         return 1
     print("结论：%d 关逐格一致（另 %d 例两边都拒）" % (compared, both_refused))
     if bad:
-        #: 比过的部分**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+        #: 比过的部分**真的不一致** ⇒ 记为差异，优先于「基线该重录」。
         return 1
     if G.mode == GB.CHECK and not cov.ok:
-        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是记为差异。
         return GB.RC_CHANNEL
     return 0
 

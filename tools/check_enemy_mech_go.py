@@ -14,7 +14,7 @@
 
 * `tools/check_enemy_go.py` 是**字段级对拍**：它证明 Go 与 `EnemyLibrary` 的字段
   逐位一致，**不证明机制被实现**。两侧同样地「读了黑板、填了字段、没人用」，
-  它照样全绿——那正是最该被看见的一种状态。
+  它照样零差异——那正是最该被看见的一种状态。
 * `tools/audit_unmodelled_abilities.py` 扫的是**一张手写登记表**里那 5 条
   「原版也没建模」的能力，它不是通用的「Go 有没有建模」。
 
@@ -22,7 +22,7 @@
 
 ## ★ 判据是**两条腿**的（2026-09-24 父会话裁定后重挑）
 
-只量「Go 读不读」会把**两台引擎共同的边界**记成 Go 的欠账。
+只量「Go 读不读」会把**两台引擎共同的边界**记成与 Python 的差异。
 `tools/audit_unmodelled_abilities.py` 的开头就立过这条规矩：
 
 > 原版战斗层也零命中 ⇒ 两台引擎同样不建模 ⇒ 对拍成立 ⇒ 不该进闸门。
@@ -33,7 +33,7 @@
 | 状态 | 判据 | 进不进 rc |
 |---|---|---|
 | **已消费** | Go 有读取点 **且** Go 有行为落点 | 否 |
-| **真红** | ¬Go消费 **且 Python 侧有落点** | **是**（Go 的欠账） |
+| **差异（未登记）** | ¬Go消费 **且 Python 侧有落点** | **是**（与 Python 的差异） |
 | **共同边界** | 两侧都没有落点 | 否（**登记**，逐条落盘） |
 | **仅 Go** | Go 有落点而 Python 没有（反向，罕见） | 否（登记） |
 | **判不了** | 正文是自然语言、没有具名判据 | 否（逐条落盘，**不装作已查**） |
@@ -47,16 +47,16 @@
   （Go：`rios-sim/*.go` 去掉 填充／规格／闸门之后剩下的文件；
    Python：`ak_tactic/battle/*.py`）。源字段与规格字段之间的改名靠
   `v.RebornDelay = es.RebornDuration` 这类搬移语句现算成同义名一起找
-  （不过这一层会造出假红：`RebornDuration` 在 `sim.go` 里一处都没有）。
+  （不过这一层会造出假差异：`RebornDuration` 在 `sim.go` 里一处都没有）。
 * **两条具名族**：重生族（`Reborn.`／`Reborning.`，后缀集从**源码**现算，
   含 `prefix + "…"` 拼接出来的那些）与相性族（`AffinityOf(bb,"P")` × `p3rSlots` 槽位）。
   族判定要**连后缀一起看**：`Reborn.invincible` 与 `Reborn.reborn_duration`
-  同前缀不同命，按前缀一律放行会把红洗成绿。
+  同前缀不同命，按前缀一律放行会把差异洗成零差异。
 * **技能读取器**：`proseSkillAttacks`（Go）／`PROSE_SKILL_ATTACK`（Python）那张表里的
   `prefabKey`，它读的黑板键**两侧**都算消费。该表实测**只有 `Drink` 一项**。
 
 ★ 要害仍是那一条：**「读了黑板、填进字段、模拟里没人读」不算建模**。
-本批 17 条真红全是这个形状（Go 只填不用、Python 有落点）。
+本批 17 条差异（未登记）全是这个形状（Go 只填不用、Python 有落点）。
 
 ⚠ **Python 面的盲区**（写在这里，不藏在注释里）：它看不见「同一机制换了个键名实现」，
 那是**未核**，不是没建。输出里另印一列 `py_token`（键的机制名在 Python 代码行里
@@ -80,17 +80,17 @@
 * **C2** 命中 `unportedLines` 的字面线名 ⇒ 具名 unported（已登记）；
 * **C3** 该敌人在 gamedata 侧**一个机制键都没有**（天赋黑板空且无技能）而正文提到了机制
   ⇒ `PROSE_NO_KEY`：**登记为共同边界**（两侧连字段都没有 ⇒ 闸门对它永远沉默），
-  **不计红**——那不是 Go 的欠账，是两台引擎共同的边界。
+  **不计入差异**——那不是与 Python 的差异，是两台引擎共同的边界。
 
 三条都不命中的，**判不了**（`PROSE_NO_CRITERION`）：正文是中文散文，
-本工具没有把中文机制名映射到键名的具名判据。**判不了不做成红**——
-永久假红等于没有判据（本仓记过），但它**逐条落盘、并在汇总行里带数**，
+本工具没有把中文机制名映射到键名的具名判据。**判不了不做成差异**——
+永久假差异等于没有判据（本仓记过），但它**逐条落盘、并在汇总行里带数**，
 不许被当成「查过了没问题」。
 
 ## 退出码
 
-* `0` 全绿（无**真红**）；
-* `1` 有真红（Go 的欠账）；共同边界与判不了**都不计入**；
+* `0` 零差异（无未登记的差异）；
+* `1` 有差异（未登记）；共同边界与判不了**都不计入**；
 * `3` 仪器缺输入（数据文件缺失、关卡清单为空、Go 源码目录为空）；
 * `5` 本判据自己崩了（与业务态不重叠，本仓惯例）。
 
@@ -142,14 +142,14 @@ RE_AFFINITY = re.compile(r"([a-zA-Z_]\w*)\s*=\s*AffinityOf\(bb,\s*\"([^\"]+)\"\)
 RE_PREFIX_CAT = re.compile(r"(?:sp\.)?(?:prefix|pre)\s*\+\s*\"([^\"]*)\"")
 RE_GO_LITERAL = re.compile(r"\"([^\"\\\n]{1,80})\"")
 #: 源字段 → 规格字段的搬移（`v.RebornDelay = es.RebornDuration`）。
-#: ★ 不过这一层会造出**假红**：`RebornDuration` 这个名字在 `sim.go` 里一处都没有，
+#: ★ 不过这一层会造出**假差异**：`RebornDuration` 这个名字在 `sim.go` 里一处都没有，
 #: 真正被读的是规格侧的名字 `RebornDelay`（`sim.go:868`）。同义名要一起找。
 RE_SPEC_MOVE = re.compile(r"\bv\.([A-Z]\w*)\s*=\s*(?:derefOr\(&)?es\.([A-Z]\w*)")
 
 #: 重生族「后缀 → 下游字段」。**每条都带锚**：锚定字面量必须在 Go 源码里现算到，
 #: 否则本工具报错退出（缺输入），不许带着一条没根据的映射往下跑。
 #: 理由：`Reborn.invincible` 与 `Reborn.reborn_duration` 同前缀不同命，
-#: 按前缀一律放行会把红洗成绿。
+#: 按前缀一律放行会把差异洗成零差异。
 REBORN_SUFFIX_FIELD: dict[str, tuple[tuple[str, ...], str]] = {
     "reborn_duration": (("RebornDuration",), "Reborn.reborn_duration"),
     "max_hp_ratio": (("RebornHPRatio",), "Reborn.max_hp_ratio"),
@@ -169,7 +169,7 @@ REBORN_SUFFIX_FIELD: dict[str, tuple[tuple[str, ...], str]] = {
 #:
 #: ⚠ 三个泛词**故意不收**：`攻击力`／`防御力`／`造成`／`受到`／`伤害`／`范围`／`层`。
 #: 实测它们会把风味文案判成机制正文（「整合运动的近身作战人员，**以高攻击力见长**。」
-#: 会因此翻红）。收窄的代价写在文档第七节：词表窄了会把机制正文错判成风味，
+#: 会因此记出差异）。收窄的代价写在文档第七节：词表窄了会把机制正文错判成风味，
 #: 那一节列全文就是为了让这件事**可复核**，而不是靠词表自己说自己对。
 MECH_KEYWORDS = (
     "免疫", "阻挡", "攻击速度", "移动速度", "攻速", "每秒", "召唤", "半径",
@@ -214,7 +214,7 @@ def snake(name: str) -> str:
 class PyFace:
     """**Python 侧**的消费面——判据要与 Go 面**同构**，才谈得上「两边求差」。
 
-    ★ 为什么要两边：只量「Go 读不读」会把**两台引擎共同的边界**记成 Go 的欠账。
+    ★ 为什么要两边：只量「Go 读不读」会把**两台引擎共同的边界**记成与 Python 的差异。
     `tools/audit_unmodelled_abilities.py` 的开头就立过这条规矩
     （「原版战斗层也零命中 ⇒ 两台引擎同样不建模 ⇒ 对拍成立 ⇒ 不该进闸门」）。
 
@@ -406,7 +406,7 @@ class GoFace:
         `bb := s.TalentBlackboard`（`enemy_derive.go:243`），而 `s.TalentBlackboard`
         只在这两个文件里被当黑板用。别的文件里的 `bbFloat(bb,"…")`／`bb["…"]`
         读的是**别的黑板**（关卡 runes、干员天赋、机制规格）——把那些算成消费，
-        就会用一个同名键把红洗成绿（本仓记过这一类假清账）。
+        就会用一个同名键把差异洗成零差异（本仓记过这一类假清账）。
         它们照样登记进 `other_keyspace`，在需要时**打印出来**，只是不改变判定。
         """
         for name, text in self.srcs.items():
@@ -450,7 +450,7 @@ class GoFace:
         self.reborn_anchor: set[str] = set()
         #: ⚠ 只扫 `enemy_derive.go`：别的文件里也有叫 `prefix` 的局部变量
         #: （`mechspec.go` 的分支名、`buildspec.go` 的打印串），扫全仓会把
-        #: `": "`／`"_1"`／`"."` 这类东西抄成「重生族后缀」，把红洗成绿。
+        #: `": "`／`"_1"`／`"."` 这类东西抄成「重生族后缀」，把差异洗成零差异。
         text = strip_line_comments("enemy_derive.go", self.srcs.get("enemy_derive.go", ""))
         for i, line in enumerate(text.splitlines(), 1):
             for m in RE_GO_LITERAL.finditer(line):
@@ -535,7 +535,7 @@ class GoFace:
         """具名族归属。返回 (字段元组, 族名, 出处)；不属于任何族返回 None。
 
         后缀不在 Go 现算的后缀集里时返回 `((), "SUFFIX_NOT_READ", [])`——
-        那是**红**，不是「不属于族」。
+        那是**差异**，不是「不属于族」。
         """
         for pre in self.reborn_suffixes:
             if key.startswith(pre):
@@ -609,7 +609,7 @@ def line_field_map(names: dict[str, int]) -> dict[str, tuple[str, int]]:
 
 #: ★ **具名 unported 登记**（第 27 套自己的登记表，2026-09-24 父会话裁定走「登记」）。
 #:
-#: 登记的是**真红**里那些「Go 读了黑板、填进了 `EnemyStats`、模拟里没人读」的键：
+#: 登记的是**差异（未登记）**里那些「Go 读了黑板、填进了 `EnemyStats`、模拟里没人读」的键：
 #: 它们是**已知行为分歧**，**不是已修复**；登记的目的是让汇总行的绿**盖不住**它们。
 #:
 #: 每条四样，缺一不算：
@@ -622,7 +622,7 @@ def line_field_map(names: dict[str, int]) -> dict[str, tuple[str, int]]:
 #:
 #: ★ **出处不许过期**（父会话第 4 条附加条件：这是守卫，不是说明）：
 #: `registry_status()` 每次现算——读取点还在不在、字段名还对不对、字段**是否已经有了
-#: 行为落点**。任何一条不成立，这条登记**当场失效**（键退回真红）并印
+#: 行为落点**。任何一条不成立，这条登记**当场失效**（键退回未登记的差异）并印
 #: `MECH-STALE-REGISTRY`。**登记表退化成永久的假绿**是这条守卫唯一要防的东西。
 #:
 #: ★ 这些**不**进 `rios-sim/unsupported.go` 的拒跑线：进了会把整个怀黍离
@@ -696,7 +696,7 @@ NAMED_UNPORTED_KEYS: dict[str, dict[str, str]] = {
         "gate": "go.behaviour(DeathToken) 为空",
         "corrobor": "rios-sim/unsupported.go:121（unportedLines 的 death_token）",
     },
-    #: ★ 2026-09-27 收尾时加。当天全量批次（2676 键）跑出 **26 处真红，全是这两个键**
+    #: ★ 2026-09-27 收尾时加。当天全量批次（2676 键）跑出 **26 处差异（未登记），全是这两个键**
     #: —— 分布在 13 个 `act54side_*` 章里，每键各 13 次（`act54side_08` 那两个敌人
     #: 的 id 不同、键相同）。它们是 P3R 相性系统（「击破值 ⇒ 倒地」）的两个参数：
     #:
@@ -973,7 +973,7 @@ def go_lookup(go: GoFace, key: str, kind: str, prefab: str):
         return False, [], fields, "NO_READ_SITE", []
     fld = go.keyfield.get(key, "") or (fields[0] if fields else "")
     if not fld:
-        #: 有读取点却认不出下游字段——**不许当成绿**（假绿比假红贵得多）。
+        #: 有读取点却认不出下游字段——**不许当成绿**（假绿比假差异贵得多）。
         return False, sites[:1], fields, "READ_NO_FIELD", []
     return True, sites[:1], (fld,) if not fields else fields, "READ", []
 
@@ -1005,9 +1005,9 @@ def judge_key(go: GoFace, py: PyFace, key: str, kind: str, prefab: str,
             return dict(base, verdict="GO", why="BOTH", evidence=gbeh[:1])
         return dict(base, verdict="GO_ONLY", why="GO_ONLY", evidence=gbeh[:1])
     if py_ok:
-        #: 真红。**先看有没有具名出处**——有出处的登记为「具名 unported」，
+        #: 差异（未登记）。**先看有没有具名出处**——有出处的登记为「具名 unported」，
         #: 但登记只改分类、**不改事实**：它仍是一条**已知行为分歧**，
-        #: 汇总行必须把条数与「真红 0」印在同一屏上。
+        #: 汇总行必须把条数与「差异 0 条」印在同一屏上。
         if named:
             return dict(base, verdict="UNPORTED", why="NAMED_LINE",
                         evidence=gsites[:1] or [(named, 0)], py_evidence=py_ev)
@@ -1111,8 +1111,8 @@ def main() -> int:
              "清单由调用方给出" if given else "缺省：缓存可达的全部"))
     print("口径（两腿求差）：")
     print("  已消费 ＝ Go 有读取点 **且** Go 有行为落点；")
-    print("  真红   ＝ ¬Go消费 **且 Python 侧有落点**（Go 的欠账，进 rc）；")
-    print("  共同边界 ＝ 两侧都没有落点（**登记、不计红**——"
+    print("  差异   ＝ ¬Go消费 **且 Python 侧有落点**（与 Python 的差异，进 rc）；")
+    print("  共同边界 ＝ 两侧都没有落点（**登记、不计入差异**——"
           "`audit_unmodelled_abilities.py` 立过这条规矩）；")
     print("  仅 Go  ＝ Go 有落点而 Python 没有（反向，登记）；判不了不进 rc。")
     print("      Go 行为文件＝rios-sim/*.go 去掉 填充%s／规格%s／闸门%s"
@@ -1139,7 +1139,7 @@ def main() -> int:
     for line in broken:
         print("!! MECH-BROKEN-REGISTRY %s" % ascii_only(line))
     for line in stale:
-        print("!! MECH-STALE-REGISTRY %s（该条登记当场失效，键退回真红）" % ascii_only(line))
+        print("!! MECH-STALE-REGISTRY %s（该条登记当场失效，键退回未登记的差异）" % ascii_only(line))
     for k in sorted(named_keys):
         e = named_keys[k]
         print("     %-46s → %-20s 读取点 %-24s 判定没有行为落点：%s"
@@ -1189,7 +1189,7 @@ def main() -> int:
         nkeys = len(set(c["go"]) | set(c["unported"]) | set(c["red"])
                     | set(c["common"]) | set(c["go_only"]))
         print("%-10s 敌人 %-4d 机制键 %-4d（出现 %-4d 次）  已消费 %-3d／"
-              "**具名 unported %-3d**／真红 %-3d／共同边界 %-3d／仅 Go %-2d  ｜ "
+              "**具名 unported %-3d**／差异 %-3d 条／共同边界 %-3d／仅 Go %-2d  ｜ "
               "正文 已登记 %-3d／无键 %-3d／判不了 %-3d／风味 %-3d"
               % (ch, len(c["enemies"]), nkeys, c["keyn"], ng, nu, nr, nc, ngo,
                  pu, pnk, pund, len(c["flavor"])))
@@ -1205,7 +1205,7 @@ def main() -> int:
                  "本章没有一条「Go 只填不用、Python 有落点」的键命中第 27 套的具名登记表"),
                 ("RED", nr, "本章一个机制键都没有（不是「都建模了」）" if nkeys == 0 else
                  "本章每一条「Go 只填不用、Python 有落点」的键都已具名登记 ⇒ "
-                 "没有未登记的真红（**登记 ≠ 已修复**）"),
+                 "没有未登记的差异（**登记 ≠ 已修复**）"),
                 ("COMMON", nc, "本章每个键要么被 Go 消费、要么 Python 侧有落点")):
             if n == 0:
                 print("!! ZERO-ROW chapter=%s class=%s reason=%s"
@@ -1240,7 +1240,7 @@ def main() -> int:
                          ascii_only(e.get("read") or ""),
                          ascii_only(it.get("py_evidence", "")), it["why"]))
         if nr:
-            print("   **真红（未登记的 Go 欠账）逐条**：")
+            print("   **差异（未登记）逐条**：")
             for k in sorted(c["red"]):
                 nm, eid, it = c["red"][k]
                 z = " [值全为 0／空]" if it.get("zero") else ""
@@ -1280,7 +1280,7 @@ def main() -> int:
         print("已写 %s" % md_path)
     print()
     print("结论：已消费 %d ／ 具名 unported %d（逐条见文档「具名 unported 登记」一节）／ "
-          "真红 %d" % (tot["go"], tot["unported"], tot["red"]))
+          "差异 %d 条" % (tot["go"], tot["unported"], tot["red"]))
     print("      （另：共同边界 %d 个键、仅 Go %d 个键、判不了 %d 条 —— 均不计入 rc）"
           % (tot["common"], tot["go_only"], tot["und"]))
     print("MECH-VERDICT red=%d unported=%d common=%d go=%d go_only=%d undecidable=%d"
@@ -1329,15 +1329,15 @@ def _mutate_verdict(face: GoFace, py: PyFace, f: Findings, srcs: dict[str, str],
 
     用合成键在四个方向上各注入一次，每一步都印出来：
 
-    * `③`  合成「共同边界」⇒ 判共同边界；**注入 Go 消费** ⇒ **须变绿，不许变红**
-           （「把共同边界错当欠账」这件事必须会被判出来）；
-    * `②`  同一条键，**打开 Python 落点** ⇒ **须变真红**；关掉 ⇒ 回到共同边界；
-    * `①a` 合成「真红」（Python 有落点、Go 有读取点但无行为）⇒ 判红；
-           **抹掉** Go 的读取点 ⇒ **仍须判红**；
-    * `①b` 同上一条，改为**补上** Go 的行为落点 ⇒ **须变绿**。
+    * `③`  合成「共同边界」⇒ 判共同边界；**注入 Go 消费** ⇒ **须变为零差异，不许记出差异**
+           （「把共同边界错当差异」这件事必须会被判出来）；
+    * `②`  同一条键，**打开 Python 落点** ⇒ **须变差异（未登记）**；关掉 ⇒ 回到共同边界；
+    * `①a` 合成「差异（未登记）」（Python 有落点、Go 有读取点但无行为）⇒ 记为差异；
+           **抹掉** Go 的读取点 ⇒ **仍须记为差异**；
+    * `①b` 同上一条，改为**补上** Go 的行为落点 ⇒ **须变为零差异**。
 
     四条都成立才 rc=0。★ 2026-09-24 父会话裁定的重挑：原来那条只抹一条「已消费」的键，
-    **只证明 Go 腿**——那正是会把假红放过去的那一侧。
+    **只证明 Go 腿**——那正是会把假差异放过去的那一侧。
     """
     K = "__guard__.probe"
     F = "GuardProbe"
@@ -1373,21 +1373,21 @@ def _mutate_verdict(face: GoFace, py: PyFace, f: Findings, srcs: dict[str, str],
     rows.append(("基线：两侧都没有落点", "COMMON", verdict()))
 
     go_on(beh=True)
-    rows.append(("③ 给共同边界注入 Go 消费（⇒ 绿，不许红）", "GO_ONLY", verdict()))
+    rows.append(("③ 给共同边界注入 Go 消费（⇒ 零差异，不许记出差异）", "GO_ONLY", verdict()))
     go_off()
 
     py_on()
-    rows.append(("② 打开 Python 落点（共同边界 ⇒ 真红）", "RED", verdict()))
+    rows.append(("② 打开 Python 落点（共同边界 ⇒ 未登记的差异）", "RED", verdict()))
     py_off()
     rows.append(("② 关掉后回到共同边界", "COMMON", verdict()))
 
     py_on()
     go_on(beh=False)
-    rows.append(("①a 真红（Go 有读取点、无行为落点）", "RED", verdict()))
+    rows.append(("①a 差异（未登记：Go 有读取点、无行为落点）", "RED", verdict()))
     go_off()
-    rows.append(("①a 抹掉 Go 读取点后仍为红", "RED", verdict()))
+    rows.append(("①a 抹掉 Go 读取点后仍记出差异", "RED", verdict()))
     go_on(beh=True)
-    rows.append(("①b 补上 Go 行为落点后转绿", "GO", verdict()))
+    rows.append(("①b 补上 Go 行为落点后转为零差异", "GO", verdict()))
     go_off()
     py_off()
 
@@ -1419,7 +1419,7 @@ def _mutate_verdict(face: GoFace, py: PyFace, f: Findings, srcs: dict[str, str],
              sum(len(c["common"]) for c in f.chapters.values())))
     if ok:
         print("结论：反向守卫四条腿都成立（Go 腿两个方向都有分辨力、Python 腿能把"
-              "共同边界翻成真红、共同边界不会被错当欠账）")
+              "共同边界翻成差异（未登记）、共同边界不会被错当差异）")
     else:
         print("结论：反向守卫**不成立** —— 至少一条腿没有分辨力")
     return 0 if ok else 1
@@ -1428,10 +1428,10 @@ def _mutate_verdict(face: GoFace, py: PyFace, f: Findings, srcs: dict[str, str],
 def _write_md(path: Path, f: Findings, tot: dict, named_keys: dict) -> None:
     out = ["# 敌人机制建模：逐章读数（由 tools/check_enemy_mech_go.py --md 生成）", "",
            "两腿口径：`已消费` ＝ Go 有读取点 ∧ Go 有行为落点；"
-           "**`真红` ＝ Python 侧有落点而 Go 没有（未登记的 Go 欠账）**；"
-           "`具名 unported` ＝ 真红但已在第 27 套的登记表里有出处（**登记 ≠ 已修复**）；"
-           "`共同边界` ＝ 两侧都没有落点（登记，不计红）。", "",
-           "| 章 | 敌人只数 | 机制键 | 已消费 | 具名 unported | 真红 | 共同边界 | 仅 Go | "
+           "**`差异（未登记）` ＝ Python 侧有落点而 Go 没有（尚未登记的与 Python 的差异）**；"
+           "`具名 unported` ＝ 差异（未登记）但已在第 27 套的登记表里有出处（**登记 ≠ 已修复**）；"
+           "`共同边界` ＝ 两侧都没有落点（登记，不计入差异）。", "",
+           "| 章 | 敌人只数 | 机制键 | 已消费 | 具名 unported | 差异（未登记） | 共同边界 | 仅 Go | "
            "正文已登记 | 正文无键 | 正文判不了 | 风味跳过 |",
            "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for ch in sorted(f.chapters):
@@ -1459,7 +1459,7 @@ def _write_md(path: Path, f: Findings, tot: dict, named_keys: dict) -> None:
             out.append("| %s | %s | `%s` | %s | %s |" % (
                 ch, nm, k, e.get("field") or it.get("field") or "?",
                 it.get("py_evidence", "")))
-    out += ["", "## 真红（未登记的 Go 欠账）——逐条", "",
+    out += ["", "## 差异（未登记）——逐条", "",
             "| 章 | 敌人 | 键 | 原因 | 下游字段 | Go 侧 | Python 落点 |",
             "|---|---|---|---|---|---|---|"]
     for ch in sorted(f.chapters):
@@ -1475,7 +1475,7 @@ def _write_md(path: Path, f: Findings, tot: dict, named_keys: dict) -> None:
             nm, eid, it = f.chapters[ch]["go"][k]
             out.append("| %s | %s | `%s` | %s | %s |" % (
                 ch, nm, k, it.get("field") or "?", _ev(it["evidence"])))
-    out += ["", "共同边界键（**两台引擎都没有落点**，登记、不计红）——逐条：", "",
+    out += ["", "共同边界键（**两台引擎都没有落点**，登记、不计入差异）——逐条：", "",
             "| 章 | 敌人 | 键 | 原因 | Python 同名词根（线索，不参与判定） |",
             "|---|---|---|---|---|"]
     for ch in sorted(f.chapters):
@@ -1483,7 +1483,7 @@ def _write_md(path: Path, f: Findings, tot: dict, named_keys: dict) -> None:
             nm, eid, it = f.chapters[ch]["common"][k]
             out.append("| %s | %s | `%s` | %s | %s |" % (
                 ch, nm, k, it["why"], "是" if it.get("py_token") else ""))
-    out += ["", "仅 Go 有落点的键（Python 侧没有——反向的欠账，逐条）：", "",
+    out += ["", "仅 Go 有落点的键（Python 侧没有——反向的差异，逐条）：", "",
             "| 章 | 敌人 | 键 | 下游字段 | Go 行为落点 |", "|---|---|---|---|---|"]
     for ch in sorted(f.chapters):
         for k in sorted(f.chapters[ch]["go_only"]):

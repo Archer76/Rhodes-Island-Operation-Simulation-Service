@@ -12,7 +12,7 @@
   `Go 已产出的 ∪ Go 自报缺的 == 源文件里的键集` 且两者**不相交**。
 
   为什么这条比逐字段对拍还重要：分开造完再拼，最容易出的错是**键名对不上而
-  两边都不报**。上游哪天加了一个键，这条会先红，而不是等某次对拍发现少送字段。
+  两边都不报**。上游哪天加了一个键，这条会先记出差异，而不是等某次对拍发现少送字段。
 
 ## 一张要盯着的表
 
@@ -199,7 +199,7 @@ def py_specgo_level(lv: str) -> dict:
     want["goal_cells"] = [[int(x), int(y)] for x, y in sorted(_find_goals(inp))]
     want["highland_cells"] = [[int(x), int(y)] for x, y in _highland_cells(inp)]
     #: ⚠ 这一格叫 `env` 不是 `want`：控制组 P1 会把值里的**第一个键**改坏，而
-    #: 改到 `loaded` 上会让整关被跳过（等于没进判决路径 ⇒ 报出一条假的「没红」）。
+    #: 改到 `loaded` 上会让整关被跳过（等于没进判决路径 ⇒ 报出一条假的「没记出差异」）。
     #: `env` 排在 `loaded` 前面，改坏它就落在被比的 12 个值上。
     return {"loaded": True, "why": "", "env": want}
 
@@ -257,8 +257,8 @@ def _compute_syn() -> list[dict]:
     """合成用例的扫描（与原版同序、同口径）。
 
     ⚠ 一处**口径差**要写明：原版按「抄到规格 **且** 比对一致（`okk`）」计数到 6，
-    这里按「抄到规格」计数——两种计数在**绿局**下必然相等（绿 ⇒ 无反例 ⇒
-    `okk` 恒真）；红局下扫描面可能不同（而红局本来就是红的）。
+    这里按「抄到规格」计数——两种计数在**零差异的局**下必然相等（零差异 ⇒ 无反例 ⇒
+    `okk` 恒真）；记出差异的局下扫描面可能不同（那种局本来就有差异）。
     ★ `_capture` 用 Python：冻结档下本函数不会被调到。
     """
     out: list[dict] = []
@@ -603,22 +603,22 @@ def main() -> int:
         print(_sum)
     if mutate:
         if bad:
-            print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")
+            print("反向守卫：合成一处不一致 → 记为差异 —— 成立 ✓")
             return 0
         print("反向守卫：不成立 ✗")
         return 1
     missingc = [k for k in VALUE_KEYS if seen.get("值 " + k, 0) == 0]
     if missingc:
-        print("结论：没覆盖到 %s —— 判红（不是实现错，是判据自己瞎）"
+        print("结论：没覆盖到 %s —— 记为差异（不是实现错，是判据自己瞎）"
               % "、".join(missingc))
         return 1
     print("结论：%d 关的 %d 个值键逐项一致，键集账 %d 个键对得上"
           % (compared, len(VALUE_KEYS), len(all_keys)))
     if bad:
-        #: 比过的部分**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+        #: 比过的部分**真的不一致** ⇒ 判据差异，优先于「基线该重录」。
         return 1
     if G.mode == GB.CHECK and not (cov_lv.ok and cov_real.ok):
-        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据差异。
         return GB.RC_CHANNEL
     return 0
 

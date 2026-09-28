@@ -43,7 +43,7 @@ taunt_level / name / talent_blackboard / skills`。
 
 **③ `DEFAULTS`（dataclass 默认值）是 Python 侧产物** ⇒ 当**判定参数**冻住。
 不冻的话，将来往 `NOT_PORTED` 加字段时，check 档会拿一份**空** `DEFAULTS` 判「非默认」，
-**把每一只敌人都报成缺口**（假红）。
+**把每一只敌人都报成缺口**（假差异）。
 
 用法:
     python tools\\check_enemy_go.py main_00-01 main_01-07 main_02-01
@@ -158,7 +158,7 @@ def is_default(v, name: str) -> bool:
     那是尺子的毛病，不是敌人的。判据要跟着数据类的默认值走。
 
     ★ 两侧都过 `norm()`：冻回来的默认值只能是 JSON 形状（`()` 会变成 `[]`），
-    不归一化就会拿 `()` 与 `[]` 比 ⇒ **每一只敌人都被报成缺口**（假红）。
+    不归一化就会拿 `()` 与 `[]` 比 ⇒ **每一只敌人都被报成缺口**（假差异）。
     """
     d = DEFAULTS.get(name, _MISSING)
     if d is _MISSING:
@@ -237,7 +237,7 @@ def main() -> int:
     batch_ref = G.expect(("query", "level_batch"), lambda: batch)
     #: ★ 声明：这份记录**真的进了判定**（下面的 `lv_same` 由它决定 ⇒ 内容变了会被
     #: 判成「输入改动」，而不是被读成「对象集变了」）。`--control` 的 P4 据此才敢开
-    #: ——对**红不起来**的套开探针，等于造一条永远不响的守卫。
+    #: ——对**记不出差异**的套开探针，等于造一条永远不响的守卫。
     G.batch_consumed()
 
     now_by_lv = {r["level"]: r["sha16"] for r in batch}
@@ -368,7 +368,7 @@ def main() -> int:
         print(_sum)
     if mutate:
         print()
-        print("反向守卫：本轮**期望**判红（合成一处不一致）——%s"
+        print("反向守卫：本轮**期望**记为差异（合成一处不一致）——%s"
               % ("成立 ✓" if bad else "不成立 ✗（判据没有分辨力）"))
         return 0 if bad else 1
     print("结论：%d 只敌人逐字段一致" % (compared - bad))

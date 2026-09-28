@@ -51,22 +51,22 @@ beam 切出来的状态就跟着错**。所以本套把「顺序」也当成被�
 Go 侧一律 `sort.SliceStable`。判据的做法是**逐索引比**（不是按集合比）：
 索引 i 的十栏都必须对上，所以顺序一错、或平局取错了谁，都会当场显形；
 另有一条专门的「顺序」判定，只有当两侧**多重集相同而序列不同**时才报它
-（那种时候字段级比较全绿、只有顺序变了——它必须自己长一条结论出来）。
+（那种时候字段级比较零差异、只有顺序变了——它必须自己长一条结论出来）。
 
 ## ★ 行使计数：两个来源
 
 `covered` 那 14 个计数是「这一层把候选从多少压到了多少」的眼睛，它是
 **被测方自报**的。判据另有一份**尺子**：`py_covered()` 用 Python 自己的原语
 （`stage.map.melee_spots` / `range_provider` / `index.dwell`）把同一批空间
-独立走一遍数出来。两边不等 ⇒ 判红（与 `check_stagepath_go.py` 的
+独立走一遍数出来。两边不等 ⇒ 记为差异（与 `check_stagepath_go.py` 的
 `py_route_plan_coverage` 同一形状：计数器本身也是一个断言）。
 
 ★ 四条**结构零**分支（**每跑一次都重新量**，不是写死一句话）：
 
 | 分支 | 为什么在现数据上不可达 | 守卫 |
 |---|---|---|
-| `no_char_id` | 两个名册读取器（`plan.py:221-223` 的 `if not name or not cid: continue` 与 Go 的读名册口）都**丢掉**没有可用 id 的行 ⇒ 表里不可能有 `char_id` 为空的条目 | 合成名册里那一行必须落进 `entry_missing` 而不是 `no_char_id`；非 0 即红（红的意思是「该补样本了」） |
-| `range_missing` | 每个用到的 `rangeId` 都在 `range_table.json` 里 | 全程必须为 0；非 0 即红 |
+| `no_char_id` | 两个名册读取器（`plan.py:221-223` 的 `if not name or not cid: continue` 与 Go 的读名册口）都**丢掉**没有可用 id 的行 ⇒ 表里不可能有 `char_id` 为空的条目 | 合成名册里那一行必须落进 `entry_missing` 而不是 `no_char_id`；非 0 即记差异（它的意思是「该补样本了」） |
+| `range_missing` | 每个用到的 `rangeId` 都在 `range_table.json` 里 | 全程必须为 0；非 0 即记差异 |
 | `empty_range` | 每条范围至少含自身格 `(0,0)`（`gamedata/range.py:18-20`） | 同上 |
 | `atk_missing` | 面板 `total["atk"]` 恒有值 | 同上 |
 
@@ -74,7 +74,7 @@ Go 侧一律 `sort.SliceStable`。判据的做法是**逐索引比**（不是按
 「范围代号查不到」吞成**空集合**，而 `RangeProvider.__call__` 在查不到时代码是
 **退回直线四格**（`battle/range.py:135-139`）——Go 那边是 `range_missing` 直接
 跳过。三者在现数据上都是 0，所以这条口径差**没有被行使**；一旦非 0，
-本判据会先把它报成「结构零变成可达」而不是「判据红」，处置是补一份样本。
+本判据会先把它报成「结构零变成可达」而不是「判据差异」，处置是补一份样本。
 
 ## `per_op <= 0`：★ 2026-09-27 已裁定 ⇒ 从「登记分歧」改成「两侧一致」的断言
 
@@ -87,7 +87,7 @@ Go 侧一律 `sort.SliceStable`。判据的做法是**逐索引比**（不是按
 引擎侧本来就是 `defaultPerOp`。
 ⇒ 判据这一支现在是**断言**：`per_op=0` 与 `per_op=6` 各问一次两侧，
 要求**候选条数／kept／顺序／逐字段**四个读数两两相等；并配一条**负对照**
-（把 Python 的旧行为装回去，这条断言必须当场判红）。
+（把 Python 的旧行为装回去，这条断言必须当场记为差异）。
 ⚠ 那一支的浮点走 `_rows_bit_equal`：它比的是**同一位实现的两个输入** ⇒ 逐位相等。
 （本套的浮点现在**一律逐位**，见文件头那条「曾经开过一个口子」。）
 ★ 冻结档**不必重录**：它复用的是**已经冻着**的 `per_op=6` 那一份期望值
@@ -98,24 +98,24 @@ Go 侧一律 `sort.SliceStable`。判据的做法是**逐索引比**（不是按
 **① Python 的关卡加载器会按需从镜像下载。** `GameDataSource` 在本地缓存缺
 文件时**联网补齐**并落进 `data/gamedata/map.ark-nights.com/levels/`。于是
 「Go 取不到、Python 取到了」有两种**完全不同**的因：数据本来是缺的（Python
-顺手补了）／代码分叉了。压成一个「判据红」＝让人去查一个不存在的分叉。
+顺手补了）／代码分叉了。压成一个「判据差异」＝让人去查一个不存在的分叉。
 处置有三层：
 
 * 取证范围来自 `cached_levels()`（索引里**缓存文件在场**的那些），
   `GB.level_inputs()` 还会再过一道「缓存文件不在场就大声失败」⇒ 批次里
   **不可能**有「数据缺」的关，本坑**按构造避开**；
 * 仍然留了防御支：Go 失败时**也去调一次 Python**，并**在调用前后各量一次
-  该关缓存文件在不在**——两边都失败记 `数据缺`（具名印出，**不算红**）、
-  Python 成了而文件是**这一次**才出现的记 `Python 顺手补齐`（**不算红**）、
-  文件本来就在场而只有 Go 失败 ⇒ **判红**（这才是真分叉）；
-* 冻结档下跑不动 Python，那时 Go 失败直接判红（冻的那批里有关卡 ⇒ 录基线时
+  该关缓存文件在不在**——两边都失败记 `数据缺`（具名印出，**不算差异**）、
+  Python 成了而文件是**这一次**才出现的记 `Python 顺手补齐`（**不算差异**）、
+  文件本来就在场而只有 Go 失败 ⇒ **记为差异**（这才是真分叉）；
+* 冻结档下跑不动 Python，那时 Go 失败直接记为差异（冻的那批里有关卡 ⇒ 录基线时
   数据是在的），**具名**说明「冻结档无法分辨数据缺与分叉」。
 
 **② 引擎的 gamedata 路径是相对 cwd 拼的。** `DataRoot()`（`stage.go:167`）
 在没有 `RIOS_DATA` 时返回 `filepath.Join("data", "gamedata")`。所以判据
 **两件都做**：给 Go 子进程 `cwd=<本仓根>`（worktree 挂了 data junction 就行），
 **并且**显式设 `RIOS_DATA=<本仓根>/data/gamedata`。少任何一件，
-换一台机器或换一个 cwd 就会得到「读关卡索引失败」——而它**长得像判据红**。
+换一台机器或换一个 cwd 就会得到「读关卡索引失败」——而它**长得像判据差异**。
 
 ## 期望值从哪来（**两种模式**）
 
@@ -130,7 +130,7 @@ Go 侧一律 `sort.SliceStable`。判据的做法是**逐索引比**（不是按
 
 ## 反向守卫（`--mutate`）
 
-十二处**互相独立**的变异，各自必须「注入过 ＋ 判红过」，缺一不算成立。
+十二处**互相独立**的变异，各自必须「注入过 ＋ 记出过差异」，缺一不算成立。
 ★ 每处落在**不同的一条候选**上，所以**一关之内**就能全部注入完 ——
 这一点是必需的：`check_go_all --selfcheck` 给「要喂清单」的套只喂 `lvls[:1]`。
 
@@ -146,22 +146,22 @@ Go 侧一律 `sort.SliceStable`。判据的做法是**逐索引比**（不是按
 | cells 少一格 | 第 i 条 `cells` 少一个格 | **按集合比**且集合比较是活的 |
 | 同价值两条的顺序 | 交换一对**同价值**的相邻候选 | 顺序那一栏是活的（字段全等、只有序变） |
 | covered 计数 | Go 自报的 `visits_zero` +1 | 行使计数比较是活的（与尺子那一份独立） |
-| 期望值 dwell 末位 | **Python 的**期望值 `dwell` 加 1 ulp | 「故意改一个期望值必须判红」 |
+| 期望值 dwell 末位 | **Python 的**期望值 `dwell` 加 1 ulp | 「故意改一个期望值必须记为差异」 |
 | per_op<=0 负对照 | 把 Python 的 `per_op<=0` 装回旧行为（**每位只留 1 条**） | 「`per_op=0` 与 `per_op=6` 同解」那条断言是活的（ISSUE-③ 的后半） |
 
 ## ★ 这一段对拍的实际结论（一处**已登记**分歧 ＋ 两条**已裁定的棘轮**）
 
-判据全绿是**要求**，不是现状：两处历史分歧各有处置，落定之后它们都变成
+判据零差异是**要求**，不是现状：两处历史分歧各有处置，落定之后它们都变成
 「读数必须为 0」的棘轮 —— 回来就当场显形，而不是重新变成一条可以商量的容差。
 
-**① 天赋面板攻击力倍率（已登记 ⇒ 口径统一后不比红）。**
+**① 天赋面板攻击力倍率（已登记 ⇒ 口径统一后不比出差异）。**
 Go 把天赋的面板倍率折进了 `total`（`rios-sim/talentpanel.go`），Python 一个都不折
 （2026-09-24 裁定，原文在 `tools/check_operator_go.py:788-799`）。
 `value = dwell × unit.atk` ⇒ 这一处原样传到候选的价值与排序上。
 实测 main_01-07：能天使 py 567 / Go 612（+8%）、焰狐龙梓兰 py 872 / Go 1003（+15%）、
 赤刃明霄陈 py 698 / Go 810（+16%）；没有这类天赋的（星熊／泥岩／阿米娅）逐位相同。
 处置照那一套：比例取自 Go 自己的 `opstats`，把两边统一到同一个量再比，
-**除不掉仍报红**（登记不等于放水）。
+**除不掉仍报出差异**（登记不等于放水）。
 
 **② 自身格（★ 已裁定并已修：**只给子职业 `fortress` 补** ⇒ 这一族必须恒为 0）。**
 `excel/range_table.json` 73 个范围代号里有 **9 个**的 `grids` **不含自身格 `(0,0)`**：
@@ -176,7 +176,7 @@ Go 把天赋的面板倍率折进了 `total`（`rios-sim/talentpanel.go`），Py
 也就是会改变搜索的输入。
 ★ 处置（2026-09-27 博士裁「按你说的改」）：**两侧只对子职业 `fortress` 补 `(0,0)`**
 （`block_of` → `self_cell_of` / `fortress_self_cell_of`），`origin_added` 的期望值
-跟着改。本判据里这一支**从判红改成棘轮**：读数必须恒为 0，非 0 即红。
+跟着改。本判据里这一支**从记为差异改成棘轮**：读数必须恒为 0，非 0 即记差异。
 
 **③ `dwell` 的累加序（★ 2026-09-27 博士裁 A：**修根因** ⇒ 已关门，这一族必须恒为 0）。**
 
@@ -197,7 +197,7 @@ Go 把天赋的面板倍率折进了 `total`（`rios-sim/talentpanel.go`），Py
 2. **它让三处守卫永远打不响。** 容差 `1e-12 × max(1, visits)` 对 1 ulp
    （相对差 ≤ 2.23e-16）**恒成立** ⇒ 只要 `cells` 相同就**必然**被收下，
    `dwell` / `value` 两栏永不报；`--mutate` 里按字段名认领的 `dwell 末位`／
-   `value 末位`／`期望值 dwell 末位` 因此白拿 credit —— 上一次它们报「判红=是」，
+   `value 末位`／`期望值 dwell 末位` 因此白拿 credit —— 上一次它们报「记为差异=是」，
    是被自身格那 123 条噪声**按字段名**顶上去的。
 
 **处置（裁 A，已落地）**：根因在**排序键**上，不在比较上。两侧的 `visits()` 改用
@@ -224,7 +224,7 @@ visit 谁在前**只由数据定**，与调用方给的格序无关 ⇒ 两侧�
 用例名与名册 sha **都必须落在 `key[1:]` 里**，`live` 也要给同形的四元组。
 第一版把用例名放在 `key[1]`、关卡放在 `key[2]`，于是 `key[1:]`（`("main", 关卡, …)`）
 与 `live`（`(关卡, sha)`）**求交出 0**，冻结档静默读到「主对拍 0 关」。
-★ 它**没有静默变绿**：末端的「`visits_zero` 一例都没走到 ⇒ 判红」守卫当场拦下。
+★ 它**没有静默变为零差异**：末端的「`visits_zero` 一例都没走到 ⇒ 记为差异」守卫当场拦下。
 
 用法:
     python tools\\check_candidates_go.py                      # 缺省：main_01-07
@@ -261,7 +261,7 @@ ABSENT_ROSTER = ROOT / "fixtures" / "__no_such_roster__.json"
 
 DIRECTIONS = ("Right", "Left", "Up", "Down")
 
-#: Go 的 `CandidateStats` 的键表（顺序照结构体）。**多一个少一个都要红**：
+#: Go 的 `CandidateStats` 的键表（顺序照结构体）。**多一个少一个都要记出差异**：
 #: 它是判据与引擎之间的一份契约，静默少一栏就是少一栏的覆盖。
 COVER_KEYS = ("operators", "entry_missing", "no_char_id", "unit_failed",
               "atk_missing", "melee_ops", "ranged_ops", "positions_tried",
@@ -340,7 +340,7 @@ MUT_WANT = "期望值 dwell 末位"
 MUT_PEROP0 = "per_op<=0 负对照"
 MUT_KEYS = (MUT_COUNT, MUT_DWELL, MUT_VALUE, MUT_POS, MUT_DIR, MUT_SKILL,
             MUT_VISITS, MUT_CELLS, MUT_ORDER, MUT_COVER, MUT_WANT, MUT_PEROP0)
-#: 每处变异应该撞出来的**字段名**（判「这一处真的被判红」的依据）。
+#: 每处变异应该撞出来的**字段名**（判「这一处真的被记为差异」的依据）。
 #: ★ `position` / `direction` 改的是**身份键**，所以它们撞出来的是
 #:   「候选集合」那一栏（键对不上），不是同名的那一栏——这不是放水：
 #:   身份键变了本来就该报「选出来的候选集合不同」。
@@ -351,7 +351,7 @@ MUT_FIELD = {MUT_COUNT: "条数", MUT_DWELL: "dwell", MUT_VALUE: "value",
              MUT_VISITS: "visits", MUT_CELLS: "cells", MUT_ORDER: "顺序",
              MUT_COVER: "covered.visits_zero", MUT_WANT: "dwell"}
 
-#: 结构零分支（见文件头）。**每跑一次都重新量**，非 0 即红。
+#: 结构零分支（见文件头）。**每跑一次都重新量**，非 0 即记差异。
 STRUCT_ZERO = {
     "no_char_id": "名册条目没有 char_id —— 两个读取器都丢掉这种行",
     "range_missing": "范围代号不在 range_table",
@@ -445,7 +445,7 @@ def go_spec(ops, per_op, directions, skills, roster=None, omit_dirs=False):
 #:
 #: 比例**不猜、也不手抄**；`opstats` 与 `candidates` 用的是同一个
 #: `OperatorStatsFor`，所以这是「同一个量的两个出口」，不是把被测方的结论
-#: 拿来当期望值。★ **除不掉仍按原样报红**（登记不等于放水）。
+#: 拿来当期望值。★ **除不掉仍按原样报出差异**（登记不等于放水）。
 
 _PANEL_CACHE: dict[tuple, tuple[dict, dict]] = {}
 
@@ -552,7 +552,7 @@ def py_covered(v, st, roster, ops, idx, directions) -> dict:
     """**尺子**：用 Python 自己的原语把 `covered` 那 14 个计数独立数一遍。
 
     ★ 它**不是期望值**（`rows` 才是），它是「计数器本身也是一个断言」那两个
-    来源里的第二个。与 Go 的 `covered` 不等 ⇒ 判红。
+    来源里的第二个。与 Go 的 `covered` 不等 ⇒ 记为差异。
     ★ `kept` 由调用方填成 `len(candidates_for(...))` —— 那是**权威自己的产物**，
     比在这里重数一遍更强。
     ★ 字段名与 `COVER_KEYS` 逐个对齐；多一个少一个由 `compare_case` 报。
@@ -629,7 +629,7 @@ def _index_of(v, level):
 #:
 #: 判别法（是**证**不是猜，两条都要）：
 #:   · 本关 visit 字段两侧**全等** ⇒ 两侧的 visit 集合与序都相同 ⇒ `dwell`
-#:     必须逐位相等；此时若不等，**只可能是 ③** ⇒ 判红（本套的账）。
+#:     必须逐位相等；此时若不等，**只可能是 ③** ⇒ 记为差异（本套的账）。
 #:   · 本关 visit 字段有 ULP 差 **且** 用 **Go 自己的 visit** 按本口径复算
 #:     `dwell` 与 Go 自报的逐位相同 ⇒ 「Go 的 dwell 是它自己输入的忠实求和」
 #:     ⇒ 差在**输入**，归 ②，具名报到上游那一套去（不吞掉，只是不记在本套头上）。
@@ -766,7 +766,7 @@ def py_expect(level, ops, per_op, directions, skills, roster_path=None):
     ★ `ak_tactic` 的 import **写在函数体里**：冻结档下本函数不会被调到。
     ★ `value` 一栏走**口径统一**（天赋面板倍率，见 `AtkFoldVerifier` 上面那张
       注释）：比例取自 Go 的 `opstats` 应答，**除不掉就记进 `fold_mismatch`**，
-      由调用方报红。
+      由调用方报出差异。
     """
     from ak_tactic.plan import Roster
     from ak_tactic.search import candidates_for
@@ -891,7 +891,7 @@ def _clip_first_per_operator(rows: list, per_op: int) -> list:
 # --------------------------------------------------------------- 变异守卫
 
 class Guard:
-    """反向守卫：每处变异都要「注入过 ＋ 判红过」，缺一不算成立。"""
+    """反向守卫：每处变异都要「注入过 ＋ 记出过差异」，缺一不算成立。"""
 
     def __init__(self, on: bool):
         self.on = on
@@ -913,7 +913,7 @@ class Guard:
         return key
 
     def note(self, fields) -> None:
-        """把这一轮撞出的字段名对照每一处已注入的变异，命中即记「判红」。"""
+        """把这一轮撞出的字段名对照每一处已注入的变异，命中即记「记出差异」。"""
         for k, f in MUT_FIELD.items():
             if k in self.applied and f in fields:
                 self.caught[k] = True
@@ -981,7 +981,7 @@ def inject(guard: Guard, got: dict, where) -> str | None:
 
 
 def inject_want(guard: Guard, want: dict, where) -> str | None:
-    """在**期望值**上注入一处不一致（「故意改一个期望值必须判红」）。
+    """在**期望值**上注入一处不一致（「故意改一个期望值必须记为差异」）。
 
     ★ 改的是**副本**：`G.expect()` 在 record/frozen 两档交回的可能是**存着的
     那一份**，原地改它＝污染将要落盘的基线（本仓记过：控制组自己把读数污染了）。
@@ -1188,9 +1188,9 @@ def compare_case(tag, level, want, got, seen, printed) -> tuple[int, set]:
             #: ---- ★ **浮点逐位比，没有容差**（2026-09-27 博士裁 A 关门；历史与
             #: 两条实证见文件头 ③ 与 `FLOAT_STATS` 上面那一段）。
             #: `dwell` 与 `value` 两栏**同一条口径**：`value = dwell × 攻击力`
-            #: ⇒ dwell 的 ulp 差会原样派生过去，只给一栏开口等于把红挪到另一栏。
-            #: ⚠ 下面那两个计数是**棘轮**：逐位不同必须恒为 0，非 0 即红。
-            #:   它们只决定读数，判红由下面统一的 `bad += 1` 走 —— 但棘轮一旦
+            #: ⇒ dwell 的 ulp 差会原样派生过去，只给一栏开口等于把差异挪到另一栏。
+            #: ⚠ 下面那两个计数是**棘轮**：逐位不同必须恒为 0，非 0 即记差异。
+            #:   它们只决定读数，记为差异由下面统一的 `bad += 1` 走 —— 但棘轮一旦
             #:   非 0，就一定已经 `bad` 过了，两条结论行会各自点名。
             if f in FLOAT_FIELDS:
                 gp = _float_gap(g, w, f)
@@ -1281,7 +1281,7 @@ def compare_case(tag, level, want, got, seen, printed) -> tuple[int, set]:
                                   _short(w.get(f))))
         #: ★ **自身格分歧**的定性（见文件头与 `SELFCELL_OPS`）：判它是它，
         #: 是为了把一处**未裁定**的分歧印成一句可读的话，而不是一串坐标。
-        #: ⚠ 定性**不影响判红**——它照旧算在 `bad` 里（红的是事实，不是标签）。
+        #: ⚠ 定性**不影响记为差异**——它照旧算在 `bad` 里（记出差异是事实，不是标签）。
         if "cells" in row_diff:
             gs = {tuple(c) for c in (g.get("cells") or [])}
             ws = {tuple(c) for c in (w.get("cells") or [])}
@@ -1428,8 +1428,8 @@ def level_cache_path(data_path: str) -> Path:
 #:
 #: ⚠ 第一版把用例名放在 `key[1]`、关卡放在 `key[2]`，而 `coverage()` 拿 `key[1:]`
 #: 去和 `[[关卡, 关卡sha]]` 求交 ⇒ 交出来是 0，冻结档读到「主对拍 0 关」。
-#: 那一跑**没有静默变绿**：末端的「visits_zero 一例都没走到」守卫当场判红
-#: （本仓那条「判据自己瞎也要红」的守卫真的救了一次）。
+#: 那一跑**没有静默变为零差异**：末端的「visits_zero 一例都没走到」守卫当场记为差异
+#: （本仓那条「判据自己瞎也要记出差异」的守卫真的救了一次）。
 CASE_TAG = "candidates:%s"
 
 
@@ -1522,7 +1522,7 @@ def main() -> int:                                             # noqa: C901
     #:    「未覆盖」具名印出来。
     #: ⚠ 第一版把这一句写进了 `if G.mode == GB.CHECK` 里 ⇒ 录出来的基线自称
     #: **「对象集写死在脚本里」**（`input_identity: False`），P3 因此被跳过。
-    #: 那不是判据红、也不改判决，但它是一条**登记成了别的东西**的身份栏。
+    #: 那不是判据差异、也不改判决，但它是一条**登记成了别的东西**的身份栏。
     main_covered = covered_set("main", roster_sha)
     to_cmp = batch
     if G.mode == GB.CHECK:
@@ -1580,11 +1580,11 @@ def main() -> int:                                             # noqa: C901
 
     def handle_py_fail(tag, lv, spec, exc, where):
         """**oracle 自己算不出来**（例如 `enemy_arrivals` 在敌人属性库里查不到
-        某只怪）⇒ 这一例**判不了**，**不是判红**。
+        某只怪）⇒ 这一例**判不了**，**不是记为差异**。
 
         ★ 两个因分开报：Go 也取不到 ⇒ 数据缺（两侧同命）；Go 取得到 ⇒
         **期望值缺**——那是覆盖洞，不是分叉（判据没有资格拿一份不存在的
-        期望值去判别人的对错）。两者都**不判红**，各自具名登记。
+        期望值去判别人的对错）。两者都**不记为差异**，各自具名登记。
         ★ 顺带一提：这一支**每次跑都会重算**，所以哪天数据补齐了它会自己消失。
         """
         nonlocal bad
@@ -1611,7 +1611,7 @@ def main() -> int:                                             # noqa: C901
             bad += 1
             printed.append(
                 "✗ %s/%s Go 取不到（%s）。**冻结档下分辨不了「数据缺」与"
-                "「代码分叉」**（那一支要现场调 Python），按判红报。"
+                "「代码分叉」**（那一支要现场调 Python），按记为差异报。"
                 % (tag, lv, str(err)[:110]))
             return {"Go 拒绝"}
         try:
@@ -1778,7 +1778,7 @@ def main() -> int:                                             # noqa: C901
             printed.append("✗ perop0/%s 这一支问不动引擎：per_op=0 → %r；per_op=6 → %r"
                            % (lv0, str(res0)[:90], str(res6)[:90]))
         elif not (six_rows and six_cov):
-            #: 主对拍的期望值缺 ⇒ 这一条**判不了**（不是判红）。具名登记。
+            #: 主对拍的期望值缺 ⇒ 这一条**判不了**（不是记为差异）。具名登记。
             data_missing.append("perop0/%s 两侧一致的断言取不到参照（per_op=6 的"
                                 "期望值不在手上）" % lv0)
         else:
@@ -1823,10 +1823,10 @@ def main() -> int:                                             # noqa: C901
                     "Python 同样 %d 条（顺序逐索引相同、逐字段精确相等；"
                     "Python 入口把它并到 `DEFAULT_PER_OP`，"
                     "引擎侧本来就是 `defaultPerOp`）。"
-                    "从「登记分歧」改成断言：不成立即红。"
+                    "从「登记分歧」改成断言：不成立即记出差异。"
                     % (len(r0), c0.get("kept"), len(six_rows)))
             #: ---- ③ **负对照**：把 Python 侧的老行为（0 ⇒ 每位只留 1 条）人为
-            #: 装回去，上面那条断言必须当场判红。装不回来也判红——没有负对照的
+            #: 装回去，上面那条断言必须当场记为差异。装不回来也记为差异——没有负对照的
             #: 「相等」证明不了任何事（本仓那条「两把相同的尺子互证」）。
             if guard.want(MUT_PEROP0):
                 old_py0 = legacy_py0_rows(six_rows)
@@ -1846,26 +1846,26 @@ def main() -> int:                                             # noqa: C901
                         guard.caught[MUT_PEROP0] = True
                         #: ⚠ 这一行走**独立通道**（直接 print，不进 `printed`）：
                         #: `printed` 有 60 行上限，负对照落在整篇的哪个位置不确定，
-                        #: 被挤掉就等于「判红」这条读数没有留证。
+                        #: 被挤掉就等于「记为差异」这条读数没有留证。
                         perop_notes.append(
                             "负对照「%s」：把 Python 的 `per_op<=0` 装回旧行为"
                             "（每位只留 1 条）⇒ %d 条 ≠ 现口径 %d 条 ⇒ 这一条断言"
-                            "当场判红 ✓" % (MUT_PEROP0, len(old_py0), len(six_rows)))
+                            "当场记为差异 ✓" % (MUT_PEROP0, len(old_py0), len(six_rows)))
 
     for line in printed:
         print(line)
     if printed:
         print("（上面 %d 行是失配样例；整篇最多印 %d 行，"
-              "**另 %d 处已判红但没印** —— 完整计数见下面那几行读数）"
+              "**另 %d 处已记为差异但没印** —— 完整计数见下面那几行读数）"
               % (len(printed), PRINT_CAP, printed.dropped))
-    #: ★ 下面这几行**不受印数上限**：它们是「断言真的活过 ＋ 真的判得红」的留证。
+    #: ★ 下面这几行**不受印数上限**：它们是「断言真的活过 ＋ 真的记出了差异」的留证。
     for _n in perop_notes:
         print("  " + _n)
     print()
 
     #: ★ 天赋面板倍率那一处**已登记的口径差**：两条腿都要成立 ——
     #: ① 它真的被行使了（有候选落在这类干员上）；② 折算之后两侧逐位相等
-    #: （那一条由 `compare_case` 的 `value` 栏保证，除不掉时已在上面报红）。
+    #: （那一条由 `compare_case` 的 `value` 栏保证，除不掉时已在上面报出差异）。
     if seen["天赋折算的候选条数"]:
         diverged.append(
             "**天赋面板攻击力倍率**（2026-09-24 已登记的口径差，原文在 "
@@ -1875,7 +1875,7 @@ def main() -> int:                                             # noqa: C901
             "这类干员上（能天使 +8%%、焰狐龙梓兰 +15%%、赤刃明霄陈 +16%%）。"
             "判据按那一套的同一处置办：把两边因子统一到同一个量再比"
             "（`期望 = Python 的 atk × (1 + 比例)`，比例取自 Go 的 `opstats`），"
-            "**除不掉仍按原样报红**。" % seen["天赋折算的候选条数"])
+            "**除不掉仍按原样报出差异**。" % seen["天赋折算的候选条数"])
 
     # ------------------------------------------------------ 读数
     print("已比：主对拍 %d 关；共 %d 次比较（%d 位干员次）；"
@@ -1896,7 +1896,7 @@ def main() -> int:                                             # noqa: C901
                        "累加序／口径（本套的账）", "perop_zero")))
     print()
     #: ★★ 这一处**已裁定并已修**（两侧只给 `fortress` 补）⇒ 这一族是**棘轮**：
-    #: 必须恒为 0。非 0 ⇒ 说明那处修复被谁动了。根因原文留在这里，红了直接照着读。
+    #: 必须恒为 0。非 0 ⇒ 说明那处修复被谁动了。根因原文留在这里，记出差异时直接照着读。
     if seen["自身格分歧条数"]:
         print("★ 自身格那一族（**已裁定 ⇒ 必须恒为 0**）：%d 条候选的 `cells` 恰好差"
               "「干员所在的那一格」（Python 有、Go 没有），其中 %d 条的 "
@@ -1917,7 +1917,7 @@ def main() -> int:                                             # noqa: C901
               % (len(SELFCELL_OPS), "、".join(n for n, _c, _l in SELFCELL_OPS)))
         print()
     if data_missing:
-        print("★ **判不了**（oracle 自己取不到 / Go 与 Python 都取不到 ⇒ 都不算判据红）：")
+        print("★ **判不了**（oracle 自己取不到 / Go 与 Python 都取不到 ⇒ 都不算判据差异）：")
         for s in data_missing[:8]:
             print("    · %s" % s)
         if len(data_missing) > 8:
@@ -1932,7 +1932,7 @@ def main() -> int:                                             # noqa: C901
         print(_sum)
     #: ★★ 累加序那一族**已裁 A 关门**（2026-09-27）⇒ 这一族是**棘轮**，恒为 0。
     #: 非 0 ⇒ 全序键那处修复被谁动了（或两侧的 visit 集合本身就不一致）。
-    #: 历史读数与两条实证照印，红了直接照着读，不必重新发现一遍。
+    #: 历史读数与两条实证照印，记出差异时直接照着读，不必重新发现一遍。
     if seen["dwell 逐位不同的条数"] or FLOAT_STATS["逐位不同条目"]:
         print("★ 浮点逐位不同：%d 条候选的 `dwell` **逐位**不同；其中 **%d 条 `cells` "
               "完全相同**（只排掉「自身格」那一因，**不等于**是累加序 —— 归因见下）、"
@@ -2008,17 +2008,17 @@ def main() -> int:                                             # noqa: C901
                   % _badbranch[0])
     if mutate:
         for k in MUT_KEYS:
-            print("  变异「%s」：注入=%s 判红=%s"
+            print("  变异「%s」：注入=%s 记为差异=%s"
                   % (k, "是" if k in guard.applied else "否",
                      "是" if guard.caught.get(k) else "否"))
         miss = [k for k in MUT_KEYS
                 if k not in guard.applied or not guard.caught.get(k)]
         if miss:
-            print("反向守卫：不成立 ✗（没做到「注入过并且判红」：%s）"
+            print("反向守卫：不成立 ✗（没做到「注入过并且记为差异」：%s）"
                   % "、".join(miss))
             return 1
         print("反向守卫：十二处独立变异（含三处 1 ulp，其一改的是**期望值**；"
-              "另一处是 `per_op<=0` 的负对照）各判红 —— 成立 ✓")
+              "另一处是 `per_op<=0` 的负对照）各记为差异 —— 成立 ✓")
         return 0
 
     #: 判据自己瞎不瞎：这几条一 0，下面的「一致」就没有信息量。
@@ -2035,19 +2035,19 @@ def main() -> int:                                             # noqa: C901
                    ("天赋折算的候选条数",
                     "落在带天赋面板攻击力的干员上的候选（已登记口径差的行使）")):
         if seen.get(k, 0) == 0:
-            print("结论：%s（%s）一例都没走到 —— 判红（不是实现错，是判据自己瞎）"
+            print("结论：%s（%s）一例都没走到 —— 记为差异（不是实现错，是判据自己瞎）"
                   % (why, k))
             return 1
     if seen["value 自检不过"]:
-        print("结论：`value` 不等于 `dwell × 攻击力`（%d 条） —— 判红："
+        print("结论：`value` 不等于 `dwell × 攻击力`（%d 条） —— 记为差异："
               "两侧同源的自检，它管的正是「对拍看不见的那种同时改错」"
               % seen["value 自检不过"])
         return 1
     #: ★ 结构零分支：**每跑一次都重量一遍**（不是写死一句「不可达」）。
-    #: 非 0 ⇒ 红，红的意思是「它现在有行使，必须补一份样本」。
+    #: 非 0 ⇒ 记出差异，它的意思是「它现在有行使，必须补一份样本」。
     for k in sorted(STRUCT_ZERO):
         if seen.get(k, 0):
-            print("结论：结构零分支「%s」**变成可达了**（%d 例） —— 判红："
+            print("结论：结构零分支「%s」**变成可达了**（%d 例） —— 记为差异："
                   "它现在有行使，必须补一份样本；不是实现错"
                   % (STRUCT_ZERO[k], seen[k]))
             return 1
@@ -2061,15 +2061,15 @@ def main() -> int:                                             # noqa: C901
                  seen["字段比较"], seen["visits_zero"],
                  seen["被 per_op 截断的关数"]))
         if G.mode == GB.CHECK and cov_reports:
-            #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+            #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据差异。
             return GB.RC_CHANNEL
         return 0
-    #: ---- 红了：**每一族点名**。★ 这一段的教训（2026-09-27，当场踩到）：
+    #: ---- 记出差异时：**每一族点名**。★ 这一段的教训（2026-09-27，当场踩到）：
     #: 曾经只在「累加序超容差」与「自身格」两族上印 `不成立`，而那次 rc=1
     #: 恰好由**第三族**（顺序：多重集相同、只有序变）引起 —— 于是日志里只剩
-    #: 一句自称「逐字段一致」的结论行，**判决没说清自己为什么红**。
+    #: 一句自称「逐字段一致」的结论行，**判决没说清自己为什么记出差异**。
     #: ⇒ 现在两条写死的规矩：① `bad` 一非 0 就**不印**「一致」；
-    #:   ② 下面按族逐条点名，且**末尾一定有一条兜底**，保证「红了但一条
+    #:   ② 下面按族逐条点名，且**末尾一定有一条兜底**，保证「记出差异了但一条
     #:   `不成立` 都没有」这种形态不可能再出现（判据盯的是性质，不是文案）。
     if seen["顺序不一致"]:
         print("结论：**不成立** —— %d 个用例的候选**顺序**与 Python 不同"
@@ -2106,7 +2106,7 @@ def main() -> int:                                             # noqa: C901
                  seen["自身格分歧并带动 dwell/visits"]))
     print("结论：**不成立** —— 共 %d 处不一致（逐条见上面的 ✗ 行；"
           "这一句是**兜底**：任何一族都不认领时由它点名）" % bad)
-    #: 比过的部分**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+    #: 比过的部分**真的不一致** ⇒ 判据差异，优先于「基线该重录」。
     return 1
 
 

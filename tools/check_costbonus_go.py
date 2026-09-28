@@ -263,12 +263,12 @@ def main() -> int:
         print(_sum)
     if mutate:
         if bad:
-            print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")
+            print("反向守卫：合成一处不一致 → 记为差异 —— 成立 ✓")
             return 0
         print("反向守卫：不成立 ✗")
         return 1
     if unchecked:
-        print("结论：网格没覆盖到 %s —— 判红（不是实现错，是判据自己瞎）"
+        print("结论：网格没覆盖到 %s —— 记为差异（不是实现错，是判据自己瞎）"
               % "、".join(unchecked))
         return 1
     print("结论：%d / %d 次求解逐点一致" % (len(queries) - bad, len(queries)))

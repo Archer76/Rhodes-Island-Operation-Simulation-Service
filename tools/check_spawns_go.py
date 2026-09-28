@@ -42,7 +42,7 @@
 
 ## 反向守卫（`--mutate`）
 
-五处互相独立、每处都要「注入过 ＋ 判红过」：`hp` 加 1 ulp ／ 翻转 `diver` ／
+五处互相独立、每处都要「注入过 ＋ 记出过差异」：`hp` 加 1 ulp ／ 翻转 `diver` ／
 删掉 `mark` ／ `legs` 段 `length` 加 1 ulp ／ 篡改 Go 自报的 `wire.matched`。
 
 用法:
@@ -70,12 +70,12 @@ import freeze_baseline as GB                                   # noqa: E402
 #: ★ **本套是捆绑判据**：11 段，其中 4 段**不适用等值冻结**——见 `SECTIONS`。
 #: 这不是「懒得转」，是「冻了会造假」：那 4 段里 3 段两侧都是 Python（冻住＝
 #: 让同一份冻值跟自己比＝恒等假绿），1 段期望值取自**源码文本**（冻住＝
-#: 每次改源码都该重录＝永久假红）。
+#: 每次改源码都该重录＝永久假差异）。
 SECTIONS = [
     {"id": "§1 生产规格(24 份)", "class": "frozen",
      "why": "Python 生产规格 ↔ Go go_spawns，逐条出怪逐字段"},
     {"id": "§1 变异守卫", "class": "frozen",
-     "why": "冻的 want ↔ 被变异的 Go（注入一处必判红）"},
+     "why": "冻的 want ↔ 被变异的 Go（注入一处必记为差异）"},
     {"id": "§1 行使计数", "class": "frozen",
      "why": "py_counters ↔ Go covered，同一夹具两侧各数一遍"},
     {"id": "§2 替身等价性", "class": "python_both",
@@ -88,7 +88,7 @@ SECTIONS = [
             "① `enemy_talent_blackb_mul` 必须回 ok 且被解析进来；"
             "② `skill` 类空选择器不拒跑 ＋ 具名计数；"
             "③ 反例守卫：`act31side_ex07` 普通档 ↔ 四星档的**派生字段**必须成倍"
-            "（只乘黑板不重跑派生 ⇒ 两档逐位相同 ⇒ 判红）"},
+            "（只乘黑板不重跑派生 ⇒ 两档逐位相同 ⇒ 记为差异）"},
     {"id": "§4 species_provider 敏感性", "class": "python_both",
      "why": "a = harness(...) ↔ b = harness(...)，两侧都是 Python——"
             "冻住等于把「这个 provider 到底有没有消费者」这条控制组删掉"},
@@ -101,7 +101,7 @@ SECTIONS = [
      "why": "Go 自报的 unported/view_fields/wire ↔ 脚本常量与 Go 自解"},
     {"id": "§6-源码", "class": "source_coupled",
      "why": "PILE_MARK 现推 + ast 读 `ak_tactic` 源码文本 ⇒ 等值冻它＝"
-            "每次改源码都该重录＝永久假红（与「敌方机制」同型）"},
+            "每次改源码都该重录＝永久假差异（与「敌方机制」同型）"},
 ]
 
 GO_BIN = os.environ.get(
@@ -114,7 +114,7 @@ UNPORTED = ("species_provider", "total_attack")
 #: 夹具目录（`fixture_records()` 按内容 sha16 枚举它）。
 FIXDIR = ROOT / "fixtures"
 
-#: 结构不可达的分支：不进行使计数，但每次运行都重量一遍它的可达性（非 0 即红）。
+#: 结构不可达的分支：不进行使计数，但每次运行都重量一遍它的可达性（非 0 即记差异）。
 STRUCTURAL_ZERO = {
     "mark_missing": "`mark` 取不到 ⇒ `except` 支（留空、不中止）",
 }
@@ -220,7 +220,7 @@ def first_diffs(want, got, path: str = "", out: list | None = None,
 
 
 class Guard:
-    """反向守卫：每处变异都要「注入过 ＋ 判红过」，缺一不算成立。"""
+    """反向守卫：每处变异都要「注入过 ＋ 记出过差异」，缺一不算成立。"""
 
     def __init__(self, on: bool):
         self.on = on
@@ -473,7 +473,7 @@ def wrapped_enemy_at(lib, raw: dict, difficulty: str):
 
     ⚠ 不包的话：`plan-hsex08f.json`（FOUR_STAR）的替身会比生产规格少乘一个
     `enemy_attribute_mul` 的 ×1.2——而那是**替身错**，不是实现错。
-    第一版就是这么红的（23/24）。
+    第一版就是这么记出差异的（23/24）。
     """
     from ak_tactic.frontend.stage_mul import parse_rune_muls, wrap_enemy_at
     muls = parse_rune_muls(raw.get("runes"), difficulty)
@@ -554,7 +554,7 @@ def main() -> int:
     #: ⚠ **本套的批次记录不被消费**：内容 sha 取自**现读的夹具**（`live_fix`），
     #: 记录只回答「录的是哪一批」＋提供关卡号（判定参数）。实测：`--control` 的 P4
     #: 改坏记录里的 sha16 ⇒ 判决不变 ⇒ **不该声明 `batch_consumed`**（声明了就是假话，
-    #: 会得到一条红不起来的探针）。内容身份住在**键**里 ⇒ P4 不适用，具名。
+    #: 会得到一条记不出差异的探针）。内容身份住在**键**里 ⇒ P4 不适用，具名。
     if G.mode == GB.CHECK:
         fix_batch = G.expect(("query", "spawn_fixtures"), lambda: live_fix)
         lv_map = G.expect(("consts", "fixture_levels"), lambda: {})
@@ -734,7 +734,7 @@ def main() -> int:
             print("   %s：Python %d 条 / Go %d 条；行使 %s%s"
                   % (tag, len(want), len(got),
                      ", ".join("%s=%d" % kv for kv in lit),
-                     "" if okc else "  ← 夹具没走到那条分支（判红）"))
+                     "" if okc else "  ← 夹具没走到那条分支（记为差异）"))
             if not okc:
                 bad += 1
                 printed.append("✗ %s 的合成夹具没行使目标分支" % tag)
@@ -810,7 +810,7 @@ def main() -> int:
         #: ---- syn C3：**反例守卫**——乘完有没有真重跑派生。
         #: ★ 为什么非另立一条不可：主干那 6 关（`main_*#f#`）打的键**一个都不喂派生字段**
         #: （`docs/four-star-gap.md` §3 末尾取证过）。只用它们，把
-        #: `DeriveBlackboardFields()` 那一句整个删掉也照样全绿 —— 而那才是这一层最阴的失败形态
+        #: `DeriveBlackboardFields()` 那一句整个删掉也照样零差异 —— 而那才是这一层最阴的失败形态
         #: （「乘数落在没人再读的表上」）。取材是**真数据真 rune**：`act31side_ex07` 的四星档
         #: 把 `enemy_1390_dhsbr_2` 的 `Passive.extra_value` 5 乘成 10、
         #: `enemy_1392_dhshld_2` 的 15 乘成 30（Python 侧 `tools/check_environment.py:843-888`
@@ -849,7 +849,7 @@ def main() -> int:
         #: 证人①：provider 真的被调、它的返回值真的落进 `e.species`。
         #: ⚠ 用**哨兵 provider** 而不是 `lib.species_of`：后者要 enemydb
         #: （`data/*.sqlite`，可再生的派生物、本机可能不在），返回空串时
-        #: 这条证人会**因为环境**而红——那是假红。哨兵法与数据无关。
+        #: 这条证人会**因为环境**而记出差异——那是假差异。哨兵法与数据无关。
         SENTINEL = "证人-萨卡兹"
         if G.mode == GB.CHECK:
             #: ★ **本段不适用等值冻结**：证人②两侧都是 Python（`a` 与 `b` 都是
@@ -865,7 +865,7 @@ def main() -> int:
                                 t=0.0, species_provider=lambda _i: SENTINEL)
             v_without = enemy_view(stats, enemy_id=real_key, level=0, route=[],
                                    legs=[], t=0.0, species_provider=None)
-            #: 顺带量一次**真 provider 在不在**（enemydb 可缺，这一条只登记不判红）。
+            #: 顺带量一次**真 provider 在不在**（enemydb 可缺，这一条只登记不记为差异）。
             try:
                 real_species = lib.species_of(real_key)
             except Exception as exc:                          # noqa: BLE001
@@ -886,7 +886,7 @@ def main() -> int:
             print("§4 species_provider：哨兵 provider 下 `e.species`=%r（None 时=%r）；"
                   "换掉 provider 后 spawns 不同的夹具 %d / %d"
                   % (v_with.species, v_without.species, eff, len(ok)))
-            print("   真 provider `lib.species_of(%s)` = %r（enemydb 可缺席，只登记不判红）"
+            print("   真 provider `lib.species_of(%s)` = %r（enemydb 可缺席，只登记不记为差异）"
                   % (real_key, real_species))
             if v_with.species != SENTINEL or v_without.species != "":
                 bad += 1
@@ -951,9 +951,9 @@ def main() -> int:
     if G.mode == GB.CHECK:
         #: ★ (a)(b)(d) 三条的期望值取自**源码文本**（`PILE_MARK` 现推、
         #: `ast` 读 `ak_tactic` 的读取点）⇒ 等值冻它＝每次改源码都该重录＝
-        #: **永久假红**。冻结档跳过并具名印出（与「敌方机制」同型）。
+        #: **永久假差异**。冻结档跳过并具名印出（与「敌方机制」同型）。
         print("   ⊘ **本档不覆盖 §6-源码**（source_coupled）：PILE_MARK 现推 ＋ "
-              "ast 读 `ak_tactic` 源码文本——等值冻结会变成永久假红")
+              "ast 读 `ak_tactic` 源码文本——等值冻结会变成永久假差异")
     else:
         pm = pile_mark_from_source()
         missing = []
@@ -1034,22 +1034,22 @@ def main() -> int:
     print()
     if mutate:
         for k in MUT_KEYS:
-            print("  变异「%s」：注入=%s 判红=%s"
+            print("  变异「%s」：注入=%s 记为差异=%s"
                   % (k, "是" if guard.applied[k] else "否",
                      "是" if guard.caught[k] else "否"))
         miss = [k for k in MUT_KEYS
                 if not (guard.applied[k] and guard.caught[k])]
         if miss:
-            print("反向守卫：不成立 ✗（没做到「注入过并且判红」：%s）"
+            print("反向守卫：不成立 ✗（没做到「注入过并且记为差异」：%s）"
                   % "、".join(miss))
             return 1
-        print("反向守卫：五处独立变异各判红 —— 成立 ✓")
+        print("反向守卫：五处独立变异各记为差异 —— 成立 ✓")
         return 0
     _sum = GB.channel_summary()
     if _sum:
         print(_sum)
     if n_spawn == 0 or not ok:
-        print("结论：一条出怪都没比到 —— 判红（不是实现错，是判据自己瞎）")
+        print("结论：一条出怪都没比到 —— 记为差异（不是实现错，是判据自己瞎）")
         return 1
     #: ★ **结论行带上覆盖面**（第四态的第四条规矩）：读这一行的人当场就知道
     #: 这一档没覆盖哪几段，不用另外去跑 `--status`。
@@ -1059,10 +1059,10 @@ def main() -> int:
           "（乘数被收下 ／ 空选择器不拒跑且具名计数 ／ 反例守卫：派生字段成倍）%s"
           % (n_spawn - n_bad_spawn, n_spawn, G.uncovered_sections_text()))
     if bad:
-        #: 覆盖段**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+        #: 覆盖段**真的不一致** ⇒ 判据差异，优先于「基线该重录」。
         return 1
     if G.mode == GB.CHECK and not cov.ok:
-        #: 覆盖段一致，但**对象集/内容变了** ⇒ 读数不可用（rc=6），不是判据红。
+        #: 覆盖段一致，但**对象集/内容变了** ⇒ 读数不可用（rc=6），不是判据差异。
         return GB.RC_CHANNEL
     return 0
 

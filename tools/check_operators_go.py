@@ -11,12 +11,12 @@
 
 ## 两把尺子：一把量实现，一把量尺子自己
 
-| 尺子 | 量什么 | 红了说明什么 |
+| 尺子 | 量什么 | 记出差异说明什么 |
 |---|---|---|
 | 生产规格 `operators[i]` | Go 产出的那些键（33） | **实现错** |
 | 本脚本从**活对象**现取的读数（`op.current_atk()` 等，自己写一遍表达式） | 同一批 33 个键 | **尺子错**（`_operator_spec` 读的属性里有两个说法） |
 
-两条各自独立判定、各自报。这样「红」能归因到实现还是归因到判据
+两条各自独立判定、各自报。这样「记出差异」能归因到实现还是归因到判据
 ——本项目为此记过：两把相同的尺子互证不构成核对，但**一把尺子量两个对象**
 才能把差归给对象。
 
@@ -28,7 +28,7 @@ Go 送的是 `OperatorStats.Total[...]` 那一套。**两者是不是同一个�
 非零就不再相等。实测 64 人次四个旋钮**全零**（取规格发生在 `sim.run()` 之前），
 所以 `Total["atk"] == current_atk()`。§3 每次运行重量这一条。
 
-## 两条**现算**的结构性守卫（非 0 即红，不是「记下来的结论」）
+## 两条**现算**的结构性守卫（非 0 即记差异，不是「记下来的结论」）
 
 1. `op.current_range_id()` —— 技能改写攻击范围那条。Go 侧**没有**这条路
    （它照干员自己的 `rangeId` 展开）；哪天它非空了，Go 的 range 口径就不成立。
@@ -50,7 +50,7 @@ Go 送的是 `OperatorStats.Total[...]` 那一套。**两者是不是同一个�
 `_operator_spec` **不送**它，所以它既不是段 A 也不是段 B：§7 的身份等式因此是
 **段 A ＋ 段 B ＋ GO_ONLY ＝ wire 的键数**（三类两两不交，各配一条断言）。
 §2 的逐人次键集比对各处都要**先从 Go 的键集里摘掉它**再比——不摘会报成
-「Go 多送了」（假红），塞进 `PORTED` 又会把「Python 没有」当成「Python 该有」。
+「Go 多送了」（假差异），塞进 `PORTED` 又会把「Python 没有」当成「Python 该有」。
 §7 另配两条**现算**断言：Go 真的送出过它（0 人次＝死登记）、Python 一次都没送过
 （送过＝这一分类要重做）。
 
@@ -61,11 +61,11 @@ Go 送的是 `OperatorStats.Total[...]` 那一套。**两者是不是同一个�
 
 ## 反向守卫（`--mutate`）
 
-十处**互相独立**的注入，每处都要「注入过 ＋ 判红过」，落在**不同字段、不同代码路径**：
+十处**互相独立**的注入，每处都要「注入过 ＋ 记出过差异」，落在**不同字段、不同代码路径**：
 ① `atk` 加 1 ulp（浮点面板那条读法）；② `splash_damage_scale` 加 1 ulp
 （条件块的浮点，且**必须落在真有这条特性的人次上**）；③ `cell` 的 x+1（整数坐标）；
 ④ 删掉一条 operator（分母由 N 变 N−1）；⑤~⑨ 段 B 那五个键各一处；
-⑩ **删掉 `GO_ONLY` 的 `hp_drain_per_sec`**（验 §7 那条「Go 真的送出过它」**红得起来**）。
+⑩ **删掉 `GO_ONLY` 的 `hp_drain_per_sec`**（验 §7 那条「Go 真的送出过它」**记得出差异**）。
 每处各自拒绝「已被别处占用的夹具」，所以是十条独立的路，不是同一条 elif 链上的十个分支。
 
 ## 期望值从哪来（**两种模式**）
@@ -148,7 +148,7 @@ UNPORTED_NEW = ("skill", "active")
 #: ⚠ 它与 `UNPORTED` **方向相反**，别混：
 #:   * `UNPORTED` ＝ 「Python 有、Go 没有」（`skill` / `active`）；
 #:   * `GO_ONLY`  ＝ 「Go 有、Python 没有」。
-#: 把 `hp_drain_per_sec` 塞进 `UNPORTED` 会让 §5 的双向比对当场红（Go 应答里的
+#: 把 `hp_drain_per_sec` 塞进 `UNPORTED` 会让 §5 的双向比对当场记出差异（Go 应答里的
 #: `unported` 里没有它），而且语义全错。
 #:
 #: 为什么它是 Go 独有而不是两边都有：`ak_tactic/simgo/spec.py::_operator_spec`
@@ -174,7 +174,7 @@ GO_ONLY = ("hp_drain_per_sec",)
 #:     Python 那一版根本没有这条机制（它连天赋面板倍率都不折），所以 Python 侧
 #:     一个都不送。同样：摘掉再比 ＋ 两条现算守卫。
 #:
-#: ⇒ 逐人次键集比对里把这两个键**从 Go 的键集里摘掉**再比（不摘会造一条永久假红），
+#: ⇒ 逐人次键集比对里把这两个键**从 Go 的键集里摘掉**再比（不摘会造一条永久假差异），
 #: 并另配两条现算守卫：**Go 真的送出过它**（0 人次＝死登记）、**Python 一次都没送过**
 #: （送过 ⇒ 口径变了，这条登记要重做）。
 EXTRA_OPS = ("skill", "active", "talent_panel_mods",
@@ -280,8 +280,8 @@ GO_ONLY_COUNTERS_ZERO_OK = {
 #:
 #: ⚠ 与 `UNPORTED` / `GO_ONLY` 都不同：那两个讲**键**，这一个讲**计数器**。
 #: 处置与 `GO_ONLY` 同一姿势——**具名列出来**，然后：
-#:   · 逐键相等那一条**跳过**它们（拿没有的东西去比，只会造一条永久假红）；
-#:   · 另配一条「**至少非零过一次**」的死账守卫（全部为 0 ⇒ 这套会计没被行使 ⇒ 判红），
+#:   · 逐键相等那一条**跳过**它们（拿没有的东西去比，只会造一条永久假差异）；
+#:   · 另配一条「**至少非零过一次**」的死账守卫（全部为 0 ⇒ 这套会计没被行使 ⇒ 记为差异），
 #:     否则它们会变成「看着在数、其实没数到任何东西」的装饰。
 GO_ONLY_COUNTERS = {
     "skill_bound": "绑上技能的部署人次（Go 自己的绑定链）",
@@ -315,7 +315,7 @@ GO_ONLY_FROM_PY: dict = {}
 
 #: `unported` 里**其实已经能搬**的那些 → 为什么。★ 现已**清空**：
 #: `heals` 这一批已经产出（`TextDerived.Heals`），所以这份表必须为空——
-#: 一旦谁再往 `unported` 里塞一条其实能搬的，§6 会红。
+#: 一旦谁再往 `unported` 里塞一条其实能搬的，§6 会记出差异。
 UNPORTED_READY: dict = {}
 
 #: 两条现算的结构性守卫。值是「这条守卫答的是什么」。
@@ -361,7 +361,7 @@ MUT_REGEN = "regen_aura.hp_per_sec 加 1 ulp"
 MUT_DODGE = "talent_dodge_phys 加 1 ulp"
 MUT_SHIELD = "shield.max_layers 加 1"
 #: ★ 第九处（本批新增）：**删掉 `GO_ONLY` 的那个键**。它验的是 §7 那条
-#: 「Go 真的送出过它」的断言**红得起来**——不装这条，SEEN>0 只是一句自我声明
+#: 「Go 真的送出过它」的断言**记得出差异**——不装这条，SEEN>0 只是一句自我声明
 #: （本项目记过：「守卫看不见＝没有守卫」）。
 #: ⚠ 它是**候选面最小**的一处（全部 24 份夹具里只有 plan-main-00-01 有），
 #: 所以注入顺序排在**最前**（与 MUT_DODGE／MUT_SHIELD 同一条纪律）。
@@ -450,7 +450,7 @@ def first_diffs(want, got, path: str = "", out: list | None = None,
 
 
 class Guard:
-    """反向守卫：每处变异都要「注入过 ＋ 判红过」，缺一不算成立。"""
+    """反向守卫：每处变异都要「注入过 ＋ 记出过差异」，缺一不算成立。"""
 
     def __init__(self, on: bool):
         self.on = on
@@ -465,7 +465,7 @@ class Guard:
         """这份夹具还没被**别的**变异占用过。
 
         ★ 四处变异必须落在**不同夹具**上：同一份夹具塞进两处，第二处会因为
-        「断言已经被第一处蕴含」而红得没有独立性（本项目记过这一条）。
+        「断言已经被第一处蕴含」因而没有独立性（本项目记过这一条）。
         """
         return all(v is None or v[0] != fixture for v in self.at.values())
 
@@ -870,7 +870,7 @@ def wire_operator_keys() -> list:
 def exe_identity() -> tuple:
     """仪器身份：sha256 ＋ 「它比本树最新的 .go 旧不旧」。
 
-    ★ 只对**默认路径**判红。显式给了 `RIOS_SIM_BIN` 时那是调用方**有意指定**的
+    ★ 只对**默认路径**记为差异。显式给了 `RIOS_SIM_BIN` 时那是调用方**有意指定**的
     仪器（另一条会话用冻结 exe 时正是这样），staleness 在那里不是缺陷。
     """
     p = Path(GO_BIN)
@@ -1062,7 +1062,7 @@ def main() -> int:
             slot_bad = False
             #: ★ 键集对账：Python ＝ （Go − GO_ONLY）∪（Python 送的段 B 键）。
             #: `GO_ONLY` 那一类**先从 Go 的键集里摘掉**再比——它是「Go 独有」，
-            #: 不是「Go 多送了」；不摘的话这里会报成实现错（假红），
+            #: 不是「Go 多送了」；不摘的话这里会报成实现错（假差异），
             #: 而把它塞进 `PORTED` 又会把「Python 没有」当成「Python 该有」。
             py_keys, go_keys = set(wt), set(gt)
             b_present = py_keys & set(UNPORTED)
@@ -1089,8 +1089,8 @@ def main() -> int:
                                   sorted(go_keys - py_keys - set(GO_ONLY))))
             #: ★ `GO_ONLY` 的**两个方向**逐人次累加（§7 拿它们配断言）：
             #: ① Go 真的送过它；② Python 一次都没送过。
-            #: ⚠ 这里的 `seen_here` 同时是 `MUT_DRAIN` 的判红点：注入把这一位
-            #: 的键删掉之后，它必须变 False（§7 那条「Go 送出过它」于是判红）。
+            #: ⚠ 这里的 `seen_here` 同时是 `MUT_DRAIN` 的记差异点：注入把这一位
+            #: 的键删掉之后，它必须变 False（§7 那条「Go 送出过它」于是记为差异）。
             seen_here = bool(go_only)
             guard.note(MUT_DRAIN, (f.name, i), seen_here)
             for k in sorted(go_only):
@@ -1148,11 +1148,11 @@ def main() -> int:
                         printed.append("      " + dd)
             if slot_bad:
                 bad_slots += 1
-                #: ★ **红要落进退出码**（2026-09-23 补）。原本这里只数 `bad_slots`，
+                #: ★ **差异要落进退出码**（2026-09-23 补）。原本这里只数 `bad_slots`，
                 #: 而它只出现在结论行的「N / M 人次逐位一致」里、**不进 rc**——
                 #: 实测：把 Go 的 `shield.max_layers` 写死成 99，11 人次印着
                 #: `Go=99 Python=3`、结论从 64/64 掉到 53/64，而 **rc 仍然是 0**。
-                #: 「判据红了但它不改退出码」＝假绿，正是本仓反复记过的那一类。
+                #: 「判据记出差异了但它不改退出码」＝假绿，正是本仓反复记过的那一类。
                 #: ⇒ 人次级的实现错与上面那些结构性错**同权**，一起驱动 rc。
                 bad += 1
         # ---- §4 covered：两侧各数一遍（**逐夹具**比，不是只比合计）
@@ -1252,7 +1252,7 @@ def main() -> int:
         if GO_ONLY_COUNTERS_SEEN.get(k, 0) > 0:
             continue
         if k in GO_ONLY_COUNTERS_ZERO_OK:
-            #: 零是**预料之中**、且有具名理由 ⇒ 印出来但不判红（登记 ≠ 装看不见）。
+            #: 零是**预料之中**、且有具名理由 ⇒ 印出来但不记为差异（登记 ≠ 装看不见）。
             printed.append("⊘ Go 独有计数器 %s 全程为 0（已登记）：%s"
                            % (k, GO_ONLY_COUNTERS_ZERO_OK[k]))
             continue
@@ -1353,28 +1353,28 @@ def main() -> int:
         return 1
     if mutate:
         for k in MUT_KEYS:
-            print("  变异「%s」：注入=%s 判红=%s  落点=%s"
+            print("  变异「%s」：注入=%s 记为差异=%s  落点=%s"
                   % (k, "是" if guard.applied[k] else "否",
                      "是" if guard.caught[k] else "否", guard.at[k]))
         miss = [k for k in MUT_KEYS
                 if not (guard.applied[k] and guard.caught[k])]
         if miss:
-            print("反向守卫：不成立 ✗（没做到「注入过并且判红」：%s）" % "、".join(miss))
+            print("反向守卫：不成立 ✗（没做到「注入过并且记为差异」：%s）" % "、".join(miss))
             return 1
-        print("反向守卫：%d 处独立变异各判红 —— 成立 ✓（分母 %d 人次）"
+        print("反向守卫：%d 处独立变异各记为差异 —— 成立 ✓（分母 %d 人次）"
               % (len(MUT_KEYS), n_compared))
         return 0
     if n_compared == 0 or not real_fixtures:
-        print("结论：一个人次都没比到 —— 判红（不是实现错，是判据自己瞎）")
+        print("结论：一个人次都没比到 —— 记为差异（不是实现错，是判据自己瞎）")
         return 1
     print("结论：干员规格 %d / %d 人次逐位一致（段 A 的 %d 个键，含条件键的"
           "存在性；段 B 的 %d 个键具名进 unported）"
           % (n_compared - bad_slots, n_compared, len(PORTED), len(UNPORTED)))
     if bad:
-        #: 比过的部分**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+        #: 比过的部分**真的不一致** ⇒ 判据差异，优先于「基线该重录」。
         return 1
     if G.mode == GB.CHECK and not cov.ok:
-        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据差异。
         return GB.RC_CHANNEL
     return 0
 

@@ -367,20 +367,20 @@ def main() -> int:
         print(_sum)
     if mutate:
         if bad:
-            print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")
+            print("反向守卫：合成一处不一致 → 记为差异 —— 成立 ✓")
             return 0
         print("反向守卫：不成立 ✗")
         return 1
     if unchecked:
-        print("结论：用例表没覆盖到 %s —— 判红（不是实现错，是判据自己瞎）"
+        print("结论：用例表没覆盖到 %s —— 记为差异（不是实现错，是判据自己瞎）"
               % "、".join(unchecked))
         return 1
     print("结论：%d 例逐字段一致（另 %d 例两边都拒）" % (compared, both_refused))
     if bad:
-        #: 覆盖部分真的不一致 ⇒ 判据红，优先于「基线该重录」。
+        #: 覆盖部分真的不一致 ⇒ 判据差异，优先于「基线该重录」。
         return 1
     if G.mode == GB.CHECK and not cov.ok:
-        #: 覆盖部分一致，但**对象集/内容变了** ⇒ 读数不可用（rc=6），不是判据红。
+        #: 覆盖部分一致，但**对象集/内容变了** ⇒ 读数不可用（rc=6），不是判据差异。
         return GB.RC_CHANNEL
     return 0
 

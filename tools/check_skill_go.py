@@ -20,7 +20,7 @@ sp_cost / init_sp / increment / max_charge_time / duration / range_id`
 
 ★ 这套冻的**两半**：查询集（`("query", "skill_levels")`，＝全表技能 × 各级）与
 逐点期望值。**只冻期望值不冻查询集**，check 档就问不出该问哪些技能×等级——
-分母静默变小而全绿是本仓记过的形状。
+分母静默变小而零差异是本仓记过的形状。
 
 ★ **期望值是一份投影**：`SkillLevel` 对象不是 JSON，所以把本判据要比的那三块
 （状态机字段 / 效果五箱 / 黑板）**先规范化成 JSON 形状**再由判据侧统一还原。
@@ -207,9 +207,9 @@ def main() -> int:
                 hit["range_id_nonnull"] += 1
             if a != b:
                 out.append("%s：Go=%r Python=%r" % (gk, a, b))
-        #: ⚠ 上一轮这里红成 11012/11012，逐条只有 `effects_total：Go=None`
+        #: ⚠ 上一轮这里记出 11012/11012 处差异，逐条只有 `effects_total：Go=None`
         #: ——Go 已把效果对象改成**嵌套字段** `effects:{eff_*}`，而这里仍按
-        #: 扁平名取。**红的是尺子**，本轮把它重写。
+        #: 扁平名取。**记出差异的是尺子**，本轮把它重写。
         ge = g.get("effects") or {}
         for gk, _pk in PAIRS:
             a, b = _normbox(ge.get(gk)), e["eff"][gk]
@@ -252,7 +252,7 @@ def main() -> int:
         print(_sum)
     if mutate:
         if bad:
-            print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")
+            print("反向守卫：合成一处不一致 → 记为差异 —— 成立 ✓")
             return 0
         print("反向守卫：不成立 ✗")
         return 1

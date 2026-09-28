@@ -20,7 +20,7 @@
 原版自己写明：那两条 rune（`cbuff_cost_recovery` 的费用的回复倍率、
 `global_lifepoint` 的生命点改写）**只在非 NORMAL 下才与普通档不同**，
 而当前流水线恒为 NORMAL ⇒ 那是**沉默区**。只跑 NORMAL 的话，这两行实现错了
-也一声不响——正是「控制组没红时工具自己吼出来」要防的那种绿。
+也一声不响——正是「控制组没记出差异时工具自己吼出来」要防的那种绿。
 
 ## 三处「0 与 None 一视同仁」
 
@@ -42,7 +42,7 @@
   · **期望值**：一关一条键，值里带**两档难度各自的**结果
     （`py_ok` / 8 项 / 拒收理由）——一关一条是**必需**的：原版对
     `load_stage` 抛错的那些关是**整关跳过**的，若按难度拆键，冻结档就会去问
-    那些本来没有期望值的问题（缺键 ⇒ rc=6 假红）；
+    那些本来没有期望值的问题（缺键 ⇒ rc=6 假差异）；
   · **输入身份**：键 `("stageenv", 关卡 id, 该关缓存文件内容 sha16)`
     ＋ 每次跑先 `G.coverage("stageenv", …)` 对账（对象集是活的）；
   · **取证面读数**（`scan_rune_coverage` 的六个计数）**不参与判定**，
@@ -161,7 +161,7 @@ def scan_rune_coverage(levels) -> dict[str, int]:
     """这批关卡的 rune 里，几条要紧的口径各命中几关。
 
     ★ 这是**取证面**的读数，不是判据：为 0 说明「这批关卡没有这种 rune」，
-    不等于实现错。所以它只印出来，只有下面 `REQUIRED` 里那几条才判红。
+    不等于实现错。所以它只印出来，只有下面 `REQUIRED` 里那几条才记为差异。
     """
     from ak_tactic.gamedata.stage import load_stage
     from ak_tactic.frontend.blackboard import mask_applies
@@ -295,7 +295,7 @@ def main() -> int:
     for rec in to_cmp:
         lv = rec["level"]
         #: ★ 键自带输入身份：缓存内容变了 ⇒ 键配不上 ⇒ 由对账如实报出，
-        #: 而不是拿一份旧内容的期望值去比新内容（那会造出一条假红）。
+        #: 而不是拿一份旧内容的期望值去比新内容（那会造出一条假差异）。
         E = G.expect(("stageenv", lv, rec["sha16"]),
                      lambda lv=lv: py_env_level(lv))
         if not E["loaded"]:
@@ -391,25 +391,25 @@ def main() -> int:
         print(_sum)
     if mutate:
         if bad:
-            print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")
+            print("反向守卫：合成一处不一致 → 记为差异 —— 成立 ✓")
             return 0
         print("反向守卫：不成立 ✗")
         return 1
     #: 只要求这两档 + 合成用例真跑过；其余是**取证面**读数，为 0 只说明
-    #: 「这批关卡没有那种 rune」，不当缺陷（三态，不压成一个红）。
+    #: 「这批关卡没有那种 rune」，不当缺陷（三态，不压成一个差异）。
     must = ["难度 NORMAL", "难度 FOUR_STAR", "合成用例"]
     unchecked = [k for k in must if seen.get(k, 0) == 0]
     if unchecked:
-        print("结论：没覆盖到 %s —— 判红（不是实现错，是判据自己瞎）"
+        print("结论：没覆盖到 %s —— 记为差异（不是实现错，是判据自己瞎）"
               % "、".join(unchecked))
         return 1
     print("结论：%d 例逐字段一致（另 %d 例两边都拒、%d 处失配）"
           % (compared, both_refused, bad))
     if bad:
-        #: 比过的部分**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+        #: 比过的部分**真的不一致** ⇒ 判据差异，优先于「基线该重录」。
         return 1
     if G.mode == GB.CHECK and not cov.ok:
-        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据差异。
         return GB.RC_CHANNEL
     return 0
 

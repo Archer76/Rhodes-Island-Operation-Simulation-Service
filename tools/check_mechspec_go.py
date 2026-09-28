@@ -19,7 +19,7 @@ Go 的 `mechspec` 命令**不吃计划**，所以期望值也在**同一个口�
 而它在空排程下恒为「没有」。为了证明这个口径**没有把别的东西一起丢掉**，
 第六节拿 24 份夹具的**生产规格**（`from_sim`，带计划）逐关对了一遍：
 `mech_config[FARMLAND_ID]` 在两个口径下必须**逐字段相同**（田地与计划无关），
-`mechanisms` 的差必须**恰好**是 `snow.field`——多一个少一个都判红。
+`mechanisms` 的差必须**恰好**是 `snow.field`——多一个少一个都记为差异。
 
 ## 两个坑（都在判据里显式处理）
 
@@ -45,7 +45,7 @@ Go 的 `mechspec` 命令**不吃计划**，所以期望值也在**同一个口�
 另记一条可读批次记录 `("query", "level_batch")`——它**不参与判定**，
 但 `--check` 的「改值」栏量得到它。
 
-★ 三种因**分得开**：Go 漂移 ⇒ 判据红（rc=1）；对象集或内容变了 ⇒ rc=6 且印
+★ 三种因**分得开**：Go 漂移 ⇒ 判据差异（rc=1）；对象集或内容变了 ⇒ rc=6 且印
 「输入批次对账」；分母缩水（有对象这次没问）⇒ 同样 rc=6 且印对账。冻结档
 **自己**看不见查询集被人改小（有界盲区），补偿控制是 `--check`。
 
@@ -91,7 +91,7 @@ SNOW_ID = "snow.field"
 UNPORTED = ("snow.field",)
 
 #: **本命令口径下**结构不可达的线：名字 ＋ 为什么。
-#: 判据第五节每次现算可达性——非 0 即红（那时说明口径变了，登记要重写）。
+#: 判据第五节每次现算可达性——非 0 即记差异（那时说明口径变了，登记要重写）。
 STRUCTURAL_ZERO = {
     SNOW_ID: "雪按**排程**判（`snow_spec` 读 `d.talents`），而本命令不吃计划 ⇒ "
              "空排程下恒无雪；判据每次拿同一口径现算并断言为 0",
@@ -707,7 +707,7 @@ def main() -> int:
     if _sum:
         print(_sum)
     if mutate_mode:
-        print("六 · 反向守卫（每处注入都要独立判红）")
+        print("六 · 反向守卫（每处注入都要独立记为差异）")
         if problems:
             print("★ 基线本身就不干净 ⇒ 反向守卫无从成立")
             return 1
@@ -723,11 +723,11 @@ def main() -> int:
             if not ok:
                 bad_guard += 1
             print("  %s 注入「%s」→ %s"
-                  % ("✓" if ok else "✗", which, "判红" if ok else "没红（守不住）"))
+                  % ("✓" if ok else "✗", which, "记为差异" if ok else "没记出差异（守卫未成立）"))
         if bad_guard:
-            print("★ %d / %d 处注入没判红或空转" % (bad_guard, len(MUTATIONS)))
+            print("★ %d / %d 处注入没记为差异或空转" % (bad_guard, len(MUTATIONS)))
             return 1
-        print("  反向守卫成立：%d / %d 处注入都判红" % (len(MUTATIONS), len(MUTATIONS)))
+        print("  反向守卫成立：%d / %d 处注入都记为差异" % (len(MUTATIONS), len(MUTATIONS)))
         return 0
 
     if problems:
@@ -736,7 +736,7 @@ def main() -> int:
             print("  · %s" % m)
         if len(problems) > 20:
             print("  · …（另有 %d 条）" % (len(problems) - 20))
-        print("结论：mechanisms / mech_config 对拍**未通过**（%d 处）" % len(problems))
+        print("结论：mechanisms / mech_config 对拍**与 Python 有差异**（%d 处）" % len(problems))
         return 1
     print("结论：%d 关逐字段一致（有田地 %d 关 / 无田地 %d 关）；"
           "生产口径对账 24 份夹具：田地逐字段相同 %d 份、mechanisms 差恰为雪 %d 份；"
@@ -747,7 +747,7 @@ def main() -> int:
              cov["child 比到的字段数"], cov["chain 走到乙的条数"],
              cov["chain 走到天标的条数"]))
     if G.mode == GB.CHECK and not (cov_lv.ok and cov_fix.ok):
-        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据差异。
         return GB.RC_CHANNEL
     return 0
 

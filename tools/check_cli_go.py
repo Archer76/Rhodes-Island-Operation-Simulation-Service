@@ -22,11 +22,11 @@
 3. 另取一关**不引用**它们的当**对照**（它必须印得出数字）；
 4. 正例的输出里，「重量 —」的**条数**必须等于那一关引用的缺值敌人数；
 5. `--mutate`：把 `cli._num` 换回旧写法再跑同一条命令，**必须崩** ——
-   没有这一条，「修好了」只证明现在没红，证明不了这一条判据红得起来。
+   没有这一条，「修好了」只证明现在没差异，证明不了这一条判据记得出差异。
 
 ## 退出码
 
-    0 ＝ 全绿   1 ＝ 判据红   3 ＝ 仪器缺输入（缓存里找不到可用关卡 / 缺数据文件）
+    0 ＝ 零差异   1 ＝ 记为差异   3 ＝ 仪器缺输入（缓存里找不到可用关卡 / 缺数据文件）
 
 用法：
     python tools\\check_cli_go.py
@@ -171,12 +171,12 @@ def main() -> int:
         print("注入：把 `_num` 换回 `{%s:g}` 再跑 %s ⇒ rc=%d，崩在 NoneType=%s"
               % ("v", pos, r3.returncode, crashed))
         if not crashed:
-            problems.append("注入「换回旧写法」后 **没有崩**（rc=%d）—— 这条判据红不起来，"
+            problems.append("注入「换回旧写法」后 **没有崩**（rc=%d）—— 这条判据记不出差异，"
                             "它的绿是零信息量的绿" % r3.returncode)
 
     print()
     if problems:
-        print("结论：**未通过**（%d 处）" % len(problems))
+        print("结论：**与 Python 有差异**（%d 处）" % len(problems))
         for p in problems:
             print("  ✗ %s" % p)
         return 1

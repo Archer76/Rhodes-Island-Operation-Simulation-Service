@@ -20,7 +20,7 @@
 * **冻结**（`RIOS_GOLDEN=check`）：只读 `fixtures/golden/范围.json`，**不 import `ak_tactic`**。
 
 ★ 这套冻的**两半**：代号集（`("query", …)`，来自 `RangeTable.known()`）与逐点期望值。
-**只冻期望值不冻代号集**，check 档就问不出该问哪些代号——分母静默变小而全绿是本仓记过的形状。
+**只冻期望值不冻代号集**，check 档就问不出该问哪些代号——分母静默变小而零差异是本仓记过的形状。
 
 ★ **类型还原（JSON 会抹掉 `tuple` / `set`）**：`tbl.cells()` 给的是 `tuple` 列表、
 `footprint()` 给的是 `set[tuple]`，而 `json` 只认 `list`。所以取期望值时**先规范化成
@@ -116,7 +116,7 @@ def main() -> int:
     got = go_range(queries)
     mutate = "--mutate" in sys.argv
     if mutate and got:
-        #: 合成一处不一致：判据**必须**红。
+        #: 合成一处不一致：判据**必须**记出差异。
         got[0]["footprint"] = list(got[0]["footprint"]) + [[999, 999]]
 
     bad = 0
@@ -158,7 +158,7 @@ def main() -> int:
         print(_sum)
     if mutate:
         if bad:
-            print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")
+            print("反向守卫：合成一处不一致 → 记为差异 —— 成立 ✓")
             return 0
         print("反向守卫：不成立 ✗")
         return 1

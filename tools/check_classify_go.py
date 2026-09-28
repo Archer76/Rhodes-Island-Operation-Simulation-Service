@@ -24,7 +24,7 @@
 
 ★ **这套要冻的是两半**：键集（`("query", …)`）与逐键期望值。
 **只冻期望值不冻键集**，check 档就问不出该问哪些键——而若有人顺手改成硬编码子集，
-**分母静默变小而全绿**。查询集是判据的一部分。
+**分母静默变小而零差异**。查询集是判据的一部分。
 
 用法:
     python tools\\check_classify_go.py
@@ -66,7 +66,7 @@ def py_classify_expect(k: str) -> dict:
     """单个键的期望值。★ **直接问 Python 的分类器**，不自己重写一遍表。
 
     第一版是照着表手写的期望值，于是「control 的量纲」两处都写成 `secs`
-    （Python 是 `sec`），判据照样全绿——**两把相同的尺子互证**。
+    （Python 是 `sec`），判据照样零差异——**两把相同的尺子互证**。
     现在期望值来自 `_classify` 本身，才是真的在被测方那一侧取证。
     """
     from ak_tactic.operator.skill import _classify, _split_variant
@@ -137,7 +137,7 @@ def main() -> int:
         print(_sum)
     if mutate:
         if bad:
-            print("反向守卫：合成一处不一致 → 判红 —— 成立 ✓")
+            print("反向守卫：合成一处不一致 → 记为差异 —— 成立 ✓")
             return 0
         print("反向守卫：不成立 ✗")
         return 1

@@ -45,11 +45,11 @@
 
 | 分支 | 为什么不可达 | 守卫 |
 |---|---|---|
-| `if not pts:`（`eta.py:138`） | `ground_path` 的**三条出口全部非空**（同格 `[start]`、端点不可走 `[start, end]`、不连通 `[start, end]`） | 每跑一次就在 55 关上重量「有没有哪个 ground_path 返回空」，非 0 即红 |
+| `if not pts:`（`eta.py:138`） | `ground_path` 的**三条出口全部非空**（同格 `[start]`、端点不可走 `[start, end]`、不连通 `[start, end]`） | 每跑一次就在 55 关上重量「有没有哪个 ground_path 返回空」，非 0 即记差异 |
 | `wait=0.0 if legs else w` 的 `else` 支（`spec.py:912`） | `Route.legs` 的 `flush()` 每次都至少产出 2 个点 ⇒ `legs` 恒非空 | 同上，重量「有没有哪条路线 legs 为空」 |
 
 ★ 两条守卫**每跑一次都重算**（不是写死一句「不可达」）。哪天真出现了，
-这里会红，而红的意思是「该补合成夹具了」——不是「实现错了」。
+这里会记出差异，它的意思是「该补合成夹具了」——不是「实现错了」。
 
 ## 合成夹具（缓存里一条 `DISAPPEAR` 都没有）
 
@@ -57,11 +57,11 @@
 而它恰恰是「必须分段、不能连成折线」那一条。故本判据自带一份最小关卡：
 Go 走它自己的 `_level_index.json` ＋ `load` 入口，Python 走 `parse_stage`，
 两侧都是各自真正的解析路径。夹具**自证行使**：`vanish` 段、`FLY` 路线、
-接续去重、非单位步四项，任一为 0 即判红（不是实现错，是夹具不再覆盖它）。
+接续去重、非单位步四项，任一为 0 即记为差异（不是实现错，是夹具不再覆盖它）。
 
 ## 反向守卫（`--mutate`）
 
-八处**互相独立**的变异，各自必须被判红，缺一不算成立：
+八处**互相独立**的变异，各自必须记出差异，缺一不算成立：
 
 | 变异 | 打在哪 | 证明什么 |
 |---|---|---|
@@ -97,9 +97,9 @@ Python 侧的全部产物——寻路问题（`qs`，含 `diagonal`）与点列�
 
 ★ **一关那份投影的字段名是给控制组排的**：`paths` 排在 `sorted()` 第一位，所以
 `--control` 的 P1 改坏的是**被比的那一栏**（`paths` 的比较**先查条数**）⇒ 得到
-「`✗ … 寻路条数：Go=32 Python=33`」这样的**带结论行的干净判决红**。把
-`idxs` / `kinds` / `legs` / `state` 排到前面去只会得到**崩溃红**（哨兵元素被拿去
-问 Go、被当字典键、或被 `zip` 截掉）——那种红证明不了「碰的是判决路径」。
+「`✗ … 寻路条数：Go=32 Python=33`」这样的**带结论行的干净判决差异**。把
+`idxs` / `kinds` / `legs` / `state` 排到前面去只会得到**崩溃差异**（哨兵元素被拿去
+问 Go、被当字典键、或被 `zip` 截掉）——那种差异证明不了「碰的是判决路径」。
 
 用法:
     python tools\\check_stagepath_go.py
@@ -127,7 +127,7 @@ GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
 DATA = ROOT / "data" / "gamedata"
 
-#: 八处独立变异的名字（`--mutate` 下八处都要「注入过 ＋ 判红过」）。
+#: 八处独立变异的名字（`--mutate` 下八处都要「注入过 ＋ 记出过差异」）。
 MUT_PATH_PTS = "寻路点列"
 MUT_LEG_PTS = "分段点列"
 MUT_LEG_LEN = "分段长度"
@@ -140,7 +140,7 @@ MUT_KEYS = (MUT_PATH_PTS, MUT_LEG_PTS, MUT_LEG_LEN, MUT_LEG_SEC,
             MUT_RP_PTS, MUT_RP_WAIT, MUT_RP_LEGS, MUT_RP_LEN)
 
 #: 两个**结构上不可达**的分支（见文件头）：它们不进行使计数，
-#: 但每跑一次都要重量一遍「可达性仍然为零」，非 0 即红。
+#: 但每跑一次都要重量一遍「可达性仍然为零」，非 0 即记差异。
 STRUCTURAL_ZERO = {
     "path_fallback": "ground_path 返回空 ⇒ 退回 [起点]+路点+终点",
     "legs_empty": "route_plans 拿到空 legs ⇒ spawns 侧走 wait=w 那一支",
@@ -148,7 +148,7 @@ STRUCTURAL_ZERO = {
 
 #: 合成夹具：`synthetic_stage()` 造关卡，`write_synthetic()` 落成 Go 读得到的树。
 SYN_LEVEL_ID = "syn_legs_01"
-SYN_BAD_MSG = "合成夹具没走到 %s —— 判红（不是实现错，是夹具不再覆盖它）"
+SYN_BAD_MSG = "合成夹具没走到 %s —— 记为差异（不是实现错，是夹具不再覆盖它）"
 
 
 # --------------------------------------------------------------- Go 侧入口
@@ -221,9 +221,9 @@ def py_expect_level(lv: str) -> dict:
     #: ⚠ **字段名是给控制组排的，不是随手起的**：`paths` 必须排在 `sorted()`
     #: 第一位。控制组的 P1 会把值里 sorted 第一个键改坏一处，而 `paths` 的比较
     #: **先查条数** ⇒ 改坏它得到的是「✗ … 寻路条数：Go=32 Python=33」那样的
-    #: **带结论行的干净判决红**。让 `idxs` / `kinds` / `legs` / `loaded` 排前面
-    #: 只会得到**崩溃红**（哨兵元素被拿去问 Go、被当字典键、或被 zip 截掉）——
-    #: 那种红只证明「有人碰了东西」，证明不了「碰的是判决路径」（实测过一次）。
+    #: **带结论行的干净判决差异**。让 `idxs` / `kinds` / `legs` / `loaded` 排前面
+    #: 只会得到**崩溃差异**（哨兵元素被拿去问 Go、被当字典键、或被 zip 截掉）——
+    #: 那种差异只证明「有人碰了东西」，证明不了「碰的是判决路径」（实测过一次）。
     return {"paths": paths,
             "py_cov": py_route_plan_coverage(st),
             "qs": qs,
@@ -283,7 +283,7 @@ def has_long_step(pts) -> bool:
 
 
 class Guard:
-    """反向守卫：每处变异都要「注入过 ＋ 判红过」，缺一不算成立。"""
+    """反向守卫：每处变异都要「注入过 ＋ 记出过差异」，缺一不算成立。"""
 
     def __init__(self, on: bool):
         self.on = on
@@ -474,7 +474,7 @@ def py_route_plan_coverage(st) -> dict:
     """Python 侧独立数一遍 `route_plans` 的各条分支——用来核对 **Go 自报的计数**。
 
     计数器本身也是一个断言（「我走到了这条分支」），它必须有两个来源：
-    被测方（Go 的 `covered`）与尺子（这里）。两边不等 ⇒ 判红。
+    被测方（Go 的 `covered`）与尺子（这里）。两边不等 ⇒ 记为差异。
     """
     from ak_tactic.eta import leading_wait
     c = {"routes": 0, "has_move": 0, "no_move": 0, "walk_mode": 0,
@@ -791,36 +791,36 @@ def main() -> int:
     if _sum:
         print(_sum)
     if cov_mismatch:
-        print("结论：Go 自报的分支行使计数与尺子独立数出的不一致 —— 判红")
+        print("结论：Go 自报的分支行使计数与尺子独立数出的不一致 —— 记为差异")
         return 1
     if mutate:
         for k in MUT_KEYS:
-            print("  变异「%s」：注入=%s 判红=%s"
+            print("  变异「%s」：注入=%s 记为差异=%s"
                   % (k, "是" if guard.applied[k] else "否",
                      "是" if guard.caught[k] else "否"))
         miss = [k for k in MUT_KEYS
                 if not (guard.applied[k] and guard.caught[k])]
         if miss:
-            print("反向守卫：不成立 ✗（没做到「注入过并且判红」：%s）"
+            print("反向守卫：不成立 ✗（没做到「注入过并且记为差异」：%s）"
                   % "、".join(miss))
             return 1
-        print("反向守卫：八处独立变异（含三处 1 ulp）各判红 —— 成立 ✓")
+        print("反向守卫：八处独立变异（含三处 1 ulp）各记为差异 —— 成立 ✓")
         return 0
     if seen["正常寻路"] == 0 or seen["关卡"] == 0:
-        print("结论：正常寻路一例都没比到 —— 判红（不是实现错，是判据自己瞎）")
+        print("结论：正常寻路一例都没比到 —— 记为差异（不是实现错，是判据自己瞎）")
         return 1
     if seen["walk 段"] == 0 or seen["分段关卡"] == 0:
-        print("结论：路线分段一例都没比到 —— 判红（不是实现错，是判据自己瞎）")
+        print("结论：路线分段一例都没比到 —— 记为差异（不是实现错，是判据自己瞎）")
         return 1
     if seen["路线计划"] == 0 or seen["计划表关卡"] == 0:
-        print("结论：路线计划表一例都没比到 —— 判红（不是实现错，是判据自己瞎）")
+        print("结论：路线计划表一例都没比到 —— 记为差异（不是实现错，是判据自己瞎）")
         return 1
     #: ★ 结构不可达的两条：**每跑一次都重量一遍**（不是写死一句「不可达」）。
-    #: 哪天真出现了，这里会红；红的意思是「该补合成夹具了」，不是「实现错了」。
+    #: 哪天真出现了，这里会记出差异；它的意思是「该补合成夹具了」，不是「实现错了」。
     for key, label in STRUCTURAL_ZERO.items():
         if py_cov.get(key) or struct_zero[key]:
             print("结论：%s 这条兜底**变成可达了**（尺子数出 %d 例、Go 自报 %d）"
-                  " —— 判红：它现在有行使，必须补一份合成夹具来判它"
+                  " —— 记为差异：它现在有行使，必须补一份合成夹具来判它"
                   % (label, py_cov.get(key, 0), struct_zero[key]))
             return 1
     print("★ 结构不可达（现算，非写死）：%s"
@@ -840,10 +840,10 @@ def main() -> int:
           % (seen["路径一致"], seen["段逐字段一致"], syn_seen["段逐字段一致"],
              seen["计划表逐字段一致"], seen["计划段逐字段一致"]))
     if bad:
-        #: 比过的部分**真的不一致** ⇒ 判据红，优先于「基线该重录」。
+        #: 比过的部分**真的不一致** ⇒ 判据差异，优先于「基线该重录」。
         return 1
     if G.mode == GB.CHECK and not cov.ok:
-        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据红。
+        #: 比过的部分一致，但**对象集变了** ⇒ 读数不可用（rc=6），不是判据差异。
         return GB.RC_CHANNEL
     return 0
 
