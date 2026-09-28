@@ -732,6 +732,15 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		csI := &chapterScreen{}
 		ssI := newSquadPickScreen(invCtx, nil)
 		stI := &stageScreen{heading: "全部关卡（清单探针）", rows: stages}
+		//: ★ 2026-09-28 博士：「选助战界面要加上一个搜索框」。探针与另两屏同一个形状
+		//: —— 它这一屏的候选来自**全量表**（与名册无关），所以造一个自带两行的实例，
+		//: 不依赖本机有没有名册/全量表。
+		supI := &supportPickScreen{rows: []data.OperatorRow{
+			{CharID: "char_1001_x", Name: "阿米娅", Profession: "CASTER"},
+			{CharID: "char_1002_y", Name: "初雪", Profession: "SUPPORT"},
+			{CharID: "char_1003_z", Name: "银灰", Profession: "WARRIOR"},
+		}}
+		supAll := len(supI.filtered())
 		chapterAll := len(csI.shown(invCtx))
 		stageAll := len(stI.shown())
 
@@ -765,6 +774,23 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			{"选关卡", "难度下拉 #diff", "恰三档、标签带关数", func() bool {
 				o := stI.diffOptions()
 				return len(o) == 3 && strings.Contains(o[1].label, "关")
+			}},
+			//: ★ 选助战那一屏（博士 2026-09-28 要的搜索框）：打字能改可见条数；
+			//: 并且**筛不着时不许乱选**（回车要挑不到人）。
+			{"选助战", "搜索框 #kw", "打字能改可见条数", func() bool {
+				supI.box.clear()
+				before := len(supI.filtered())
+				supI.update(invCtx, keyMsg("初"))
+				n := len(supI.filtered())
+				supI.box.clear()
+				return before == supAll && n == 1 && n < before
+			}},
+			{"选助战", "搜索框 #kw ＋ Enter", "筛不着时回车选不了人（不许乱选）", func() bool {
+				supI.box.clear()
+				supI.update(invCtx, keyMsg("没有这个人"))
+				_, act := supI.update(invCtx, keyMsg("enter"))
+				supI.box.clear()
+				return act.kind == actNone
 			}},
 			{"选人", "练度门槛 #f-trained", "恰三档（不限／≥精英二60／精英二90）",
 				func() bool { return len(trainedOptions) == 3 }},

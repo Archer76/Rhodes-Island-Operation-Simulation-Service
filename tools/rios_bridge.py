@@ -287,6 +287,58 @@ def cmd_logout(req: dict) -> dict:
     return {"result": bool(res)}
 
 
+#: 一个进程里只试一次"直接去森空岛取名册"（界面会反复问；每问一次打一趟网是浪费）。
+_ROSTER_FETCH_TRIED = False
+
+
+def _try_fetch_roster_from_skland() -> tuple[object | None, str]:
+    """名册缓存不在时**直接去森空岛取一份**（博士 2026-09-28 裁）。
+
+    链路就是现成的那两条（**不重写**）：`skland.fetch_all()` 拉全量落 `opers_<uid>.json`，
+    再用 `tools/roster.py` 的 `build()` ＋ `write_json()` 翻成 `roster_<uid>.json`
+    —— 之后 `load_roster()` 自己就找得到（口径仍在它手里，桥上只负责"缺了就去取"）。
+
+    返回 `(名册 or None, 说明)`：说明在成功时是"取到并落盘"，失败时是**具名原因**
+    （要一起写进上层那句失败提示里 —— 玩家得知道是"没登录"还是"网/证书"）。
+    """
+    global _ROSTER_FETCH_TRIED
+    if _ROSTER_FETCH_TRIED:
+        return None, "（这一步本次已经试过，不重复打网）"
+    _ROSTER_FETCH_TRIED = True
+    try:
+        from ak_tactic import skland
+        from ak_tactic.tui import data as D
+
+        uid = skland.current_uid()
+        if not uid:
+            return None, "本机没有森空岛登录凭据（~/.skland/cred.json）"
+        #: ★ 要的是**游戏 uid**，不是登录账号 id —— 两者通常不相等（前者 13 位、
+        #: 后者 8 位），而 `fetch_all()` 只认前者。实测（2026-09-28）：直接拿
+        #: `current_uid()` 去取会报「uid 1352155938927 不在绑定列表里」。
+        game_uid = ""
+        try:
+            game_uid = str(skland.game_uid() or "")
+        except Exception:                                    # noqa: BLE001
+            game_uid = ""
+        if not game_uid:
+            try:
+                got = skland.resolve_game_uid_for(uid)
+                game_uid = str(got.get("gameUid") or "")
+            except Exception:                                # noqa: BLE001
+                game_uid = ""
+        res = skland.fetch_all(uid=game_uid or uid)
+        real = str(res.get("uid") or uid)
+        import roster as _roster          #: `tools/roster.py`（桥的 cwd 就在 tools/）
+        data = _roster.build(real)
+        path = _roster.write_json(data)
+        got = D.load_roster()
+        if got is None:
+            return None, "从森空岛取回来了、但 load_roster() 仍认不出（%s）" % path
+        return got, "已从森空岛取到并落盘：%s" % path
+    except Exception as exc:                                 # noqa: BLE001
+        return None, "%s: %s" % (exc.__class__.__name__, exc)
+
+
 def cmd_roster(req: dict) -> dict:
     """名册：把 `ak_tactic.tui.data.load_roster()` 的产出翻成一行 JSON。
 
@@ -314,13 +366,19 @@ def cmd_roster(req: dict) -> dict:
     from ak_tactic.tui import data as D
 
     r = D.load_roster()
+    fetch_note = ""
+    if r is None:
+        #: ★ 2026-09-28 博士裁：名册**直接去森空岛取**，取不到才明确提示手动导入。
+        r, fetch_note = _try_fetch_roster_from_skland()
     if r is None:
         raise LookupError(
-            "RosterUnavailable: load_roster() 返回 None —— 既没有当前账号的 "
-            "data/skland/roster_<游戏uid>.json，也没有**解析得动**的 OperBox 导出。"
-            "先取一份名册：python tools/roster.py（把 data/skland/opers_<uid>.json "
-            "翻成 roster_<uid>.json），或把 MAA 的 OperBox 导出放到 "
-            "tools/operbox_path.py 指的位置。")
+            "RosterUnavailable: 名册取不到 —— 本机既没有当前账号的 "
+            "data/skland/roster_<游戏uid>.json，也没有**解析得动**的 OperBox 导出；"
+            "并且**已经试过直接去森空岛取**：%s。\n"
+            "  手动导入（两条路任选）：\n"
+            "    ① MAA 的 OperBox 导出放到 `tools/operbox_path.py` 指的位置；\n"
+            "    ② `python tools/skland.py fetch`（拉全量）再 `python tools/roster.py`"
+            "（翻成 roster_<uid>.json）。" % (fetch_note or "未试"))
     operators = [{"char_id": op.char_id, "name": op.name,
                   "profession": op.profession or "",
                   "sub_profession": getattr(op, "sub_profession", "") or "",

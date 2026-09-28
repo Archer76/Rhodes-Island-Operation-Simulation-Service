@@ -115,22 +115,42 @@ func (c *appCtx) supportLine() string {
 //  2. **不分练度、不显示练度、也不收练度**（口径 3）；
 //  3. 只能选**一个**（助战占一格，口径 1）。
 //
-// ★ 未做（具名登记）：这一屏**没有筛选／搜索**。四百六十人靠上下键翻，找某一位很难
-// —— 选人屏（名册）也有同样的毛病，而 Python 侧那一屏有职业行与练度门槛两排筛查。
-// 口径没定之前**不自己发明筛选键**（多一个键就多一处得跟 Python 对齐的行为），
-// 先如实登记在这里。
+// ★ 2026-09-28 博士裁：「选助战界面要加上一个搜索框」。
+//
+// 原来这一屏**没有筛选／搜索**，四百六十人靠上下键翻；当时的登记写着"口径没定之前
+// 不自己发明筛选键"。现在口径定了，而且**不发明新工具**：直接用章节屏／关卡屏
+// 那一件 `util.go::filterBox`（折半角、忽略大小写、字面量子串；中文输入法全角是常态），
+// 键位也照抄那一屏的纪律：`↑/↓` 翻列表、**其余按键进输入框**、`Esc` 两级
+// （有关键词先清空，没有才退回）、`Backspace` 在空框时退回。
 type supportPickScreen struct {
 	cursor int
 	rows   []data.OperatorRow
 	//: 取不到「全部干员」时的**具名**原因（照 `welcomeScreen` 那条口径：
 	//: 任何一栏取不到，也要把原因写在那一栏里，不许静默空着）。
 	err string
+	//: 搜索框（与章节屏／关卡屏同一件工具）。
+	box filterBox
+}
+
+// filtered 是**唯一的筛选口径**：`view` 与 `update` 都走它。
+//
+// 命中字段：干员名／职业中文名／`char_id`（名字是主要用法，另两个是"我记不清名字时"
+// 的兜底；与 `filterBox.match` 的"多字段取或"同口径）。
+func (s *supportPickScreen) filtered() []int {
+	out := make([]int, 0, len(s.rows))
+	for i, op := range s.rows {
+		if s.box.match(op.Name, professionCN(op.Profession), op.CharID) {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 func (*supportPickScreen) title() string { return "选助战" }
 
 func (*supportPickScreen) help() string {
-	return "↑/↓ 移动 · Enter 选定这位助战 · Esc 取消（不用助战）· Q 退出"
+	return "↑/↓ 移动 · 打字＝搜索（Esc 先清关键词）· Enter 选定这位助战 · " +
+		"Esc 取消（不用助战）· Q 退出"
 }
 
 // newSupportPickScreen 造一张助战屏。
@@ -149,17 +169,21 @@ func newSupportPickScreen() *supportPickScreen {
 }
 
 func (s *supportPickScreen) view(c *appCtx) string {
+	idx := s.filtered()
 	head := []string{
 		c.supportLine() + fmt.Sprintf("　编队上限 %d 人（自己的 %d ＋ 助战 %d）",
 			c.squadLimitShown(), squadCap, supportSlots),
 		//: 口径 3 那句话要**写在屏上**：玩家看得见"不用填练度"，才不会去找输入框。
 		"★ 助战的练度不用填（MAA 不识别助战干员的练度）—— 这一屏只选一个名字。",
+		//: ★ 搜索框（博士 2026-09-28）：与章节屏／关卡屏同一件控件、同一句提示。
+		s.box.view(c),
 	}
 	if s.err != "" {
 		head = append(head, styleDim.Render("★ 全部干员取不到："+firstLineWith(s.err, "★")))
 	} else {
 		head = append(head, styleDim.Render(fmt.Sprintf(
-			"候选：全部干员 %d 名（gamedata 全量表，与自己的名册无关）", len(s.rows))))
+			"候选：全部干员 %d 名（筛出 %d 名）——gamedata 全量表，与自己的名册无关",
+			len(s.rows), len(idx))))
 	}
 	if len(s.rows) == 0 {
 		//: ⚠ 不走 `renderPickList`：它那句"名册里没有可勾的干员"在这一屏是**错的**
@@ -171,34 +195,68 @@ func (s *supportPickScreen) view(c *appCtx) string {
 		b.WriteString(styleDim.Render("  （没有可挑的候选）"))
 		return b.String()
 	}
-	rows := make([]string, 0, len(s.rows))
-	for _, op := range s.rows {
+	if len(idx) == 0 {
+		//: ★ 有候选但**筛不着**：这是"关键词"的问题，不是"没有候选"——必须分开说，
+		//: 否则玩家会以为全量表坏了（与"取不到"那条具名口径同源）。
+		head = append(head, styleDim.Render(
+			"（这个关键词一位都没筛着 —— Esc 先清关键词，或换个名字试试）"))
+	}
+	rows := make([]string, 0, len(idx))
+	for _, i := range idx {
+		op := s.rows[i]
 		rows = append(rows, pad(op.Name, 16)+professionCN(op.Profession))
+	}
+	if s.cursor >= len(idx) {
+		s.cursor = len(idx) - 1
+	}
+	if s.cursor < 0 {
+		s.cursor = 0
 	}
 	return renderPickList(c, head, rows, s.cursor)
 }
 
 func (s *supportPickScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
-	if n, ok := moveCursor(k, s.cursor, len(s.rows)); ok {
+	idx := s.filtered()
+	if s.cursor >= len(idx) {
+		s.cursor = len(idx) - 1
+	}
+	if s.cursor < 0 {
+		s.cursor = 0
+	}
+	if n, ok := moveCursor(k, s.cursor, len(idx)); ok {
 		s.cursor = n
 		return s, action{kind: actNone}
 	}
 	switch {
 	case keyIs(k, "enter"):
-		if s.err != "" || len(s.rows) == 0 {
-			//: 没有候选就选不了人。**不许静默**：把原因留在屏上（它已经在头的第三行）。
-			c.note = "★ 全部干员取不到，挑不了助战（原因见屏上那一行）"
+		if s.err != "" || len(idx) == 0 {
+			//: 没有候选就选不了人。**不许静默**：把原因留在屏上（它已经在头里）。
+			c.note = "★ 挑不了助战（原因见屏上那一行）"
 			return s, action{kind: actNone}
 		}
-		return s, action{kind: actBack, res: s.rows[s.cursor].Name}
-	case keyIs(k, "esc"), keyIs(k, "backspace"):
+		return s, action{kind: actBack, res: s.rows[idx[s.cursor]].Name}
+	case keyIs(k, "esc"):
+		//: Esc 分两级：**有关键词先清空**（"我刚打错了"最常见的意图），没关键词才取消。
+		if s.box.text() != "" {
+			s.box.clear()
+			s.cursor = 0
+			return s, action{kind: actNone}
+		}
 		//: 取消 = **不用助战**，退回选人屏。交回 nil —— 与「选了个空名字」分得开
 		//: （照询问屏那条口径：取消与空值是两回事）。
 		return s, action{kind: actBack}
+	case keyIs(k, "backspace"):
+		if s.box.text() != "" {
+			return s, action{kind: actNone, cmd: s.box.key(k)}
+		}
+		return s, action{kind: actBack}
 	case keyIs(k, "q"):
 		return s, action{kind: actQuit}
+	default:
+		//: 其余按键交给输入框（可打印字符、左右移动、删除…）。它不认的键什么也不做
+		//: —— 于是"打字"与"翻列表"两件事不会互相抢键（与章节屏同一条纪律）。
+		return s, action{kind: actNone, cmd: s.box.key(k)}
 	}
-	return s, action{kind: actNone}
 }
 
 // ---- 回调与开关的落点 ------------------------------------------------------
