@@ -313,7 +313,7 @@ def main() -> int:
         print("        %s" % what)
     if selfcheck:
         print()
-        print("★ 反向守卫自检（每套人为注入一处不一致，**判据必须能判红**，rc=0 即成立）：")
+        print("★ 反向守卫自检（每套人为注入一处不一致，**判据必须能记出差异**，rc=0 即成立）：")
         print("  这一块量的是**判据自己的灵敏度**，与上表的差异无关。")
         gbad = 0
         for name, grc in guards:
@@ -321,7 +321,7 @@ def main() -> int:
             if not ok:
                 gbad += 1
             print("    %s %-6s rc=%d %s" % ("✓" if ok else "⚠", name, grc,
-                                            "" if ok else "← 守卫未成立：注入了改动却没红（判据自己的缺陷）"))
+                                            "" if ok else "← 守卫未成立：注入了改动却没记出差异（判据自己的缺陷）"))
         if gbad:
             print("★ %d / %d 套的守卫不成立（这是判据的问题，不是与 Python 的差异）"
                   % (gbad, len(guards)))
