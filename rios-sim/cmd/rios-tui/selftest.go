@@ -2630,14 +2630,33 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		}
 		check("★ 进度条行宽夹住终端宽度（60 列窗口：最宽一行 ≤ 60）", maxw <= 60,
 			fmt.Sprintf("最宽 %d 格", maxw))
-		check("★ 长中文标题不折行（3 步 ⇒ 恰好 3 行）",
-			strings.Count(w1.String(), "\n") == 3,
-			fmt.Sprintf("%d 行", strings.Count(w1.String(), "\n")))
+		check("★ 长中文标题不折行（3 步 ＋ 1 汇总位 ⇒ 内容恰好 4 行；首帧另有 4 行占位）",
+			strings.Count(w1.String(), "\n") == 8,
+			fmt.Sprintf("%d 行（4 占位 ＋ 4 内容）", strings.Count(w1.String(), "\n")))
 		var w2 bytes.Buffer
 		narrow.render(&w2)
-		check("★ 重画按上一帧行数上移（第二帧以 \\x1b[3A 开头 ⇒ 不逐帧往下漂）",
-			strings.HasPrefix(w2.String(), "\x1b[3A"),
-			fmt.Sprintf("第二帧 %d 字节、3 行", w2.Len()))
+		check("★ 重画按上一帧行数上移（第二帧以 \\x1b[4A 开头 ⇒ 不逐帧往下漂）",
+			strings.HasPrefix(w2.String(), "\x1b[4A"),
+			fmt.Sprintf("第二帧 %d 字节、4 行", w2.Len()))
+		//: ★★ 2026-09-28 博士物理机截图（同一行被印了三遍）⇒ 两条钉死：
+		//:   ① 块高**恒定**＝步数 ＋ 1（给汇总留位）；② 第一帧**先占位再锚定**
+		//:   （先把滚动吃掉，否则贴底时每帧都会偏一行、旧字留在屏上）。
+		check("★ 第一帧先占位（3 步 ⇒ 先打 4 个空行，再上移 4）",
+			strings.HasPrefix(w1.String(), "\n\n\n\n\x1b[4A"),
+			fmt.Sprintf("开头 %q", w1.String()[:min(12, w1.Len())]))
+		check("★ 每帧**内容**行数恒定（首帧 4 占位 ＋ 4 内容；之后每帧 4 行）",
+			strings.Count(w1.String(), "\n")-4 == strings.Count(w2.String(), "\n") &&
+				strings.Count(w2.String(), "\n") == 4,
+			fmt.Sprintf("第一帧 %d 行 / 第二帧 %d 行",
+				strings.Count(w1.String(), "\n"), strings.Count(w2.String(), "\n")))
+		//: 负对照：汇总来了之后，行数**不许变**（变一行就会漂一行）
+		narrow.haveSum = true
+		narrow.ok, narrow.failed = 3, 0
+		var w2b bytes.Buffer
+		narrow.render(&w2b)
+		check("负对照：汇总行出现后行数仍为 4（不许长高）",
+			strings.Count(w2b.String(), "\n") == 4,
+			fmt.Sprintf("%d 行", strings.Count(w2b.String(), "\n")))
 		//: 负对照：窗口压到极窄，也必须一行都不超（`cut` 兜底在场）
 		tiny := &setupBars{width: 28, ansi: true}
 		tiny.steps = narrow.steps

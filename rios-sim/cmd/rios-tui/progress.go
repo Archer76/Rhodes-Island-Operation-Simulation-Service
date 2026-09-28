@@ -202,19 +202,33 @@ func (b *setupBars) render(w io.Writer) {
 	//: ⚠ 再让一格：写到**最后一列**时有些终端会自动折行（那又回到"物理行多于逻辑行"
 	//: 的老问题上）。让一格最省事，视觉上也留了边距。
 	width--
-	if b.drew > 0 {
+	//: ★★ 行数**恒定** ＋ **先占位再锚定**（2026-09-28 博士物理机截图：同一行被印了三遍）。
+	//:
+	//: 两个坑叠在一起：
+	//:   ① 原来每帧只印"当前有内容的行"⇒ 汇总行一出现，块就长高一行，而上移仍按
+	//:      上一帧的行数 ⇒ 差一行，旧字留在屏上；
+	//:   ② 块贴在窗口底部时，**打印换行会让终端滚动**（内容上移、光标不动）⇒ 接下来
+	//:      `\x1b[NA` 落点整体偏移 ⇒ 旧行不被覆盖，看起来就是"同一行重复出现"。
+	//: 处置：块高固定 `len(steps)+1`（给汇总留一格，没有就印空行）；第一帧先打印
+	//: 这么多空行**把滚动吃在锚定之前**，再上移同样行数，此后每帧都印满同样行数。
+	lines := len(b.steps) + 1
+	if b.drew == 0 {
+		for i := 0; i < lines; i++ {
+			fmt.Fprint(w, "\n")
+		}
+		fmt.Fprintf(w, "\x1b[%dA", lines)
+	} else {
 		fmt.Fprintf(w, "\x1b[%dA", b.drew)
 	}
-	n := 0
 	for i := range b.steps {
 		fmt.Fprintf(w, "\x1b[2K%s\n", barLine(&b.steps[i], b.spins, width))
-		n++
 	}
 	if b.haveSum {
 		fmt.Fprintf(w, "\x1b[2K%s\n", cut("  "+summaryLine(b.ok, b.failed), width))
-		n++
+	} else {
+		fmt.Fprint(w, "\x1b[2K\n") //: 占位：汇总还没来，这一行也必须占着
 	}
-	b.drew = n
+	b.drew = lines
 	b.spins++
 }
 
