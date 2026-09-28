@@ -126,10 +126,10 @@ CASES: list[tuple[str, bytes, str, tuple[str, ...]]] = [
      "both-refuse", ("校验：缺关卡号",)),
     ("一个部署都没有", j('{"stage":"1-7","deploys":[]}'),
      "both-refuse", ("校验：无部署",)),
-    ("同一人部署两次",
+    ("同一人部署两次（Go 已放宽，见下）",
      j('{"stage":"1-7","deploys":[{"operator":"甲","position":[1,1]},'
        '{"operator":"甲","position":[2,2]}]}'),
-     "both-refuse", ("校验：同一人两次",)),
+     "go-accept", ("校验：同一人两次",)),
     ("两人挤同一格",
      j('{"stage":"1-7","deploys":[{"operator":"甲","position":[1,1]},'
        '{"operator":"乙","position":[1,1]}]}'),
@@ -379,6 +379,25 @@ def main() -> int:
                     bad += 1
                     print("✗ %s —— 期望 Go 拒（原版那一侧本轮不断言）" % label)
                 continue
+            if expect == "go-accept":
+                #: 「Go 收 ∧ 原版拒」——**登记的分歧**，不是漏改：
+                #: 博士 2026-09-29 定「同一干员不许**同时在场**两次；被击倒／撤退回
+                #: 待部署区且冷却结束后可以再部署」，而「此刻在不在场上」是**运行期**
+                #: 的事 ⇒ 计划层不再拦，真值由模拟器两道具名拒收给
+                #: （`rios-sim/redeploy_test.go` 三例：正例 ＋ 两条负对照）。
+                #: ⚠ 只查「Go 收」会漏掉「收下了却把一条部署静默丢了」这一种坏法，
+                #: 所以顺带查**Go 自己回的那份里两条部署都在**。
+                if not ok or py_ok:
+                    bad += 1
+                    print("✗ %s —— 期望「Go 收 ∧ 原版拒」：Go ok=%s Python ok=%s"
+                          % (label, ok, py_ok))
+                elif not isinstance(got, dict) or len(got.get("deploys") or []) != 2:
+                    bad += 1
+                    print("✗ %s —— Go 收下了，但回来的部署不是 2 条：%r"
+                          % (label, got))
+                else:
+                    diverged.append("%s（原版: %s）" % (label, py_err))
+                continue
 
             if not ok:
                 bad += 1
@@ -408,7 +427,8 @@ def main() -> int:
     if _sum:
         print(_sum)
     if diverged:
-        print("★ 已登记的分歧（要求「Go 拒 ∧ 原版收」同时成立，不算对拍失败）：")
+        print("★ 已登记的分歧（`go-refuse`＝「Go 拒 ∧ 原版收」、"
+              "`go-accept`＝「Go 收 ∧ 原版拒」，两者都不算对拍失败）：")
         for d in diverged:
             print("    %s" % d)
         print()

@@ -39,6 +39,8 @@ import (
 //   - `validate` 拦两条会**静默出错**的事：同一干员部署两次（要再上一次得先
 //     撤退）、两个干员挤在同一格（模拟器不校验，会让两个单位重叠着跑完，
 //     产出一个「看着对」的结果）。
+//     ★ **第一条按博士 2026-09-29 的裁定放宽了**（第二条仍拦），见
+//     `Validate` 的说明——那不是漏改，是刻意与原版分道。
 //
 // ## 一条本轮**没有**接的分支（具名拒收，不静默）
 //
@@ -380,7 +382,38 @@ func ParsePlan(obj map[string]json.RawMessage) (PlayPlan, error) {
 	return plan, nil
 }
 
-// Validate 复刻 `Plan.validate`（`plan.py:262-289`）。
+// Validate 复刻 `Plan.validate`（`plan.py:262-289`），**其中一条按博士 2026-09-29
+// 的裁定放宽**（下面「放宽的那一处」）。
+//
+// # 放宽的那一处：同一干员的二次部署
+//
+// 博士 2026-09-29 定的规则：「不允许一个干员**同时在场上**出现两次，但如果被击倒
+// ／撤退回到待部署区、且再部署冷却结束，则可以再次部署。」
+//
+// 这条规则**是运行期的**，计划层判不了：要知道「这位此刻在不在场上」（取决于有没有
+// 被打死）与「离场多久了」（取决于撤退／阵亡的时刻）。所以计划层**不再拦**，把真值
+// 交给模拟器——它本来就有那两道具名拒收（`sim.go` 的 `_can_deploy_again` 复刻），
+// 落进 `verdict.deploy_rejected` 的 `(时刻, 名字, 原因)` 里，**不是静默**：
+//
+//	· sim.go:609  「同一干员已在场」   —— 活着且在场上 ⇒ 拒；
+//	· sim.go:615  「再部署冷却中」     —— 离场未满 `RedeployTime` ⇒ 拒。
+//
+// ⚠ **两件事不能混**：`Sim` 里那条「同一干员已在场」判的是 `cur.alive()`——阵亡的
+// 不算在场，所以「落地→阵亡→冷却过后再落」这条路**走得通**；而计划层想表达同样的
+// 意思就必须知道死没死，静态文本里没有这个信息。**拦在计划层是把该模拟器判的事
+// 提前判死**（`docs/retreat-audit.md` §2.4 里那条 `SYNTHETIC-redeploy-twice` 的
+// 症状就是它：真值由模拟器给，计划层却先拒了）。
+//
+// ⚠ **这是与 Python 侧的一处刻意分歧**：`plan.py:270-274` 仍无条件拒收。
+// `tools/check_plan_go.py` 的「同一人部署两次」一条因此从 `both-refuse` 改判为
+// `go-accept-only`（Go 收下、模拟器判），见该文件里那条守卫的说明。
+//
+// # 仍拦的那一处：同一格
+//
+// 两个干员挤在同一格**仍然拒收**——**两个模拟器都不校验占格**，放行会让两个单位
+// 重叠着跑完，产出「看着对」的结果。要按同一套运行期语义放开它，得先在模拟器里加
+// 一条具名占格拒收（现在没有），所以这里**先不放开**：**这是能力缺口，不是裁定**。
+// 副作用要具名——**同一干员在同一格「撤了再上」也会撞到这条**。
 func (p PlayPlan) Validate() error {
 	if p.Stage == "" {
 		return fmt.Errorf("打法必须有关卡号（stage）")
@@ -388,16 +421,11 @@ func (p PlayPlan) Validate() error {
 	if len(p.Deploys) == 0 {
 		return fmt.Errorf("打法里一个部署都没有")
 	}
-	seen := map[string]int{}
+	seen := map[string]bool{}
 	//: 同一格判重用坐标做键——原版就是这么判的（元组相等）。
 	occupied := map[[2]int]string{}
-	for i, d := range p.Deploys {
-		if at, dup := seen[d.Operator]; dup {
-			return fmt.Errorf(
-				"同一个干员被部署了两次：%s（第 %d 条与第 %d 条）。要再上一次得先撤退",
-				d.Operator, at+1, i+1)
-		}
-		seen[d.Operator] = i
+	for _, d := range p.Deploys {
+		seen[d.Operator] = true
 		if who, dup := occupied[d.Position]; dup {
 			return fmt.Errorf("两个干员挤在同一格 %v：%s 与 %s",
 				d.Position, who, d.Operator)

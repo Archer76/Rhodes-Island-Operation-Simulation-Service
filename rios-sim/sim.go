@@ -780,7 +780,12 @@ func runSim(spec *Spec) (*Verdict, error) {
 		for len(retreats) > 0 && retreats[0].Time <= t {
 			r := retreats[0]
 			retreats = retreats[1:]
-			op := findOpByName(objs, r.Operator)
+			//: ⚠ **按名字找人要不重不漏**：重复部署的计划里，同一个名字在 `objs` 里
+			//: 有**多个对象**（每条部署一个，见 `DeploySpec.Index` 的说明）。只按名字
+			//: 取第一个会取到**第一次那条部署的对象**——它多半已经撤过／死过，于是这条
+			//: 撤退请求会被下面第 797 行判成「已经不在场」而**静默不撤**，真正在场的
+			//: 那一个留在场上。所以**在场的优先**。
+			op := opOnFieldByName(onField, objs, r.Operator)
 			if op == nil {
 				//: 找不到人（名字写错／这一关没这人）**什么也不发生**——
 				//: 撤退请求不是命令，与 `SkillUseSpec` 同一口径；但要记一笔，
@@ -3287,17 +3292,29 @@ func (o *operator) retreat() {
 	o.hp = 0
 }
 
-// findOpByName 按**干员名**在这一次出场的干员里找人（撤退请求按名字指人）。
+// opOnFieldByName 按名字找人，**此刻在场的那一个优先**（撤退请求用）。
 //
-// ⚠ 找不到返回 `nil`，由调用方决定怎么办——本仓的规矩是「请求不是命令」，
-// 但**必须记一笔**，否则「请求发了没人接」与「没发请求」长得一样。
-func findOpByName(objs []*operator, name string) *operator {
+// 一个名字可能对应多个对象（同一干员的多次部署，见 `DeploySpec.Index` 的说明）。
+// `onField` 按 `char_id` 记着「此刻在场的那个对象」（含已阵亡的，见它的声明），
+// 所以先拿它认人；不在场上时退回到**最后一个**同名的对象——那个是最近一次部署的，
+// 让「还没部署」「已经不在场」这两句诊断指向正确的对象。
+//
+// ⚠ **找不到返回 `nil`**（这一关没有这个人），由调用方决定怎么办——本仓的规矩是
+// 「请求不是命令」，但**必须记一笔**，否则「请求发了没人接」与「没发请求」长得一样。
+// （2026-09-29 之前这里叫 `findOpByName`：只取第一个同名的对象，重复部署的计划下会
+// 取到**上一次**那条部署的对象 ⇒ 撤退请求被判成「已经不在场」而静默不撤。）
+func opOnFieldByName(onField map[string]*operator, objs []*operator, name string) *operator {
+	var last *operator
 	for _, o := range objs {
-		if o.spec.Name == name {
+		if o.spec.Name != name {
+			continue
+		}
+		if cur, ok := onField[o.spec.CharID]; ok && cur == o {
 			return o
 		}
+		last = o
 	}
-	return nil
+	return last
 }
 
 // nextDeploySeq 发一个"这一次部署"的身份号（见 `operator.deploySeq`）。

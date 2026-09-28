@@ -62,7 +62,7 @@ $env:RIOS_SIM_BIN="out/acceptance/rios-sim-stage3.exe"
 | 计划解析 | `plan.go:337-353` | `retreats: [{operator, time}]` → `RetreatOrder{Operator, Time}` |
 | 闸门**不再**拒 | `unsupported.go:163-167` | 原 `Covered["retreat"]++` 与 `Reasons` 那句**已删**；`Scanned["retreat"]` **留着**（实测 `unsupported.retreat = 1`） |
 | 规格搬运 | `buildspec.go:482-486` | `plan.Retreats` → `Spec.Retreats`（照搬，不解释） |
-| 执行 | `sim.go:768-806` | 帧序 **1c**：按时刻队列出队 → `findOpByName` → `op.retreat()` → 退费 → `Event{kind:"retreat"}` ＋ `RETREAT` 痕迹 |
+| 执行 | `sim.go:768-806` | 帧序 **1c**：按时刻队列出队 → `findOpByName` → `op.retreat()` → 退费 → `Event{kind:"retreat"}` ＋ `RETREAT` 痕迹（**该函数 2026-09-29 已换成 `opOnFieldByName`，见 §2.4**） |
 
 **实测**（`SYNTHETIC-retreat-lingyu`，路径形态走闸门）：
 
@@ -126,6 +126,45 @@ if !op.alive() {                     // ② 静默：什么都不记
 ⇒ 现在撤退**已经做了**，这句话就变成**误导**：读者会以为「撤了再下」可行，而校验层依旧不许
 （`operators.go:1054-1062` 按 `char_id` 去重并报错）。**要么改文案，要么让二次部署真的可行**——
 这是本次改动新造出来的口径落差，不是旧账。
+
+**★ 后续（2026-09-29）：已按后者办**——见 §2.4。
+
+---
+
+### 2.4 后续（2026-09-29）：二次部署真的可行了
+
+**变化**：博士 2026-09-29 定下规则——「不允许一个干员**同时在场上**出现两次，但如果被
+击倒／撤退回到待部署区、且再部署冷却结束，则可以再次部署」。这条规则是**运行期**的
+（判它要知道「死没死」、「离场多久」），所以拦它的地方从计划层挪到模拟器：
+
+| 位置 | 改前 | 改后 |
+| --- | --- | --- |
+| `core/plan.go::Validate` | 同一干员出现两次 ⇒ **无条件拒** | **放行**；仍拒同格重叠、撤退/开技能给了没部署过的人 |
+| `operators.go::BuildOperators` | 同一 `char_id` 两次 ⇒ **拒**（「`operators` 按 char_id 配对」） | **放行**：真正配对的是**下标**（`specdeploys.go:185-199` 的 `Index: i`）；每条部署一个对象，因为落点／朝向挂在对象上（`wire.go:454`） |
+| `sim.go` 撤退找人 | `findOpByName`（**第一个同名**） | `opOnFieldByName`（**在场的优先**）：重复部署时同名对象不止一个，取第一个会取到上一次那条部署的对象 ⇒ 撤退请求被判成「已经不在场」而**静默不撤** |
+| 模拟器那两条判据（`sim.go:609`／`615`） | 一直在，但**结构上不可达**（上游全被拒） | **现在是真值**：拒收明细写进 `verdict.deploy_rejected` |
+
+**判据**（三例，都跑真规格 ＋ 真判决）：
+
+* `rios-sim/redeploy_test.go`——① 正例：撤退 @+20s → 冷却（70s，`opsRedeployDefault`）
+  过后 @+95s **换一格**再上 ⇒ 两条 `deploy` 事件、`Deployed=3`、无拒收；
+  ② 负对照：不撤退、第一次还在场上 ⇒ 具名拒「同一干员已在场」；
+  ③ 负对照：撤退了但冷却没到 ⇒ 具名拒「再部署冷却中」。
+  ★ 三例都先断言**第一次真的落了地**（零行使的绿不算过）。
+* `rios-sim/core/plan_redeploy_test.go`——计划层的四种边界（放两次／不带撤退也放／
+  同格仍拒／撤退未部署者仍拒）＋ `ParsePlan` 入口那一层。
+* `tools/check_plan_go.py` 的「同一人部署两次」从 `both-refuse` 改判 **`go-accept`**
+  （该判据新增这一档：**Go 收 ∧ 原版拒**，并顺带查「收下的那份里两条部署都在」）。
+  **这是与原版的刻意分歧**：`ak_tactic/plan.py:270-274` 仍无条件拒。
+
+**还欠着的两件（具名，未做）**：
+
+1. **同一格「撤了再上」仍被拒**——它撞的是计划层的同格判据，而**两个模拟器都不校验占格**
+   （`sim.go` 没有这条，Python `battle/sim.py` 也没有）。要放开得先给模拟器加一条具名占格拒收，
+   否则两个单位会重叠着跑完、产出一个「看着对」的结果。
+2. **再部署时间是常量 70s**（`operators.go:730` 的 `opsRedeployDefault`，跟 `verify.py` 同口径）。
+   真实数据里处决者是 **18s**、THRM-EX 是 200s（`ak_tactic/team.py` 文档第 2/3 条，
+   值在 `operator_attr.respawn_time`）。「快速复活」那套用法要建模，这一列必须先接。
 
 ---
 

@@ -1149,18 +1149,23 @@ func BuildOperators(plan PlayPlan, roster RosterRead,
 	if err != nil {
 		return nil, err
 	}
-	//: 配对靠 `char_id`：`Plan.validate` 保证同一份计划里干员不重复。
-	//: 这一条**要在代码里也拦一次**——静默配错人的症状是「某个干员数字不对」，
-	//: 而那是所有症状里最难往「配错」上想的一种。
-	seen := make(map[string]bool, len(rows))
-	for _, r := range rows {
-		if seen[r.Entry.CharID] {
-			return nil, fmt.Errorf(
-				"同一份计划里 %s 出现了两次——`operators` 按 char_id 配对，"+
-					"重复会让两个键的次序口径分叉", r.Entry.CharID)
-		}
-		seen[r.Entry.CharID] = true
-	}
+	//: ★ **同一 `char_id` 出现多次是合法的**（博士 2026-09-29：「不许一个干员**同时
+	//: 在场**两次；被击倒／撤退回待部署区、冷却结束后可以再次部署」）。
+	//:
+	//: 这里曾经无条件拒收，理由是「配对靠 `char_id`」——但真正配对的是**下标**：
+	//: `BuildDeploys`（`specdeploys.go:185-199`）给第 i 行 `Index: i`，本函数给出的
+	//: `operators[]` 也是同一份 `rows` 的顺序 ⇒ 一一对应，与 char_id 重不重复无关。
+	//:
+	//: 为什么**每条部署一个对象**（而不是同一人复用一个）：一个 `OperatorOut` 上挂着
+	//: **这一次部署的落点与朝向**（`Cell`／`Direction`／技能槽），再部署换一格就得是
+	//: 另一个对象——`wire.go:454` 的 `DeploySpec.Index` 说明写的就是这条。
+	//: 模拟器那边按 `char_id` 判「在不在场」与再部署冷却（`sim.go:609/615`），
+	//: 所以两个对象同 char_id 不会骗过它。
+	//:
+	//: ⚠ **副作用（已登记，不修）**：`Covered`／`Scan` 那套覆盖计数按**行**累加，
+	//: 同一个人上两次会让他的键计两遍。它只影响覆盖表的读数，不影响判决；
+	//: 24 份夹具里没有重复部署，Go↔Python 的对拍读数不变。
+	//: 真值形状见 `docs/retreat-audit.md` §2.3。
 	covered := newOperatorsCovered()
 	out := make([]OperatorOut, 0, len(rows))
 	for _, r := range rows {
