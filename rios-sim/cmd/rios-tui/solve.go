@@ -184,6 +184,19 @@ type solveRoundMsg struct {
 	err   error
 }
 
+// solveTickMsg 是**心跳**：每秒一跳，与引擎轮次无关。
+//
+// ★ 2026-09-28 博士实测报的：「解算屏似乎完全没有开始解算」「读秒更新不是按秒跳的」。
+// 根因是这一屏原先**只在轮次回来时**才有消息可处理，而一轮是分钟级（实测：同一关，
+// 小参数 2.3s、生产参数 113s）⇒ 屏上秒数冻住、日志停在 0.0s、进度条钉在 5%，
+// 看着与"卡死"一模一样 —— 其实引擎正在烧 CPU。
+// 修法：屏自己带一个**独立计数**的秒表（`elapsed`），每秒一跳、每跳重画一次。
+type solveTickMsg struct{}
+
+func solveTickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return solveTickMsg{} })
+}
+
 // solveParams 是这一屏跑一轮需要的全部输入（起屏时定下来，之后不变）。
 type solveParams struct {
 	levelID    string
@@ -233,10 +246,28 @@ type solveScreen struct {
 	err      string
 	best     solveOutView // 跨轮保留最好的（"加人未必更好"）
 	haveBest bool
+	//: ★ 心跳的**独立计数**（博士 2026-09-28 要的）：每秒 +1，由 `solveTickMsg` 驱动。
+	//: 显示用它，**不用** `time.Since(t0)` —— 后者只在重画时取一次，屏不重画就冻住。
+	elapsed int
+	//: spinner 的帧号（同一跳里 +1）：让"它在动"这件事一眼可见。
+	spin int
 }
 
+// spinnerFrames 是解算中那个转轮（ASCII，任何终端都画得出）。
+var spinnerFrames = []string{"|", "/", "-", "\\"}
+
 func newSolveScreen(p solveParams, ladder []int) *solveScreen {
-	return &solveScreen{p: p, ladder: ladder, t0: time.Now(), running: true}
+	s := &solveScreen{p: p, ladder: ladder, t0: time.Now(), running: true}
+	//: 第一轮的"已发出"也要写进日志：否则从"开始解算……"到第一轮回来（分钟级）
+	//: 中间一个字都没有 —— 那正是博士看到的"像没开始"。
+	s.logRoundStart()
+	return s
+}
+
+// logRoundStart 记一行"本轮已发给引擎"（带这一轮的参数）。
+func (s *solveScreen) logRoundStart() {
+	s.log(fmt.Sprintf("第 %d/%d 轮：最多 %d 人、beam %d、per-op %d　已发给引擎，等它回来",
+		s.idx+1, len(s.ladder), s.currentDepth(), s.p.beam, s.p.perOp))
 }
 
 func (*solveScreen) title() string { return "解算" }
@@ -271,7 +302,7 @@ func (s *solveScreen) headText(c *appCtx) string {
 	if c.stage != nil {
 		code, levelID = c.stage.Code, c.stage.LevelID
 	}
-	elapsed := time.Since(s.t0).Seconds()
+	elapsed := float64(s.elapsed)
 	depth := s.currentDepth()
 	capNote := ""
 	if c.deployLimit > 0 {
@@ -320,7 +351,13 @@ func (s *solveScreen) progress() float64 {
 
 func (s *solveScreen) view(c *appCtx) string {
 	var b strings.Builder
-	b.WriteString(styleTitle.Render("解算中") + "\n")
+	head := "解算中"
+	if s.running {
+		//: 转轮 ＋ 轮次：一眼看出"它在动"、且在第几轮（心跳那件事的可见面）
+		head = fmt.Sprintf("解算中 %s　第 %d/%d 轮",
+			spinnerFrames[s.spin%len(spinnerFrames)], s.idx+1, len(s.ladder))
+	}
+	b.WriteString(styleTitle.Render(head) + "\n")
 	b.WriteString(s.headText(c) + "\n\n")
 	b.WriteString(progressBar(s.progress(), c.w) + "\n")
 	if s.err != "" {
@@ -371,6 +408,16 @@ func (s *solveScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
 // （见 `msgScreen` 的说明）。
 func (s *solveScreen) onMsg(r *root, msg tea.Msg) action {
 	c := r.ctx
+	//: ★ 心跳：每秒一跳。**独立计数**（不看 `time.Since`），跑着就再排下一跳；
+	//: 结束了就停（不再排），免得空转重画。
+	if _, ok := msg.(solveTickMsg); ok {
+		if !s.running {
+			return action{kind: actNone}
+		}
+		s.elapsed++
+		s.spin++
+		return action{kind: actNone, cmd: solveTickCmd()}
+	}
 	m, ok := msg.(solveRoundMsg)
 	if !ok {
 		return action{kind: actNone}
@@ -401,6 +448,7 @@ func (s *solveScreen) onMsg(r *root, msg tea.Msg) action {
 		s.log(fmt.Sprintf("%d 人以内没找到三星，加深到 %d 人再试一轮",
 			m.depth, s.ladder[s.idx+1]))
 		s.idx++
+		s.logRoundStart()
 		return action{kind: actNone, cmd: runSolveRoundCmd(s.p, s.currentDepth())}
 	}
 	s.done = true

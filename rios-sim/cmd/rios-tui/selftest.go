@@ -28,6 +28,24 @@ import (
 // 把每一屏**真的渲染出来**、再对内容做断言。
 //
 // 退出码：0 全过 ／ 1 有红 ／ 3 尺子自检不过（负对照没红，整批读数作废）。
+// noteBackScreen 只在自检里存在：它的 `update` **在返回 `actBack` 之前设一条提示**。
+//
+// 用途是那条负对照 —— 证明「换屏时清旧提示」不是**无差别清空**：生产里真实的同形
+// 场景有两处（`guidesDirScreen` 保存成功、`enterSolve` 拦下编队），它们都得留住提示。
+type noteBackScreen struct{}
+
+func (*noteBackScreen) title() string       { return "自检·带提示返回" }
+func (*noteBackScreen) help() string        { return "" }
+func (*noteBackScreen) view(*appCtx) string { return "" }
+
+func (*noteBackScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
+	if keyIs(k, "esc") {
+		c.note = "新提示（换屏时设的）"
+		return nil, action{kind: actBack}
+	}
+	return nil, action{kind: actNone}
+}
+
 func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 	var bad int
 	check := func(name string, cond bool, got string) bool {
@@ -262,6 +280,28 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		press(r4, "q") //: 解算屏的中止键
 		check("解算屏按 q（中止）⇒ 退回**选章节**（不是准备屏，也不是「问编队」）",
 			screenName(r4.top()) == "*main.chapterScreen", screenName(r4.top()))
+	}
+	//: ★ 2026-09-28 博士：「选关之后那个提示，只要进入了任意另一个屏幕就可以消失」。
+	//: 口径＝**换屏而这一步没产生新提示 ⇒ 旧提示清掉**；要给新提示的（例：拦下时那句
+	//: 在压屏回调里设）天然被保住。两条一起看才说明这把尺子不瞎：
+	{
+		rN := newRoot(newAppCtx(stages, zones), welcomeScreen{})
+		rN.Update(tea.WindowSizeMsg{Width: 90, Height: 26})
+		press(rN, "enter") //: 准备屏 → 选章节（栈深 2）
+		rN.ctx.note = "已取回这一关的地图（main_01-07，45.0 KB）"
+		press(rN, "esc") //: 退回准备屏：换屏且没人说话 ⇒ 旧提示该消失
+		check("★ 换屏后旧提示消失（博士：选关那句不许一直显示）",
+			rN.ctx.note == "" && screenName(rN.top()) == "main.welcomeScreen",
+			fmt.Sprintf("note=%q 栈顶=%s", rN.ctx.note, screenName(rN.top())))
+		//: 负对照：**换屏时自己设的提示必须留住**（否则上面那条只是"清了所有提示"）。
+		//: 用一个只在自检里存在的屏：它在返回 `actBack` 之前设提示 —— 生产里对应的
+		//: 真实形状是 `guidesDirScreen`（保存成功）与 `enterSolve` 的"拦下"那条。
+		rM := newRoot(newAppCtx(stages, zones), welcomeScreen{})
+		rM.push(&noteBackScreen{}, nil)
+		press(rM, "esc")
+		check("负对照：换屏时**在 update 里新设**的提示留得住（不是无差别清空）",
+			rM.ctx.note == "新提示（换屏时设的）",
+			fmt.Sprintf("note=%q", rM.ctx.note))
 	}
 
 	fmt.Println("== 五之三 · 章节屏的搜索框（Python `Input #kw` 的等价物）==")
@@ -1986,6 +2026,31 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			pool: []string{"圣聆初雪", "赤刃明霄陈"}, perOp: 1, beam: 1}
 		scr := newSolveScreen(params, []int{1})
 		scr.log("开始解算……")
+		//: ★ 2026-09-28 新增（博士：「似乎完全没有开始解算」「读秒不按秒跳」）：
+		//: 心跳是这一屏"在动"的唯一来源。三条：① 起屏就写出"本轮已发出"；
+		//: ② 一跳 ⇒ 独立计数器 +1 且**自己再排下一跳**；③ 停下之后不再排（不空转）。
+		check("★ 起屏就写出「第 1/N 轮已发给引擎」（否则分钟级的等待里一个字都没有）",
+			strings.Contains(strings.Join(scr.lines, "\n"), "第 1/1 轮"),
+			firstLineWith(strings.Join(scr.lines, "\n"), "轮"))
+		cTick := &appCtx{w: 90, h: 26, stage: &data.StageRecord{Code: "1-7", LevelID: "main_01-07"}}
+		rTick := newRoot(cTick, welcomeScreen{})
+		actTick := scr.onMsg(rTick, solveTickMsg{})
+		check("★ 一跳 ⇒ 独立计数 +1（不看墙上时钟，屏不重画也不冻）",
+			scr.elapsed == 1 && actTick.cmd != nil,
+			fmt.Sprintf("elapsed=%d cmd=%v", scr.elapsed, actTick.cmd != nil))
+		_ = scr.onMsg(rTick, solveTickMsg{})
+		check("心跳：连跳两次 ⇒ 2 秒（按秒跳，不是按轮跳）", scr.elapsed == 2,
+			fmt.Sprintf("elapsed=%d", scr.elapsed))
+		check("心跳：屏上看得见它在动（转轮 ＋ 第几轮）",
+			strings.Contains(scr.view(cTick), "第 1/1 轮") &&
+				strings.Contains(scr.view(cTick), "已用 2 秒"),
+			firstLineWith(scr.view(cTick), "解算中"))
+		scr.running = false
+		stopTick := scr.onMsg(rTick, solveTickMsg{})
+		check("负对照：停下之后不再排下一跳（也不再加秒，不空转重画）",
+			stopTick.cmd == nil && scr.elapsed == 2,
+			fmt.Sprintf("cmd=%v elapsed=%d", stopTick.cmd != nil, scr.elapsed))
+		scr.running = true
 		cSolve := &appCtx{w: 90, h: 26, deployLimit: 6,
 			stage: &data.StageRecord{Code: "1-7", LevelID: "main_01-07", Name: "测试关"}}
 		//: 屏的消息处理现在收 `*root`（它要连动屏栈）⇒ 这里造一个最小根模型。

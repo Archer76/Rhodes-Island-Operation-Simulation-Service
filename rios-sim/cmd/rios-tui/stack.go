@@ -239,6 +239,10 @@ func (r *root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			return r, tea.Quit
 		}
+		//: ⚠ 这个快照必须在 `update` **之前**取：屏可以在自己那一步里设一条新提示
+		//: （`guidesDirScreen` 保存成功、`noteBackScreen` 就是那个形状）；取晚了就会把
+		//: "新提示"当成"旧提示"一起清掉 —— 第一版正是这么错的，被那条负对照当场抓住。
+		noteBefore := r.ctx.note
 		next, act := r.top().update(r.ctx, msg)
 		if next != nil {
 			//: 屏可以就地换掉自己（例如「没有关卡」这种终态）。
@@ -248,6 +252,14 @@ func (r *root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return r, tea.Quit
 		}
 		cmd = r.apply(act)
+		//: ★ 2026-09-28 博士：「选关之后那个提示，只要进入了任意另一个屏幕就可以消失，
+		//: 不要一直显示」。判据取**这一步有没有产生新提示**：屏自己（或压/弹屏的回调）
+		//: 要给新提示，会在上面那两处设 ⇒ 它天然被保住（例：拦下时那句就在回调里设）。
+		//: 只有"换屏了、却没人说话"时才把旧提示清掉 —— 那正是要消失的那种。
+		if (act.kind == actBack || act.kind == actPush || act.kind == actPopTo) &&
+			r.ctx.note == noteBefore {
+			r.ctx.note = ""
+		}
 	case tea.MouseMsg:
 		//: 鼠标交给**实现 `mouseScreen` 的栈顶屏**（不实现就什么也不做 —— 静默丢弃
 		//: 是刻意的：纯文本屏点了本来就没有含义）。
@@ -262,7 +274,13 @@ func (r *root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if act.kind == actQuit {
 				return r, tea.Quit
 			}
+			noteBefore := r.ctx.note
 			cmd = r.apply(act)
+			//: 与键盘那条同一口径：换屏而没人说话 ⇒ 旧提示不留（见 KeyMsg 分支的注释）。
+			if (act.kind == actBack || act.kind == actPush || act.kind == actPopTo) &&
+				r.ctx.note == noteBefore {
+				r.ctx.note = ""
+			}
 		}
 		return r, cmd
 	default:
