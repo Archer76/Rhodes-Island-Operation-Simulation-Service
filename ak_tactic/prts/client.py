@@ -16,6 +16,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+#: ★ 2026-09-28：证书链的兜底与具名提示**与 gamedata 取数共用同一份实现**
+#: （博士的 Windows 沙箱里 prts.wiki 与 map.ark-nights.com 一起报
+#: `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate`）。
+#: `source.py` 不 import 本模块 ⇒ 这条依赖是单向的，不会成环。
+from ..gamedata.source import ssl_context, tls_hint
+
 API_ENDPOINT = "https://prts.wiki/api.php"
 WIKI_BASE = "https://prts.wiki/w/"
 
@@ -136,7 +142,8 @@ class PrtsClient:
             "Accept-Language": "zh-CN,zh;q=0.9",
             "Referer": "https://prts.wiki/",
         })
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+        with urllib.request.urlopen(req, timeout=self.timeout,
+                                    context=ssl_context()) as resp:
             raw = resp.read()
         #: 累计字节：界面拿它算下载速度（缓存命中不计 —— 那本来就没走网络）。
         self.stats["bytes"] = int(self.stats.get("bytes", 0)) + len(raw)
@@ -155,6 +162,11 @@ class PrtsClient:
                     raise PrtsError(f"404 Not Found: {url}") from e
                 last = e
             except (urllib.error.URLError, TimeoutError, OSError) as e:
+                #: ★ 证书链问题**不该退避重试**（重试三次也还是同一张证书），
+                #: 直接具名报出去，把可操作的三条路写清楚。
+                if "CERTIFICATE_VERIFY_FAILED" in str(e) or "certificate verify failed" in str(e):
+                    self.stats["errors"] += 1
+                    raise PrtsError(f"请求失败（证书）: {url}\n{tls_hint(e)}") from e
                 last = e
             if attempt < self.max_retries:
                 self.stats["retries"] += 1
