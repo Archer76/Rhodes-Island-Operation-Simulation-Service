@@ -43,6 +43,7 @@ import json
 import re
 import sys
 import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -287,8 +288,14 @@ def cmd_logout(req: dict) -> dict:
     return {"result": bool(res)}
 
 
-#: 一个进程里只试一次"直接去森空岛取名册"（界面会反复问；每问一次打一趟网是浪费）。
-_ROSTER_FETCH_TRIED = False
+#: ★ 2026-09-28 修（博士：「又出现了没有名册的问题」）：原来这里是**进程级一次性**标志
+#: （`_ROSTER_FETCH_TRIED`）。坑在于：界面在**登录之前**就会问一次名册（那时没有凭据），
+#: 那一次把标志置上以后，整条会话里**再也不试**了 —— 于是"登录成功后自动取名册"永远不发车。
+#: 改成**冷却**：同一进程里两次尝试至少隔 `_ROSTER_FETCH_COOLDOWN` 秒（防界面反复问时
+#: 每问一次打一趟网），但**不封死**。成功之后本来就不用再试（缓存已落盘，`load_roster()`
+#: 自己就找得到）。
+_ROSTER_FETCH_COOLDOWN = 3.0
+_ROSTER_FETCH_LAST_AT = 0.0
 
 
 def _try_fetch_roster_from_skland() -> tuple[object | None, str]:
@@ -301,10 +308,12 @@ def _try_fetch_roster_from_skland() -> tuple[object | None, str]:
     返回 `(名册 or None, 说明)`：说明在成功时是"取到并落盘"，失败时是**具名原因**
     （要一起写进上层那句失败提示里 —— 玩家得知道是"没登录"还是"网/证书"）。
     """
-    global _ROSTER_FETCH_TRIED
-    if _ROSTER_FETCH_TRIED:
-        return None, "（这一步本次已经试过，不重复打网）"
-    _ROSTER_FETCH_TRIED = True
+    global _ROSTER_FETCH_LAST_AT
+    now = time.time()
+    if now - _ROSTER_FETCH_LAST_AT < _ROSTER_FETCH_COOLDOWN:
+        return None, "（%.1f 秒内刚试过，等下一轮再试）" % (
+            now - _ROSTER_FETCH_LAST_AT)
+    _ROSTER_FETCH_LAST_AT = now
     try:
         from ak_tactic import skland
         from ak_tactic.tui import data as D

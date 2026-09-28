@@ -169,6 +169,27 @@ func loginActionCmd(what, uid string) tea.Cmd {
 	}
 }
 
+// rosterMsg 是"名册重取回来了"。它由**根模型**处理（`stack.go` 的 Update）：
+// 名册是 `appCtx` 级别的状态，不属于任何一屏 —— 而扫码登录成功之后登录屏已经弹掉，
+// 交给屏去处理会**没人接**（消息在屏栈里找不到实现 `msgScreen` 的那个屏）。
+type rosterMsg struct {
+	roster *rosterData
+	err    error
+}
+
+// rosterRefreshCmd 只做一件事：重取一次名册（桥那侧**缺缓存会直接去森空岛取**）。
+//
+// ★ 2026-09-28 博士：「登录账号或者识别到已登录账号，自动查询有没有名册，没有就自动下载」。
+// 扫码登录成功那条路（`onLoginDone`）原先只刷了「登录态」那一块，没人去碰名册 ⇒
+// 名册还是空的，而选人屏那边又因为 `rosterErr` 被记住而不再重试。
+// 这个命令就是补上那一趟。
+func rosterRefreshCmd() tea.Cmd {
+	return func() tea.Msg {
+		rr, err := fetchRoster()
+		return rosterMsg{roster: rr, err: err}
+	}
+}
+
 func loginFillCmd() tea.Cmd {
 	return func() tea.Msg {
 		res, err := fillAccounts()
@@ -498,6 +519,13 @@ func (s *loginScreen) onMsg(r *root, msg tea.Msg) action {
 		if m.roster != nil {
 			c.roster = m.roster
 			c.rosterErr = ""
+		} else {
+			//: ★ 2026-09-28 修（博士：「又出现了没有名册的问题」）：登录动作**没带回名册**时
+			//: 要把**上一次的失败**清掉 —— `ensureRoster` 只要 `rosterErr` 非空就直接返回
+			//: （它把失败也当缓存），于是"登录前那次取不到"会被一路记住，登录成功后
+			//: 选人屏仍然显示「名册取不到」，而且不再重试。清掉之后下一次进选人屏会重取
+			//: （桥那侧也改成了**冷却重试**，不再是进程内一次性）。
+			c.rosterErr = ""
 		}
 		switch m.what {
 		case "fill":
@@ -574,5 +602,9 @@ func onLoginDone(r *root, res any) {
 	if s, ok := res.(string); ok && strings.TrimSpace(s) != "" {
 		r.ctx.accountNote = s
 	}
-	r.pending = loginInfoCmd()
+	//: ★ 2026-09-28 博士：「登录账号或者识别到已登录账号，**自动查询有没有名册，没有就自动下载**」。
+	//: 扫码登录成功这一刻就顺带取一趟（桥那侧缺缓存会直接去森空岛取并落盘）；
+	//: 同时把上次的失败清掉 —— 否则选人屏那边的 `rosterErr` 会一直是登录前那次的结果。
+	r.ctx.rosterErr = ""
+	r.pending = tea.Batch(loginInfoCmd(), rosterRefreshCmd())
 }

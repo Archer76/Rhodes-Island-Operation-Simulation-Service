@@ -234,6 +234,17 @@ func (r *root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		r.ctx.w, r.ctx.h = msg.Width, msg.Height
 		return r, nil
+	case rosterMsg:
+		//: ★ 2026-09-28：名册重取的应答由**根模型**接（名册是 `appCtx` 级状态，不属于
+		//: 任何一屏；扫码登录成功后登录屏已弹掉，交给屏会没人接）。成功落进 ctx，
+		//: 失败记进 `rosterErr`（选人屏会具名画出来）。
+		if msg.err != nil {
+			r.ctx.rosterErr = msg.err.Error()
+		} else if msg.roster != nil {
+			r.ctx.roster = msg.roster
+			r.ctx.rosterErr = ""
+		}
+		return r, nil
 	case tea.KeyMsg:
 		//: ctrl+c 在任何屏都退，且不走屏自己的键表（与 Python 的 App 级绑定一致）。
 		if msg.String() == "ctrl+c" {
@@ -260,8 +271,7 @@ func (r *root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			r.ctx.note == noteBefore {
 			r.ctx.note = ""
 		}
-	case tea.MouseMsg:
-		//: 鼠标交给**实现 `mouseScreen` 的栈顶屏**（不实现就什么也不做 —— 静默丢弃
+	case tea.MouseMsg: //: 鼠标交给**实现 `mouseScreen` 的栈顶屏**（不实现就什么也不做 —— 静默丢弃
 		//: 是刻意的：纯文本屏点了本来就没有含义）。
 		//: 坐标换算在一处：终端行号 − 本屏 body 的起始行 = 屏内行号。
 		m := msg
