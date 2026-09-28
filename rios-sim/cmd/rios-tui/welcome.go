@@ -103,9 +103,16 @@ func (c *appCtx) accountLine() string {
 		out += c.accountNote + "\n"
 	}
 	if c.roster == nil {
-		if c.rosterErr != "" {
+		switch {
+		case c.rosterErr != "":
 			out += styleDim.Render("（名册取不到：" + reasonOf(c.rosterErr) + "）")
-		} else {
+		case c.accountNote != "":
+			//: ★ 2026-09-28 修（博士："已经登陆也会提示未登录，两句提示共存了"）：
+			//: 刚登录成功（`accountNote` 非空）但名册还没到 —— 这时候**不许**再说
+			//: "当前没有登录的账号"，那是自相矛盾。如实说"登上了、名册还没到"。
+			out += styleDim.Render("（**登上了账号，但名册还没取到**——名册来自 MAA 导出的" +
+				"名册文件；按 R 重试，或直接继续，编队那一步可以手动输名字）")
+		default:
 			out += styleDim.Render("当前没有登录的账号。可以继续，编队那一步手动输名字；或按 L 扫码登录。")
 		}
 		return out

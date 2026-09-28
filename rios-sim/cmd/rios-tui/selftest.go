@@ -103,6 +103,9 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			{"没账号", &appCtx{}},
 			{"有名册", &appCtx{roster: &rosterData{Source: "skland", Count: 12}}},
 			{"名册取不到", &appCtx{rosterErr: "★ 名册读不出来"}},
+			//: ★ 2026-09-28 新增（博士："已经登陆也会提示未登录，两句提示共存了"）：
+			//: 刚登录成功、名册还没到 —— 这一档**不许**出现"当前没有登录的账号"。
+			{"刚登录但名册未到", &appCtx{accountNote: "已登录：Archer#6725　游戏uid=10404662"}},
 		}
 		blank := ""
 		for _, s := range accStates {
@@ -110,8 +113,19 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 				blank = s.what
 			}
 		}
-		check("登录账号栏三档都有话说（不留空白）", blank == "",
-			fmt.Sprintf("空白的那一档：%q（三档：没账号／有名册／名册取不到）", blank))
+		check("登录账号栏四档都有话说（不留空白）", blank == "",
+			fmt.Sprintf("空白的那一档：%q（四档：没账号／有名册／名册取不到／刚登录名册未到）", blank))
+		//: ★ 自相矛盾那条：刚登录成功时**不许**再说"当前没有登录的账号"
+		justLogged := ansi.Strip((&appCtx{
+			accountNote: "已登录：Archer#6725　游戏uid=10404662"}).accountLine())
+		check("★ 刚登录成功 ⇒ 不再说「当前没有登录的账号」（两句提示不许共存）",
+			!strings.Contains(justLogged, "当前没有登录的账号") &&
+				strings.Contains(justLogged, "名册还没取到"),
+			firstLineWith(justLogged, "登录"))
+		//: 负对照：**真的**没登录时那句话必须还在（别把这条修成"永远不说"）
+		noAcct := ansi.Strip((&appCtx{}).accountLine())
+		check("负对照：真没登录时仍说「当前没有登录的账号」",
+			strings.Contains(noAcct, "当前没有登录的账号"), firstLineWith(noAcct, "当前"))
 		//: 负对照：这把尺子**对已知的空**必须给得出「空」。只写纯 ANSI 转义
 		//: （肉眼看着是空白的那种）也算空——否则上面那条绿可能只是尺子眼瞎。
 		ctrl := strings.TrimSpace(ansi.Strip("\x1b[2m   \x1b[0m")) == ""
