@@ -29,6 +29,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 const barWidth = 24
@@ -50,6 +52,9 @@ type setupBars struct {
 	haveSum bool
 	drew    int // 上次画了几行（重画时要把光标移回去）
 	spins   int
+	//: width ≤ 0 ⇒ 现读终端宽度（`terminalWidth()`）。判据里显式给一个小值，
+	//: 好把"行超宽 ⇒ 折行 ⇒ 光标漂移"这件事故意逼出来。
+	width int
 }
 
 // apply 解析一行进度事件。认识的返回 true，其余（含子进程的散文）返回 false。
@@ -122,35 +127,70 @@ func (b *setupBars) find(key string) *progressStep {
 }
 
 // render 原地重画。第一次画 N 行，之后先用 ANSI 把光标移回这 N 行的开头。
+//
+// ★ 2026-09-28 修（博士真机截图报的）：**每一行必须先夹到终端宽度以内**。
+// 原版按固定预算拼行（`barWidth` ＋ `pad(title, 22)`），而标题是中文（一个字占
+// **两格**），"关卡索引（akdb 里的一张表）"这种长标题直接把行顶过终端宽度 ⇒
+// 终端**折行** ⇒ 一行占两个物理行，而上移仍按逻辑行数 ⇒ 每帧往下漂一行、
+// 旧帧的残字留在屏上，几十帧之后满屏半截进度条。
+// 判据里三条宽度断言就是钉它的（`selftest` 的二十二节）。
 func (b *setupBars) render(w io.Writer) {
+	width := b.width
+	if width <= 0 {
+		width = terminalWidth()
+	}
+	if width < 24 {
+		width = 24 //: 窗口窄到离谱时也得画得出来；真窄到 24 以下，内容会被 cut 兜住
+	}
+	//: ⚠ 再让一格：写到**最后一列**时有些终端会自动折行（那又回到"物理行多于逻辑行"
+	//: 的老问题上）。让一格最省事，视觉上也留了边距。
+	width--
 	if b.drew > 0 {
 		fmt.Fprintf(w, "\x1b[%dA", b.drew)
 	}
 	n := 0
 	for i := range b.steps {
-		st := &b.steps[i]
-		fmt.Fprintf(w, "\x1b[2K  %s %s  %s\n", barOf(st, b.spins), pad(st.Title, 22), tailOf(st))
+		fmt.Fprintf(w, "\x1b[2K%s\n", barLine(&b.steps[i], b.spins, width))
 		n++
 	}
 	if b.haveSum {
-		fmt.Fprintf(w, "\x1b[2K  %s\n", summaryLine(b.ok, b.failed))
+		fmt.Fprintf(w, "\x1b[2K%s\n", cut("  "+summaryLine(b.ok, b.failed), width))
 		n++
 	}
 	b.drew = n
 	b.spins++
 }
 
+// barLine 拼一行进度条，**保证显示宽度 ≤ width**（夹不住就会折行，见 render 的注释）。
+//
+// 布局：两格缩进 ／ 条形（`barWidth` ＋ 一对括号）／ 两格 ／ 标题（≤22 格）／ 两格 ／ 尾巴。
+// 预算不够时先压标题（最少 6 格），最后还有一道 `cut` 兜底（尾巴太长时也压它）。
+func barLine(st *progressStep, spin, width int) string {
+	const lead = "  "
+	tail := tailOf(st)
+	title := 22
+	if room := width - len(lead)*3 - (barWidth + 2) - ansi.StringWidth(tail); room < title {
+		title = room
+	}
+	if title < 6 {
+		title = 6
+	}
+	line := lead + barOf(st, spin) + lead + pad(cut(st.Title, title), title) + lead + tail
+	if ansi.StringWidth(line) > width {
+		line = cut(line, width)
+	}
+	return line
+}
+
 // firstLineOf 取第一行、并按 width 截断（进度条那一行只放得下这么点）。
+// ⚠ 截断按**显示宽度**（`cut` 走 `ansi.StringWidth`），不是按字符个数 ——
+// 中文一个字占两格，按个数截会算出半个宽度。
 func firstLineOf(s string, width int) string {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
 		s = s[:i]
 	}
-	r := []rune(s)
-	if len(r) > width {
-		return string(r[:width]) + "…"
-	}
-	return s
+	return cut(s, width)
 }
 
 func summaryLine(ok, failed int) string {

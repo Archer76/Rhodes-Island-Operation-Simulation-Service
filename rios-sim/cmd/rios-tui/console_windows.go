@@ -6,7 +6,9 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"syscall"
+	"unsafe"
 )
 
 // # 自己把控制台调成 UTF-8，并在需要时停住窗口
@@ -79,4 +81,45 @@ func pauseIfInteractive(reason string) {
 	}
 	fmt.Print("按回车键关闭本窗口……")
 	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+}
+
+// ---------------------------------------------------------------- 终端尺寸
+
+var procGetConsoleScreenBufferInfo = kernel32.NewProc("GetConsoleScreenBufferInfo")
+
+type consoleCoord struct{ x, y int16 }
+
+type consoleSmallRect struct{ left, top, right, bottom int16 }
+
+type consoleScreenBufferInfo struct {
+	size              consoleCoord
+	cursorPosition    consoleCoord
+	attributes        uint16
+	window            consoleSmallRect
+	maximumWindowSize consoleCoord
+}
+
+// terminalWidth 取**可见窗口**的列数。
+//
+// ★ 为什么首次运行那段非要它不可（2026-09-28 真机踩到）：进度条是"打印 N 行、
+// 下一帧 `\x1b[NA` 移回来原地重画"。**只要有一行超过终端宽度，终端就会折行**，
+// 那一行占两个物理行，而上移仍按逻辑行数算 ⇒ 每帧往下漂一行，旧帧的残字留在屏上
+// —— 几十帧之后满屏都是半截进度条。行宽必须按这里读到的列数夹住。
+//
+// 拿不到控制台（重定向、判据里跑）时退回 `COLUMNS`，再退回 80。
+func terminalWidth() int {
+	if handle, err := syscall.GetStdHandle(syscall.STD_OUTPUT_HANDLE); err == nil {
+		var info consoleScreenBufferInfo
+		ret, _, _ := procGetConsoleScreenBufferInfo.Call(
+			uintptr(handle), uintptr(unsafe.Pointer(&info)))
+		if ret != 0 {
+			if w := int(info.window.right-info.window.left) + 1; w > 0 {
+				return w
+			}
+		}
+	}
+	if v, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil && v > 0 {
+		return v
+	}
+	return 80
 }

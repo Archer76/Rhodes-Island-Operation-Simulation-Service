@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 )
 
 // 非 Windows 的对应物：**只为了让别的平台上 `go build` 不炸**，行为是空实现。
@@ -34,4 +35,14 @@ func pauseIfInteractive(reason string) {
 	}
 	fmt.Print("按回车键关闭本窗口……")
 	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+}
+
+// terminalWidth 非 Windows 的对应物：`COLUMNS` 优先，缺省 80。
+// （发布形态是 Windows，这里够 `go build` 与跨平台判据用就行；口径与
+// console_windows.go 那一条一致：**行宽必须夹住它**，夹不住进度条会漂。）
+func terminalWidth() int {
+	if v, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil && v > 0 {
+		return v
+	}
+	return 80
 }
