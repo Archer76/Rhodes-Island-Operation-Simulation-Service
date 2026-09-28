@@ -42,7 +42,7 @@ func (welcomeScreen) view(c *appCtx) string {
 	//: 矮窗口下**先收标题块**：优先级是明写的 —— 数据 > 标题。
 	//: 服务名顶栏也印着，而数据目录与登录状态才是他每次来这一屏要看的东西。
 	if c.h == 0 || c.h >= welcomeShortHeight {
-		b.WriteString(styleTitle.Render(appTitle) + "\n")
+		b.WriteString(styleBrand.Render(appTitle) + "\n")
 		b.WriteString(styleCrumb.Render(appSubtitle) + "\n\n")
 	}
 	b.WriteString(styleTitle.Render("数据目录") + "\n" + c.dirLine() + "\n\n")

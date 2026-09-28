@@ -340,13 +340,15 @@ func (r *root) View() string {
 	}
 	head := ""
 	if r.ctx.h == 0 || r.ctx.h >= tinyHeight {
-		head = styleTitle.Render("R.I.O.S. 作战演算") + "  " +
-			styleCrumb.Render(r.crumb()) + "\n"
+		// 顶栏仍只占一行：鼠标 bodyTop 与矮窗口口径均保持不变。
+		brand := styleBrand.Render("R.I.O.S.") + styleDim.Render(" │ ") +
+			styleTitle.Render("作战演算")
+		head = brand + styleDim.Render("  /  ") + styleCrumb.Render(r.crumb()) + "\n"
 	}
 	body := top.view(r.ctx)
-	foot := styleDim.Render(r.help())
+	foot := styleDim.Render("操作  ") + styleKey.Render(r.help())
 	if r.ctx.note != "" {
-		foot += "\n" + r.ctx.note
+		foot += "\n" + styleAlert.Render(r.ctx.note)
 	}
 	return head + "\n" + body + "\n" + foot + "\n"
 }

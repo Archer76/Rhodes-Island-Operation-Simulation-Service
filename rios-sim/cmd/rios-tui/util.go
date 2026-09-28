@@ -10,12 +10,25 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// 样式：集中一处，免得各屏各写一套颜色。
+// R.I.O.S. 控制台视觉系统。仅改变绘制，不改变屏栈、行数或命中坐标。
+// 使用 256 色而非终端真彩：旧版 Windows 控制台与远程终端也能读清。
 var (
-	styleTitle  = lipgloss.NewStyle().Bold(true)
-	styleCrumb  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	styleCursor = lipgloss.NewStyle().Bold(true).Reverse(true)
-	styleDim    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	colorInk    = lipgloss.Color("252")
+	colorMuted  = lipgloss.Color("245")
+	colorCyan   = lipgloss.Color("80")
+	colorGold   = lipgloss.Color("221")
+	colorPanel  = lipgloss.Color("24")
+	colorDanger = lipgloss.Color("210")
+
+	styleTitle  = lipgloss.NewStyle().Foreground(colorCyan).Bold(true)
+	styleCrumb  = lipgloss.NewStyle().Foreground(colorMuted)
+	styleCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("16")).Background(colorCyan).Bold(true)
+	styleDim    = lipgloss.NewStyle().Foreground(colorMuted)
+	styleBrand  = lipgloss.NewStyle().Foreground(colorGold).Bold(true)
+	styleKey    = lipgloss.NewStyle().Foreground(colorCyan).Bold(true)
+	styleRow    = lipgloss.NewStyle().Foreground(colorInk)
+	styleAlert  = lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
+	stylePanel  = lipgloss.NewStyle().Foreground(colorInk).Background(colorPanel)
 )
 
 // # 排版工具：宽度一律走 x/ansi
@@ -205,7 +218,7 @@ func (f *filterBox) match(fields ...string) bool {
 func (f *filterBox) view(c *appCtx) string {
 	f.ensure()
 	f.in.Width = max(20, c.w-4)
-	return "> " + f.in.View()
+	return styleKey.Render("> ") + f.in.View()
 }
 
 // # 可点的一排标签（命中表）
@@ -264,7 +277,7 @@ func renderHitRow(items []string, cursor, width, topLine int) (string, hitRow) {
 		if i == cursor {
 			b.WriteString(styleCursor.Render(cell))
 		} else {
-			b.WriteString(cell)
+			b.WriteString(stylePanel.Render(cell))
 		}
 		row.boxes = append(row.boxes, hitBox{line: line, x: col, w: w, idx: i})
 		col += w
@@ -310,5 +323,7 @@ func centerBlock(block string, w, h int) string {
 // 这个差 2 的坑有判据盯着（自检里断言整框宽 68）。
 var boxStyle = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
+	BorderForeground(colorCyan).
+	Foreground(colorInk).
 	Padding(1, 2).
 	Width(66)

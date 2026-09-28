@@ -808,7 +808,7 @@ func renderPickList(c *appCtx, head []string, rows []string, cursor int,
 		if i == cursor {
 			b.WriteString(styleCursor.Render("> "+line) + "\n")
 		} else {
-			b.WriteString("  " + line + "\n")
+			b.WriteString("  " + styleRow.Render(line) + "\n")
 		}
 	}
 	b.WriteString(styleDim.Render(fmt.Sprintf("共 %d 人", len(rows))))

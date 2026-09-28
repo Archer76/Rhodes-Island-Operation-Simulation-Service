@@ -87,6 +87,12 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 	fmt.Println("== 二 · [0] 准备屏 渲染 ==")
 	v := r.View()
 	check("渲染里有服务名", strings.Contains(v, appTitle), appTitle)
+	// 视觉层正负对照：有配色，但 ANSI 剥除后仍是原本文案；配色不改信息。
+	// 重定向输出时 lipgloss 会自动禁用 ANSI；直接检查样式配置，不误判非终端自检。
+	check("视觉层：标题配置金色强调", styleBrand.GetForeground() == colorGold,
+		"品牌标题使用统一色板")
+	check("视觉层负对照：剥除样式仍保留原文", ansi.Strip(styleBrand.Render(appTitle)) == appTitle &&
+		!strings.Contains(ansi.Strip(styleBrand.Render(appTitle)), "\x1b["), appTitle)
 	check("渲染里有「数据目录」栏", strings.Contains(v, "数据目录"), "数据目录")
 	check("渲染里有「登录账号」栏", strings.Contains(v, "登录账号"), "登录账号")
 	check("干员库那栏是真读数", strings.Contains(v, "干员库：已获取"),
