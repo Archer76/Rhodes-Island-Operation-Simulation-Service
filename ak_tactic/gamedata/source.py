@@ -107,19 +107,35 @@ GAMEDATA_TABLES: tuple[str, ...] = (
     "excel/stage_table.json",
 )
 
+#: **引擎直接读**的 ark-nights 文件（与 excel 那族不同源，所以单列）。
+#:
+#: ★ 2026-09-29 补（博士实测：「进入解算会报读敌人库失败」）：`rios-sim` 的
+#: `LoadEnemyLibrary()`（`enemy.go:183`）读的就是这份 `enemy_database.json`（约 6.4 MB），
+#: 而首启取数**从来没取过它** —— 开发树里有（早先留下的），全新发布树里没有 ⇒
+#: 一进解算就「读敌人库失败（…\enemydata\enemy_database.json）：open …」。
+#: 它与 excel 那八张表**同一个病**：引擎要的文件没人负责取。
+ENGINE_FILES: tuple[str, ...] = (
+    "levels/enemydata/enemy_database.json",
+)
+
 
 def fetch_gamedata_tables(progress: object | None = None, *, log=print) -> int:
-    """把 `GAMEDATA_TABLES` 取到本地缓存。**可续跑**（盘上有就跳过）。rc：0 = 齐了。
+    """把 `GAMEDATA_TABLES`（GitHub 镜像的 excel）＋ `ENGINE_FILES`（ark-nights）
+    取到本地缓存。**可续跑**（盘上有就跳过）。rc：0 = 齐了。
 
-    每张表报一次 `tick("gamedata 源表", done, total, bytes_=累计字节)` —— 界面靠它
+    每一份报一次 `tick("gamedata 源表", done, total, bytes_=累计字节)` —— 界面靠它
     画百分比与下载速度（与别的步骤同一个形状，见 `ak_tactic/progress.py`）。
     """
-    src = GameDataSource(base=GITHUB_BASE)
-    total = len(GAMEDATA_TABLES)
+    gh = GameDataSource(base=GITHUB_BASE)
+    ark = GameDataSource()                 #: 默认 base 就是 ark-nights
+    jobs: list[tuple[GameDataSource, str]] = (
+        [(gh, rel) for rel in GAMEDATA_TABLES] + [(ark, rel) for rel in ENGINE_FILES]
+    )
+    total = len(jobs)
     done = 0
     cum = 0
     failed: list[tuple[str, str]] = []
-    for i, rel in enumerate(GAMEDATA_TABLES):
+    for i, (src, rel) in enumerate(jobs):
         if progress is not None:
             progress.tick("gamedata 源表", i, total, bytes_=cum)
         try:
@@ -129,9 +145,16 @@ def fetch_gamedata_tables(progress: object | None = None, *, log=print) -> int:
             continue
         done += 1
         cum += size
-        log("  %s %-34s %7.2f MB%s"
+        log("  %s %-46s %7.2f MB%s"
             % ("✓" if fetched else "·", rel, size / 1048576.0,
                "" if fetched else "（盘上已有，跳过）"))
+    #: `_level_index.json` 也归这一步：引擎的 `LoadIndex()` 读它，而它在
+    #: **缓存根**（不在镜像子目录里），所以单独调 `level_index()`（它会落盘）。
+    try:
+        idx = ark.level_index()
+        log("  ✓ %-46s %7d 个关卡键" % ("_level_index.json", len(idx)))
+    except GamedataError as exc:
+        failed.append(("_level_index.json", str(exc)))
     if progress is not None:
         progress.tick("gamedata 源表", done, total, bytes_=cum)
     log("源表：%d / %d 就位、共 %.1f MB"
