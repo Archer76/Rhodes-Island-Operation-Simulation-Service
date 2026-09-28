@@ -78,6 +78,19 @@ class Step:
 
 STEPS: list[Step] = [
     Step(
+        key="gamedata 源表", title="游戏源表", kind="online",
+        produces="data/gamedata/raw.githubusercontent.com/excel/*.json（8 张）",
+        source="GitHub 镜像 Kengxxiao/ArknightsGameData 的 zh_CN/gamedata/excel/",
+        needs="**要联网**；不需要登录；取过一次之后离线步骤才做得了",
+        eta="约 10~30 秒（8 个文件）",
+        fail_looks_like="证书链报错（沙箱/代理做 TLS 检查）⇒ 见日志里的具名三条路；"
+                        "403/404 ⇒ 镜像地址变了",
+        argv=[sys.executable, "-m", "ak_tactic", "cache", "--fetch-gamedata"],
+        #: ★ 2026-09-28 补：这一步**原先不存在**（离线建干员库要这批源表，却没人负责取）
+        #: ⇒ 全新机器首启必挂。它能报百分比（8 张表）与下载速度。
+        wants_progress=True,
+    ),
+    Step(
         key="akdb.sqlite", title="干员库", kind="offline",
         produces="data/akdb.sqlite",
         source="本地 gamedata 源表（character_table / skill_table / uniequip_table / "
@@ -616,8 +629,11 @@ def main() -> int:
         n = len(list(GAMEDATA_DIR.glob("*.json")))
         print(f"  ✅ gamedata 源表在：{GAMEDATA_DIR}（{n} 个 json）")
     else:
-        print(f"  ⛔ **gamedata 源表不在**：{GAMEDATA_DIR}")
-        print(f"     离线步骤全部做不了。取它：从 {GAMEDATA_SRC} 下载到该目录。")
+        #: ★ 2026-09-28 改成**提示**而不是拒跑：这批源表现由 `gamedata 源表` 那一步
+        #: 自己联网取（`cache --fetch-gamedata`）。原先是"报错 + 让玩家去 GitHub 手下"，
+        #: 而全新机器上首启必然走到这里 ⇒ 那等于首启必挂。
+        print(f"  · gamedata 源表还没有：{GAMEDATA_DIR}")
+        print(f"    ⇒ 由 `gamedata 源表` 那一步联网取（{GAMEDATA_SRC}）；离线步骤排在它后面")
     print(f"  data/ 现有：{sorted(p.name for p in DATA.iterdir()) if DATA.exists() else '（无）'}")
 
     if args.dry_run:

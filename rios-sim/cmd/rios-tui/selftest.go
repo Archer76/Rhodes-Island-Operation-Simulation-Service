@@ -2511,8 +2511,9 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		//: 改成选定某一关时取那一个（见二十三节）。所以下面由「必须含」翻成
 		//: **「必须不含」** —— 这条断言就是「首次运行不再全量下载」的守门人。
 		joined := strings.Join(playerSteps, ",")
-		check("一键流程只跑玩家必需的三步，且**不含关卡文件**（随用随取）",
-			strings.Contains(joined, "akdb.sqlite") &&
+		check("一键流程只跑玩家必需的几步，且**不含关卡文件**（随用随取）",
+			strings.Contains(joined, "gamedata 源表") &&
+				strings.Contains(joined, "akdb.sqlite") &&
 				strings.Contains(joined, "stage 表") &&
 				strings.Contains(joined, "enemydb.sqlite") &&
 				!strings.Contains(joined, "关卡文件") &&
@@ -2520,6 +2521,11 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 				!strings.Contains(joined, "op-briefs") &&
 				!strings.Contains(joined, "ranges.json") &&
 				!strings.Contains(joined, "operbox"),
+			joined)
+		//: ★ 2026-09-28 新增（博士首启实测报的那条）：**源表那一步必须在最前面**
+		//: —— 干员库是离线步骤，没有源表就必挂；顺序错了等于首启必挂。
+		check("「gamedata 源表」排在离线步骤之前（否则干员库必挂）",
+			len(playerSteps) > 0 && playerSteps[0] == "gamedata 源表",
 			joined)
 
 		//: 双击 exe 那条路（无参数）才自动跑准备；**任何显式开关都不走** ——

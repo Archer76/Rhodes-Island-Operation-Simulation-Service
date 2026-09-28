@@ -1872,6 +1872,15 @@ def cmd_cache(args: argparse.Namespace) -> int:
         else:
             print(f"攻击范围索引本来就不存在：{p}")
         return 0
+    if getattr(args, "fetch_gamedata", False):
+        #: ★ 2026-09-28 补：**这一步原先不存在** —— 离线建干员库要 8 张 excel 源表，
+        #: 而"随用随取"只覆盖关卡文件，谁也不负责取它们 ⇒ 全新机器上首启必挂，
+        #: 报错还把玩家指去 GitHub 手动下载。现在它是一条正经的取数步骤：
+        #: 可续跑（盘上有就跳过）、带进度（done/total ＋ 累计字节）。
+        from .gamedata.source import GameDataSource, fetch_gamedata_tables
+        from .progress import ProgressWriter
+        return fetch_gamedata_tables(ProgressWriter(getattr(args, "progress_file", None)))
+
     if args.clear_gamedata:
         src = GameDataSource()
         n, size = src.clear_cache()
@@ -2200,6 +2209,9 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--fetch-levels", action="store_true",
                    help="把库里用到的逐关 JSON 一次性取齐（引擎 load 要读它；"
                         "可续跑，已下过的跳过）")
+    c.add_argument("--fetch-gamedata", action="store_true",
+                   help="取游戏本体源表（GitHub 镜像的 excel/*.json，8 张）—— "
+                        "离线建干员库要它们，取过一次就不用再取")
     c.add_argument("--workers", type=int, default=4,
                    help="--fetch-levels 的并发线程数（默认 4）")
     c.add_argument("--retries", type=int, default=3,

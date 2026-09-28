@@ -30,7 +30,9 @@ ark-nights 的前端把一份 4694 条的关卡索引直接编译进了 JS bundl
 from __future__ import annotations
 
 import json
+import os
 import re
+import ssl
 import threading
 import time
 import urllib.error
@@ -53,6 +55,90 @@ DEFAULT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
 INDEX_TTL = 7 * 86400
+
+
+def ssl_context() -> ssl.SSLContext:
+    """取数用的 SSL 上下文。
+
+    **不是**为了绕过校验 —— 是为了让"这台机器不认识对方的证书链"这件事有一条
+    **具名**的路可走（2026-09-28 博士的 Windows 沙箱实测：prts.wiki 与
+    map.ark-nights.com 双双 `CERTIFICATE_VERIFY_FAILED: unable to get local
+    issuer certificate`，宿主上的根证书沙箱里没有）：
+
+      ① 设了 `RIOS_CA_BUNDLE` 且文件存在 ⇒ 用它；
+      ② 装了 `certifi` ⇒ 叠上它的 bundle（有些 Python 不带系统 CA）；
+      ③ 都没有 ⇒ 系统默认（Windows 上会去读系统证书库）。
+    """
+    ctx = ssl.create_default_context()
+    bundle = os.environ.get("RIOS_CA_BUNDLE", "")
+    if bundle and Path(bundle).is_file():
+        ctx.load_verify_locations(bundle)
+        return ctx
+    try:
+        import certifi                                    # type: ignore
+        ctx.load_verify_locations(certifi.where())
+    except Exception:                                     # noqa: BLE001
+        pass
+    return ctx
+
+
+def tls_hint(err: Exception) -> str:
+    """证书链问题的**具名**提示：把三条可操作的路写清楚，别只说"失败了"。"""
+    return ("★ 这台机器的 Python 不认识对方的证书链（常见于：代理/杀软做 TLS 检查，"
+            "或这个 Python 没带 CA 包）。三条路，任选一条：\n"
+            "  ① 设环境变量 RIOS_CA_BUNDLE=<根证书文件路径> 指到能验证它的 CA；\n"
+            "  ② `python -m pip install --upgrade certifi` 之后重试；\n"
+            "  ③ 换一个 python.org 装的 Python（它自带 CA）。\n"
+            "  原始错误：" + str(err))
+
+
+#: 游戏本体的源表（只有 GitHub 镜像的 `excel/` 提供）。
+#: 前六张是 `db build`（干员库）要的，后两张是 `db stage-fetch`（关卡索引）要的。
+#: ★ 2026-09-28 补：**这批文件原先没有任何取数步骤** —— 全新机器上首启必挂，
+#: 报错还把玩家指去 GitHub 手动下载。现在由 `fetch_gamedata_tables()` 统一取。
+GAMEDATA_TABLES: tuple[str, ...] = (
+    "excel/character_table.json",
+    "excel/skill_table.json",
+    "excel/uniequip_table.json",
+    "excel/battle_equip_table.json",
+    "excel/range_table.json",
+    "excel/char_patch_table.json",
+    "excel/zone_table.json",
+    "excel/stage_table.json",
+)
+
+
+def fetch_gamedata_tables(progress: object | None = None, *, log=print) -> int:
+    """把 `GAMEDATA_TABLES` 取到本地缓存。**可续跑**（盘上有就跳过）。rc：0 = 齐了。
+
+    每张表报一次 `tick("gamedata 源表", done, total, bytes_=累计字节)` —— 界面靠它
+    画百分比与下载速度（与别的步骤同一个形状，见 `ak_tactic/progress.py`）。
+    """
+    src = GameDataSource(base=GITHUB_BASE)
+    total = len(GAMEDATA_TABLES)
+    done = 0
+    cum = 0
+    failed: list[tuple[str, str]] = []
+    for i, rel in enumerate(GAMEDATA_TABLES):
+        if progress is not None:
+            progress.tick("gamedata 源表", i, total, bytes_=cum)
+        try:
+            size, fetched = src.download_to_cache(rel)
+        except GamedataError as exc:
+            failed.append((rel, str(exc)))
+            continue
+        done += 1
+        cum += size
+        log("  %s %-34s %7.2f MB%s"
+            % ("✓" if fetched else "·", rel, size / 1048576.0,
+               "" if fetched else "（盘上已有，跳过）"))
+    if progress is not None:
+        progress.tick("gamedata 源表", done, total, bytes_=cum)
+    log("源表：%d / %d 就位、共 %.1f MB"
+        % (done, total, cum / 1048576.0))
+    for rel, err in failed[:8]:
+        log("  ✗ %s\n      %s" % (rel, err.splitlines()[0] if err else ""))
+    return 0 if not failed else 1
 
 
 class GamedataError(RuntimeError):
@@ -222,7 +308,8 @@ class GameDataSource:
             "Accept": accept,
         })
         try:
-            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout,
+                                        context=ssl_context()) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
             if e.code == 404:
@@ -231,7 +318,14 @@ class GameDataSource:
                     f"  （关卡路径由关卡索引给出，形如 levels/obt/main/level_main_01-07.json "
                     f"或 levels/activities/act54side/level_act54side_ex08.json）") from e
             raise GamedataError(f"下载失败 HTTP {e.code}：{url}") from e
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
+        except ssl.SSLError as e:
+            raise GamedataError(f"下载失败（证书）：{url}\n{tls_hint(e)}") from e
+        except urllib.error.URLError as e:
+            if isinstance(getattr(e, "reason", None), ssl.SSLError) or \
+                    "CERTIFICATE_VERIFY_FAILED" in str(e):
+                raise GamedataError(f"下载失败（证书）：{url}\n{tls_hint(e)}") from e
+            raise GamedataError(f"下载失败：{url}\n  {e}") from e
+        except (TimeoutError, OSError) as e:
             raise GamedataError(f"下载失败：{url}\n  {e}") from e
         self.stats["bytes"] += len(raw)
         return raw

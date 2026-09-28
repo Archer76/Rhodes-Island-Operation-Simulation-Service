@@ -350,7 +350,11 @@ func shouldAutoSetup(nflag int, plan []setupStep) bool {
 //
 // ⇒ 整跑会让玩家白等两段联网抓取（prts 备注与范围页），还顺带把
 // `fetch_prts_notes.py` 拖进安装包 —— 那两件都该只留在开发侧。
-var playerSteps = []string{"akdb.sqlite", "stage 表", "enemydb.sqlite"}
+// ★ 2026-09-28 补第一步「gamedata 源表」：离线建干员库要 8 张 excel 源表
+// （`excel/character_table.json` 等），而"随用随取"只覆盖关卡文件 —— 这批源表
+// **原先没有任何取数步骤**，全新机器上首启必然挂在第一步（报错还把玩家指去
+// GitHub 手动下载）。现在它是正经的一步：联网取、可续跑、带百分比与速度。
+var playerSteps = []string{"gamedata 源表", "akdb.sqlite", "stage 表", "enemydb.sqlite"}
 
 // runCheckUpdates 只查一次更新并打印读数，**不动手**（`-check-updates`）。
 //
@@ -529,7 +533,7 @@ func runRebuildData(py string) int {
 
 	fmt.Println()
 	fmt.Printf("开始取数据与建库（%d 步，每步一条进度条）：\n", len(playerSteps))
-	fmt.Println("  （只跑玩家真正需要的三步：干员库／关卡索引／敌人库；")
+	fmt.Println("  （只跑玩家真正需要的几步：游戏源表／干员库／关卡索引／敌人库；")
 	fmt.Println("   关卡地图**随用随取** —— 玩到哪一关才下那一关的那一个文件；")
 	fmt.Println("   wiki 备注语料与范围索引只有判据与开发工具用得上，不在这里拉）")
 	fmt.Println("  （中途可以 Ctrl+C 停，停了下次双击会接着做）")
