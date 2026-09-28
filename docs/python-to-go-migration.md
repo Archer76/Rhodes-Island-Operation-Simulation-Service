@@ -1070,3 +1070,232 @@ bad = 0 //: …故意造的红不算进最终读数
 教训与 §12.10 那条同族：**负对照的豁免要精确到那一条，不能用"清零"来豁免** ——
 清零的豁免范围是"这一行之前的一切"，那正是判据最容易藏污的地方。
 
+
+### 12.15 旧版枚举编码：169 个关卡文件此前**整个读不出来**（2026-09-27）
+
+**怎么发现的**：故事集加回来之后要重录冻结档，`寻路` 那一步跑到第 40 个对象就崩：
+
+```
+File "ak_tactic/gamedata/stage.py", line 169, in walkable
+    and "ALL" in self.tiles[y][x].passable
+TypeError: argument of type 'int' is not a container or iterable
+```
+
+**性质**：不是我们解析器的 bug，是这批关卡文件用的是**游戏旧编码** —— 枚举字段写成**整数**而不是字符串。实测缓存 1764 个文件里 **169 个**是这种（正是当天新取回来的故事集那一族：`act10d5`／`act10mini`／`act8mini`…），而 GitHub 镜像上同一份文件**也是整数** ⇒ 是游戏数据本身的形态，不是镜像的转换。
+
+**影响面（比想象的大）**：Python 侧 `"ALL" in 2` 抛 TypeError（冻结档录不下去）；**Go 侧同样读不出来** —— 那些字段声明成 `string`，`json.Unmarshal` 直接报
+`cannot unmarshal number into Go struct field … of type string` ⇒ 那些关卡在界面里 `load` **整个失败**（部署人数上限也取不到）。
+
+**修法：能证的照证据映射，认不出的不许猜。** 逐字段的映射与证据：
+
+| 字段 | 映射 | 证据 |
+| --- | --- | --- |
+| `tiles[].heightType` | 0=LOWLAND／1=HIGHLAND | 字符串侧 53.6%/46.4% ↔ 整数侧 1:53.8%/0:46.2%，**占比逐项吻合** |
+| `tiles[].buildableType` | 0/1/2/3=NONE/MELEE/RANGED/ALL | 66/24/11/1.7% ↔ 64/24/11.6/0.7%，**序数一一对应** |
+| `tiles[].passableMask` | **位掩码**：bit0 地面⇒ALL、bit1 仅飞行⇒FLY_ONLY | 名字里就是 Mask；观测值只有 2 与 3，与 FLY_ONLY/ALL 的占比吻合 |
+| `checkpoints[].type` | 0=MOVE、6=APPEAR_AT_POS、5=DISAPPEAR、1=WAIT_FOR_SECONDS、3/4=两个等待类 | **结构证据**（见下） |
+| `routes[].motionMode` | 0=WALK、1=E_NUM | 优势项一致（92%/8% ↔ 96%/4%） |
+| `actions[].actionType` | 0=SPAWN | 优势项一致（86.7% ↔ 91%）；三处代码都只判 SPAWN |
+| `runes[].difficultyMask` | **位掩码**：bit0=NORMAL、bit1=FOUR_STAR、两位=ALL | 字符串 FOUR_STAR 95% ↔ 整数 2 占 98% |
+
+★ `checkpoints[].type` 的**结构证据**（不是占比 —— 占比这一族对不齐到可信程度）：
+**带真坐标的**检查点，`0` 有 13022 个且落点全在可走格（road/floor…）⇒ 只有"沿路线移动"才这样 ⇒ **MOVE**；
+**`6` 有 469 个，其中 467 个落在 `tile_telout`（传送落点）** ⇒ 正是 `APPEAR_AT_POS` 的语义；
+`5` 与 `6` 的次数**一一配对**（469/469，先消失再在别处出现）⇒ **DISAPPEAR**。
+而我们的引擎**只对 `MOVE`／`APPEAR_AT_POS` 分支**（`etaroutes.go` 的 `has_move`）—— 恰好就是被钉死的那两个。
+
+**两条"不许猜"的兜底**：认不出的**检查点整数** ⇒ 报错（静默当 MOVE 会改路线）；
+认不出的 **difficultyMask** ⇒ 回一个"谁都不匹配"的串，**不回 `nil`**
+（`maskApplies(nil)` 是"对所有难度都适用"，那会把一条来路不明的 rune 用得到处都是）。
+
+**同批的第二个坑：`routes` 数组里可以有 `null`**（实测 98 个关卡、位置任意：0/1/2/6/9/11/35…）。
+`routeIndex` 是**下标** ⇒ 跳过一条会让它后面所有路线整体前移，那不是"少一条"，是"所有引用都对错了人"。
+Go 侧（`json.Unmarshal` 进结构体）天然得到零值占位，Python 改成对齐它（mode 空、起终点 `(0, height-1)`、无检查点）。
+
+**读数**：Python 参照按索引扫全缓存 ⇒ **2676 / 2676 全部可解析（0 失败）**；
+引擎逐个 `load`：`act10d5_01`（48 路线／48 出怪）、`act10mini_03`、`act12mini_04`、`act8mini_01` 全部 `ok=true`。
+判据：新增 `rios-sim/stagelegacy_test.go`（24 条正例 ＋ **3 条负对照**：认不出的检查点整数必须报错／
+认不出的 actionType 不许当 SPAWN／认不出的 difficultyMask 不许回 nil）。
+
+### 12.16 全量关卡清单不能再塞命令行（同日踩到）
+
+重录冻结档时当场炸：
+
+```
+FileNotFoundError: [WinError 206] 文件名或扩展名太长
+```
+
+原因：总闸与录制都是把**全量缓存关卡键**当位置参数喂给需要清单的那几套。命令行上限约 32767 字符
+—— 2314 个键≈30k **刚好塞得下**，涨到 **2676** 个（≈35k）就超了。
+
+**修法**：清单走**文件**。调用方传 `@<路径>` 一个参数（`tools/levelargs.py` 的 `as_arg`），
+各套判据在解析位置参数时调 `expand()` 展开。`@` 是唯一约定，只认"以 @ 开头且指向存在文件"的参数
+—— 手敲几个关卡的老用法一字不变。落点：`check_go_all.py`、`freeze_baseline.suite_args`、
+`check_stage_go.py`、`check_enemy_go.py`、`check_candidates_go.py`、`check_enemy_mech_go.py`。
+
+⚠ **顺带一条**：总闸的仪器默认指向 `out/acceptance/rios-sim-stage3.exe`（9-26 那枚**过渡件**）。
+实测同一套判据：用它跑 ⇒ 红（`2 关的可部署格都没比到`）；`RIOS_SIM_BIN` 指到当前引擎 ⇒ 绿（`2 / 2 关逐字段一致`）。
+⇒ **跑闸与录制前先确认仪器是当前引擎**，否则红里混着仪器过期的账。
+
+### 12.17 那 7 处红里，有 5 处是**仪器过期**＋**批次缩水**（2026-09-28 逐条复核）
+
+博士 9-27 夜里挂起的那份「7 红」清单（关卡／候选生成／闸门／命令面／干员规格／单一入口／敌方机制）
+来自 23:40 那次总闸。**同一份日志自己就写着两处不同口径**，读它之前先把这两行找出来：
+
+```
+仪器：D:\home\DSH\ak-tactic\out\acceptance\rios-sim-stage3.exe      ← 9-26 那枚过渡件
+取证范围：缓存可达的关卡**键** 603 个（＝不同关卡内容 326 份）        ← 全量是 2676 键 / 1764 份
+```
+
+⇒ 那次跑的不是"当前引擎 × 全量缓存"，**两处口径都缩了**。逐条复核（把 `RIOS_SIM_BIN`
+指到当天重建的引擎、清单给全量）后的读数：
+
+| 套 | 23:40 那次 | 复核后 | 归因 |
+| --- | --- | --- | --- |
+| 干员规格 | ✗ 67 / 68 | **✓ 68 / 68 人次逐位一致** | 仪器过期 |
+| 命令面 | ✗ 1 处 | **✓ 正例 `act10d5_01` ／ 对照 `a001_01`** | 仪器过期（正例正是旧编码那一族） |
+| 关卡·反向守卫 | ✗ 守不住 | **✓ 三处变异各判红** | 仪器过期 |
+| 候选生成·反向守卫 | ✗ 守不住 | **✓ 判红成立** | 仪器过期 |
+| 关卡·`all` 覆盖 | ✗ 全量批次里 0 样本 | **✓ 4160 格 / 136 关** | 批次缩水（603 键那一批里没有含 `ALL` 的关） |
+| 敌方机制 | 真红 4 | **真红 26**（＝2 个键 × 13 章，见 §12.21） | 批次缩水**放大**了红：603 键没覆盖到 `act54side_*` |
+| 闸门 | ✗ W2 1 处 | **✓**（修了假红，见 §12.20） | 源码耦合守卫读死了文件 |
+| 机制规格 | ✓ 绿但守卫不响 | ✗→✓（见 §12.19） | 603 键那一批没轮到 `act15side`，全量才炸 |
+
+★ 教训一句话：**判据的读数必须连同"仪器身份 ＋ 分母"一起读**。这两行日志里都有，
+但只有把套名与结论抄进总表时**一起抄**，才不会把"仪器过期"记成"实现错"。
+
+### 12.18 支线 `interval` 的 `or 1.0`：3 处红 → 0（2026-09-28）
+
+全量重录「关卡」当场红 3 处，两处是同一个因：
+
+```
+✗ act26side_ex08   —— 1 处不一致
+    stage.branches.cledub_summon[0].interval：Go='0' Python='1.0'
+✗ act26side_ex08#f# —— 1 处不一致   （同上，同内容别名）
+✗ act49side_10     —— 1 处不一致
+    stage.branches.left_hand_room_branch[5].interval：Go='0' Python='1.0'
+```
+
+**根因不是解析错，是两条路的 `or` 兜底本来就不一样**（照抄 Python，不许统一）：
+
+```
+出怪（`stage.py::_parse_spawns`）   ：interval=float(a.get("interval", 1.0) or 0.0)   ← 显式 0 保留 0
+支线（`stage.py::_parse_branches`）：interval=float(a.get("interval", 1.0) or 1.0)   ← 显式 0 被顶成 1.0
+```
+
+`stage.go::parseBranches` 原来直接抄 `*a.Interval`，于是**关卡文件里明写的 `"interval": 0`**
+（实测：`act26side_ex08` 的 `branches.cledub_summon[0]`、`act49side_10` 的
+`branches.left_hand_room_branch[5]` 两处都是 `0`）在 Go 侧留成 0、Python 侧是 1.0。
+
+修法：新增 `waveAction.branchInterval()`（缺键 / 显式 0 ⇒ 1.0，非零原值），
+`parseBranches` 改调它；出怪那条路**一个字不动**。
+判据：`rios-sim/stagebranch_test.go` —— 正例 4 条 ＋ `parseBranches` 真解析路径
+＋ **两条负对照**（出怪那条路必须仍保留显式 0；非零区间必须原样读进去）。
+
+复核读数：`act26side_ex08` / `act26side_ex08#f#` / `act49side_10` ⇒ **3 / 3 关逐字段一致**（rc=0）。
+
+### 12.19 关卡本地定义（`useDb:false`）＋ rune 乘数：Python 参照整关崩（2026-09-28）
+
+全量跑「机制规格」，前向**与**反向守卫都断在同一处：
+
+```
+KeyError: '属性库里没有敌人 enemy_1526_sfsui_2'
+  ← simgo/spec.py::_spawn_spec → frontend/enemy_stats.py:47 → gamedata/enemy.py:1022
+```
+
+这个 id 出现在 `activities/act15side/level_act15side_09.json` 与 `level_act15side_ex08.json`
+（`bgmEvent: "sfsui boss"`）。它在两库里都**搜不到**（`enemydb.sqlite` 零命中；
+`akdb.sqlite` 只有同名干员 `char_id`），因为它**根本不该在库里**：
+
+```
+"enemyDbRefs": [ {"useDb": true,  "id": "enemy_1526_sfsui",   ...},
+                 {"useDb": false, "id": "enemy_1526_sfsui_2", "overwrittenData": {"name": {"m_value": "岁相"}, ...}} ]
+```
+
+`useDb:false` = **关卡本地定义**，整份数据写在关卡里（"岁相"）。两侧本来都支持它
+（Go：`enemy.go:617 WithOverwrite`；Python：`enemy.py:1040` ＋ `enemy_stats` 的兜底）。
+
+**真正的原因是"包了一层之后兜底够不着"**：`SpecInputs.from_stage` 在有 rune 乘数时会调
+`stage_mul.wrap_enemy_at(lib.get, muls)`，而那一版返回的是**裸闭包**；`enemy_stats` 的兜底
+先找 `enemy_at.__self__`（闭包没有）⇒ 直接 `raise`，本地定义那条路**永远走不到**。
+⇒ 触发条件是「**既有本地定义敌人、又带 rune 乘数**」⇒ 只有 `#f#`（四星档）那类键会炸。
+
+修法两处（都在 Python 参照侧）：
+1. `wrap_enemy_at` 返回一个**小对象**（`_WrappedEnemyAt`）：`__call__` 与以前逐字同义，
+   另把 `with_overwrite` 转发下去、**并且乘数照样作用在本地定义那一份上**
+   （⚠ 第一版写 `self._base.with_overwrite(...)` 当场 `AttributeError`：`_base` 是**绑定方法**，
+   `with_overwrite` 在**库对象**上 ⇒ 得先解析出 owner）；
+2. `enemy_stats` 的 owner 解析认**两种**取数器：自带 `with_overwrite` 的对象，或 `__self__`。
+
+判据（`out/acceptance/_localenemy_fix.py`，逐条实测）：
+`act15side_09` / `act15side_ex08` / `act15side_ex08#f#` 的 `build_spec` 全部通过
+（`#f#` 那一关去掉 runes 再算，结果**不同** ⇒ 乘数确实作用了）；
+**机制隔离**：同一个 `stage`、同一个 id，只换取数器形态 —— 旧写法（裸闭包）如实抛 KeyError、
+新写法取到 `enemy_1526_sfsui_2`（`max_hp=85000`）；
+两条负对照：库里没有且非本地定义的 id **照样抛 KeyError**（兜底不是静默通道）、
+`muls` 为空时 `wrap_enemy_at` **原样返回 base**（不白套一层）。
+
+### 12.20 W2 的假红：源码耦合守卫**读死了一个文件**（2026-09-28）
+
+「闸门」那 1 处红，文案是：
+
+```
+✗ W2：`rios-sim/plan.go` 不再具名拒收对象 skill —— 那条 unported 登记的依据变了
+```
+
+实测：那句话**原样还在**，只是搬了家 —— `509e110`（MAA 导出移植：新增 `core` / `maa`
+两个可导入包）把计划读取器搬到了 `rios-sim/core/plan.go:274-280`：
+
+```go
+//: `skill` 为对象那一支（丙方案）要查技能书，本轮未接——具名拒收。
+if raw, ok := m["skill"]; ok && !pyFalsy(raw) && strings.TrimSpace(string(raw))[0] == '{' {
+```
+
+⇒ 修法：**整棵树搜**（`rios-sim/**/*.go`）并把命中位置印出来（`W2 拒收依据 在 rios-sim/core/plan.go`）。
+「真的删掉了这条拒收」仍然会红（搜不到就是搜不到）；将来再搬家，读数跟着走，不会又红一次。
+★ 通用形状：**源码耦合的守卫不许读死一个路径** —— 重构（尤其"拆包")会让它变成假红，
+而假红与真红在总表上长得一模一样。
+
+### 12.21 敌方机制「真红 26」＝ **同一对键 × 13 章** ⇒ 具名登记（2026-09-28）
+
+全量批次（2676 键）跑出来 26 处真红，抽出来看**只有两个键**，分布在 13 个 `act54side_*` 章里：
+
+```
+MECH-ITEM verdict=RED chapter=act54side_01 enemy=enemy_10184_pppsbr key=TotalAttack.fall_duration
+MECH-ITEM verdict=RED chapter=act54side_01 enemy=enemy_10184_pppsbr key=TotalAttack.weak_max
+…
+（每章各 2 条，共 13 章；`act54side_08` 的敌人 id 不同、键相同）
+```
+
+这两个键是 P3R 相性系统（「击破值 ⇒ 倒地」）的参数，Python 参照是
+`ak_tactic/battle/p3r.py::BreakState`（`weak_max` / `fall_duration` / `meter` /
+`down_until` / `falls`，219 行）。Go 侧**只算不用**（现算读数，见
+`out/acceptance/_p3r_keyfield.txt`）：
+
+| 键 | Go 字段 | 读取点 | 行为落点 |
+| --- | --- | --- | --- |
+| `TotalAttack.weak_max` | `WeakMax` | `enemy_derive.go:245` | **空** |
+| `TotalAttack.fall_duration` | `FallDuration` | `enemy_derive.go:250` | **空** |
+| （负对照）`Atk` | — | — | 3 处（`panelfold.go:131/137`）⇒ 查询不是恒空 |
+
+它俩只进**出怪规格**（`spawns.go:536-537` → `wire.go:661-664` 的
+`p3r_weak_max` / `p3r_fall_duration`），模拟里零调用点。
+
+处置：登进第 27 套自己的 `NAMED_UNPORTED_KEYS`（⇒ 真红 26 → 0，具名 unported 22 → 24）。
+★ **登记 ≠ 已修复**：要真接上，得把 `BreakState` 搬进 Go 模拟主循环（谁在掉血、掉多少、
+何时倒、倒几次），那是建模活、会动模拟主循环与金标 —— **不在 9-27 那一批的范围内**，
+已具名留给博士裁。登记表自带守卫：一旦谁把这个字段接进行为，`registry_status()` 现算到
+行为落点非空 ⇒ 该条**当场失效并印 `MECH-STALE-REGISTRY`**。
+
+### 12.22 两条仪器纪律（2026-09-28 踩到）
+
+1. **并发跑重活会 OOM，而 OOM 的读数长得像判据红**：同一台机上同时开着「重录冻结档 ＋
+   关卡全量 ＋ 敌人机制全量 ＋ 机制规格」四份活时，`check_buildspec_go.py --mutate` 与
+   `check_candidates_go.py` 双双以
+   `Go rc=2：fatal error: runtime: cannot allocate memory`／
+   `VirtualAlloc … failed with errno=1455` 收场。
+   ⇒ 收尾跑闸**一份一份来**；看到 `rc=2` ＋ `runtime` 字样，先查内存，别去改判据。
+2. **日志要 `python -u`**：`python … *> file` 的块缓冲会让长任务**几十分钟里 0 字节**，
+   于是"没输出"既可能是"刚起"也可能是"卡死"。`-u` 之后每行即落盘（本次重录改成 `-u` 才看清
+   它是逐套在推进）。
+

@@ -593,7 +593,7 @@ type waveAction struct {
 	RouteIndex    *int            `json:"routeIndex"`
 	PreDelay      float64         `json:"preDelay"`
 	BlockFragment bool            `json:"blockFragment"`
-	HiddenGroup   *string  `json:"hiddenGroup"`
+	HiddenGroup   *string         `json:"hiddenGroup"`
 }
 
 // count 返回这一条动作的出怪数。`nil`（键缺失或显式 null）与 0 都当 1——
@@ -605,9 +605,26 @@ func (a waveAction) count() int {
 	return *a.Count
 }
 
-// interval 默认 1.0（`stage.py:883`）。注意 `or 0.0`：显式 0 也是 0。
+// interval 默认 1.0（`stage.py::_parse_spawns`）。注意 `or 0.0`：显式 0 也是 0。
 func (a waveAction) interval() float64 {
 	if a.Interval == nil {
+		return 1.0
+	}
+	return *a.Interval
+}
+
+// branchInterval 复刻 `stage.py::_parse_branches` 那一行：
+//
+//	interval=float(a.get("interval", 1.0) or 1.0)
+//
+// ★ 它**与出怪那一支不是同一个口径**：出怪是 `or 0.0`（显式 0 保留 0），
+// 支线是 `or 1.0`（显式 0 被 `or` 顶成 1.0）。实测依据：`act26side_ex08`
+// 的 `branches.cledub_summon[0]` 与 `act49side_10` 的
+// `branches.left_hand_room_branch[5]` 里都**明写着** `"interval": 0`，
+// Python 参照读出来是 1.0，而 Go 原来直接抄了 0 ⇒ 判据上三处各红一处
+// （`act26side_ex08` 与它的 `#f#` 别名是同一份内容）。
+func (a waveAction) branchInterval() float64 {
+	if a.Interval == nil || *a.Interval == 0 {
 		return 1.0
 	}
 	return *a.Interval
@@ -692,10 +709,8 @@ func parseBranches(raw json.RawMessage) (map[string][]BranchAction, error) {
 				if a.RouteIndex != nil {
 					ri = *a.RouteIndex
 				}
-				iv := 1.0
-				if a.Interval != nil {
-					iv = *a.Interval
-				}
+				//: ★ 支线用 `or 1.0` 口径（出怪那支是 `or 0.0`）——见 branchInterval 的注释。
+				iv := a.branchInterval()
 				acts = append(acts, BranchAction{
 					EnemyKey: a.Key, RouteIndex: ri, Count: a.count(),
 					Interval: iv, PreDelay: a.PreDelay,

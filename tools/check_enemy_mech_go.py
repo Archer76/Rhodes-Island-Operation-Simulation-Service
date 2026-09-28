@@ -696,6 +696,39 @@ NAMED_UNPORTED_KEYS: dict[str, dict[str, str]] = {
         "gate": "go.behaviour(DeathToken) 为空",
         "corrobor": "rios-sim/unsupported.go:121（unportedLines 的 death_token）",
     },
+    #: ★ 2026-09-27 收尾时加。当天全量批次（2676 键）跑出 **26 处真红，全是这两个键**
+    #: —— 分布在 13 个 `act54side_*` 章里，每键各 13 次（`act54side_08` 那两个敌人
+    #: 的 id 不同、键相同）。它们是 P3R 相性系统（「击破值 ⇒ 倒地」）的两个参数：
+    #:
+    #:   · `weak_max`      —— 累积到这么多**实际掉血量**就倒地
+    #:   · `fall_duration` —— 倒地持续秒数
+    #:
+    #: （Python 参照：`ak_tactic/battle/p3r.py::BreakState.weak_max` / `.fall_duration`，
+    #:  共 219 行的状态机：meter / down_until / falls 三件 ＋ 装置「全场倒地」判定。）
+    #:
+    #: Go 侧**只算不用**：`enemy_derive.go:245/250` 读进 `EnemyStats.WeakMax` /
+    #: `FallDuration`，`spawns.go:536-537` 把它们带进出怪规格
+    #: （`p3r_weak_max` / `p3r_fall_duration`，`wire.go:661-664` 还写着各自的语义），
+    #: **但模拟里没有任何行为读它** —— `registry_status()` 现算 `go.behaviour` 为空。
+    #: （收尾时实测：两个键读取点非空、行为落点为空；负对照 `Atk` 有 3 处落点，
+    #:  证明这条查询不是恒空。读数见 `out/acceptance/_p3r_keyfield.txt`。）
+    #:
+    #: ⇒ 登记为**具名 unported**。★ **登记 ≠ 已修复**：要真接上它，得把
+    #: `battle/p3r.py` 的 `BreakState` 搬进 Go 模拟主循环（谁在掉血、掉多少、
+    #: 什么时候倒、倒几次），那是建模活、会动模拟主循环与金标，
+    #: **不在 9-27 那一批的范围内**，已具名留给博士裁。
+    "TotalAttack.weak_max": {
+        "field": "WeakMax",
+        "why": "相性计量：累积到这么多**实际掉血量**即倒地（`battle/p3r.py::BreakState`）",
+        "gate": "go.behaviour(WeakMax) 为空",
+        "corrobor": "只进规格、不进模拟：`spawns.go:536` → `wire.go:662`（p3r_weak_max）",
+    },
+    "TotalAttack.fall_duration": {
+        "field": "FallDuration",
+        "why": "倒地持续秒数（`battle/p3r.py::BreakState.fall_duration`）",
+        "gate": "go.behaviour(FallDuration) 为空",
+        "corrobor": "同上：`spawns.go:537` → `wire.go:664`（p3r_fall_duration）",
+    },
 }
 
 
@@ -1032,7 +1065,9 @@ def main() -> int:
         i = argv.index("--md")
         md_path = Path(argv[i + 1])
         del argv[i:i + 2]
-    levels = [a for a in argv if not a.startswith("-")]
+    #: ★ 2026-09-27：清单可以写成 `@<文件>`（全量键塞进命令行会 WinError 206）
+    from levelargs import expand
+    levels = expand([a for a in argv if not a.startswith("-")])
 
     if not ENEMY_DB.is_file():
         print("MECH-ERROR missing=%s" % ENEMY_DB.as_posix())

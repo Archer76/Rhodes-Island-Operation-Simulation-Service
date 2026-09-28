@@ -20,6 +20,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import levelargs  # noqa: E402  （同目录模块：清单走文件的约定见它的文件头）
+
 sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -270,7 +273,11 @@ def main() -> int:
     for name, script, what, wants_levels in SUITE:
         cmd = [PY, "-X", "utf8", str(ROOT / script)]
         if wants_levels:
-            cmd += lvls
+            #: ★ 2026-09-27：**清单走文件**（`@<路径>`）。实测缓存涨到 2676 个关卡键时
+            #: 直接把它们塞进命令行会 `WinError 206 文件名或扩展名太长`——
+            #: 录制冻结档时当场炸，一炸就什么都录不成（命令行上限约 32767 字符，
+            #: 2314 个键≈30k 刚好塞得下，2676 个≈35k 就超了）。
+            cmd += [levelargs.as_arg(lvls)]
         p = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, env=child_env)
         out = p.stdout.decode("utf-8", "replace")
         #: 从各自输出里抠出「结论：」那一行；抠不到就明说抠不到（不当成通过）。

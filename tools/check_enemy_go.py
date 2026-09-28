@@ -221,7 +221,9 @@ def py_enemy_expect(level: str, key: str, lv: int) -> dict:
 
 def main() -> int:
     G = GB.bind("敌人", __file__)
-    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    #: ★ 2026-09-27：清单可以写成 `@<文件>`（全量键塞进命令行会 WinError 206）
+    from levelargs import expand
+    args = expand([a for a in sys.argv[1:] if not a.startswith("-")])
     mutate = "--mutate" in sys.argv
     levels = args or ["main_00-01"]
 

@@ -208,15 +208,51 @@ def wrap_enemy_at(base: Callable[[str, int], Any],
 
     包在**取数的出口**上而不是逐处调用点：模拟器里取敌人属性的地方有好几处
     （出怪、形态、报告），漏掉任何一处都会让乘数只生效一半。
+
+    ⚠ **包出来的是一个对象，不是一个裸闭包**（2026-09-27 修）：
+
+    原先是 `def at(...)` 返回闭包。闭包没有 `__self__`，于是
+    `frontend/enemy_stats.py::enemy_stats` 那条「库取不到 ⇒ 退回关卡本地定义」
+    的兜底**拿不到 `with_overwrite`**（它先找 `enemy_at.__self__`），直接 `raise`
+    —— 结果是：**既有 `useDb:false` 本地敌人、又带 rune 乘数的关卡整关崩**
+    （实测 `act15side_09` / `act15side_ex08`：`KeyError: 属性库里没有敌人
+    enemy_1526_sfsui_2`，机制规格判据的前向与反向守卫都断在这里）。
+
+    现在返回这个小对象：`__call__` 与以前逐字同义（出库即乘），另外把
+    `with_overwrite` **转发**下去，并且**乘数照样作用在本地定义出来的那一份上**
+    —— 本地定义的敌人也是"出库的敌人"，凭什么少乘一次。
     """
     muls = list(muls)
     if not muls:
         return base
 
-    def at(enemy_id: str, level: int = 0):
-        return apply_rune_muls(base(enemy_id, level), muls)
+    class _WrappedEnemyAt:
+        """带乘数的取数器。存在的唯一理由是**把 `with_overwrite` 一起带出去**。"""
 
-    return at
+        def __init__(self, base_at: Callable[[str, int], Any]) -> None:
+            self._base = base_at
+            #: ⚠ `base_at` 通常是**绑定方法** `lib.get`：`with_overwrite` 在**库对象**上，
+            #: 不在那个方法对象上（第一版就栽在这：写 `self._base.with_overwrite(...)`
+            #: 实测 `AttributeError: 'function' object has no attribute 'with_overwrite'`）。
+            #: 所以这里把"真正拥有 with_overwrite 的那个对象"先解析出来，与
+            #: `frontend/enemy_stats.py::enemy_stats` 的解析规则**同一条**。
+            self._owner = (base_at if hasattr(base_at, "with_overwrite")
+                           else getattr(base_at, "__self__", None))
+            self._muls = muls
+
+        def __call__(self, enemy_id: str, level: int = 0):
+            return apply_rune_muls(self._base(enemy_id, level), self._muls)
+
+        def with_overwrite(self, enemy_id: str, overwritten: dict, level: int = 0):
+            """关卡本地定义（`useDb:false`）那一支：先按本地定义出库，再乘。"""
+            if self._owner is None or not hasattr(self._owner, "with_overwrite"):
+                raise TypeError(
+                    "这条 enemy_at 取数器既没有 with_overwrite 也没有 __self__："
+                    "关卡本地定义（useDb:false）那一支走不通")
+            return apply_rune_muls(
+                self._owner.with_overwrite(enemy_id, overwritten, level), self._muls)
+
+    return _WrappedEnemyAt(base)
 
 
 def global_lifepoint(stage: Any, difficulty: str = "NORMAL") -> int | None:

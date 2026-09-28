@@ -746,10 +746,17 @@ def suite_args(name: str) -> list[str]:
     清单**（按缓存现算）。这里不给清单的话，`--record`／`--status` 只会跑那一套的
     **缺省样本**（1 关）——**分母小得误导**，正是本仓记过的形状
     （总表印「1 / 1」看着漂亮、覆盖面其实是抽样）。
+
+    ★ 2026-09-27：清单改走**文件**（`@<路径>`）。实测缓存涨到 2676 个关卡键时，
+    把它们直接塞进 argv 会 `WinError 206 文件名或扩展名太长` —— 录制当场炸，
+    一炸就什么都录不成。展开在各套判据里（`tools/levelargs.py`）。
     """
     for n, _s, _w, wants in suite_table():
         if n == name:
-            return list(cached_levels()) if wants else []
+            if not wants:
+                return []
+            import levelargs
+            return [levelargs.as_arg(cached_levels())]
     return []
 
 

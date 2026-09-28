@@ -496,7 +496,9 @@ def main() -> int:
               "`expect()` 落进基线。当前 RIOS_GOLDEN=%s。" % GB.mode())
         return 1
     G = GB.bind("关卡", __file__)
-    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    #: ★ 2026-09-27：清单可以写成 `@<文件>`（2676 个关卡键塞进命令行会 WinError 206）
+    from levelargs import expand
+    args = expand([a for a in sys.argv[1:] if not a.startswith("-")])
     levels = args or ["main_00-01"]
 
     #: ---- 坑②：引擎的取数根。本判据把 `RIOS_DATA` 显式指到**绝对路径**，所以 cwd

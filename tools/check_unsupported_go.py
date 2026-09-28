@@ -681,10 +681,22 @@ def witnesses(tmp: Path, G) -> list[str]:
         print("  W2 skill_name    证人成立：%s" % w2)
     #: ⚠ 顺带钉住 Go 为什么搬不了它：Go 的计划读取器**故意**拒收对象形态
     #: （`tools/check_plan_go.py` 把这条登记为「Go 拒 ∧ 原版收」的分歧）。
-    plan_go = (ROOT / "rios-sim" / "plan.go").read_text(encoding="utf-8")
-    if "skill 是对象" not in plan_go:
-        problems.append("W2：`rios-sim/plan.go` 不再具名拒收对象 skill —— "
+    #:
+    #: ★ 2026-09-27：这条守卫原来读**死**一个文件 `rios-sim/plan.go`。`509e110`
+    #: （MAA 导出移植：新增 `core` / `maa` 两个可导入包）把计划读取器搬去了
+    #: `rios-sim/core/plan.go`，于是它当场变成一条**假红**：代码一个字没改、
+    #: 拒收文案原样还在，只是换了文件。⇒ 改成**整棵树搜**（`rios-sim/**/*.go`），
+    #: 并把命中位置印出来。这样将来再搬家，读数跟着走，而不是又红一次；
+    #: 而「真的删掉了这条拒收」仍然会红（搜不到就是搜不到）。
+    _hit = []
+    for _go in sorted((ROOT / "rios-sim").rglob("*.go")):
+        if "skill 是对象" in _go.read_text(encoding="utf-8", errors="replace"):
+            _hit.append(_go.relative_to(ROOT).as_posix())
+    if not _hit:
+        problems.append("W2：`rios-sim/` **整棵树**里都找不到「skill 是对象」这条具名拒收 —— "
                         "那条 unported 登记的依据变了：要么把它搬进 Go，要么改登记")
+    else:
+        print("  W2 拒收依据       在 %s —— 对象技能仍被具名拒收" % "、".join(_hit))
 
     # ---- W3 `device_deploy` ＋ `death_token`：给排程塞一条装置部署时报 ----
     lv = tmp / "w3_level.json"

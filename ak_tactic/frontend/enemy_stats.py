@@ -49,7 +49,13 @@ def enemy_stats(enemy_at: Callable[[str, int], Any], stage: Any,
         local = stage.local_enemies().get(enemy_id)
         if not local:
             raise
-        owner = getattr(enemy_at, "__self__", None)
+        #: ⚠ 兜底要认**两种**取数器（2026-09-27 修）：库自己的绑定方法
+        #: （`enemy_at.__self__` 是库）与 `stage_mul.wrap_enemy_at` 包出来的
+        #: 那个对象（它**自己**就带 `with_overwrite`）。原先只看 `__self__`，
+        #: 于是"带 rune 乘数的关卡"里这条兜底永远拿不到 `with_overwrite`、
+        #: 直接把 KeyError 抛出去 —— 实测 `act15side_09` 整关崩在这里。
+        owner = enemy_at if hasattr(enemy_at, "with_overwrite") else getattr(
+            enemy_at, "__self__", None)
         if owner is None or not hasattr(owner, "with_overwrite"):
             raise
         return owner.with_overwrite(enemy_id, local, level)

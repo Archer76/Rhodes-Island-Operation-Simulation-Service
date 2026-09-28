@@ -1436,8 +1436,10 @@ CASE_TAG = "candidates:%s"
 def main() -> int:                                             # noqa: C901
     G = GB.bind("候选生成", __file__)
     G.sections(SECTIONS)
+    #: ★ 2026-09-27：清单可以写成 `@<文件>`（全量键塞进命令行会 WinError 206）
+    from levelargs import expand
 
-    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    args = expand([a for a in sys.argv[1:] if not a.startswith("-")])
     mutate = "--mutate" in sys.argv
     guard = Guard(mutate)
     levels = args or ["main_01-07"]
