@@ -135,12 +135,15 @@ def _insert(conn: sqlite3.Connection, e: PrtsEnemy) -> None:
 def build_enemy_db(path: Path | str | None = None, *,
                    client: PrtsClient | None = None,
                    verbose: bool = False,
-                   limit: int | None = None) -> EnemyBuildReport:
+                   limit: int | None = None,
+                   progress: object | None = None) -> EnemyBuildReport:
     """从 prts.wiki 重建敌人库，返回构建报告。
 
     :param path: 库文件路径，默认 `data/enemydb.sqlite`
     :param client: prts.wiki 客户端（默认新建一个，走 `data/cache/prts/` 缓存）
     :param limit: 只抓前 N 页，供试跑用；正式建库不要给
+    :param progress: 给了就往它发 `tick(key, done, total, bytes_)`（形状见
+        `ak_tactic/progress.py`）—— 界面靠它画百分比与下载速度。鸭子类型，不给就一条不发。
     """
     target = Path(path) if path else DEFAULT_ENEMY_DB_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -158,10 +161,16 @@ def build_enemy_db(path: Path | str | None = None, *,
     titles = all_enemy_titles(c)
     if limit is not None:
         titles = titles[:limit]
+    if progress is not None:                     #: 先报一次总数，界面立刻能显示 0 / N
+        progress.tick("enemydb.sqlite", 0, len(titles),
+                      bytes_=int(c.stats.get("bytes", 0)))
 
     def step(done: int, total: int) -> None:
         if verbose and done % 500 < 50:
             note(f"已抓 {done}/{total}")
+        if progress is not None:
+            progress.tick("enemydb.sqlite", done, total,
+                          bytes_=int(c.stats.get("bytes", 0)))
 
     note(f"批量抓取 {len(titles)} 页……")
     pages = fetch_enemy_pages(titles, c, progress=step)

@@ -945,7 +945,9 @@ def cmd_enemy_db(args: argparse.Namespace) -> int:
     if args.action == "build":
         what = f"（只抓前 {args.pages} 页）" if args.pages else ""
         print(f"从 prts.wiki 重建敌人库{what}……")
-        report = build_enemy_db(path, verbose=args.verbose, limit=args.pages)
+        from .progress import ProgressWriter
+        report = build_enemy_db(path, verbose=args.verbose, limit=args.pages,
+                                progress=ProgressWriter(args.progress_file or None))
         print(report.summary())
         return 0
 
@@ -2174,6 +2176,8 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--path", default="",
                    help="库文件路径（默认 data/enemydb.sqlite）")
     e.add_argument("--verbose", action="store_true", help="build 时打印进度")
+    e.add_argument("--progress-file", default="",
+                   help="build 时把进度事件按 JSONL 追加到这个文件（界面靠它画进度条与速度）")
     e.add_argument("--json", action="store_true")
     e.set_defaults(func=cmd_enemy_db)
 

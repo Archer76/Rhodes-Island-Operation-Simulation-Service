@@ -124,7 +124,8 @@ class PrtsClient:
         self.max_retries = max_retries
         self.timeout = timeout
         self.user_agent = user_agent
-        self.stats = {"requests": 0, "cache_hits": 0, "retries": 0, "errors": 0}
+        self.stats = {"requests": 0, "cache_hits": 0, "retries": 0, "errors": 0,
+                      "bytes": 0}
 
     # ---------------------------------------------------------------- 底层
 
@@ -136,7 +137,10 @@ class PrtsClient:
             "Referer": "https://prts.wiki/",
         })
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            return resp.read().decode("utf-8", "replace")
+            raw = resp.read()
+        #: 累计字节：界面拿它算下载速度（缓存命中不计 —— 那本来就没走网络）。
+        self.stats["bytes"] = int(self.stats.get("bytes", 0)) + len(raw)
+        return raw.decode("utf-8", "replace")
 
     def _fetch_with_retry(self, url: str) -> str:
         last: Exception | None = None

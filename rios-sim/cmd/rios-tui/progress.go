@@ -43,6 +43,16 @@ type progressStep struct {
 	Total int
 	Sec   float64
 	Msg   string
+	//: Bytes 是**累计已下载字节**（子进程报的），Rate 是**现算的下载速度**（字节/秒）。
+	//: 2026-09-28 博士要的：进度条上要有百分比与速度。
+	Bytes int64
+	Rate  float64
+}
+
+// sample 是算速度用的一次取样（字节数 ＋ 取样的时刻）。
+type sample struct {
+	bytes int64
+	at    time.Time
 }
 
 type setupBars struct {
@@ -60,6 +70,30 @@ type setupBars struct {
 	ansi bool
 	//: last 只在追加式里用：记每一步上次印过的状态，同一个状态不重复印。
 	last map[string]string
+	//: samples 记每一步上次 tick 的（字节, 时刻），用来算下载速度。
+	samples map[string]sample
+}
+
+// sampleRate 用**两次 tick 的字节差 ÷ 时间差**算下载速度。
+//
+// ★ 只在字节**真的涨了**且间隔够长时才更新：缓存命中时字节不涨（那本来就没走网络），
+// 报一个"0 B/s"会被读成"卡住了"；间隔太短（同一批里的连续两行）则会算出噪声速度。
+func (b *setupBars) sampleRate(st *progressStep, bytes int64) {
+	st.Bytes = bytes
+	if b.samples == nil {
+		b.samples = map[string]sample{}
+	}
+	now := time.Now()
+	prev, ok := b.samples[st.Key]
+	b.samples[st.Key] = sample{bytes: bytes, at: now}
+	if !ok || bytes <= prev.bytes {
+		return
+	}
+	dt := now.Sub(prev.at).Seconds()
+	if dt < 0.2 {
+		return
+	}
+	st.Rate = float64(bytes-prev.bytes) / dt
 }
 
 // useANSI 这次能不能用转义序列原地重画。
@@ -79,6 +113,7 @@ func (b *setupBars) apply(line []byte) bool {
 		Msg    string  `json:"msg"`
 		Done   int     `json:"done"`
 		Total  int     `json:"total"`
+		Bytes  int64   `json:"bytes"`
 		OK     int     `json:"ok"`
 		Failed int     `json:"failed"`
 		Steps  []struct {
@@ -103,7 +138,7 @@ func (b *setupBars) apply(line []byte) bool {
 		}
 		return false
 	case "tick":
-		//: 只有一步会写 tick（关卡文件）⇒ 键缺省时落到**正在跑**的那一步
+		//: 键缺省时落到**正在跑**的那一步（`关卡文件` 之外的步骤现在也报 tick 了）
 		st := b.find(ev.Key)
 		if st == nil {
 			for i := range b.steps {
@@ -117,6 +152,7 @@ func (b *setupBars) apply(line []byte) bool {
 			return false
 		}
 		st.Done, st.Total = ev.Done, ev.Total
+		b.sampleRate(st, ev.Bytes)
 		return true
 	case "summary":
 		b.ok, b.failed, b.haveSum = ev.OK, ev.Failed, true
@@ -240,12 +276,44 @@ func summaryLine(ok, failed int) string {
 	return fmt.Sprintf("★ 有 %d 项没做成（下面列出原因）", failed)
 }
 
+// humanBytes 把字节数写成人读的（进度条上只留三位有效数字量级）。
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.2f GB", float64(n)/float64(int64(1)<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/float64(int64(1)<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.0f KB", float64(n)/float64(int64(1)<<10))
+	}
+	return fmt.Sprintf("%d B", n)
+}
+
+// humanRate 把"每秒多少字节"写成同样的人读形式。
+func humanRate(bps float64) string { return humanBytes(int64(bps)) + "/s" }
+
 func tailOf(st *progressStep) string {
 	switch st.State {
 	case "run":
 		if st.Total > 0 {
-			return fmt.Sprintf("%d / %d（%.0f%%）", st.Done, st.Total,
+			//: ★ 2026-09-28 博士要的：**百分比 ＋ 下载速度 ＋ 已下多少**。
+			//: 速度是现算的（两次 tick 的字节差 ÷ 时间差），字节没涨就不报速度。
+			s := fmt.Sprintf("%d / %d（%.0f%%）", st.Done, st.Total,
 				100*float64(st.Done)/float64(st.Total))
+			if st.Rate > 0 {
+				s += " · " + humanRate(st.Rate)
+			}
+			if st.Bytes > 0 {
+				s += " · 已下 " + humanBytes(st.Bytes)
+			}
+			return s
+		}
+		if st.Bytes > 0 {
+			//: 给不出总数（建库那几步）⇒ 不假装知道百分比，只报**已下多少 ＋ 速度**
+			if st.Rate > 0 {
+				return "进行中… · " + humanRate(st.Rate) + " · 已下 " + humanBytes(st.Bytes)
+			}
+			return "进行中… · 已下 " + humanBytes(st.Bytes)
 		}
 		return "进行中…"
 	case "ok":

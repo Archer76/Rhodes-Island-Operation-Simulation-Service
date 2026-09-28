@@ -88,7 +88,7 @@ STEPS: list[Step] = [
         argv=[sys.executable, "-m", "ak_tactic", "db", "build", "--verbose"],
     ),
     Step(
-        key="stage 表", title="关卡索引（akdb 里的一张表）", kind="online",
+        key="stage 表", title="关卡索引", kind="online",
         produces="data/akdb.sqlite 的 stage / zone 两张表",
         source="map.ark-nights.com 的 JS bundle + 镜像的 excel/zone_table.json、stage_table.json",
         needs="**要联网**；不需要登录",
@@ -115,6 +115,9 @@ STEPS: list[Step] = [
         eta="冷启约 53 秒",
         fail_looks_like="库能建出来但 `enemy` 行数远小于预期；或对 prts.wiki 的请求 403",
         argv=[sys.executable, "-m", "ak_tactic", "enemydb", "build"],
+        #: ★ 2026-09-28：这一步是 1800 个页面，**给得出百分比与下载速度**
+        #: （`build_enemy_db(progress=…)` 每抓一批就报一次 done/total/bytes）。
+        wants_progress=True,
     ),
     Step(
         key="prts-notes.sqlite", title="干员备注库", kind="online",
@@ -335,6 +338,15 @@ class Progress:
     def done(self, key: str, state: str, sec: float, msg: str = "") -> None:
         self._w({"ev": "step", "key": key, "state": state,
                  "sec": round(sec, 1), "msg": msg[:300]})
+
+    def tick(self, key: str, done: int, total: int, *, bytes_: int = 0) -> None:
+        """报一次进度（子进程往这个文件 append，界面按偏移量增量读）。
+
+        `bytes_` 是**累计已下载字节** —— 界面拿两次 tick 的差 ÷ 时间差算速度。
+        给不出就写 0，界面只画百分比、不编速度。
+        """
+        self._w({"ev": "tick", "key": key, "done": int(done), "total": int(total),
+                 "bytes": int(bytes_)})
 
     def summary(self, ok: int, failed: int) -> None:
         self._w({"ev": "summary", "ok": ok, "failed": failed})

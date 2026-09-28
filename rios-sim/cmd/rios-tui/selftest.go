@@ -2665,6 +2665,38 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		check("负对照：追加式里状态一变就必须印一行（否则这条路是死的）",
 			strings.Count(p3.String(), "\n") == 1,
 			fmt.Sprintf("%d 行", strings.Count(p3.String(), "\n")))
+		//: ★ 2026-09-28 新增（博士要的）：**百分比 ＋ 下载速度 ＋ 已下多少**。
+		rate := &setupBars{width: 100, ansi: true}
+		rate.steps = []progressStep{
+			{Key: "enemydb.sqlite", Title: "敌人库", State: "run", Done: 421, Total: 1807},
+		}
+		rate.sampleRate(&rate.steps[0], 0) //: 第一次取样：有字节没速度
+		//: 造一段"两秒下了 2 MB"的取样（直接摆样本，不真的 sleep）
+		rate.samples["enemydb.sqlite"] = sample{bytes: 0, at: time.Now().Add(-2 * time.Second)}
+		rate.sampleRate(&rate.steps[0], 2<<20)
+		var rb bytes.Buffer
+		rate.render(&rb)
+		check("★ 运行中的一步报出百分比",
+			strings.Contains(rb.String(), "421 / 1807（23%）"),
+			firstLineWith(rb.String(), "421"))
+		check("★ 报出下载速度（2 MB / 2 s ⇒ 1.0 MB/s）",
+			strings.Contains(rb.String(), "1.0 MB/s"), firstLineWith(rb.String(), "MB/s"))
+		check("★ 报出已下多少", strings.Contains(rb.String(), "已下 2.0 MB"),
+			firstLineWith(rb.String(), "已下"))
+		//: 负对照：字节没涨（缓存命中，本来就没走网络）⇒ **不许报速度**
+		//: （报个"0 B/s"会被读成"卡住了"，那是编出来的信息）
+		nost := &progressStep{Key: "x", State: "run", Done: 1, Total: 10}
+		nb := &setupBars{}
+		nb.sampleRate(nost, 5<<20)
+		nb.samples["x"] = sample{bytes: 5 << 20, at: time.Now().Add(-2 * time.Second)}
+		nb.sampleRate(nost, 5<<20)
+		check("负对照：字节没涨（缓存命中）⇒ 不报速度", nost.Rate == 0,
+			fmt.Sprintf("rate=%.0f B/s", nost.Rate))
+		//: 负对照：给不出总数的那一步**不许编百分比**，只报"已下多少"
+		notot := &progressStep{Key: "y", Title: "干员库", State: "run", Bytes: 3 << 20}
+		tl := tailOf(notot)
+		check("负对照：没有总数时不编百分比（只报已下多少）",
+			!strings.Contains(tl, "%") && strings.Contains(tl, "已下 3.0 MB"), tl)
 		//: 负对照：坏 JSON 不许把已解析出来的东西打乱
 		before := len(bars.steps)
 		check("负对照：截断的 JSON 行被丢掉，不影响已解析的状态",
