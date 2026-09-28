@@ -1299,3 +1299,50 @@ MECH-ITEM verdict=RED chapter=act54side_01 enemy=enemy_10184_pppsbr key=TotalAtt
    于是"没输出"既可能是"刚起"也可能是"卡死"。`-u` 之后每行即落盘（本次重录改成 `-u` 才看清
    它是逐套在推进）。
 
+### 12.23 整数 `difficultyMask`：Python 侧漏归一 ⇒ 163 处红（2026-09-28）
+
+「关卡静态」在全量批次上红 **163 处**，形状只有一种（`5368 例` 里两档中的四星档那一半）：
+
+```
+✗ act10d5_01/FOUR_STAR life：Go=1 Python=5
+✗ act10d5_02/FOUR_STAR life：Go=1 Python=3
+✗ act10mini_01/FOUR_STAR life：Go=1 Python=3   …（共 163 例）
+```
+
+把原始数据摊开（`out/acceptance/_lifepoint_runes.py`）：
+
+```
+level_act10d5_01.json  runes 3 条：key=global_lifepoint  difficultyMask=2（**整数**）
+                                   blackboard={"value": 1}
+                       options.maxLifePoint = 5
+```
+
+Go 侧 `stageenv.go::difficultyMaskOf` 早就把整数 2 归一成 `FOUR_STAR`（证据表在
+`stageenv.go:58-67`：字符串侧 95% `FOUR_STAR` ↔ 整数侧 98% 值 `2`，且字段名就叫 Mask），
+于是四星档套上这条 rune ⇒ `life=1`。**Python 侧 `frontend/blackboard.py::mask_applies`
+只认字符串**：`2 in ("ALL","",None)` 假、`2 == "FOUR_STAR"` 也假 ⇒ 整条 rune 被跳过，
+四星档的 `life` 被算成关卡自己的 `maxLifePoint`。
+
+**谁对：Go 对**。两条旁证，都不靠"哪边看着顺眼"：
+1. 同一份对拍里 **NORMAL 档两边一致**（Go=5=Python）⇒ Go 只在四星档套了这条 rune，
+   与"bit1=FOUR_STAR"自洽（若 bit2 是别的意思，NORMAL 那一半会先红）；
+2. ★ **独立同形证据**：`main_01-07` 的 `gbuff_lifepoint` 写的是**字符串** `FOUR_STAR`
+   （老键名），它的四星档 life 也正好是 **1** —— 两种编码给出同一个数，
+   ⇒「整数 2 ≡ 字符串 FOUR_STAR」被一条与本次修复无关的实例钉住。
+
+**修法**：`blackboard.py` 新增 `normalize_difficulty_mask()`（位义逐条对齐 Go：
+两位都有⇒`ALL`、bit1⇒`FOUR_STAR`、bit0⇒`NORMAL`、都不满足⇒`#<n>`），
+`mask_applies` 先过它。★ 它只改**归一**，不改任何调用点 —— 这是 Python 侧唯一的掩码入口。
+
+**读数**（`tools/difficulty_mask_probe.py`，已提交，rc=0）：
+单元 14 条（整数 1/2/3/4/0 ＋ 字符串 `FOUR_STAR`/`ALL`/空/None）全对，
+其中 **负对照**：认不出的整数（`0`、`4`）**不许**变成"对所有难度都适用"（归一成 `#0`/`#4`，谁都不匹配）；
+端到端 `act10d5_01`：NORMAL ⇒ `None`（不套）、FOUR_STAR ⇒ `1`（套上）；
+对照 A（老键名＋字符串）：`main_01-07` FOUR_STAR ⇒ 1；
+对照 B（负向）：`tr_01` / `a001_01` 两档都 ⇒ `None`（这两关根本没有这条 rune）。
+
+跨实现复核：`check_stageenv_go.py` 全量跑 ⇒ **5368 例逐字段一致（0 处失配）**
+（修前是 `163 处失配`）。⚠ 这一套判据**不吃位置参数**，永远按缓存全量跑 ——
+想"只跑几关看看"是跑不到的，别被"喂了几个关卡名"骗了。
+
+

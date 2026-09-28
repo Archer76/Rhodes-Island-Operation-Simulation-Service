@@ -34,16 +34,53 @@ from __future__ import annotations
 
 from typing import Iterable
 
-__all__ = ["mask_applies", "find_rune", "bb_number", "bb_text"]
+__all__ = ["mask_applies", "find_rune", "bb_number", "bb_text",
+           "normalize_difficulty_mask"]
 
 
 # ================================================================ 一、runes 黑板
 
-def mask_applies(mask: str | None, difficulty: str) -> bool:
+#: `difficultyMask` 的**整数形态**（2026-09-28 补）。
+#:
+#: 旧编码的关卡文件（实测缓存 169 个）把它写成整数位掩码，而新编码写字符串。
+#: 位义**照证据**定，与 `rios-sim/stageenv.go::difficultyMaskOf` 同一份：
+#: 字符串侧 `FOUR_STAR` 73 / `NORMAL` 3 / `ALL` 1（95%/4%/1%），整数侧
+#: `2: 98% / 3: 2%` —— **优势项一一对应**，且字段名就叫 Mask。
+#: ⇒ bit0=NORMAL、bit1=FOUR_STAR、两位都有=ALL。
+#:
+#: ⚠ 认不出的整数（含 0 与 ≥4）返回 `#<n>` 这种**谁都不匹配**的串，**不许**退化
+#: 成 `None`/`""` —— 那两个在 `mask_applies` 里表示"对所有难度都适用"，
+#: 会把一条来路不明的 rune 应用到每一档上，比"漏用一条 rune"坏得多。
+#: （分支次序与 Go 那边逐条对齐：两位都有 ⇒ ALL，否则 bit1 ⇒ FOUR_STAR，
+#:  否则 bit0 ⇒ NORMAL，都不满足 ⇒ `#n`。）
+
+
+def normalize_difficulty_mask(mask: object) -> object:
+    """把整数形态的 `difficultyMask` 归一成字符串；其余原样返回。
+
+    这一个函数是 Python 侧唯一的归一入口 —— 修之前这里只认字符串，
+    于是**旧编码关卡里的 `global_lifepoint`（mask=2、value=1）被整条跳过**：
+    `act10d5_*` / `act10mini_*` 等 163 个四星档键的生命点数被算成关卡自己的
+    `maxLifePoint`（3 或 5），而真值是那个 rune 写的 **1**。
+    """
+    if isinstance(mask, bool) or not isinstance(mask, int):
+        return mask
+    if mask & 1 and mask & 2:
+        return "ALL"
+    if mask & 2:
+        return "FOUR_STAR"
+    if mask & 1:
+        return "NORMAL"
+    return "#%d" % mask
+
+
+def mask_applies(mask: object, difficulty: str) -> bool:
     """这条 rune 在当前难度下生效吗。
 
     `ALL` 必须认——`act31side_08` 用的就是它，不认则整条环境系统静默消失。
+    整数掩码先过 `normalize_difficulty_mask`（见那里的证据表）。
     """
+    mask = normalize_difficulty_mask(mask)
     return mask in ("ALL", "", None) or mask == difficulty
 
 
