@@ -2665,14 +2665,27 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			fmt.Printf("  （未核：这一条要走 Python 桥，这次找不到。具名原因：%s）\n",
 				firstLineWith(err.Error(), "★"))
 		} else {
-			fetched, n, err := ensureLevelFile("main_09-12")
-			if err != nil {
-				fmt.Printf("  （未核：ensure_level 没答上来。具名原因：%s）\n",
-					firstLineWith(err.Error(), "★"))
+			//: ★ 2026-09-28 修（打包自查时红的那一条）：原来**只调一次**就断言
+			//: `!fetched` ⇒ 它量的其实是"这台机器的缓存里恰好有这一关"，而不是
+			//: "已在盘上就不再发请求"这条性质。发布树里没有 `data/`，于是桥真去取
+			//: 了一次、`fetched=true` ⇒ 假红（`build_release.py` 因此 rc=1）。
+			//: 改成**先预热一次**（不在盘上就先取下来），再调第二次断言 ——
+			//: 这样量的是性质本身，与环境无关；首取那次的读数照样印出来当对照。
+			firstFetched, _, ferr := ensureLevelFile("main_09-12")
+			if ferr != nil {
+				fmt.Printf("  （未核：预热那一取没成，取不到「已在盘上」这条正例。具名原因：%s）\n",
+					firstLineWith(ferr.Error(), "★"))
 			} else {
-				check("已在盘上的关 ⇒ 桥不发请求（cached），并报出文件大小",
-					!fetched && n > 0,
-					fmt.Sprintf("fetched=%v bytes=%d", fetched, n))
+				fetched, n, err := ensureLevelFile("main_09-12")
+				if err != nil {
+					fmt.Printf("  （未核：ensure_level 没答上来。具名原因：%s）\n",
+						firstLineWith(err.Error(), "★"))
+				} else {
+					check("已在盘上的关 ⇒ 桥不发请求（cached），并报出文件大小",
+						!fetched && n > 0,
+						fmt.Sprintf("首取 fetched=%v、复取 fetched=%v bytes=%d",
+							firstFetched, fetched, n))
+				}
 			}
 			if _, _, err := ensureLevelFile("__no_such_level__"); err == nil {
 				check("负对照：索引里没有这一关 ⇒ 具名失败（不许静默当成「这关没地图」）",
