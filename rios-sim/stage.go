@@ -605,26 +605,14 @@ func (a waveAction) count() int {
 	return *a.Count
 }
 
-// interval 默认 1.0（`stage.py::_parse_spawns`）。注意 `or 0.0`：显式 0 也是 0。
+// interval 取这一条动作的出怪间隔：**照数据来写** —— 有值原样抄（显式 0 就是 0），
+// 只有键缺失／显式 null 才用缺省 1.0。
+//
+// ★ 出怪与支线**共用这一条口径**（博士 2026-09-28 裁）。Python 参照那两条路
+// 的兜底其实不同（`_parse_spawns` 是 `or 0.0`、`_parse_branches` 是 `or 1.0`），
+// 但那是它的实现细节，不是数据的样子 —— Go 不从它那里继承口径。
 func (a waveAction) interval() float64 {
 	if a.Interval == nil {
-		return 1.0
-	}
-	return *a.Interval
-}
-
-// branchInterval 复刻 `stage.py::_parse_branches` 那一行：
-//
-//	interval=float(a.get("interval", 1.0) or 1.0)
-//
-// ★ 它**与出怪那一支不是同一个口径**：出怪是 `or 0.0`（显式 0 保留 0），
-// 支线是 `or 1.0`（显式 0 被 `or` 顶成 1.0）。实测依据：`act26side_ex08`
-// 的 `branches.cledub_summon[0]` 与 `act49side_10` 的
-// `branches.left_hand_room_branch[5]` 里都**明写着** `"interval": 0`，
-// Python 参照读出来是 1.0，而 Go 原来直接抄了 0 ⇒ 判据上三处各红一处
-// （`act26side_ex08` 与它的 `#f#` 别名是同一份内容）。
-func (a waveAction) branchInterval() float64 {
-	if a.Interval == nil || *a.Interval == 0 {
 		return 1.0
 	}
 	return *a.Interval
@@ -709,8 +697,14 @@ func parseBranches(raw json.RawMessage) (map[string][]BranchAction, error) {
 				if a.RouteIndex != nil {
 					ri = *a.RouteIndex
 				}
-				//: ★ 支线用 `or 1.0` 口径（出怪那支是 `or 0.0`）——见 branchInterval 的注释。
-				iv := a.branchInterval()
+				//: ★ **照数据来写**（博士 2026-09-28 裁）：有值就原样抄，显式 0 就是 0；
+				//: 只有键缺失／显式 null 才用缺省 1.0。**不去复刻** Python
+				//: `_parse_branches` 那个 `or 1.0` 的兜底 —— 那是它自己的口径，
+				//: 不是数据的样子。Go 是从零写的独立实现，跟 Python 有差异不是缺陷。
+				iv := 1.0
+				if a.Interval != nil {
+					iv = *a.Interval
+				}
 				acts = append(acts, BranchAction{
 					EnemyKey: a.Key, RouteIndex: ri, Count: a.count(),
 					Interval: iv, PreDelay: a.PreDelay,

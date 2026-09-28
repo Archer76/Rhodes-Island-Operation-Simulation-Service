@@ -1164,7 +1164,7 @@ FileNotFoundError: [WinError 206] 文件名或扩展名太长
 ★ 教训一句话：**判据的读数必须连同"仪器身份 ＋ 分母"一起读**。这两行日志里都有，
 但只有把套名与结论抄进总表时**一起抄**，才不会把"仪器过期"记成"实现错"。
 
-### 12.18 支线 `interval` 的 `or 1.0`：3 处红 → 0（2026-09-28）
+### 12.18 支线 `interval`：**照数据来写**，这三处是与 Python 的差异、不是缺陷（2026-09-28 裁）
 
 全量重录「关卡」当场红 3 处，两处是同一个因：
 
@@ -1176,23 +1176,30 @@ FileNotFoundError: [WinError 206] 文件名或扩展名太长
     stage.branches.left_hand_room_branch[5].interval：Go='0' Python='1.0'
 ```
 
-**根因不是解析错，是两条路的 `or` 兜底本来就不一样**（照抄 Python，不许统一）：
+**数据本身写的是什么**（实测）：这两处关卡文件里**明写着** `"interval": 0`。
+`interval` 是"同一批出怪里相邻两只之间的秒数"，只在 `count>1` 时参与
+`第 i 只 = start + preDelay + i × interval`（`stage.py:522/528`）；这两条都是 `count: 1`，
+所以**出怪结果两边一致**，差的只是"读出来的那个数"。
 
-```
-出怪（`stage.py::_parse_spawns`）   ：interval=float(a.get("interval", 1.0) or 0.0)   ← 显式 0 保留 0
-支线（`stage.py::_parse_branches`）：interval=float(a.get("interval", 1.0) or 1.0)   ← 显式 0 被顶成 1.0
-```
+**Python 那边的 1.0 是它自己的兜底**：`_parse_branches` 写的是
+`float(a.get("interval", 1.0) or 1.0)` —— `or` 把显式 0 顶成 1.0；
+而出怪那条路是 `or 0.0`（显式 0 保留）。两条路口径不同，是它的实现细节。
 
-`stage.go::parseBranches` 原来直接抄 `*a.Interval`，于是**关卡文件里明写的 `"interval": 0`**
-（实测：`act26side_ex08` 的 `branches.cledub_summon[0]`、`act49side_10` 的
-`branches.left_hand_room_branch[5]` 两处都是 `0`）在 Go 侧留成 0、Python 侧是 1.0。
+★ **2026-09-28 博士裁**：Go 是从零写的**独立实现**，字段**按关卡数据原样读**，
+该是什么样就什么样 —— 不去继承 Python 的兜底。所谓「Python 与游戏内一致」也不构成
+Go 必须跟随的理由。⇒ 这三处**保留为差异**（`Go='0'` 是照数据、`Python='1.0'` 是它的兜底），
+判据上按"差异"读，不改 Go。
 
-修法：新增 `waveAction.branchInterval()`（缺键 / 显式 0 ⇒ 1.0，非零原值），
-`parseBranches` 改调它；出怪那条路**一个字不动**。
-判据：`rios-sim/stagebranch_test.go` —— 正例 4 条 ＋ `parseBranches` 真解析路径
-＋ **两条负对照**（出怪那条路必须仍保留显式 0；非零区间必须原样读进去）。
+**中间那一版曾经向 Python 对齐过**（新增 `waveAction.branchInterval()`，显式 0 ⇒ 1.0），
+**已按裁定回退**：`parseBranches` 回到"有值原样抄、缺键／显式 null 用缺省 1.0"，
+出怪与支线**共用同一条口径**（`waveAction.interval()`）。
 
-复核读数：`act26side_ex08` / `act26side_ex08#f#` / `act49side_10` ⇒ **3 / 3 关逐字段一致**（rc=0）。
+判据：`rios-sim/stagebranch_test.go` —— 正例 5 条（含**显式 0 ⇒ 0**、负数、小数原值）
+＋ `parseBranches` 真解析路径 4 条（显式 0／非零／缺键／显式 null）
+＋ **负对照**：谁哪天又把它"兜"成 1.0，那一条当场红。
+
+回退后的复核读数（`tools/check_stage_go.py`）：`0 / 3 关逐字段一致`，
+三处差异逐条就是上面那三行 —— **这是预期结果**，不是回归。
 
 ### 12.19 关卡本地定义（`useDb:false`）＋ rune 乘数：Python 参照整关崩（2026-09-28）
 
