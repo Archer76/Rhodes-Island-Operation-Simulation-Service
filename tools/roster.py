@@ -84,6 +84,19 @@ def classify(calc, uni: dict, battle: dict, equip_id: str) -> str:
 
 
 def build(uid: str | None = None) -> dict:
+    """`opers_<uid>.json` → 名册 dict。
+
+    ★ 2026-09-29：**实现搬进了 `ak_tactic.skland_roster`**（本体从 84 行起的那一大段）。
+    为什么搬：发布包按「只放运行时必须的文件」白名单**不含 `tools/roster.py`**，
+    而桥（`tools/rios_bridge.py`）在缺名册时要现场做这份转换 ⇒ 在发布树里
+    `import roster` 直接 `ModuleNotFoundError`，自动取名册那条路一次也没走通过。
+    ⇒ 现在两边共用包里那一份，这里只转发（产物逐字段相同，已实测）。
+    """
+    from ak_tactic.skland_roster import build_roster
+    return build_roster(uid, raw=load_skland(uid), calc=OperatorCalculator())
+
+
+def _build_legacy(uid: str | None = None) -> dict:
     raw = load_skland(uid)
     calc = OperatorCalculator()
     uni = calc._load_uniequip()
@@ -174,9 +187,9 @@ def _mod_cell(r: dict) -> str:
 
 
 def write_json(data: dict) -> Path:
-    p = SKLAND_DATA / f"roster_{data['uid']}.json"
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return p
+    """★ 2026-09-29：同样转发到包里那一份（见 `build` 的说明）—— 一处实现，两边用。"""
+    from ak_tactic.skland_roster import write_roster
+    return write_roster(data)
 
 
 def write_md(data: dict) -> Path:

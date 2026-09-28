@@ -337,9 +337,13 @@ def _try_fetch_roster_from_skland() -> tuple[object | None, str]:
                 game_uid = ""
         res = skland.fetch_all(uid=game_uid or uid)
         real = str(res.get("uid") or uid)
-        import roster as _roster          #: `tools/roster.py`（桥的 cwd 就在 tools/）
-        data = _roster.build(real)
-        path = _roster.write_json(data)
+        #: ★ 2026-09-29 修：**不再 `import roster`（`tools/roster.py`）** —— 那个文件是
+        #: 开发侧脚本，发布包按「只放运行时必须的文件」白名单不含它，于是这条自动取名册的
+        #: 路在发布树里一直以 `ModuleNotFoundError` 收场（而外层只说"名册取不到"）。
+        #: 转换逻辑现在住在 `ak_tactic.skland_roster`（包随发布走），两边共用一份实现。
+        from ak_tactic.skland_roster import build_roster, write_roster
+        data = build_roster(real, raw=res.get("opers") if isinstance(res.get("opers"), dict) else None)
+        path = write_roster(data)
         got = D.load_roster()
         if got is None:
             return None, "从森空岛取回来了、但 load_roster() 仍认不出（%s）" % path
