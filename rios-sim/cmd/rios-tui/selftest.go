@@ -2608,7 +2608,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		//: 光标回位按逻辑行数上移、物理行数却是两倍 ⇒ 每帧往下漂一行、满屏残字。
 		//: 三条断言：① 每行显示宽度 ≤ 窗口宽；② 一行都不许折（行数＝步数）；
 		//: ③ 第二帧仍按上一帧的**行数**上移（漂移的判别式）。
-		narrow := &setupBars{width: 60}
+		narrow := &setupBars{width: 60, ansi: true}
 		narrow.steps = []progressStep{
 			{Key: "akdb.sqlite", Title: "干员库", State: "ok", Sec: 12.3},
 			{Key: "stage 表", Title: "关卡索引（akdb 里的一张表）", State: "run"},
@@ -2633,7 +2633,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			strings.HasPrefix(w2.String(), "\x1b[3A"),
 			fmt.Sprintf("第二帧 %d 字节、3 行", w2.Len()))
 		//: 负对照：窗口压到极窄，也必须一行都不超（`cut` 兜底在场）
-		tiny := &setupBars{width: 28}
+		tiny := &setupBars{width: 28, ansi: true}
 		tiny.steps = narrow.steps
 		var w3 bytes.Buffer
 		tiny.render(&w3)
@@ -2644,6 +2644,27 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			}
 		}
 		check("负对照：28 列窗口下也不许有行超宽", tw <= 28, fmt.Sprintf("最宽 %d 格", tw))
+		//: ★ 2026-09-28 新增（博士第二次截图：满屏 `[2K`、`[3A` 字面量）：
+		//: **VT 开不了时不许装作能原地重画** —— 一行转义序列都不发，只在状态变时追加。
+		plain := &setupBars{width: 60}
+		plain.steps = []progressStep{
+			{Key: "akdb.sqlite", Title: "干员库", State: "ok", Sec: 12.3},
+			{Key: "stage 表", Title: "关卡索引（akdb 里的一张表）", State: "run"},
+		}
+		var p1, p2 bytes.Buffer
+		plain.render(&p1)
+		plain.render(&p2)
+		check("★ VT 开不了时退化成追加式：输出里一个转义序列都没有",
+			!strings.Contains(p1.String(), "\x1b"),
+			fmt.Sprintf("首帧 %d 行", strings.Count(p1.String(), "\n")))
+		check("★ 追加式：状态没变就不重复印（第二帧 0 字节 ⇒ 不会堆满屏）",
+			p2.Len() == 0, fmt.Sprintf("%d 字节", p2.Len()))
+		plain.steps[1].State = "ok"
+		var p3 bytes.Buffer
+		plain.render(&p3)
+		check("负对照：追加式里状态一变就必须印一行（否则这条路是死的）",
+			strings.Count(p3.String(), "\n") == 1,
+			fmt.Sprintf("%d 行", strings.Count(p3.String(), "\n")))
 		//: 负对照：坏 JSON 不许把已解析出来的东西打乱
 		before := len(bars.steps)
 		check("负对照：截断的 JSON 行被丢掉，不影响已解析的状态",

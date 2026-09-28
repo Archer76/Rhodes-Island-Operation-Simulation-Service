@@ -55,7 +55,15 @@ type setupBars struct {
 	//: width ≤ 0 ⇒ 现读终端宽度（`terminalWidth()`）。判据里显式给一个小值，
 	//: 好把"行超宽 ⇒ 折行 ⇒ 光标漂移"这件事故意逼出来。
 	width int
+	//: ansi=true 强制走转义序列重画（判据里用）。真机上由 `vtEnabled` 决定：
+	//: 开不了 VT 就退化成追加式，**绝不把 `[2K` 这类字面量打给玩家看**。
+	ansi bool
+	//: last 只在追加式里用：记每一步上次印过的状态，同一个状态不重复印。
+	last map[string]string
 }
+
+// useANSI 这次能不能用转义序列原地重画。
+func (b *setupBars) useANSI() bool { return b.ansi || vtEnabled }
 
 // apply 解析一行进度事件。认识的返回 true，其余（含子进程的散文）返回 false。
 func (b *setupBars) apply(line []byte) bool {
@@ -135,6 +143,10 @@ func (b *setupBars) find(key string) *progressStep {
 // 旧帧的残字留在屏上，几十帧之后满屏半截进度条。
 // 判据里三条宽度断言就是钉它的（`selftest` 的二十二节）。
 func (b *setupBars) render(w io.Writer) {
+	if !b.useANSI() {
+		b.renderAppend(w)
+		return
+	}
 	width := b.width
 	if width <= 0 {
 		width = terminalWidth()
@@ -161,8 +173,36 @@ func (b *setupBars) render(w io.Writer) {
 	b.spins++
 }
 
-// barLine 拼一行进度条，**保证显示宽度 ≤ width**（夹不住就会折行，见 render 的注释）。
+// renderAppend 是 **VT 开不了时的退路**：一行转义序列都不发，只在某一步的**状态真的变了**
+// 的时候追加一行。
 //
+// ★ 为什么要有这条退路（2026-09-28 博士截图）：那个控制台没开 VT，于是 `\x1b[2K` 被当
+// 普通字符打了出来（屏幕上全是 `[2K`、`[3A`），"原地重画"根本没发生 ⇒ 进度条不动、
+// 还越堆越多。开不了 VT 就**别装作能重画** —— 老老实实按行追加，屏幕至少是干净的。
+func (b *setupBars) renderAppend(w io.Writer) {
+	if b.last == nil {
+		b.last = map[string]string{}
+	}
+	width := b.width
+	if width <= 0 {
+		width = terminalWidth()
+	}
+	for i := range b.steps {
+		st := &b.steps[i]
+		fp := st.State //: 只认状态变没变（进度 tick 太密，追加式里不重印）
+		if b.last[st.Key] == fp {
+			continue
+		}
+		b.last[st.Key] = fp
+		fmt.Fprintln(w, barLine(st, 0, width))
+	}
+	if b.haveSum && b.last["\x00summary"] == "" {
+		b.last["\x00summary"] = "1"
+		fmt.Fprintln(w, cut("  "+summaryLine(b.ok, b.failed), width))
+	}
+}
+
+// barLine 拼一行进度条，**保证显示宽度 ≤ width**（夹不住就会折行，见 render 的注释）。
 // 布局：两格缩进 ／ 条形（`barWidth` ＋ 一对括号）／ 两格 ／ 标题（≤22 格）／ 两格 ／ 尾巴。
 // 预算不够时先压标题（最少 6 格），最后还有一道 `cut` 兜底（尾巴太长时也压它）。
 func barLine(st *progressStep, spin, width int) string {

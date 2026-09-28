@@ -17,6 +17,9 @@ import (
 func setupConsole()   {}
 func restoreConsole() {}
 
+// : 非 Windows 终端本来就是 ANSI，直接算可用（首次运行那段的原地重画靠它）。
+var vtEnabled = true
+
 func stdinIsTerminal() bool {
 	st, err := os.Stdin.Stat()
 	if err != nil {

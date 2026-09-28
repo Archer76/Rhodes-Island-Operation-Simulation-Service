@@ -35,26 +35,70 @@ var (
 	procSetConsoleCP    = kernel32.NewProc("SetConsoleOutputCP")
 	consoleCPRestore    uintptr
 	consoleCPNeedsReset bool
+
+	procGetConsoleMode = kernel32.NewProc("GetConsoleMode")
+	procSetConsoleMode = kernel32.NewProc("SetConsoleMode")
+	//: 输出模式里开 VT：让 `\x1b[2K` / `\x1b[3A` 这类序列被**解释**，而不是当普通字符打出来。
+	consoleModeRestore    uint32
+	consoleModeNeedsReset bool
 )
 
-// setupConsole 把控制台输出代码页切成 UTF-8，并记下原值供退出时恢复。
+// : `ENABLE_VIRTUAL_TERMINAL_PROCESSING`（Windows 10+ 控制台输出模式位）。
+const enableVirtualTerminalProcessing = 0x0004
+
+// vtEnabled 记录"这个进程的输出句柄到底能不能解释 ANSI 序列"。
+//
+// ★ 2026-09-28 真机踩到（博士截图）：首次运行那段进度条跑在 bubbletea **之前**，
+// 而"开 VT"这活一直是 bubbletea 进来时干的 ⇒ 在那之前 `\x1b[2K` 全是字面量
+// （屏幕上看得见 `[2K`、`[3A`），"原地重画"根本没发生 ⇒ 进度条不动、还越堆越多。
+// 这里自己开一次；开不了就记成 false，渲染侧退化成**不用转义序列**的追加式输出。
+var vtEnabled bool
+
+// setupConsole 把控制台输出代码页切成 UTF-8、并打开 VT 序列解释；原值都记下供退出还原。
 // 拿不到控制台（重定向、判据里跑）时**什么都不做** —— 那不是错误。
 func setupConsole() {
 	old, _, _ := procGetConsoleCP.Call()
-	if old == 0 || old == utf8CodePage {
+	if old != 0 && old != utf8CodePage {
+		if ret, _, _ := procSetConsoleCP.Call(utf8CodePage); ret != 0 {
+			consoleCPRestore, consoleCPNeedsReset = old, true
+		}
+	}
+	enableVT()
+}
+
+// enableVT 给标准输出句柄打开 VT 处理。开了（或本来就有）算 true。
+func enableVT() {
+	handle, err := syscall.GetStdHandle(syscall.STD_OUTPUT_HANDLE)
+	if err != nil {
 		return
 	}
-	ret, _, _ := procSetConsoleCP.Call(utf8CodePage)
-	if ret != 0 {
-		consoleCPRestore, consoleCPNeedsReset = old, true
+	var mode uint32
+	if ret, _, _ := procGetConsoleMode.Call(
+		uintptr(handle), uintptr(unsafe.Pointer(&mode))); ret == 0 {
+		return //: 不是真控制台（重定向/管道）⇒ 没有"解释序列"这回事
+	}
+	if mode&enableVirtualTerminalProcessing != 0 {
+		vtEnabled = true
+		return
+	}
+	if ret, _, _ := procSetConsoleMode.Call(
+		uintptr(handle), uintptr(mode|enableVirtualTerminalProcessing)); ret != 0 {
+		consoleModeRestore, consoleModeNeedsReset = mode, true
+		vtEnabled = true
 	}
 }
 
-// restoreConsole 把代码页还回去（只有真改过才还）。
+// restoreConsole 把代码页与输出模式都还回去（只有真改过才还）。
 func restoreConsole() {
 	if consoleCPNeedsReset {
 		_, _, _ = procSetConsoleCP.Call(consoleCPRestore)
 		consoleCPNeedsReset = false
+	}
+	if consoleModeNeedsReset {
+		if handle, err := syscall.GetStdHandle(syscall.STD_OUTPUT_HANDLE); err == nil {
+			_, _, _ = procSetConsoleMode.Call(uintptr(handle), uintptr(consoleModeRestore))
+		}
+		consoleModeNeedsReset = false
 	}
 }
 
