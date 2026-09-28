@@ -297,33 +297,44 @@ def main() -> int:
 
     print("=" * 92)
     print("Go 侧跨实现对拍总表（判据脚本各自独立跑；本表只汇总，不改它们的判据）")
+    #: ★ 口径（博士 2026-09-28 裁）：**Go 是从零写的独立实现**。
+    #: 本表的「非绿」是**与 Python 参照的差异记录**，不是"Go 欠账"；
+    #: 就算 Python 那边与游戏内一致，也不构成 Go 必须跟随的理由。
+    #: ⇒ 因此：非绿记「差异」不记「红」；**只有反向守卫不成立才是判据自己的缺陷**。
+    print("★ 口径：Go 是从零写的独立实现 —— 非绿＝**与 Python 参照的差异**（不是 Go 欠账）；")
+    print("        Python 与游戏内一致也不构成 Go 必须跟随的理由。逐条差异见下面各行的结论。")
     print("=" * 92)
-    bad = 0
+    diff = 0
     for name, rc, verdict, what, _out, _err in rows:
-        mark = "✓" if rc == 0 and verdict else ("✗" if rc != 0 else "?")
+        mark = "✓" if rc == 0 and verdict else ("△" if rc != 0 else "?")
         if mark != "✓":
-            bad += 1
+            diff += 1
         print("%s %-6s rc=%-3d %s" % (mark, name, rc, verdict or "（没抠到结论行）"))
         print("        %s" % what)
     if selfcheck:
         print()
-        print("★ 反向守卫自检（每套人为注入一处不一致，**必须判红**，rc=0 即成立）：")
+        print("★ 反向守卫自检（每套人为注入一处不一致，**判据必须能判红**，rc=0 即成立）：")
+        print("  这一块量的是**判据自己的灵敏度**，与上表的差异无关。")
         gbad = 0
         for name, grc in guards:
             ok = grc == 0
             if not ok:
                 gbad += 1
-            print("    %s %-6s rc=%d %s" % ("✓" if ok else "✗", name, grc,
-                                            "" if ok else "← 守不住：注入了改动却没红"))
+            print("    %s %-6s rc=%d %s" % ("✓" if ok else "⚠", name, grc,
+                                            "" if ok else "← 守卫未成立：注入了改动却没红（判据自己的缺陷）"))
         if gbad:
-            print("★ %d / %d 套的守卫不成立" % (gbad, len(guards)))
+            print("★ %d / %d 套的守卫不成立（这是判据的问题，不是与 Python 的差异）"
+                  % (gbad, len(guards)))
             return 1
         #: ⚠ 这行**要与 SUITE 同源**：写死「六套」会在加第七套之后变成假话
         #: （实测：加了「生命上限」之后它仍印「六套守卫全部成立」，而表上是七行）。
         print("    %d 套守卫全部成立" % len(guards))
     print()
-    if bad:
-        print("★ %d / %d 套判据没通过 —— 下面是各自的原始输出尾部：" % (bad, len(rows)))
+    if diff:
+        print("★ %d / %d 套与 Python 参照**有差异** —— 下面是各自的原始输出尾部："
+              % (diff, len(rows)))
+        print("  （按 2026-09-28 口径：差异不等于缺陷。先问「这是差异还是缺陷」，")
+        print("    再决定是改 Go、改判据，还是就这么留着。）")
         for name, rc, verdict, _what, out, err in rows:
             if rc == 0 and verdict:
                 continue
@@ -335,7 +346,7 @@ def main() -> int:
             if err.strip():
                 print("    [stderr] " + err.strip().splitlines()[-1])
         return 1
-    print("结论：%d / %d 套全绿" % (len(rows), len(rows)))
+    print("结论：%d / %d 套与 Python 参照逐字段一致（零差异）" % (len(rows), len(rows)))
     return 0
 
 
