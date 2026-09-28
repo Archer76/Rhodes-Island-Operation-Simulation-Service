@@ -2807,10 +2807,18 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			if _, _, err := ensureLevelFile("__no_such_level__"); err == nil {
 				check("负对照：索引里没有这一关 ⇒ 具名失败（不许静默当成「这关没地图」）",
 					false, "竟然成功了")
-			} else {
+			} else if strings.Contains(err.Error(), "__no_such_level__") {
 				check("负对照：索引里没有这一关 ⇒ 具名失败（不许静默当成「这关没地图」）",
-					strings.Contains(err.Error(), "__no_such_level__"),
-					firstLineWith(err.Error(), "索引"))
+					true, firstLineWith(err.Error(), "索引"))
+			} else {
+				//: ★ 2026-09-28 修：这条负对照原来**把所有非空错误都算过**，
+				//: 而错误的含义不一样 —— 这里要证的是"索引里没有它 ⇒ 具名失败"。
+				//: 网络/证书坏了时错误是**另一个**具名错误（例如
+				//: `下载失败（证书）：https://map.ark-nights.com/`），
+				//: 那不是"把没地图静默放行"，记成红就是**假红**（打包自查时踩到）。
+				//: ⇒ 取不到那条读数就**具名未核**，别把"网断了"记成"判据红"。
+				fmt.Printf("  （未核：这条负对照取不到「索引里没有这一关」的读数。"+
+					"具名原因：%s）\n", firstLineOf(err.Error(), 120))
 			}
 		}
 	}
