@@ -618,7 +618,28 @@ func runSim(spec *Spec) (*Verdict, error) {
 					[3]any{t, op.spec.Name, "再部署冷却中"})
 				continue
 			}
-			// ③ 付得起吗（`_affordable` 2064-2077）
+			// ③ 部署位满了吗（博士 2026-09-29 定的规则）
+			//
+			// 「即时关卡部署上限是 9 人或更少，**编队中的 12 人依旧都可以上场**，
+			// 只要**同时在场**的部署位占用不超过关卡上限即可。」
+			//
+			// 判的是**此刻在场上的人数**（`alive()`：阵亡与已撤退的不占位，
+			// 所以「撤一个再上一个」在满位时照样成立）。计划里排多少条部署**不管**
+			// ——那是编队的事，上限只约束同一时刻。
+			//
+			// ⚠ **没送上限（`0`）就不判**：老调用方那份「造好的规格」不带这个键，
+			// 行为必须一个字不变（与 `DeployLimit` 的注释同一口径）。
+			// ⚠ **召唤物也占位**，而 Go 侧现在**没有友方召唤物**（令那一族整个没建模）
+			// ⇒ 这一条现在只数干员，缺口已登记在 `docs/retreat-audit.md` §2.5。
+			if spec.DeployLimit > 0 {
+				if onFieldCount(onField) >= spec.DeployLimit {
+					verdict.DeployRejected = append(verdict.DeployRejected,
+						[3]any{t, op.spec.Name,
+							fmt.Sprintf("部署位已满（同时上限 %d）", spec.DeployLimit)})
+					continue
+				}
+			}
+			// ④ 付得起吗（`_affordable` 2064-2077）
 			if float64(d.Cost) > cost {
 				verdict.CostDenied = append(verdict.CostDenied,
 					[4]any{t, op.spec.Name, d.Cost, cost})
@@ -3290,6 +3311,25 @@ func (o *operator) retreat() {
 	o.retreated = true
 	o.blocking = nil
 	o.hp = 0
+}
+
+// onFieldCount 数**此刻占着部署位**的干员个数。
+//
+// 判据是 `alive()`（`hp > 0 && !retreated`，见它的定义）——阵亡与已撤退的**不占位**，
+// 所以「满位时先撤一个再上一个」照样成立。`onField` 按 `char_id` 记着**最近一次部署**
+// 的那个对象（含已阵亡的），所以这里必须逐个数活着的，不能拿 `len(onField)` 当答案
+// （那会把死人与撤走的人也算成占位）。
+//
+// ⚠ 博士 2026-09-29 点名的**召唤物也占部署位**（令的那一族）：Go 侧现在没有友方
+// 召唤物，所以这里数不到它们——缺口登记在 `docs/retreat-audit.md` §2.5。
+func onFieldCount(onField map[string]*operator) int {
+	n := 0
+	for _, o := range onField {
+		if o.alive() {
+			n++
+		}
+	}
+	return n
 }
 
 // opOnFieldByName 按名字找人，**此刻在场的那一个优先**（撤退请求用）。

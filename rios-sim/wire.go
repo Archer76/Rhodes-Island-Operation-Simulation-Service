@@ -30,6 +30,21 @@ type Spec struct {
 	RangedEnemies bool    `json:"ranged_enemies"`
 	//: 位移速度乘区（`speed_scale`，含关卡 `move_multiplier`）
 	SpeedScale float64 `json:"speed_scale"`
+
+	//: **这一关的同时部署上限**（`options.characterLimit`：能同时站在场上的部署位数）。
+	//:
+	//: 博士 2026-09-29 定的规则：「即时关卡部署上限是 9 人或更少，**编队中的 12 人依旧
+	//: 都可以上场**，只要**同时在场**的部署位占用不超过关卡上限即可（例：令的召唤物
+	//: 占用部署位）。」⇒ 这是**运行期**的判据（占用随撤退／阵亡释放），所以真值在
+	//: 模拟器，不在计划层：计划里可以排 12 条不同干员的部署。
+	//:
+	//: ⚠ 这是**第 21 个顶层键**（`retreats` 是第 20 个），与它同一套登记：Go 单方面
+	//: 扩协议 ⇒ 进 `specgo.go::specKeysGoOnly`，不动那张手抄自 Python 的 19 键表。
+	//: 值来自关卡：main_01-07 是 8（界面侧那条 `deployLimit` 判据用的同一个数）。
+	//:
+	//: ⚠ **0 ＝ 没送** ⇒ 不判上限（与「这一关一个位置都没有」分得开：真实关卡
+	//: `characterLimit` 至少是 1）。老调用方（造好的规格，不带这个键）因此行为不变。
+	DeployLimit int `json:"deploy_limit,omitempty"`
 	//: 高台格（`[x, y]` 列表）。Go 没有地图，而天赋「汹涌怒火」的高台那一半
 	//: 要判"被溅射到的格是不是高台"——这份几何由 Python 随规格送来。
 	//: 不在表里就当没高台（高台溅射那一段因此整段不发生）。

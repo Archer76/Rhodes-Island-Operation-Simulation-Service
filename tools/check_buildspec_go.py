@@ -479,20 +479,33 @@ REGISTERED_EXTRA: tuple[tuple[str, str], ...] = (
      "撤退请求（时刻 ＋ 干员名）。博士 2026-09-25「你现在把撤退机制做了吧」⇒ "
      "Go 实现了撤退（`sim.go` 帧序 1c 执行），而 Python 侧仍把撤退整条拒跑"
      "（`spec.py:146-151`）⇒ 它永远不送这个键"),
+    #: ★★ 2026-09-29 第七批：**同时部署上限**（第二个 Go 单方面的顶层键）。
+    #: 博士 2026-09-29「编队中的 12 人依旧都可以上场，只要**同时在场**的部署位占用
+    #: 不超过关卡上限即可（例：令的召唤物占用部署位）」⇒ 上限是运行期判据，
+    #: 真值在模拟器（`sim.go` 部署那一支的具名拒）；Python 侧既没有这个键、
+    #: 也没有这条判据。与 `retreats` 一样，**逐路径**这一道也要登记。
+    (r"^\.deploy_limit$",
+     "同时部署上限（`options.characterLimit`）。Go 在 `sim.go` 的部署那一支按它"
+     "具名拒「部署位已满」；Python 侧没有这个键（且它的普通部署路径根本不判同时上限，"
+     "只在召唤物那一路判 `allowance.simultaneous`）"),
 )
 REGISTERED_EXTRA_RX = tuple((re.compile(p), src) for p, src in REGISTERED_EXTRA)
 
 #: **Go 多出来的「顶层」键**（与 `REGISTERED_EXTRA` 是两件事：那是**逐路径**的，
-#: 这是**规格顶层**的）。现有一族一条：
+#: 这是**规格顶层**的）。现有两族，各一条：
 #:
 #:   · `retreats` —— 撤退请求。博士 2026-09-25「你现在把撤退机制做了吧」⇒
 #:     Go 实现了撤退（规格多一个顶层键、`sim.go` 帧序 1c 执行、特性
 #:     「撤退时返还初始部署费用」跟着兑现）；而 Python 侧仍然把撤退整条拒跑
 #:     （`spec.py:146-151`）⇒ 它**永远不会**送这个键。
+#:   · `deploy_limit` —— 同时部署上限（`options.characterLimit`）。博士 2026-09-29
+#:     「编队中的 12 人依旧都可以上场，只要**同时在场**的部署位占用不超过关卡上限
+#:     即可」⇒ 上限是**运行期**判据（占用随撤退／阵亡释放），Go 在部署那一支具名拒
+#:     「部署位已满」；Python 侧没有这个键。
 #:
 #: ⚠ 与 `specgo.go::specKeysGoOnly` 是**同一份事实的两处落点**（那一侧给 Go 自己的
 #: 反键守卫用，这一侧给跨源判据用）。两处都**具名**，且都必须配两侧守卫。
-TOP_LEVEL_GO_ONLY: tuple[str, ...] = ("retreats",)
+TOP_LEVEL_GO_ONLY: tuple[str, ...] = ("retreats", "deploy_limit")
 TOP_LEVEL_SEEN: dict = {}
 TOP_LEVEL_FROM_PY: dict = {}
 

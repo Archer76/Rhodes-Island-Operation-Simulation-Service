@@ -52,12 +52,16 @@ var specKeysAll = []string{
 // 往它里面塞 Go 自己的键，等于把「与 Python 的契约」偷偷改成「Go 的单方面声明」，
 // 那条核对的判据就再也发现不了真正的协议漂移。
 //
-// 现有一族一条：
+// 现有两族，各一条：
 //
 //	· `retreats` —— 撤退请求（博士 2026-09-25：「你现在把撤退机制做了吧」）。
 //	  Python 侧**也拒撤退**（`spec.py:146-151` 把它报成 `撤退 ×N` 的理由），
 //	  所以这是 Go **先走一步**，不是「把 Python 有的补上」。
-var specKeysGoOnly = []string{"retreats"}
+//	· `deploy_limit` —— 这一关的**同时部署上限**（`options.characterLimit`）。
+//	  博士 2026-09-29：「编队中的 12 人依旧都可以上场，只要**同时在场**的部署位
+//	  占用不超过关卡上限即可」⇒ 上限是运行期判据，真值在模拟器（`sim.go` 部署那一支
+//	  的具名拒），Python 侧没有这个键也没有这条判据。
+var specKeysGoOnly = []string{"retreats", "deploy_limit"}
 
 // gatedKeys 是**已经产出、但原版那道门还没接**的键。
 var gatedKeys = []string{"highland_cells", "goal_cells"}

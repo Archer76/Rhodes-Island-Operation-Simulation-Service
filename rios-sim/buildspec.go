@@ -210,6 +210,12 @@ type FullSpec struct {
 	EnemyWindup   float64 `json:"enemy_windup"`
 	RangedEnemies bool    `json:"ranged_enemies"`
 	SpeedScale    float64 `json:"speed_scale"`
+	//: **同时部署上限**（`options.characterLimit`）——第 21 个顶层键，与 `retreats`
+	//: 同属 `specKeysGoOnly`（Go 单方面扩协议）。判据在 `sim.go` 的部署那一支：
+	//: 同时在场的部署位占用到顶就具名拒（占用随撤退／阵亡释放）。
+	//: ⚠ 与 `retreats` 一样**不带 `omitempty`**：这一栏要能跟「没送」分开，
+	//: 而 0 的语义是「不判上限」（老调用方造好的规格不带这个键）。
+	DeployLimit int `json:"deploy_limit"`
 
 	HighlandCells [][2]int `json:"highland_cells"`
 	GoalCells     [][2]int `json:"goal_cells"`
@@ -434,6 +440,9 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 	out.Spec.EnemyWindup = env.EnemyWindup
 	out.Spec.RangedEnemies = env.RangedEnemies
 	out.Spec.SpeedScale = env.SpeedScale
+	//: **同时部署上限**：直接从关卡的 `options.characterLimit` 搬（不折算、不夹）。
+	//: 0 也照搬——那是「这一关没声明」，模拟器据此不判上限（见 `Spec.DeployLimit`）。
+	out.Spec.DeployLimit = st.Options.CharacterLimit
 
 	// ---- operators / deploys / skill_uses：有输入才有内容 ----
 	//: ⚠ 走**对象级的核心函数**（`BuildOperators` / `BuildDeploys`）而不是那两个
