@@ -695,6 +695,13 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		return OperatorOut{}, fmt.Errorf("%s（%s）的部署费用：%v",
 			r.Operator, e.CharID, err)
 	}
+	//: 再部署时间：面板那一份（基底 ＋ 潜能 ＋ 模组，见 `CalculateOperator`），
+	//: 天赋的平摊减免已经折在里面了；取不到退回默认 70。
+	redeploy, err := totalOrDef(t, "respawnTime", opsRedeployDefault)
+	if err != nil {
+		return OperatorOut{}, fmt.Errorf("%s（%s）的再部署时间：%v",
+			r.Operator, e.CharID, err)
+	}
 
 	code, err := operatorRangeCode(e.CharID, e.Elite)
 	if err != nil {
@@ -724,10 +731,22 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		MaxHP: maxHP, ATK: atk, DEF: def, RES: res,
 		AttackInterval: interval, DamageType: st.TextDerived.DamageType,
 		BlockCnt: int(blockCnt), DeployCost: cost,
-		//: ⚠ 常量 70.0，**不是** `total["respawnTime"]`：`verify.py:314-355` 的
-		//: `kw` 里没有 `redeploy_time`，所以原版读到的恒是 `OperatorView` 的
-		//: 默认值。这一点由判据每次现算（非 0 即红），见文件头第 2 条。
-		RedeployTime: opsRedeployDefault,
+		//: ★ **再部署时间取真值**（博士 2026-09-29 裁定：「连天赋／模组的再部署减免
+		//: 一起算」）——「快速复活」那一族要建模撤退／二次部署，这一列必须是真数：
+		//: 处决者是 **18s**、THRM-EX 是 200s，而原先（照 `verify.py:314-355` 的口径）
+		//: 所有人恒 70s ⇒ 骗伤位的二次落位节奏会**差 3.9 倍**。
+		//:
+		//: 组成：`total["respawnTime"]` 里已经含**基底（关卡表相位属性）＋ 潜能
+		//: （`RESPAWN_TIME`，见 `potentialAttrMap`）＋ 模组（`respawn_time`，见
+		//: `moduleKeyMap`）**三项；天赋那一份是 `CalculateOperator` 里另外折进去的
+		//: （与 atk/def/maxHp 那三个倍率同一处）。取不到就退回 `opsRedeployDefault`
+		//: （70）——那是**老口径**，与「这一位真的是 70」分不开，所以判据钉的是
+		//: 处决者 18 / THRM-EX 200 这两个**不可能撞上默认值**的数。
+		//:
+		//: ⚠ **有意与 Python 分道**：Python 侧 `OperatorView.redeploy_time` 恒为默认
+		//: 70（`kw` 里没有这个键），所以「与 Python 逐字段一致」的判据会在这一栏看见
+		//: 差值 ⇒ 已在那条判据里具名登记，见 `docs/retreat-audit.md` §2.6。
+		RedeployTime: redeploy,
 		Range:        cells,
 	}
 	//: 势力代号：取不到就是空串（等于不翻倍），原版据此**不送这个键**。

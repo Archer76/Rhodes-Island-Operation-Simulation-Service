@@ -425,6 +425,29 @@ func isGliderTalent(t resolvedTalent) bool {
 	return true
 }
 
+// respawnTalentDelta 把天赋黑板上 `respawn_time` 的**平摊减免**加起来。
+//
+// 博士 2026-09-29 裁定：「连天赋／模组的再部署减免一起算」。模组那一份走
+// `moduleKeyMap`（`respawn_time` → `respawnTime`）已经进了面板的 `total`，
+// 天赋这一份不在那条路上，所以在 `CalculateOperator` 里单独折。
+//
+// 单位是**秒**，不是比例——实测（`out/acceptance/_respawn_probe.py`）：焰狐龙梓兰的
+// 「翔虫机动」黑板原样 `{"respawn_time": -15.0}`；若是比例会是 -0.15 那种小数。
+// 所以这里是**相加**，与潜能（`RESPAWN_TIME`）同一支。
+//
+// ⚠ 取的是 `resolveTalents` 给出的**这一次练度下生效**的那一份候选（精英／等级／
+// 潜能三档都对上），不是把整张表里所有候选加起来——那样会把满潜那一档的减免
+// 提前算给一个没满潜的人。
+func respawnTalentDelta(talents []json.RawMessage, elite, level, potential int) float64 {
+	delta := 0.0
+	for _, t := range resolveTalents(talents, elite, level, potential) {
+		if v, ok := toFloat(t.Blackboard["respawn_time"]); ok {
+			delta += v
+		}
+	}
+	return delta
+}
+
 // strOr 复刻 `str(a or b or "")`：前者为空则取后者。
 func strOr(a, b any) string {
 	if s, ok := a.(string); ok && s != "" {

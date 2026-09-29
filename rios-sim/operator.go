@@ -539,6 +539,21 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 			"atk": talentMods.ATKPct, "def": talentMods.DEFPct, "max_hp": talentMods.MaxHPPct,
 		}
 	}
+	//: ---- ★ 天赋的**平摊**再部署减免（博士 2026-09-29 裁定：连天赋／模组的
+	//: 再部署减免一起算）----
+	//:
+	//: 形状由探针定死（`out/acceptance/_respawn_probe.py` 的实测）：焰狐龙梓兰的
+	//: 天赋「翔虫机动」黑板原样是 `{"respawn_time": -15.0}` ⇒ **是秒，不是比例**
+	//: （比例会写成 -0.15）。所以与潜能／模组那两族一样**平摊相加**，不走倍率那一支。
+	//: 实战验证点：她基础 70s，天赋 −15 ⇒ 55s；再挂上「梓兰特制箭靶」（−25）⇒ 30s。
+	//:
+	//: ⚠ 只读**裸键** `respawn_time`：`$` 前缀（值住在 `valueStr` 里）那一族在这一
+	//: 项上没有出现，硬写一个分支会是一条永远不成立的判据。
+	if d := respawnTalentDelta(char.Talents, cfg.Elite, cfg.Level, cfg.Potential); d != 0 {
+		if cur, ok := toFloat(total["respawnTime"]); ok {
+			total["respawnTime"] = applyRounding(cur+d, "respawnTime", rounding)
+		}
+	}
 	st.Total = total
 	//: 攻速加成：天赋（常驻/高台条件）＋ 模组特性改写（未阻挡条件）。
 	parts, err := moduleParts(cfg.Module, cfg.ModuleLevel)

@@ -203,6 +203,43 @@ if !op.alive() {                     // ② 静默：什么都不记
 
 ---
 
+### 2.6 同一批（2026-09-29）：**再部署时间取真值**
+
+**规则**（博士 2026-09-29 裁定）：「连天赋／模组的再部署减免一起算」。
+
+改之前 Go 与 Python 同口径：`OperatorOut.RedeployTime` 恒 `opsRedeployDefault` = **70s**
+（照 `verify.py` 的 `kw` 里没有 `redeploy_time` 这个键，读到的永远是视图默认值）。
+后果很具体：**骗伤位的二次落位节奏差 3.9 倍**（砾真值 18s 级，老口径 70s），
+「快速复活」那一族根本没法建模。
+
+**真值在哪（都是本地数据，不需要新协议）**：
+
+| 组成 | 数据位置 | 例 |
+| --- | --- | --- |
+| 相位基值 | `character_table.json` 的 `phases[].attributesKeyFrames[].data.respawnTime`（**顶层没有这个键**，探针踩过） | 处决者 18、THRM-EX 200、普通 70 |
+| 潜能 | `potentialRanks[].buff.attributes.attributeModifiers[RESPAWN_TIME]` | 砾第 3 档 −2、焰狐龙梓兰第 2 档 −4 |
+| 天赋 | 天赋黑板 `respawn_time`（**秒，不是比例**） | 焰狐龙梓兰「翔虫机动」−15 |
+| 模组 | `attributeBlackboard` 的 `respawn_time` | 「梓兰特制箭靶」−25 |
+
+**落地**：`operator.go::CalculateOperator` 把天赋那一份（`respawnTalentDelta`，平摊相加）
+折进 `total["respawnTime"]`——潜能与模组**本来就在**那条路上（`potentialAttrMap`／
+`moduleKeyMap` 早就有这两个键，只是没人读总值）；`operators.go::buildOperatorOut` 改成
+读 `total["respawnTime"]`，取不到才退回 70。
+
+**判据**：`rios-sim/redeploytime_test.go` 三层——① 面板层六个具名数（含**负对照**：
+能天使仍是 70，不是「全变 18」）；② 规格层两次部署两个对象都带真值；③ 行为层
+「撤退后 `rt+1` 秒能上、`rt−1` 秒被具名拒」，`rt` **从规格里现读**不写死
+（老口径下这两个时刻都会被拒 ⇒ 正例不可能是偶然通过）。
+
+**与 Python 的分道已登记**：`tools/check_operators_go.py` 新增 §5b——把这一栏从
+「与 Python 逐位比」里摘出来，改比**判据自己用本地库现算的期望值**
+（`expected_respawn_time`：相位基值 ＋ 潜能 ＋ 天赋，映射与 Go 的 `potentialBonus`
+逐字对齐）。摘出来不等于放它走：它照样逐人次比、照样驱动 rc，并且**报行使计数**——
+实测 **64 人次比过、其中 22 人次的期望值不是默认 70**（⇒ 非默认那一支真的被行使过），
+另 4 人次因名册夹具里没有那几位而**不进分母**（具名列出，不假装一致）。
+
+---
+
 ## 三 · Q2：`specKeysGoOnly` 与 `specKeysAll` 真是两张表吗？往 `specKeysAll` 加行会怎样？
 
 **结论：两张表确实是分开的（对得上）；但新键把 buildspec 那一路的跨实现键集判据**打红了**（对不上）。**

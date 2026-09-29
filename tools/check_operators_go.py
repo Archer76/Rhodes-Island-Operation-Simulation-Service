@@ -118,6 +118,129 @@ GO_BIN = os.environ.get(
     "RIOS_SIM_BIN", str(ROOT / "out" / "acceptance" / "rios-sim-stage3.exe"))
 DATA = ROOT / "data" / "gamedata"
 ROSTER_FIX = ROOT / "fixtures" / "roster_max_modelled.json"
+DB_PATH = ROOT / "data" / "akdb.sqlite"
+
+#: ---- ★★ 2026-09-29：`redeploy_time` 是**有意与 Python 分道**的一栏 ----
+#:
+#: 博士 2026-09-29 裁定「连天赋／模组的再部署减免一起算」。Python 侧
+#: `OperatorView.redeploy_time` 恒为视图默认 **70**（`verify.py` 的 `kw` 里没有这个键，
+#: 见本文件开头第 2 条），而 Go 现在取**真值**：
+#:
+#:     相位基值（`phases[].attributesKeyFrames[].data.respawnTime`，处决者 18／THRM-EX 200）
+#:     ＋ 潜能（`RESPAWN_TIME`）
+#:     ＋ 天赋黑板 `respawn_time`（**秒**，不是比例）
+#:     ＋ 模组 `attributeBlackboard.respawn_time`
+#:
+#: ⇒ 逐位比会**必然**看见差值。所以这一栏从下面的严格比较里摘出来，换成
+#: **判据自己现算的期望值**（`expected_respawn_time`，只读本地库、不读 Go 的读数）。
+#: 摘出来**不等于放它走**：它照样逐人次比、照样驱动 rc（见 §5 那段循环）。
+REDEPLOY_KEY = "redeploy_time"
+
+#: 天赋黑板上 `respawn_time` 的**平摊**减免（秒），按 char_id 具名。
+#: 只列「当前夹具里真的出现、且天赋带这一项」的干员；来历是 `operator_talent.blackboard`
+#: 现查（焰狐龙梓兰「翔虫机动」原样 `{"respawn_time": -15.0}`）。
+#: ⚠ 天赋那一支要在判据里**现算**得把「精英／等级／潜能的解锁条件」重写一遍——
+#: 那是第二份实现，不如具名列出来源、并在 Go 侧由单测钉住（`redeploytime_test.go`）。
+TALENT_RESPAWN_DELTA = {"char_1048_orchd2": -15.0}
+
+
+def expected_respawn_time(conn, char_id: str, elite: int, potential: int):
+    """判据侧独立现算的 `redeploy_time` 期望值（**不读 Go 的读数**）。
+
+    = `operator_attr(kind='phase', phase=elite).respawn_time`
+      ＋ Σ `operator_potential(rank < potential-1).modifiers[RESPAWN_TIME]`
+      ＋ 天赋那一份（`TALENT_RESPAWN_DELTA`，具名）
+
+    映射与 Go 的 `potentialBonus` 逐字对齐：`potential <= 1` 不加、否则取前
+    `potential-1` 档（`ranks[:potential-1]`）。
+    模组那一份在**本套夹具里恒为 0**（`roster_max_modelled.json` 不带 `module`／
+    `module_level`）⇒ 这里不建模；哪天夹具带上模组了，这条要跟着补并具名。
+
+    缺行返回 `None`：那**不是**「一致」，是不进这条判据的分母（调用方单独计数）。
+    """
+    if conn is None:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT respawn_time FROM operator_attr "
+            "WHERE char_id = ? AND kind = 'phase' AND phase = ?",
+            (char_id, elite)).fetchone()
+    except Exception:                                          # noqa: BLE001
+        return None
+    if row is None or row[0] is None:
+        return None
+    base = float(row[0])
+    delta = 0.0
+    if potential > 1:
+        for (mods,) in conn.execute(
+                "SELECT modifiers FROM operator_potential "
+                "WHERE char_id = ? AND rank < ? ORDER BY rank",
+                (char_id, potential - 1)):
+            try:
+                items = json.loads(mods or "[]")
+            except ValueError:
+                continue
+            for it in items:
+                if isinstance(it, dict) and it.get("attributeType") == "RESPAWN_TIME":
+                    delta += float(it.get("value") or 0.0)
+    return base + delta + TALENT_RESPAWN_DELTA.get(char_id, 0.0)
+
+
+#: 这一栏的**行使计数**与两个账（报告里逐条印出来——摘出严格比较不等于放它走）。
+REDEPLOY_SEEN = [0]
+REDEPLOY_NONDEFAULT = [0]
+REDEPLOY_BAD: list = []
+REDEPLOY_SKIPPED: list = []
+_DB = [None]
+_INPUTS: dict = {}
+
+
+def _db():
+    """判据自己开的**只读**库连接（期望值只从库里现算，不读 Go 的读数）。
+
+    ⚠ **库不在就返回 `None`**：干净检出上没有 `data/`，而**冻结档**
+    （`RIOS_GOLDEN=check`）本来就要求不碰外部数据 —— 那种情况下这一栏
+    「不进分母」（`expected_respawn_time` 见 `conn is None` 即返回 `None`），
+    而不是崩掉，也不是假装一致。
+    """
+    if _DB[0] is None:
+        try:
+            import sqlite3
+            _DB[0] = sqlite3.connect("file:%s?mode=ro" % DB_PATH, uri=True)
+        except Exception:                                      # noqa: BLE001
+            _DB[0] = False                                     #: 记「试过了、没有」
+    return _DB[0] or None
+
+
+def _fixture_inputs(fname: str) -> dict:
+    """夹具 → `{char_id: (elite, potential)}`：只用**输入侧**（计划 ＋ 名册夹具）。
+
+    ⚠ 按 `char_id` 反查而不是按下标对齐：`buildspec` 按落地时刻**稳定排序**，
+    规格里 `operators[]` 的顺序与计划里的书写顺序可以不同。
+    ⚠ 同一个夹具里同一人出现两次（二次部署）时取**第一次**——`redeploy_time`
+    只跟练度走，与哪一次无关。
+    """
+    if fname in _INPUTS:
+        return _INPUTS[fname]
+    out: dict = {}
+    try:
+        roster = {e.get("name"): e for e in json.loads(
+            ROSTER_FIX.read_text(encoding="utf-8"))}
+        doc = json.loads((ROOT / "fixtures" / fname).read_text(encoding="utf-8-sig"))
+        for d in (doc.get("deploys") or doc.get("deploy") or []):
+            if not isinstance(d, dict):
+                continue
+            e = roster.get(d.get("operator") or d.get("name") or "")
+            if not e:
+                continue
+            cid = e.get("id")
+            if not cid or cid in out:
+                continue
+            out[cid] = (int(d.get("elite") or 0), int(e.get("potential") or 0))
+    except Exception:                                          # noqa: BLE001
+        out = {}
+    _INPUTS[fname] = out
+    return out
 
 #: Go **产出的** 33 个键（13 无条件 ＋ 12 条件 ＋ 8 天赋派生）。
 #: ★ 33 ＋ 2 ＋ 1 ＝ **36** ＝ `wire.go::OperatorSpec` 的 json 键数，
@@ -1121,6 +1244,24 @@ def main() -> int:
                 talent_panel_seen.append("、".join(_adj))
             #: 25 个键逐个比（**含存在性**——条件键「该不该出现」也是内容）。
             for k in PORTED:
+                if k == REDEPLOY_KEY:
+                    #: ★ `redeploy_time` 有意与 Python 分道（见文件头上那一段）：
+                    #: 不比 Python 的默认值 70，改比**判据自己现算的期望值**。
+                    _cid = gt.get("char_id") or ""
+                    _el, _pot = _fixture_inputs(f.name).get(_cid, (None, None))
+                    _exp = (None if _el is None
+                            else expected_respawn_time(_db(), _cid, _el, _pot))
+                    if _exp is None:
+                        REDEPLOY_SKIPPED.append("%s[%d] %s" % (f.name, i, _cid))
+                    else:
+                        REDEPLOY_SEEN[0] += 1
+                        if not same(REDEPLOY_DEFAULT, _exp):
+                            REDEPLOY_NONDEFAULT[0] += 1
+                        if not same(_exp, gt.get(k)):
+                            slot_bad = True
+                            REDEPLOY_BAD.append("%s[%d] %s：Go=%s 期望=%s"
+                                                % (f.name, i, _cid, gt.get(k), _exp))
+                    continue
                 g_same = (k in gt) == (k in wt) and same(wt.get(k), gt.get(k))
                 guard.note(MUT_ATK, (f.name, i),
                            g_same or k != "atk")
@@ -1367,6 +1508,26 @@ def main() -> int:
     if n_compared == 0 or not real_fixtures:
         print("结论：一个人次都没比到 —— 记为差异（不是实现错，是判据自己瞎）")
         return 1
+    #: ---- ★ `redeploy_time` 那一栏的账（有意与 Python 分道，见文件头）----
+    print("§5b `redeploy_time`（Go 取真值，Python 恒 70 —— 有意分道）：")
+    print("    比过 %d 人次（其中 %d 人次的期望值**不是**默认 70 ⇒ 非默认那一支真的被行使过）；"
+          "不进分母 %d 人次（库里查不到那一档）"
+          % (REDEPLOY_SEEN[0], REDEPLOY_NONDEFAULT[0], len(REDEPLOY_SKIPPED)))
+    if REDEPLOY_SEEN[0] and REDEPLOY_NONDEFAULT[0] == 0:
+        print("    ✗ 比过的人次里没有一个是非默认值 —— 这一栏证明不了「真值被用上了」")
+        bad += 1
+    if REDEPLOY_SKIPPED:
+        print("    跳过：%s" % "、".join(REDEPLOY_SKIPPED[:8]))
+    if REDEPLOY_SEEN[0] == 0:
+        print("    ✗ 一个人次都没比到 —— 这一栏是**零行使**，不算通过")
+        bad += 1
+    for _line in REDEPLOY_BAD[:12]:
+        print("    ✗ %s" % _line)
+    if REDEPLOY_BAD:
+        print("    ✗ 共 %d 人次与判据现算的期望值不符" % len(REDEPLOY_BAD))
+        bad += 1
+    elif REDEPLOY_SEEN[0]:
+        print("    ✓ 逐人次与「相位基值 ＋ 潜能 ＋ 天赋」现算值一致（含非默认值的人次）")
     print("结论：干员规格 %d / %d 人次逐位一致（段 A 的 %d 个键，含条件键的"
           "存在性；段 B 的 %d 个键具名进 unported）"
           % (n_compared - bad_slots, n_compared, len(PORTED), len(UNPORTED)))
