@@ -133,7 +133,9 @@ func run() int {
 	//: 够用且比 `AllMotion` 省事件；不认鼠标的屏在 `stack.go` 里被静默忽略。
 	//: ⚠ 代价登记：终端里的鼠标从此被程序接管 ⇒ 想用鼠标**选文本**要按住 Shift
 	//: （Textual 同理，所以这不是新引入的差异）。
-	p := tea.NewProgram(newRoot(newAppCtx(stages, zones), welcomeScreen{}),
+	model := newRoot(newAppCtx(stages, zones), welcomeScreen{})
+	defer model.shutdown()
+	p := tea.NewProgram(model,
 		tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "★ 界面退出：%v\n", err)

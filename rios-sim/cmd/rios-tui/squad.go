@@ -945,7 +945,7 @@ func (r *root) enterSolve(picked []RosterOperator, src solveSource) solveVerdict
 	r.push(scr, onSolveClosed)
 	//: 第一轮 ＋ **心跳**一起排上：心跳是这一屏"在动"的唯一来源（一轮是分钟级，
 	//: 没有心跳时秒数冻住、进度钉在 5%，看着与卡死一样 —— 博士 2026-09-28 实测报的）。
-	r.pending = tea.Batch(runSolveRoundCmd(params, scr.currentDepth()), solveTickCmd())
+	r.pending = tea.Batch(scr.startRound(), solveTickCmd(scr.taskID))
 	return v
 }
 

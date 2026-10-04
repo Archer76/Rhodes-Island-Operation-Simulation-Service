@@ -179,7 +179,59 @@ type root struct {
 	quit  bool
 	//: 回**调里**（`pop` 的 done 里）压屏时要求的命令先存这儿 —— 下一次 `Update`
 	//: 的出口把它交出去。bubbletea 的 `Init` 只在程序启动时调一次，动态压的屏拿不到它。
-	pending tea.Cmd
+	pending      tea.Cmd
+	closedSolves []*solveTask
+}
+
+func (r *root) closeScreen(s screen) {
+	if solve, ok := s.(*solveScreen); ok {
+		solve.close()
+		// Retain only unfinished process handles, not old screens and their logs.
+		pending := r.closedSolves[:0]
+		for _, task := range r.closedSolves {
+			select {
+			case <-task.exited:
+			default:
+				pending = append(pending, task)
+			}
+		}
+		r.closedSolves = pending
+		tasks := append([]*solveTask(nil), solve.retired...)
+		if solve.task != nil {
+			tasks = append(tasks, solve.task)
+		}
+		for _, task := range tasks {
+			select {
+			case <-task.exited:
+			default:
+				r.closedSolves = append(r.closedSolves, task)
+			}
+		}
+	}
+}
+
+func (r *root) cancelTasks() {
+	for _, f := range r.stack {
+		if s, ok := f.scr.(*solveScreen); ok {
+			s.close()
+		}
+	}
+	for _, task := range r.closedSolves {
+		task.cancel()
+	}
+}
+
+func (r *root) shutdown() {
+	r.cancelTasks()
+	for _, f := range r.stack {
+		if s, ok := f.scr.(*solveScreen); ok {
+			s.waitClosed()
+		}
+	}
+	for _, task := range r.closedSolves {
+		<-task.exited
+	}
+	r.closedSolves = nil
 }
 
 func newRoot(c *appCtx, first screen) *root {
@@ -220,6 +272,7 @@ func (r *root) pop(res any) {
 		return
 	}
 	f := r.stack[len(r.stack)-1]
+	r.closeScreen(f.scr)
 	r.stack = r.stack[:len(r.stack)-1]
 	if f.done != nil {
 		f.done(r, res) // 回调里可以再 push（照 Python 的 back_to_step）
@@ -248,6 +301,7 @@ func (r *root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		//: ctrl+c 在任何屏都退，且不走屏自己的键表（与 Python 的 App 级绑定一致）。
 		if msg.String() == "ctrl+c" {
+			r.cancelTasks()
 			return r, tea.Quit
 		}
 		//: ⚠ 这个快照必须在 `update` **之前**取：屏可以在自己那一步里设一条新提示
@@ -256,10 +310,14 @@ func (r *root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		noteBefore := r.ctx.note
 		next, act := r.top().update(r.ctx, msg)
 		if next != nil {
+			if next != r.top() {
+				r.closeScreen(r.top())
+			}
 			//: 屏可以就地换掉自己（例如「没有关卡」这种终态）。
 			r.stack[len(r.stack)-1].scr = next
 		}
 		if act.kind == actQuit {
+			r.cancelTasks()
 			return r, tea.Quit
 		}
 		cmd = r.apply(act)
@@ -282,6 +340,7 @@ func (r *root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				r.stack[len(r.stack)-1].scr = next
 			}
 			if act.kind == actQuit {
+				r.cancelTasks()
 				return r, tea.Quit
 			}
 			noteBefore := r.ctx.note
@@ -309,6 +368,7 @@ func (r *root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			act := ms.onMsg(r, msg)
 			if act.kind == actQuit {
+				r.cancelTasks()
 				return r, tea.Quit
 			}
 			cmd = r.apply(act)
@@ -349,6 +409,9 @@ func (r *root) popTo(match func(screen) bool) {
 	}
 	for i := len(r.stack) - 1; i >= 0; i-- {
 		if match(r.stack[i].scr) {
+			for _, f := range r.stack[i+1:] {
+				r.closeScreen(f.scr)
+			}
 			r.stack = r.stack[:i+1]
 			return
 		}

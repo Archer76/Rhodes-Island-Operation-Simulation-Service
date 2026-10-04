@@ -2034,11 +2034,11 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			firstLineWith(strings.Join(scr.lines, "\n"), "轮"))
 		cTick := &appCtx{w: 90, h: 26, stage: &data.StageRecord{Code: "1-7", LevelID: "main_01-07"}}
 		rTick := newRoot(cTick, welcomeScreen{})
-		actTick := scr.onMsg(rTick, solveTickMsg{})
+		actTick := scr.onMsg(rTick, solveTickMsg{taskID: scr.taskID})
 		check("★ 一跳 ⇒ 独立计数 +1（不看墙上时钟，屏不重画也不冻）",
 			scr.elapsed == 1 && actTick.cmd != nil,
 			fmt.Sprintf("elapsed=%d cmd=%v", scr.elapsed, actTick.cmd != nil))
-		_ = scr.onMsg(rTick, solveTickMsg{})
+		_ = scr.onMsg(rTick, solveTickMsg{taskID: scr.taskID})
 		check("心跳：连跳两次 ⇒ 2 秒（按秒跳，不是按轮跳）", scr.elapsed == 2,
 			fmt.Sprintf("elapsed=%d", scr.elapsed))
 		check("心跳：屏上看得见它在动（转轮 ＋ 第几轮）",
@@ -2046,7 +2046,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 				strings.Contains(scr.view(cTick), "已用 2 秒"),
 			firstLineWith(scr.view(cTick), "解算中"))
 		scr.running = false
-		stopTick := scr.onMsg(rTick, solveTickMsg{})
+		stopTick := scr.onMsg(rTick, solveTickMsg{taskID: scr.taskID})
 		check("负对照：停下之后不再排下一跳（也不再加秒，不空转重画）",
 			stopTick.cmd == nil && scr.elapsed == 2,
 			fmt.Sprintf("cmd=%v elapsed=%d", stopTick.cmd != nil, scr.elapsed))
@@ -2055,7 +2055,20 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			stage: &data.StageRecord{Code: "1-7", LevelID: "main_01-07", Name: "测试关"}}
 		//: 屏的消息处理现在收 `*root`（它要连动屏栈）⇒ 这里造一个最小根模型。
 		rSolve := newRoot(cSolve, welcomeScreen{})
-		msg := runSolveRoundCmd(params, 1)()
+		// 行使生产进度链，而不是旧的只收最终响应入口。
+		cmdSolve := scr.startRound()
+		var msg tea.Msg
+		for {
+			msg = cmdSolve()
+			if _, final := msg.(solveRoundMsg); final {
+				break
+			}
+			act := scr.onMsg(rSolve, msg)
+			if act.cmd == nil {
+				break
+			}
+			cmdSolve = act.cmd
+		}
 		if m, ok := msg.(solveRoundMsg); ok && m.err != nil {
 			fmt.Printf("  （未核：这一轮解算没跑成，不判红。具名原因：%s）\n",
 				firstLineWith(m.err.Error(), "★"))

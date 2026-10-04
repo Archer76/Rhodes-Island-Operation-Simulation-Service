@@ -33,6 +33,7 @@ const (
 
 type engineClient struct {
 	path string
+	args []string // normally empty; allows an isolated protocol peer in process tests
 	//: 起子进程时用的工作目录。
 	//:
 	//: ⚠ **必须给对**：引擎的 gamedata 路径是**相对 cwd** 拼的

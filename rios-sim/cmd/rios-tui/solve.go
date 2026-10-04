@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"rios-sim/progress"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -21,13 +23,11 @@ import (
 // 以为这一关真能上 12 个）。每深一层都要把搜索整个重跑一遍，代价是真的 ⇒ 每一轮都
 // 往日志里写一行，让人看得见"它在加深，不是卡住了"。
 //
-// ## 与 Python 的一处登记分歧：进度粒度
+// ## 运行时隔离与实时状态
 //
-// Python 的搜索在**同进程**，用一个 0.25 秒的定时器读 `evaluated` 计数器刷进度。
-// Go 这边搜索在**引擎子进程**里，跨进程拿不到中间计数 ⇒ 进度按**轮**刷新：每起完
-// 一轮引擎就有一次真读数（`evaluated` 与 `steps`），日志行与 Python 的逐轮行同形。
-// **要拿到逐候选的实时进度，得让引擎往 stderr 写进度行**（协议不动）—— 记在这里，
-// 这一轮没做，也不假装做了。
+// TUI 与引擎是独立进程。引擎在 stderr 输出真实搜索快照，stdout 只给最终响应。
+// 每个解算屏持有可取消任务；结果、快照与心跳带屏幕任务身份及轮次。
+// 输入在本轮固定。计数按后端完成尝试刷新，耗时/转轮独立刷新，不依赖最终响应。
 
 const (
 	//: 候选池上限。**这是候选池，不是出战人数**（博士 2026-09-18 追问过）：它只决定
@@ -179,9 +179,11 @@ type solveOutView struct {
 
 // solveRoundMsg 是「一轮引擎调用回来了」。
 type solveRoundMsg struct {
-	depth int
-	out   solveOutView
-	err   error
+	taskID uint64
+	round  int
+	depth  int
+	out    solveOutView
+	err    error
 }
 
 // solveTickMsg 是**心跳**：每秒一跳，与引擎轮次无关。
@@ -191,10 +193,10 @@ type solveRoundMsg struct {
 // 小参数 2.3s、生产参数 113s）⇒ 屏上秒数冻住、日志停在 0.0s、进度条钉在 5%，
 // 看着与"卡死"一模一样 —— 其实引擎正在烧 CPU。
 // 修法：屏自己带一个**独立计数**的秒表（`elapsed`），每秒一跳、每跳重画一次。
-type solveTickMsg struct{}
+type solveTickMsg struct{ taskID uint64 }
 
-func solveTickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg { return solveTickMsg{} })
+func solveTickCmd(taskID uint64) tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return solveTickMsg{taskID: taskID} })
 }
 
 // solveParams 是这一屏跑一轮需要的全部输入（起屏时定下来，之后不变）。
@@ -250,14 +252,50 @@ type solveScreen struct {
 	//: 显示用它，**不用** `time.Since(t0)` —— 后者只在重画时取一次，屏不重画就冻住。
 	elapsed int
 	//: spinner 的帧号（同一跳里 +1）：让"它在动"这件事一眼可见。
-	spin int
+	spin           int
+	taskID         uint64
+	task           *solveTask
+	retired        []*solveTask
+	live           progress.Snapshot
+	completedEvals int
+}
+
+func (s *solveScreen) startRound() tea.Cmd {
+	if s.task != nil {
+		s.retired = append(s.retired, s.task)
+	}
+	s.live = progress.Snapshot{Phase: "preparing", MaxDepth: s.currentDepth()}
+	s.task = startSolveTask(s.taskID, s.idx, s.p, s.currentDepth())
+	return s.task.next()
+}
+
+func (s *solveScreen) close() {
+	s.running = false
+	if s.task != nil {
+		s.task.cancel()
+	}
+	for _, t := range s.retired {
+		t.cancel()
+	}
+}
+
+func (s *solveScreen) waitClosed() {
+	s.close()
+	if s.task != nil {
+		<-s.task.exited
+	}
+	for _, t := range s.retired {
+		<-t.exited
+	}
 }
 
 // spinnerFrames 是解算中那个转轮（ASCII，任何终端都画得出）。
 var spinnerFrames = []string{"|", "/", "-", "\\"}
 
 func newSolveScreen(p solveParams, ladder []int) *solveScreen {
-	s := &solveScreen{p: p, ladder: ladder, t0: time.Now(), running: true}
+	p.pool = append([]string(nil), p.pool...)
+	s := &solveScreen{p: p, ladder: append([]int(nil), ladder...), t0: time.Now(), running: true,
+		taskID: solveTaskSequence.Add(1)}
 	//: 第一轮的"已发出"也要写进日志：否则从"开始解算……"到第一轮回来（分钟级）
 	//: 中间一个字都没有 —— 那正是博士看到的"像没开始"。
 	s.logRoundStart()
@@ -334,19 +372,38 @@ func (s *solveScreen) headText(c *appCtx) string {
 	return out + fmt.Sprintf("已评估 %d 个候选　已用 %.0f 秒", s.evals, elapsed)
 }
 
-// progress 是进度条百分比。
-//
-// ★ **这个数不是编的**：Python 那边用 `5.0 + evaluated*0.6` 且封顶 95（"没有精确分母
-// 就不假装有分母"）。Go 这边 `evaluated` 每轮才刷新一次，所以分母改成"已完成轮数"，
-// 同样不假装。
+// progress 是当前层完成尝试占真实状态总数的比例，不是整场搜索完成率。
+// 分母未知时显示等待；早停可能在未遍历整层时完成。
 func (s *solveScreen) progress() float64 {
 	if s.done {
 		return 100
 	}
 	if len(s.ladder) == 0 {
-		return 5
+		return 0
 	}
-	return 5.0 + 90.0*float64(s.idx)/float64(len(s.ladder))
+	if s.live.Total <= 0 {
+		return 0
+	}
+	return 100 * float64(s.live.Completed) / float64(s.live.Total)
+}
+
+func solvePhaseLabel(phase string) string {
+	switch phase {
+	case "preparing", "":
+		return "准备中"
+	case "candidates":
+		return "候选已生成"
+	case "evaluating":
+		return "评估中"
+	case "filtering":
+		return "筛选中"
+	case "completed":
+		return "本轮完成"
+	case "failed":
+		return "失败"
+	default:
+		return phase
+	}
 }
 
 func (s *solveScreen) view(c *appCtx) string {
@@ -359,7 +416,18 @@ func (s *solveScreen) view(c *appCtx) string {
 	}
 	b.WriteString(styleTitle.Render(head) + "\n")
 	b.WriteString(s.headText(c) + "\n\n")
-	b.WriteString(progressBar(s.progress(), c.w) + "\n")
+	b.WriteString(fmt.Sprintf("状态：%s　搜索深度 %d/%d　beam %d　per-op %d\n",
+		solvePhaseLabel(s.live.Phase), s.live.Depth, s.currentDepth(), s.p.beam, s.p.perOp))
+	b.WriteString(fmt.Sprintf("几何候选 %d　当前层完成 %d/%d　保留 %d　最佳 %d 星\n",
+		s.live.Candidates, s.live.Completed, s.live.Total, s.live.Kept, s.live.BestStars))
+	if s.live.BestLine != "" {
+		b.WriteString("当前最佳：" + s.live.BestLine + "\n")
+	}
+	if s.live.Total > 0 {
+		b.WriteString("当前层尝试进度：" + progressBar(s.progress(), c.w) + "\n")
+	} else {
+		b.WriteString("当前层尝试进度：等待后端提供分母\n")
+	}
 	if s.err != "" {
 		b.WriteString(styleTitle.Render("失败：") + s.err + "\n")
 	}
@@ -395,8 +463,8 @@ func (s *solveScreen) update(c *appCtx, k tea.KeyMsg) (screen, action) {
 	case keyIs(k, "q"), keyIs(k, "esc"):
 		//: 中止 ⇒ **退回上一步**（不是退出程序）。Python 那边原先写成 `app.exit()`，
 		//: Footer 上写着「中止」按下去却把整个程序关掉 —— 博士 2026-09-17 裁定改掉。
-		s.running = false
-		s.log("已中止（退回上一步）")
+		s.close()
+		s.log("已中止（取消引擎并退回上一步）")
 		return s, action{kind: actBack}
 	}
 	return s, action{kind: actNone}
@@ -410,16 +478,31 @@ func (s *solveScreen) onMsg(r *root, msg tea.Msg) action {
 	c := r.ctx
 	//: ★ 心跳：每秒一跳。**独立计数**（不看 `time.Since`），跑着就再排下一跳；
 	//: 结束了就停（不再排），免得空转重画。
-	if _, ok := msg.(solveTickMsg); ok {
-		if !s.running {
+	if tick, ok := msg.(solveTickMsg); ok {
+		if !s.running || tick.taskID != s.taskID {
 			return action{kind: actNone}
 		}
 		s.elapsed++
 		s.spin++
-		return action{kind: actNone, cmd: solveTickCmd()}
+		return action{kind: actNone, cmd: solveTickCmd(s.taskID)}
+	}
+	if m, ok := msg.(solveProgressMsg); ok {
+		if !s.running || m.taskID != s.taskID || m.round != s.idx {
+			return action{kind: actNone}
+		}
+		previous := s.live
+		s.live = m.snapshot
+		s.evals = s.completedEvals + m.snapshot.Evaluated
+		if m.snapshot.Message != "" && (previous.Message != m.snapshot.Message || previous.Phase != m.snapshot.Phase || previous.Depth != m.snapshot.Depth) {
+			s.log(m.snapshot.Message)
+		}
+		if s.task != nil {
+			return action{kind: actNone, cmd: s.task.next()}
+		}
+		return action{kind: actNone}
 	}
 	m, ok := msg.(solveRoundMsg)
-	if !ok {
+	if !ok || !s.running || m.taskID != s.taskID || m.round != s.idx {
 		return action{kind: actNone}
 	}
 	if m.err != nil {
@@ -429,9 +512,10 @@ func (s *solveScreen) onMsg(r *root, msg tea.Msg) action {
 		s.log("失败：" + reasonOf(m.err.Error()))
 		return action{kind: actNone}
 	}
-	s.evals += m.out.Evaluated
+	s.completedEvals += m.out.Evaluated
+	s.evals = s.completedEvals
 	for _, st := range m.out.Steps {
-		s.log(fmt.Sprintf("第 %d 人：试 %d 个、留 %d，最佳 %s",
+		s.log(fmt.Sprintf("第 %d 人：生成 %d 个状态、留 %d，最佳 %s",
 			st.Depth, st.States, st.Kept, st.Line))
 	}
 	if !s.haveBest || m.out.Stars > s.best.Stars {
@@ -449,7 +533,7 @@ func (s *solveScreen) onMsg(r *root, msg tea.Msg) action {
 			m.depth, s.ladder[s.idx+1]))
 		s.idx++
 		s.logRoundStart()
-		return action{kind: actNone, cmd: runSolveRoundCmd(s.p, s.currentDepth())}
+		return action{kind: actNone, cmd: s.startRound()}
 	}
 	s.done = true
 	s.running = false
