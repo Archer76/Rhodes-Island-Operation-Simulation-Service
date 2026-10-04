@@ -6,6 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"rios-sim/data"
+	"rios-sim/mechanisms"
 )
 
 // # 屏栈：与 Python 侧 `RiosApp.push_step/step_back` 同构
@@ -154,13 +155,15 @@ type appCtx struct {
 
 	//: 解算结果（结果屏读它）。`plan`／`verdict` 是引擎给的原样 JSON，不在这里
 	//: 重新解释 —— 那是 `solver.go` 与 `maa` 包的事。
-	solvePlan      json.RawMessage
-	solveVerdict   json.RawMessage
-	solveStars     int
-	solveNote      string
-	solveSteps     []solveStepView
-	solveEvaluated int
-	solveSeconds   float64
+	solveStatus       string
+	solvePlaceholders []mechanisms.Gap // 完整列表；complete 时是被排除候选，不是最终计划缺口。
+	solvePlan         json.RawMessage
+	solveVerdict      json.RawMessage
+	solveStars        int
+	solveNote         string
+	solveSteps        []solveStepView
+	solveEvaluated    int
+	solveSeconds      float64
 	//: 最近一次导出的作业路径（结果屏把它显示出来 —— 玩家要靠它找到文件）。
 	exportPath string
 	//: 登录屏带回的一句话（显示在 `[0]` 屏的**账号行**上，照 Python 的 `_login_done`）。

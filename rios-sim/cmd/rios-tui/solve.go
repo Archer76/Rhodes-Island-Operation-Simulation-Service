@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"rios-sim/mechanisms"
 	"rios-sim/progress"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -163,14 +164,16 @@ type solveStepView struct {
 
 // solveOutView 是引擎 `solve` 段里我们关心的那几栏（其余忽略）。
 type solveOutView struct {
-	OK        bool            `json:"ok"`
-	Plan      json.RawMessage `json:"plan"`
-	Verdict   json.RawMessage `json:"verdict"`
-	Stars     int             `json:"stars"`
-	Steps     []solveStepView `json:"steps"`
-	Depth     int             `json:"depth"`
-	Evaluated int             `json:"evaluated"`
-	Note      string          `json:"note"`
+	Status       string           `json:"status"`
+	Placeholders []mechanisms.Gap `json:"placeholders,omitempty"`
+	OK           bool             `json:"ok"`
+	Plan         json.RawMessage  `json:"plan"`
+	Verdict      json.RawMessage  `json:"verdict"`
+	Stars        int              `json:"stars"`
+	Steps        []solveStepView  `json:"steps"`
+	Depth        int              `json:"depth"`
+	Evaluated    int              `json:"evaluated"`
+	Note         string           `json:"note"`
 	//: 引擎**回声**的助战名（它从 spec 的 `support` 收下、原样放进 `SolveOut.Support`）。
 	//: 这一栏是"界面确实把助战送到了引擎那一步"的**唯一凭据** —— 自检里有一条真往返
 	//: 断言读的就是它（屏上自己记着名字不算数：那只证明界面知道）。
@@ -258,6 +261,7 @@ type solveScreen struct {
 	retired        []*solveTask
 	live           progress.Snapshot
 	completedEvals int
+	placeholders   []mechanisms.Gap
 }
 
 func (s *solveScreen) startRound() tea.Cmd {
@@ -514,6 +518,15 @@ func (s *solveScreen) onMsg(r *root, msg tea.Msg) action {
 	}
 	s.completedEvals += m.out.Evaluated
 	s.evals = s.completedEvals
+	s.placeholders = append(s.placeholders, m.out.Placeholders...)
+	// 未完成不是战斗失败；即使后端误带 OK/三星/旧计划，也不接受判决或继续加深。
+	if m.out.Status == "incomplete" {
+		s.close()
+		s.done = true
+		s.best, s.haveBest = solveOutView{}, false
+		s.log(mechanismIncompleteMessage)
+		return s.finish(c, m.out)
+	}
 	for _, st := range m.out.Steps {
 		s.log(fmt.Sprintf("第 %d 人：生成 %d 个状态、留 %d，最佳 %s",
 			st.Depth, st.States, st.Kept, st.Line))
@@ -555,9 +568,27 @@ func (s *solveScreen) onMsg(r *root, msg tea.Msg) action {
 // ⚠ 结果屏还没落地 ⇒ 这里**不静默什么都不做**（那会变成"看起来跑完了"），而是在日志
 // 里明说一句。结果屏写出来之后，这一处改成 push 它（一行的事）。
 func (s *solveScreen) finish(c *appCtx, out solveOutView) action {
+	if out.Status == "incomplete" {
+		c.solveStatus = "incomplete"
+		c.solvePlaceholders = append([]mechanisms.Gap(nil), s.placeholders...)
+		if len(c.solvePlaceholders) == 0 {
+			c.solvePlaceholders = append([]mechanisms.Gap(nil), out.Placeholders...)
+		}
+		c.solvePlan, c.solveVerdict = nil, nil
+		c.solveStars, c.solveNote = -1, mechanismIncompleteMessage
+		c.solveSteps = nil
+		c.solveEvaluated, c.solveSeconds = s.evals, time.Since(s.t0).Seconds()
+		c.exportPath = ""
+		return action{kind: actPush, push: newResultScreen()}
+	}
 	use := out
 	if s.haveBest && !out.OK {
 		use = s.best
+	}
+	c.solveStatus = use.Status
+	c.solvePlaceholders = append([]mechanisms.Gap(nil), s.placeholders...)
+	if len(c.solvePlaceholders) == 0 {
+		c.solvePlaceholders = append([]mechanisms.Gap(nil), use.Placeholders...)
 	}
 	c.solvePlan = use.Plan
 	c.solveVerdict = use.Verdict

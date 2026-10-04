@@ -75,6 +75,19 @@ func (s *resultScreen) view(c *appCtx) string {
 	}
 	b.WriteString(styleTitle.Render(code) + "　" + styleDim.Render(levelID) + "\n\n")
 
+	if blocked, gaps := finalMechanismGaps(c); blocked {
+		b.WriteString(mechanismIncompleteMessage + "\n\n")
+		b.WriteString(mechanismGapLines(gaps))
+		b.WriteString("\n导出已禁用；待这些机制完整建模后再解算。")
+		if s.msg != "" {
+			b.WriteString("\n\n" + s.msg)
+		}
+		return b.String()
+	}
+	if len(c.solvePlaceholders) > 0 {
+		b.WriteString("以下占位仅属于排除候选，非结果缺口；当前完整计划可显示及导出。\n")
+		b.WriteString(mechanismGapLines(c.solvePlaceholders) + "\n")
+	}
 	var v verdictView
 	haveVerdict := false
 	if len(c.solveVerdict) > 0 && json.Unmarshal(c.solveVerdict, &v) == nil {
@@ -201,6 +214,10 @@ func moduleTableBestEffort() map[string]maa.ModuleInfo {
 
 // export 把结果编队写成 MAA 认得的作业（`ResultScreen.action_export`）。
 func (s *resultScreen) export(c *appCtx) action {
+	if blocked, _ := finalMechanismGaps(c); blocked {
+		s.msg = mechanismIncompleteMessage + "；导出已禁用。"
+		return action{kind: actNone}
+	}
 	plan, ops, err := loadSolved(c)
 	if err != nil {
 		s.msg = "★ 导出失败：" + err.Error()
