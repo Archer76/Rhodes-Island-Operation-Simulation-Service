@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"rios-sim/mech"
+	"rios-sim/mechanisms"
 	"rios-sim/num"
 )
 
@@ -518,6 +519,9 @@ func (o *operator) canBlock(e *enemy) bool {
 
 // runSim 把一份规格推成判决。
 func runSim(spec *Spec) (*Verdict, error) {
+	if gaps := specMechanismGaps(spec); len(gaps) > 0 {
+		return nil, &mechanisms.IncompleteError{Placeholders: gaps}
+	}
 	if len(spec.Unsupported) > 0 {
 		return nil, fmt.Errorf("这一局用到了最小版本还没覆盖的机制，不跑：%v",
 			spec.Unsupported)

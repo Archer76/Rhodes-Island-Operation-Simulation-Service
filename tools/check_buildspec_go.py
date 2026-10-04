@@ -484,6 +484,12 @@ REGISTERED_EXTRA: tuple[tuple[str, str], ...] = (
     #: 不超过关卡上限即可（例：令的召唤物占用部署位）」⇒ 上限是运行期判据，
     #: 真值在模拟器（`sim.go` 部署那一支的具名拒）；Python 侧既没有这个键、
     #: 也没有这条判据。与 `retreats` 一样，**逐路径**这一道也要登记。
+    (r"^\.mechanism_placeholders$",
+     "当前方案未完成机制的具名占位；Go 不用近似结果替代完整建模，非空拒绝战斗判决"),
+    (r"^\.operators\[\d+\]\.talent_proc_(probabilities|scales)$",
+     "Go概率来源保全字段；只有端点且与倍率一致时才允许确定性结果"),
+    (r"^\.operators\[\d+\]\.mechanism_placeholders$",
+     "逐部署来源保全的未完成机制占位，含原始载荷，非全局能力目录"),
     (r"^\.deploy_limit$",
      "同时部署上限（`options.characterLimit`）。Go 在 `sim.go` 的部署那一支按它"
      "具名拒「部署位已满」；Python 侧没有这个键（且它的普通部署路径根本不判同时上限，"
@@ -505,7 +511,7 @@ REGISTERED_EXTRA_RX = tuple((re.compile(p), src) for p, src in REGISTERED_EXTRA)
 #:
 #: ⚠ 与 `specgo.go::specKeysGoOnly` 是**同一份事实的两处落点**（那一侧给 Go 自己的
 #: 反键守卫用，这一侧给跨源判据用）。两处都**具名**，且都必须配两侧守卫。
-TOP_LEVEL_GO_ONLY: tuple[str, ...] = ("retreats", "deploy_limit")
+TOP_LEVEL_GO_ONLY: tuple[str, ...] = ("retreats", "deploy_limit", "mechanism_placeholders")
 TOP_LEVEL_SEEN: dict = {}
 TOP_LEVEL_FROM_PY: dict = {}
 

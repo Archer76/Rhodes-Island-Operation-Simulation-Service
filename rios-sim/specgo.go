@@ -61,7 +61,7 @@ var specKeysAll = []string{
 //	  博士 2026-09-29：「编队中的 12 人依旧都可以上场，只要**同时在场**的部署位
 //	  占用不超过关卡上限即可」⇒ 上限是运行期判据，真值在模拟器（`sim.go` 部署那一支
 //	  的具名拒），Python 侧没有这个键也没有这条判据。
-var specKeysGoOnly = []string{"retreats", "deploy_limit"}
+var specKeysGoOnly = []string{"retreats", "deploy_limit", "mechanism_placeholders"}
 
 // gatedKeys 是**已经产出、但原版那道门还没接**的键。
 var gatedKeys = []string{"highland_cells", "goal_cells"}

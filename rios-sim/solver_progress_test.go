@@ -138,10 +138,10 @@ func TestSolveProgressCompletedEmptyCandidates(t *testing.T) {
 
 func TestSolveProgressRealLayerSnapshot(t *testing.T) {
 	chdirRepoRootForData(t)
-	roster := writeTempRoster(t, testRosterRows)
+	roster := writeTempRoster(t, `[{"name":"玫兰莎","charId":"char_208_melan","elite":1,"level":55,"potential":6}]`)
 	var events []progress.Snapshot
 	out, err := SolveWithProgress("main_01-07", "", SolveQuery{
-		Roster: roster, Operators: []string{"圣聆初雪"}, PerOp: 2, MaxOps: 1,
+		Roster: roster, Operators: []string{"玫兰莎"}, PerOp: 2, MaxOps: 1,
 	}, func(s progress.Snapshot) { events = append(events, s) })
 	if err != nil {
 		t.Fatal(err)

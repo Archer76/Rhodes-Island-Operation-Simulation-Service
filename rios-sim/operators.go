@@ -65,6 +65,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"rios-sim/mechanisms"
 	"sort"
 	"strings"
 )
@@ -199,7 +200,8 @@ type OperatorOut struct {
 	//: **只在本进程内用**：这一位干员的技能黑板里落在首发表之外的键。
 	//: 不出去（`json:"-"`）——出去的那一份是 bundle 上汇总+去重的 `SkillUnknownKeys`，
 	//: 逐人一份会把同一个键重复报很多遍，读的人反而看不出「一共缺哪几个键」。
-	SkillUnknownKeys []string `json:"-"`
+	SkillUnknownKeys []string         `json:"-"`
+	Placeholders     []mechanisms.Gap `json:"mechanism_placeholders,omitempty"`
 
 	//: **天赋折进面板的那三个比例**（`talentpanel.go`），原样透出给判据。
 	//:
@@ -213,11 +215,13 @@ type OperatorOut struct {
 	//:
 	//: 每个键以**指针 ＋ omitempty** 出去：「没有这一条」与「有这一条、值是 0」
 	//: 必须分得开（本仓记过：用带 `omitempty` 的裸值会让两者长得一样）。
-	TalentDeploySP      *float64 `json:"talent_deploy_sp,omitempty"`
-	TalentProcFactor    *float64 `json:"talent_proc_factor,omitempty"`
-	TalentExtraHealProb *float64 `json:"talent_extra_heal_prob,omitempty"`
-	TalentDodgeOnHeal   *float64 `json:"talent_dodge_on_heal,omitempty"`
-	TalentDodgeSeconds  *float64 `json:"talent_dodge_seconds,omitempty"`
+	TalentDeploySP          *float64  `json:"talent_deploy_sp,omitempty"`
+	TalentProcScales        []float64 `json:"talent_proc_scales,omitempty"`
+	TalentProcProbabilities []float64 `json:"talent_proc_probabilities,omitempty"`
+	TalentProcFactor        *float64  `json:"talent_proc_factor,omitempty"`
+	TalentExtraHealProb     *float64  `json:"talent_extra_heal_prob,omitempty"`
+	TalentDodgeOnHeal       *float64  `json:"talent_dodge_on_heal,omitempty"`
+	TalentDodgeSeconds      *float64  `json:"talent_dodge_seconds,omitempty"`
 	//: 这一位的天赋黑板里、**键表之外**的键（排序去重）。与 `SkillUnknownKeys`
 	//: 同一个姿势：逐位的这一份只在本进程内用，汇总去重的在 bundle 上。
 	TalentUnknownKeys []string `json:"-"`
@@ -305,6 +309,7 @@ type OperatorsBundle struct {
 	//: **天赋黑板里落在首发表之外的键**（同一套汇总/去重/排序，与技能那一栏分账）。
 	//: 空＝这一批天赋恰好都在表里；非空要能**指名**——博士给的验收标准就是这一条。
 	TalentUnknownKeys []string
+	Placeholders      []mechanisms.Gap
 }
 
 // OperatorsCoveredKeys 是 `covered` 的**全部**计数器。
@@ -996,6 +1001,12 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		covered["talent_proc"]++
 		v := te.ProcFactor
 		out.TalentProcFactor = &v
+		for _, talent := range talents {
+			if bbHas(talent.Blackboard, "prob", "atk_scale") && !bbHas(talent.Blackboard, "duration") {
+				out.TalentProcProbabilities = append(out.TalentProcProbabilities, bbValue(talent.Blackboard, "prob", 0))
+				out.TalentProcScales = append(out.TalentProcScales, bbValue(talent.Blackboard, "atk_scale", 1))
+			}
+		}
 	}
 	if te.ExtraHealProb != 0 {
 		covered["talent_extra_heal"]++
@@ -1011,6 +1022,14 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		covered["talent_unknown_key_instances"] += len(st.TalentUnknownKeys)
 		out.TalentUnknownKeys = append([]string{}, st.TalentUnknownKeys...)
 	}
+	gaps, err := operatorMechanismGaps(r, st, talents)
+	if err != nil {
+		return OperatorOut{}, err
+	}
+	for i := range gaps {
+		gaps[i].Instance = r.PlanIdx
+	}
+	out.Placeholders = gaps
 	return out, nil
 }
 
@@ -1204,10 +1223,15 @@ func BuildOperators(plan PlayPlan, roster RosterRead,
 	talentUnknownKeys := collectUnknownKeys(out, func(o OperatorOut) []string {
 		return o.TalentUnknownKeys
 	})
+	var placeholders []mechanisms.Gap
+	for _, op := range out {
+		placeholders = mechanisms.Merge(placeholders, op.Placeholders)
+	}
 	return &OperatorsBundle{
-		Operators: out,
-		Unported:  append([]string{}, OperatorUnported...),
-		Covered:   covered,
+		Placeholders: placeholders,
+		Operators:    out,
+		Unported:     append([]string{}, OperatorUnported...),
+		Covered:      covered,
 		//: `scanned` 与 `len(Operators)` **同源**（不是第二次计数）：一个量只能
 		//: 有一个口径来源，两处各数一遍迟早印出两个数。
 		Scanned:           len(out),

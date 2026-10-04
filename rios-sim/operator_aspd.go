@@ -45,8 +45,12 @@ func phaseOf(raw any) int {
 
 // resolvedTalent 是「这个练度下真正生效的一条天赋」。
 type resolvedTalent struct {
-	Name       string
-	Blackboard map[string]any
+	Name           string
+	GroupIndex     int
+	CandidateIndex int
+	RawDescription string
+	RawBlackboard  []json.RawMessage
+	Blackboard     map[string]any
 	//: **渲染后**的天赋正文（`talent.py:164-178` 的 `render_description`，
 	//: 与 `OperatorStats` 那份 `TextDerived` 同源）。
 	//:
@@ -88,7 +92,7 @@ func resolveTalents(talents []json.RawMessage, elite, level, potential int) []re
 		if err := json.Unmarshal(gRaw, &group); err != nil {
 			continue
 		}
-		for _, cand := range group.Candidates {
+		for ci, cand := range group.Candidates {
 			phase := phaseOf(cand.UnlockCondition.Phase)
 			needLv := 1
 			if cand.UnlockCondition.Level != nil {
@@ -113,7 +117,10 @@ func resolveTalents(talents []json.RawMessage, elite, level, potential int) []re
 			}
 			best[gi] = pick{Phase: phase, NeedPot: needPot, Talent: resolvedTalent{
 				Name:       cand.Name,
-				Blackboard: bb,
+				GroupIndex: gi, CandidateIndex: ci,
+				RawDescription: desc,
+				RawBlackboard:  append([]json.RawMessage(nil), cand.Blackboard...),
+				Blackboard:     bb,
 				//: 与 `_build`（`talent.py:163-164`）同一句：
 				//: `render_description(cand.get("description") or "", bb)`。
 				//: 缺正文就是空串（`or ""`）——渲染一个空串仍是空串。

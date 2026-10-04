@@ -36,9 +36,11 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"rios-sim/mechanisms"
 	"runtime"
 	"sort"
 	"time"
@@ -63,10 +65,12 @@ type request struct {
 }
 
 type response struct {
-	ID      int             `json:"id"`
-	OK      bool            `json:"ok"`
-	Pong    *pong           `json:"pong,omitempty"`
-	Verdict json.RawMessage `json:"verdict,omitempty"`
+	Status       string           `json:"status,omitempty"`
+	Placeholders []mechanisms.Gap `json:"placeholders,omitempty"`
+	ID           int              `json:"id"`
+	OK           bool             `json:"ok"`
+	Pong         *pong            `json:"pong,omitempty"`
+	Verdict      json.RawMessage  `json:"verdict,omitempty"`
 	//: `load` 的应答：Go 自己解析出来的关卡（见 `stage.go`）。
 	Stage json.RawMessage `json:"stage,omitempty"`
 	//: `enemies` 的应答：一关引用的敌人各自那一档（见 `enemy.go`）。
@@ -301,6 +305,11 @@ func handleWithProgress(req *request, started string, progressEncoder *json.Enco
 			// **宁可什么都不回，也不回一个残缺的判决**：对拍台把「这一局不支持」
 			// 当成失败，把「缺了机制的结果」当成通过，后者才是真危险。
 			resp := response{ID: req.ID, OK: false, Error: err.Error()}
+			var incomplete *mechanisms.IncompleteError
+			if errors.As(err, &incomplete) {
+				resp.Status = "incomplete"
+				resp.Placeholders = incomplete.Placeholders
+			}
 			if form == simFormQuery {
 				resp.Unsupported = unsupportedReasons(selfUnsupported)
 				resp.SelfSpec = marshalOrNil(selfEcho)
@@ -312,7 +321,7 @@ func handleWithProgress(req *request, started string, progressEncoder *json.Enco
 			return response{ID: req.ID, OK: false,
 				Error: fmt.Sprintf("判决序列化失败：%v", err)}
 		}
-		resp := response{ID: req.ID, OK: true, Verdict: raw}
+		resp := response{ID: req.ID, Status: "complete", OK: true, Verdict: raw}
 		if form == simFormQuery {
 			resp.Unsupported = unsupportedReasons(selfUnsupported)
 			resp.SelfSpec = marshalOrNil(selfEcho)
@@ -1014,7 +1023,7 @@ func handleWithProgress(req *request, started string, progressEncoder *json.Enco
 				Error: fmt.Sprintf("序列化失败：%v", err)}
 		}
 		return response{ID: req.ID, OK: true,
-			Operators: oraw, Unported: bundle.Unported, Covered: bundle.Covered,
+			Operators: oraw, Placeholders: bundle.Placeholders, Unported: bundle.Unported, Covered: bundle.Covered,
 			Scanned: &bundle.Scanned, Params: praw,
 			ViewFields: bundle.ViewFields, DeployFields: bundle.DeployFields}
 	case "buildspec":

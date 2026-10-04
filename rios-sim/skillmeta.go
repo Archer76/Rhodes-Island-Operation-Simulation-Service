@@ -56,7 +56,8 @@ type SkillMeta struct {
 	//: 也照样落 0），**另有 `$key` 落 valueStr**（只有当它非空时）。
 	//: 两套都要——字符串键是「召唤什么/给哪个装置」唯一的住处，丢掉不报错，
 	//: 只是上层把它当「没这项机制」。
-	Blackboard map[string]any `json:"blackboard"`
+	Blackboard    map[string]any    `json:"blackboard"`
+	RawBlackboard []json.RawMessage `json:"raw_blackboard,omitempty"`
 	//: 级号：**0 起算**（`SkillLevel.index`）。级别用的是 1 起算的 `Level`，
 	//: 两个都在——混用会让「第 3 级」与「index 3」差一位。
 	Index int `json:"index"`
@@ -280,6 +281,7 @@ func SkillMetaFor(skillID string, level int) (*SkillMeta, error) {
 	}
 	//: 黑板：数值键全落（null 也落 0），`$key` 只在 valueStr 非空时落。
 	out.Blackboard = map[string]any{}
+	out.RawBlackboard = append([]json.RawMessage(nil), lv.Blackboard...)
 	for _, bRaw := range lv.Blackboard {
 		var b struct {
 			Key      string   `json:"key"`

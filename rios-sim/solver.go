@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"rios-sim/mechanisms"
 	"runtime"
 	"sort"
 	"strings"
@@ -94,14 +96,16 @@ type SolveStep struct {
 
 // SolveStats 是**行使计数**。
 type SolveStats struct {
-	Depths      int `json:"depths"`
-	StatesBuilt int `json:"states_built"`
-	Evaluated   int `json:"evaluated"`    //: 真的跑完模拟的条数
-	PlanInvalid int `json:"plan_invalid"` //: `Validate` 拦下的
-	SpecFailed  int `json:"spec_failed"`  //: 造不出规格（含拒跑）
-	SimFailed   int `json:"sim_failed"`   //: 模拟本身报错
-	Stars3      int `json:"stars3"`
-	DedupeHit   int `json:"dedupe_hit"`
+	Incomplete   int              `json:"incomplete"`
+	Placeholders []mechanisms.Gap `json:"placeholders,omitempty"`
+	Depths       int              `json:"depths"`
+	StatesBuilt  int              `json:"states_built"`
+	Evaluated    int              `json:"evaluated"`    //: 真的跑完模拟的条数
+	PlanInvalid  int              `json:"plan_invalid"` //: `Validate` 拦下的
+	SpecFailed   int              `json:"spec_failed"`  //: 造不出规格（含拒跑）
+	SimFailed    int              `json:"sim_failed"`   //: 模拟本身报错
+	Stars3       int              `json:"stars3"`
+	DedupeHit    int              `json:"dedupe_hit"`
 	//: **首条失败的原因**。整层被丢光时，光看计数只知道"全丢了"，不知道**为什么**
 	//: —— 那是本仓点名过的坏读数（"没跑"与"打输"长得一样）。它进 note。
 	FirstError string `json:"first_error,omitempty"`
@@ -109,16 +113,18 @@ type SolveStats struct {
 
 // SolveOut 是 `solve` 的应答。
 type SolveOut struct {
-	OK        bool            `json:"ok"`
-	Plan      json.RawMessage `json:"plan,omitempty"`
-	Verdict   json.RawMessage `json:"verdict,omitempty"`
-	Stars     int             `json:"stars"`
-	Steps     []SolveStep     `json:"steps"`
-	Depth     int             `json:"depth"`
-	Evaluated int             `json:"evaluated"`
-	Note      string          `json:"note"`
-	Covered   SolveStats      `json:"covered"`
-	Params    map[string]any  `json:"params"`
+	Status       string           `json:"status"`
+	Placeholders []mechanisms.Gap `json:"placeholders,omitempty"`
+	OK           bool             `json:"ok"`
+	Plan         json.RawMessage  `json:"plan,omitempty"`
+	Verdict      json.RawMessage  `json:"verdict,omitempty"`
+	Stars        int              `json:"stars"`
+	Steps        []SolveStep      `json:"steps"`
+	Depth        int              `json:"depth"`
+	Evaluated    int              `json:"evaluated"`
+	Note         string           `json:"note"`
+	Covered      SolveStats       `json:"covered"`
+	Params       map[string]any   `json:"params"`
 	//: 助战干员的名字（`SolveQuery.Support` 的**原样回声**）。
 	//:
 	//: ⚠ `omitempty`：不带助战时整个键消失 ⇒ 那一轮的应答与加这个字段之前
@@ -318,6 +324,9 @@ func evalState(level, path string, q SolveQuery, st *Stage, state []CandidateRow
 	if err != nil {
 		return nil, nil, "spec_failed", err
 	}
+	if gaps := specMechanismGaps(spec); len(gaps) > 0 {
+		return nil, nil, "incomplete", &mechanisms.IncompleteError{Placeholders: gaps}
+	}
 	if len(unsup) > 0 {
 		//: 拒跑：这一条状态**丢弃**，但要与"打输"分开计数
 		return nil, nil, "spec_failed", fmt.Errorf("闸门拒跑：%v", unsup)
@@ -402,6 +411,12 @@ func evalDepthStreaming(states [][]CandidateRow, earlyStop bool,
 		var got *scoredState
 		if o.err != nil {
 			switch o.why {
+			case "incomplete":
+				sub.Incomplete++
+				var gap *mechanisms.IncompleteError
+				if errors.As(o.err, &gap) {
+					sub.Placeholders = mechanisms.Merge(sub.Placeholders, gap.Placeholders)
+				}
 			case "plan_invalid":
 				sub.PlanInvalid++
 			case "spec_failed":
@@ -521,7 +536,7 @@ func SolveWithProgress(level, path string, q SolveQuery, notify func(progress.Sn
 			emit("completed", out.Note)
 		}
 	}()
-	out = SolveOut{Steps: []SolveStep{},
+	out = SolveOut{Status: "complete", Steps: []SolveStep{},
 		Params: map[string]any{"level": level, "path": path,
 			"operators": len(q.Operators), "max_ops": q.MaxOps,
 			"beam": q.Beam, "per_op": q.PerOp, "min_ops": q.MinOps}}
@@ -632,13 +647,16 @@ func SolveWithProgress(level, path string, q SolveQuery, notify func(progress.Sn
 					liveBest = got
 					snap.BestStars, snap.BestLine = starsOf(got.v), verdictLine(got.v, maxLife)
 				}
-				message := fmt.Sprintf("完成 %d/%d；求值 %d；拒收 %d", completed, len(states), snap.Evaluated,
+				message := fmt.Sprintf("完成 %d/%d；求值 %d；机制未完成 %d；拒收 %d", completed, len(states), snap.Evaluated, sub.Incomplete,
 					sub.PlanInvalid+sub.SpecFailed+sub.SimFailed)
 				if sub.FirstError != "" {
 					message += "；首个原因：" + sub.FirstError
 				}
 				emit("evaluating", message)
 			})
+		stats.Incomplete += sub.Incomplete
+		stats.Placeholders = mechanisms.Merge(stats.Placeholders, sub.Placeholders)
+		out.Placeholders = stats.Placeholders
 		stats.Evaluated += sub.Evaluated
 		stats.Stars3 += sub.Stars3
 		stats.PlanInvalid += sub.PlanInvalid
@@ -704,6 +722,11 @@ func SolveWithProgress(level, path string, q SolveQuery, notify func(progress.Sn
 	}
 	out.Evaluated = stats.Evaluated
 	out.Covered = stats
+	if overall == nil && stats.Incomplete > 0 {
+		out.Status = "incomplete"
+		out.Stars = -1
+		out.Note = "机制未完成，未产生战斗判决；参见具名占位"
+	}
 	if overall != nil {
 		out.Plan = mustJSON(overall.plan)
 		out.Verdict = mustJSON(overall.v)

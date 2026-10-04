@@ -55,6 +55,7 @@ import (
 	"strings"
 
 	"rios-sim/mech"
+	"rios-sim/mechanisms"
 )
 
 // BuildSpecQuery 是 `buildspec` 命令的 spec 体。
@@ -233,7 +234,8 @@ type FullSpec struct {
 	//: 没有撤退请求时它必须是 `[]`，不是缺键（缺键会让键集账把它记成「没造」）。
 	Retreats []RetreatSpec `json:"retreats"`
 
-	Unsupported []string `json:"unsupported"`
+	Unsupported  []string         `json:"unsupported"`
+	Placeholders []mechanisms.Gap `json:"mechanism_placeholders,omitempty"`
 
 	Mechanisms []string                   `json:"mechanisms"`
 	MechConfig map[string]json.RawMessage `json:"mech_config"`
@@ -476,6 +478,7 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 			return out, err
 		}
 		out.Spec.Operators = bundle.Operators
+		out.Spec.Placeholders = bundle.Placeholders
 		out.Unported = append(out.Unported, prefixAll("operators", bundle.Unported)...)
 		for k, v := range bundle.Covered {
 			out.Scanned["operators."+k] = v

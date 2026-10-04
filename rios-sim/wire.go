@@ -13,7 +13,10 @@
 // ——那种"对齐"会把 bug 固化成基线。
 package main
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"rios-sim/mechanisms"
+)
 
 // Spec 是一场战斗的完整输入。
 type Spec struct {
@@ -79,7 +82,8 @@ type Spec struct {
 
 	//: 这一局用到了最小版本没覆盖的机制时，Python 侧在这里逐条写明。
 	//: 非空即拒跑——见文件头。
-	Unsupported []string `json:"unsupported,omitempty"`
+	Unsupported  []string         `json:"unsupported,omitempty"`
+	Placeholders []mechanisms.Gap `json:"mechanism_placeholders,omitempty"`
 
 	//: 这一局要挂上的**关卡特有机制**（博士 2026-09-18：机制单独成层、按需取用）。
 	//: 由 Python 点名——它知道"这一关有哪几样机制"；Go 侧按名字从 `mech` 包里取。
@@ -169,9 +173,10 @@ type TeamAuraSpec struct {
 // 被动技能与常驻天赋/光环的影响**已经折进这些数字**（`atk` 就是
 // `OperatorUnit.current_atk()` 在无技能帧的值），所以 Go 这边不需要任何再计算。
 type OperatorSpec struct {
-	CharID string `json:"char_id"`
-	Name   string `json:"name"`
-	Cell   [2]int `json:"cell"`
+	Placeholders []mechanisms.Gap `json:"mechanism_placeholders,omitempty"`
+	CharID       string           `json:"char_id"`
+	Name         string           `json:"name"`
+	Cell         [2]int           `json:"cell"`
 
 	MaxHP float64 `json:"max_hp"`
 	//: 「圣山的祝福」（圣聆初雪的天赋）：**受到致命伤害时不撤退**——免死一次、
@@ -343,11 +348,13 @@ type OperatorSpec struct {
 	//:   · `talent_extra_heal_prob` —— 治疗时**额外**治一名的概率（安赛尔 附加治疗）；
 	//:   · `talent_dodge_on_heal` ＋ `talent_dodge_seconds` —— 治疗友方后
 	//:     授出的物理闪避比例与秒数（斑点 烟雾加装）。
-	TalentDeploySP      float64 `json:"talent_deploy_sp,omitempty"`
-	TalentProcFactor    float64 `json:"talent_proc_factor,omitempty"`
-	TalentExtraHealProb float64 `json:"talent_extra_heal_prob,omitempty"`
-	TalentDodgeOnHeal   float64 `json:"talent_dodge_on_heal,omitempty"`
-	TalentDodgeSeconds  float64 `json:"talent_dodge_seconds,omitempty"`
+	TalentDeploySP          float64   `json:"talent_deploy_sp,omitempty"`
+	TalentProcScales        []float64 `json:"talent_proc_scales,omitempty"`
+	TalentProcProbabilities []float64 `json:"talent_proc_probabilities,omitempty"`
+	TalentProcFactor        float64   `json:"talent_proc_factor,omitempty"`
+	TalentExtraHealProb     float64   `json:"talent_extra_heal_prob,omitempty"`
+	TalentDodgeOnHeal       float64   `json:"talent_dodge_on_heal,omitempty"`
+	TalentDodgeSeconds      float64   `json:"talent_dodge_seconds,omitempty"`
 
 	Skill *SkillSpec `json:"skill,omitempty"`
 	//: **技能开启期间**的那一套数值。`Skill != nil` 时必须有。
