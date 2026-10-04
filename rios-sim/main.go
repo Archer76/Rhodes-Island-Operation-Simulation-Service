@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"rios-sim/mech"
+	"rios-sim/progress"
 )
 
 // : 协议版本。Python 侧连上来先 `ping` 一次核对它——二进制与调用方版本不一致时，
@@ -244,6 +245,12 @@ func main() {
 }
 
 func handle(req *request, started string) response {
+	return handleWithProgress(req, started, json.NewEncoder(os.Stderr))
+}
+
+// The encoder writes one complete JSON line synchronously. Solve callbacks run
+// on its consumer goroutine, so progress cannot interleave within this request.
+func handleWithProgress(req *request, started string, progressEncoder *json.Encoder) response {
 	switch req.Cmd {
 	case "ping":
 		ids := mech.Available()
@@ -896,7 +903,15 @@ func handle(req *request, started string) response {
 					Error: fmt.Sprintf("solve 的 spec 解不开：%v", err)}
 			}
 		}
-		sout, err := Solve(req.Level, req.Path, q)
+		sout, err := SolveWithProgress(req.Level, req.Path, q, func(s progress.Snapshot) {
+			s.RequestID = req.ID
+			if progressEncoder != nil {
+				_ = progressEncoder.Encode(struct {
+					Type     string            `json:"type"`
+					Progress progress.Snapshot `json:"progress"`
+				}{Type: "solve_progress", Progress: s})
+			}
+		})
 		if err != nil {
 			return response{ID: req.ID, OK: false, Error: err.Error()}
 		}
