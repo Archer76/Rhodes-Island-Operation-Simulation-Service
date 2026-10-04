@@ -523,6 +523,12 @@ func (s *solveScreen) onMsg(r *root, msg tea.Msg) action {
 	if m.out.Status == "incomplete" {
 		s.close()
 		s.done = true
+		bestCtx := &appCtx{solveStatus: s.best.Status, solvePlan: s.best.Plan, solveVerdict: s.best.Verdict}
+		blocked, _ := finalMechanismGaps(bestCtx)
+		if s.haveBest && s.best.Status == "complete" && !blocked && len(s.best.Plan) > 0 && string(s.best.Plan) != "null" && len(s.best.Verdict) > 0 && string(s.best.Verdict) != "null" {
+			s.log("本轮机制未完成，停止加深；保留前轮完整方案，本轮占位仅属于排除候选。")
+			return s.finish(c, s.best)
+		}
 		s.best, s.haveBest = solveOutView{}, false
 		s.log(mechanismIncompleteMessage)
 		return s.finish(c, m.out)

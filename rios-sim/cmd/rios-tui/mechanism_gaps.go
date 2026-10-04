@@ -22,7 +22,7 @@ func finalMechanismGaps(c *appCtx) (bool, []mechanisms.Gap) {
 	}
 	_ = json.Unmarshal(c.solveVerdict, &v)
 	_ = json.Unmarshal(c.solvePlan, &p)
-	blocked := c.solveStatus == "incomplete" || v.Status == "incomplete" || len(p.Placeholders) > 0
+	blocked := c.solveStatus == "incomplete" || v.Status == "incomplete" || len(v.Placeholders) > 0 || len(p.Placeholders) > 0
 	gaps := append([]mechanisms.Gap(nil), v.Placeholders...)
 	gaps = append(gaps, p.Placeholders...)
 	if c.solveStatus == "incomplete" {

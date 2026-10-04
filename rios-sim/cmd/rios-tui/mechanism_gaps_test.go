@@ -93,6 +93,7 @@ func TestFinalResultMechanismExportGuards(t *testing.T) {
 	}{
 		{"solve", "incomplete", `{}`, `{}`, true},
 		{"verdict", "complete", `{}`, `{"status":"incomplete"}`, true},
+		{"verdict placeholders despite complete", "complete", `{}`, `{"status":"complete","mechanism_placeholders":[{"id":"verdict-gap","reason":"not modeled"}]}`, true},
 		{"plan", "complete", `{"mechanism_placeholders":[{"id":"final","reason":"not modeled"}]}`, `{"status":"complete"}`, true},
 		{"empty final gaps", "complete", `{"mechanism_placeholders":[]}`, `{"status":"complete"}`, false},
 	} {
@@ -109,6 +110,44 @@ func TestFinalResultMechanismExportGuards(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLaterIncompletePreservesEarlierCompletePlan(t *testing.T) {
+	dir := t.TempDir()
+	roster := filepath.Join(dir, "roster.json")
+	if err := os.WriteFile(roster, []byte(`[]`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c := &appCtx{roster: &rosterData{Path: roster}, guidesDir: dir, stage: &data.StageRecord{Code: "EARLIER", LevelID: "test"}}
+	s := newSolveScreen(solveParams{}, []int{4, 6, 8})
+	// A fully judged two-star plan from the earlier round is still usable.
+	s.best = solveOutView{Status: "complete", Stars: 2,
+		Plan:    json.RawMessage(`{"stage":"test","deploys":[{"operator":"测试干员","position":[1,2],"direction":"right","skill":1}]}`),
+		Verdict: json.RawMessage(`{"status":"complete","won":true,"leaks":1}`)}
+	s.haveBest, s.idx = true, 1
+	a := s.onMsg(newRoot(c, s), solveRoundMsg{taskID: s.taskID, round: 1, depth: 6,
+		out: solveOutView{Status: "incomplete", OK: true, Stars: 3, Placeholders: []mechanisms.Gap{testGap()}}})
+	if a.kind != actPush || a.cmd != nil || s.running || !s.done || s.idx != 1 || !s.haveBest {
+		t.Fatal("later incomplete did not stop with earlier complete result")
+	}
+	if c.solveStatus != "complete" || c.solveStars != 2 || string(c.solvePlan) != string(s.best.Plan) || string(c.solveVerdict) != string(s.best.Verdict) || len(c.solvePlaceholders) != 1 {
+		t.Fatal("earlier complete result lost or replaced by incomplete stars")
+	}
+	if blocked, _ := finalMechanismGaps(c); blocked {
+		t.Fatal("excluded later round blocked earlier plan")
+	}
+	rs := newResultScreen()
+	view := rs.view(c)
+	if !strings.Contains(view, "排除候选，非结果缺口") || !strings.Contains(view, "用到的干员") || strings.Contains(view, mechanismIncompleteMessage) {
+		t.Fatalf("wrong result view: %s", view)
+	}
+	rs.export(c)
+	if c.exportPath == "" {
+		t.Fatalf("earlier complete export failed: %s", rs.msg)
+	}
+	if _, err := os.Stat(c.exportPath); err != nil {
+		t.Fatal(err)
 	}
 }
 
