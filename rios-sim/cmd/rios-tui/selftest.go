@@ -2011,7 +2011,7 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 	}
 	//: ★ 运行期行使见证：**真起一轮**引擎（`runSolveRoundCmd` 返回的就是一个
 	//: `func() tea.Msg`，直接调它即可），再喂给屏的消息处理，看状态机走完。
-	//: 参数取最小（per_op=1、beam=1、1 人）—— 这一条要的是"链通"，不是"搜得好"。
+	//: 使用已建模的玫兰莎（per_op=2、beam=1、1 人）—— 这一条要的是"链通"，不是"搜得好"。
 	if _, err := newEngineClient(); err != nil {
 		fmt.Printf("  （未核：找不到引擎 exe，解算那一段不判红。具名原因：%s）\n",
 			firstLineWith(err.Error(), "★"))
@@ -2019,11 +2019,9 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 		solveDir, _ := os.MkdirTemp("", "rios-selftest-solve-")
 		solveRoster := filepath.Join(solveDir, "roster.json")
 		_ = os.WriteFile(solveRoster, []byte(`[
- {"name":"圣聆初雪","charId":"char_1046_sbell2","elite":2,"level":90,"potential":1,"module_level":0},
- {"name":"赤刃明霄陈","charId":"char_1050_chen3","elite":2,"level":90,"potential":1,
-  "module":"uniequip_002_chen3","module_level":3}]`), 0o644)
+ {"name":"玫兰莎","charId":"char_208_melan","elite":1,"level":55,"potential":6,"module_level":0}]`), 0o644)
 		params := solveParams{levelID: "main_01-07", rosterPath: solveRoster,
-			pool: []string{"圣聆初雪", "赤刃明霄陈"}, perOp: 1, beam: 1}
+			pool: []string{"玫兰莎"}, perOp: 2, beam: 1}
 		scr := newSolveScreen(params, []int{1})
 		scr.log("开始解算……")
 		//: ★ 2026-09-28 新增（博士：「似乎完全没有开始解算」「读秒不按秒跳」）：
@@ -2092,10 +2090,9 @@ func runSelftest(stages []data.StageRecord, zones []data.ZoneRecord) int {
 			fmt.Println("== 十八 · 结果屏（渲染 ＋ **真导出**）==")
 			cSolve.guidesDir, _ = os.MkdirTemp("", "rios-selftest-guides-")
 			//: 结果屏要**名册文件**才导得出（桥上那份只有 5 个字段，缺 potential/module）
-			cSolve.roster = &rosterData{Source: "selftest", Path: solveRoster, Count: 2,
+			cSolve.roster = &rosterData{Source: "selftest", Path: solveRoster, Count: 1,
 				Operators: []RosterOperator{
-					{CharID: "char_1046_sbell2", Name: "圣聆初雪", Elite: 2, Level: 90},
-					{CharID: "char_1050_chen3", Name: "赤刃明霄陈", Elite: 2, Level: 90},
+					{CharID: "char_208_melan", Name: "玫兰莎", Elite: 1, Level: 55},
 				}}
 			rv := newResultScreen().view(cSolve)
 			for _, want := range []string{"评价", "时长", "击杀", "漏怪", "剩余生命", "总伤害",
