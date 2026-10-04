@@ -14,9 +14,9 @@ package main
 //	③ 撤退**释放**部署位（所以「撤一个再上一个」在满位时照样成立），
 //	   而计划里排几个人**不管**（编队 12 人那一句）。
 //
-// ⚠ ②③ 用**只翻一个字段**的控制实验：规格照生产路径造（`BuildSpecFull`），
-// 只把 `DeployLimit` 改成 1，让两条部署必然撞上限。翻的是**输入数据**，不是代码分支
-// ——判决随它改，才说明这条判据真的读了它。
+// ⚠ ① 保留真实生产接线；②③ 用独立 synthetic primitive Spec 的单元行为控制实验。
+// 只翻 `DeployLimit` 让两条部署撞上限，不从真实规格删机制标记绕过生产拒判。
+// 这些行为判据不声称真实关卡实战通过。
 //
 // ⚠ 每一例都先证明**前一次部署真的落了地**（事件里有 `deploy`）：否则「第二条被拒」
 // 可能只是整局根本没跑到那一刻，那是零行使的绿。
@@ -42,10 +42,15 @@ func limitPlan(secondAt float64, retreatAt float64) string {
 	}`, secondAt, retreats)
 }
 
-// limitSpec 按生产路径造规格，然后把**同时部署上限**翻成 `limit`。
+// limitSpec 独立构造部署位单元行为夹具，只翻同时部署上限。
 func limitSpec(t *testing.T, limit int, secondAt float64, retreatAt float64) *Spec {
 	t.Helper()
-	spec := redeploySpec(t, limitPlan(secondAt, retreatAt))
+	spec := deploymentPrimitiveSpec(secondAt)
+	addDeploymentPrimitive(spec, "char_103_angel", "能天使", [2]int{3, 5}, 0, 70)
+	addDeploymentPrimitive(spec, "char_311_mudrok", "泥岩", [2]int{2, 3}, secondAt, 70)
+	if retreatAt >= 0 {
+		spec.Retreats = []RetreatSpec{{Operator: "能天使", Time: retreatAt}}
+	}
 	spec.DeployLimit = limit
 	return spec
 }
@@ -105,8 +110,8 @@ func costDeniedFor(v *Verdict, who string) int {
 func TestDeployLimitRefusesOnlyWhileOccupied(t *testing.T) {
 	chdirRepoRoot(t)
 	at := firstDeployAt(t)
-	//: 第二条排到 +50s：**费够**才落得了地（泥岩 ~20 费，+8s 时账上不够，
-	//: 会被「费用不足」挡下——那与上限无关）。
+	//: 保留原计划 +50s 的被测时刻。primitive 初始费用充足，
+	//: 不让真实干员费用与战斗机制干扰部署位单元行为。
 	spec := limitSpec(t, 8, at+50, -1)
 	v, err := runSim(spec)
 	if err != nil {

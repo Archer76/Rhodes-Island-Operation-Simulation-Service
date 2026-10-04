@@ -20,7 +20,7 @@ package main
 //	① 面板层：上面这些数逐个数出来（含**负对照**：普通干员仍是 70，不是「全变 18」）；
 //	② 规格层：规格里 `operators[].redeploy_time` 真的带着真实值（两次部署两个对象）；
 //	③ 行为层：砾撤退后 **rt+1 秒**再上 ⇒ 落地；**rt−1 秒**再上 ⇒ 具名拒「再部署冷却中」
-//	   （rt 从规格里现读，不写死）。这一对是**回归防线**：老口径下这两个时刻都会被拒
+//	   （rt 从真实面板现取，注入独立 primitive Spec）。这一对是**回归防线**：老口径下这两个时刻都会被拒
 //	   （冷却 70s），所以正例不可能靠偶然通过。
 //
 // ⚠ 名册是**内联**的（`fixtures/roster_max_modelled.json` 里没有砾，而这一条必须要她）：
@@ -137,18 +137,6 @@ func gravelSpec(t *testing.T, retreatAt, secondAt float64) *Spec {
 	return &spec
 }
 
-// gravelRedeployTime 从规格里读砾的再部署时间（行为层那两个时刻由它现算）。
-func gravelRedeployTime(t *testing.T, spec *Spec) float64 {
-	t.Helper()
-	for _, o := range spec.Operators {
-		if o.CharID == "char_237_gravel" {
-			return o.RedeployTime
-		}
-	}
-	t.Fatalf("规格里没有砾：%+v", spec.Operators)
-	return 0
-}
-
 // TestRedeployTimeInSpec ② 规格层：`operators[].redeploy_time` 真的带真值，两次部署两个对象。
 func TestRedeployTimeInSpec(t *testing.T) {
 	chdirRepoRoot(t)
@@ -173,13 +161,12 @@ func TestRedeployTimeInSpec(t *testing.T) {
 func TestRedeployAfterRealCooldownLands(t *testing.T) {
 	chdirRepoRoot(t)
 	const retreatAt = 34.0
-	probe := gravelSpec(t, retreatAt, retreatAt+1)
-	rt := gravelRedeployTime(t, probe)
+	rt := respawnOf(t, "char_237_gravel", 2, 1, 6, "", 0)
 	if rt >= 70 {
 		t.Fatalf("被测对象的再部署时间是 %v——它必须**小于**老口径的 70，"+
 			"否则这一对时刻证明不了「真值被用上了」", rt)
 	}
-	spec := gravelSpec(t, retreatAt, retreatAt+rt+1)
+	spec := gravelPrimitiveSpec(retreatAt, retreatAt+rt+1, rt)
 	v, err := runSim(spec)
 	if err != nil {
 		t.Fatalf("跑不起来：%v", err)
@@ -209,9 +196,8 @@ func TestRedeployAfterRealCooldownLands(t *testing.T) {
 func TestRedeployBeforeRealCooldownRefused(t *testing.T) {
 	chdirRepoRoot(t)
 	const retreatAt = 34.0
-	probe := gravelSpec(t, retreatAt, retreatAt+1)
-	rt := gravelRedeployTime(t, probe)
-	spec := gravelSpec(t, retreatAt, retreatAt+rt-1)
+	rt := respawnOf(t, "char_237_gravel", 2, 1, 6, "", 0)
+	spec := gravelPrimitiveSpec(retreatAt, retreatAt+rt-1, rt)
 	v, err := runSim(spec)
 	if err != nil {
 		t.Fatalf("跑不起来：%v", err)

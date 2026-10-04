@@ -6,7 +6,8 @@ package main
 // 且再部署冷却结束，则可以再次部署。」
 //
 // 这条规则的**真值在模拟器**：计划层判不了「此刻在不在场上」（取决于有没有被打死）。
-// 所以这里**跑真规格、真判决**（`BuildSpecFull` → `runSim`），三例：
+// 所以这里以独立 synthetic primitive Spec → runSim 测三例单元行为。
+// 真实生产接线另有测试；不删真实机制标记绕过生产拒判，也不声称实战通过：
 //
 //	① 正例：撤退 → 冷却过后 → 换个格子再上 ⇒ **真的落地了**；
 //	② 负对照一：不撤退、第一次还在场上 ⇒ 拒「同一干员已在场」；
@@ -17,13 +18,11 @@ package main
 // 正例还要证明**第二次也真的落了地**（两条 `deploy` 事件 ＋ `Deployed` 计数），
 // 而不是「被拒了但没记账」。
 //
-// ⚠ 时刻**现算**，不许写死：第一条部署没给 `time` 时由费用模型定落地时刻
-// （`specdeploys.go:159-170`），写死一个 `time` 会把「冷却够不够」测成假的
-// ——它同时也会把「这一局跑不跑得到那一刻」测成假的（`sim.go:1166` 生命归零即收场）。
+// ⚠ 时刻相对 primitive 首次部署计算，保留撤退与二次部署的原差值。
+// 未来普通出怪保证跑到被测时刻，期间无战斗影响；事件断言防止零行使的绿。
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -64,41 +63,10 @@ func redeploySpec(t *testing.T, planJSON string) *Spec {
 	return &spec
 }
 
-// planBody 造一份计划的原文：`能天使` 打输出，`泥岩` 顶住（**别让这一局过早收场**），
-// 第三条是 `能天使` 的**第二次部署**，时刻给死（由调用方算好）。
-func planBody(secondAt float64, retreatAt float64) string {
-	retreats := "[]"
-	if retreatAt >= 0 {
-		retreats = fmt.Sprintf(`[{"operator":"能天使","time":%.3f}]`, retreatAt)
-	}
-	return fmt.Sprintf(`{
-		"stage": "main_01-07",
-		"deploys": [
-			{"operator": "能天使", "position": [3,5], "direction": "Up", "skill": 0},
-			{"operator": "泥岩", "position": [2,3], "direction": "Left", "skill": 0},
-			{"operator": "能天使", "position": [3,4], "direction": "Up", "skill": 0, "time": %.3f}
-		],
-		"retreats": %s
-	}`, secondAt, retreats)
-}
-
-// firstDeployAt 先跑一趟**只有前两条**的计划，读「能天使」实际落地在哪一刻。
+// firstDeployAt 读独立 primitive 首次部署时刻，不依赖真实关卡费用排程。
 func firstDeployAt(t *testing.T) float64 {
 	t.Helper()
-	spec := redeploySpec(t, `{
-		"stage": "main_01-07",
-		"deploys": [
-			{"operator": "能天使", "position": [3,5], "direction": "Up", "skill": 0},
-			{"operator": "泥岩", "position": [2,3], "direction": "Left", "skill": 0}
-		]
-	}`)
-	for _, d := range spec.Deploys {
-		if d.CharID == "char_103_angel" {
-			return d.Time
-		}
-	}
-	t.Fatalf("规格里没有能天使那条部署：%+v", spec.Deploys)
-	return 0
+	return redeployPrimitiveSpec(1, -1).Deploys[0].Time
 }
 
 // eventsOf 数某类事件里某个名字出现了几次。
@@ -128,7 +96,7 @@ func rejectionsOf(v *Verdict, who string) [][2]any {
 func TestRedeployAfterRetreatLands(t *testing.T) {
 	chdirRepoRoot(t)
 	at := firstDeployAt(t)
-	spec := redeploySpec(t, planBody(at+95, at+20))
+	spec := redeployPrimitiveSpec(at+95, at+20)
 	v, err := runSim(spec)
 	if err != nil {
 		t.Fatalf("跑不起来：%v", err)
@@ -166,7 +134,7 @@ func TestRedeployAfterRetreatLands(t *testing.T) {
 func TestRedeployRefusedWhileOnField(t *testing.T) {
 	chdirRepoRoot(t)
 	at := firstDeployAt(t)
-	spec := redeploySpec(t, planBody(at+20, -1)) //: -1 = 不排撤退
+	spec := redeployPrimitiveSpec(at+20, -1) //: -1 = 不排撤退
 	v, err := runSim(spec)
 	if err != nil {
 		t.Fatalf("跑不起来：%v", err)
@@ -189,7 +157,7 @@ func TestRedeployRefusedWhileOnField(t *testing.T) {
 func TestRedeployRefusedDuringCooldown(t *testing.T) {
 	chdirRepoRoot(t)
 	at := firstDeployAt(t)
-	spec := redeploySpec(t, planBody(at+60, at+20))
+	spec := redeployPrimitiveSpec(at+60, at+20)
 	v, err := runSim(spec)
 	if err != nil {
 		t.Fatalf("跑不起来：%v", err)
