@@ -2,50 +2,22 @@ package main
 
 import (
 	"fmt"
-	"math"
-	"sort"
 )
 
-// specdeploys.go：规格里的 `deploys` 那一串（丙阶段四·第二十三批）。
-//
-// 权威是两处拼起来的：
-//
-//   - **排时刻**：`verify.py:393-480`（费用模型，与 MAA 自动作战同规则——
-//     「钱够了就下」）；
-//   - **成键**：`spec.py:1232-1241`（按 `time` 排序、写 `index` 与 `char_id`、
-//     `cost`、`auto_skill`）。
-//
-// ## 费用模型逐行
-//
-//	rate   = stage.options.cost_increase_time      ← **原始值**
-//	budget = stage.options.initial_cost + Σ squad_cost_bonus(全队天赋)
-//	now    = 0
-//	每条部署：
-//	  time 是 None（按费用自动排）：
-//	      need = max(0, cost − budget); at = now + need × rate
-//	      budget = budget + need − cost
-//	  给了显式时刻：
-//	      at = time; 若 at > now 则 budget += (at − now) ÷ rate
-//	      budget = max(0, budget − cost)
-//	  now = at
-//
-// ⚠ **`rate` 是原始值，不是 `stage_env` 给规格的那个 `cost_time`**：后者被
-// 「四星档费用回复翻倍」的 `cbuff_cost_recovery.scale` **除过**（见 `stageenv.go`）。
-// 两个数在四星档下不同。拿错的那一个当 rate，每一条落地时刻都会偏，
-// 而模拟照常给判决——**没有任何判据会响**，除了这一条。
-//
-// ⚠ `time` 为 None 时 `budget` 可以变成**负数**（`need` 只把差额补到够，
-// 于是 `budget + need − cost` 恰为 0；但 `cost` 大于 `need` 的差额部分
-// 会让它落回 0 以下的情形出现在初值极小的时候）。原版不夹这一支，
-// 这里也不夹——**照抄**。
+// specdeploys.go：规格里的 `deploys` 那一串。
+// H3: 未写 time 的部署保留运行期费用等待意图，不能在构造期预测
+// 技能/撤退/击杀带来的费用。显式 time 保留一次性截止请求。
+// 初费天赋按唯一上阵干员汇总一次，环境参数与模拟共用 StageEnv。
 
 // SpecDeploy 是 `deploys` 里的一条。
 type SpecDeploy struct {
-	Time      float64 `json:"time"`
-	Index     int     `json:"index"`
-	CharID    string  `json:"char_id"`
-	Cost      int     `json:"cost"`
-	AutoSkill bool    `json:"auto_skill"`
+	Time        float64 `json:"time"`
+	Index       int     `json:"index"`
+	CharID      string  `json:"char_id"`
+	Cost        int     `json:"cost"`
+	AutoSkill   bool    `json:"auto_skill"`
+	WaitForCost bool    `json:"wait_for_cost,omitempty"`
+	PlanOrder   bool    `json:"plan_order,omitempty"`
 }
 
 // SpecSkillUse 是 `skill_uses` 里的一条。
@@ -83,7 +55,7 @@ func BuildSkillUses(plan PlayPlan) []SpecSkillUse {
 	return out
 }
 
-// DeployRow 是一条**解算完的部署**：练度 ＋ 费用 ＋ 落地时刻 ＋ 计划里的下标。
+// DeployRow resolves one deployment's loadout, cost, request intent and plan identity.
 //
 // 为什么单独抽出来（第二十四批 `operators` 要用）：`build_spec` 里 `deploys` 与
 // `operators` 是**同一个循环**里的两次 append ——
@@ -102,7 +74,7 @@ type DeployRow struct {
 	Direction string
 	Entry     LoadoutEntry
 	Cost      int
-	//: 落地时刻（费用模型算出来的）。排序键。
+	// Explicit deadline, or earliest eligibility (zero) for an automatic request.
 	At        float64
 	AutoSkill bool
 	//: 计划里的**技能槽号**（`DeployOrder.Skill`，0–3）。
@@ -110,25 +82,18 @@ type DeployRow struct {
 	//: ★ 口径（博士 2026-09-24）：**`0` 不等于「不用技能」**——除了一二星干员是真的
 	//: 没有技能之外，0 都会选到**玩家的默认技能**；测试期间把 `0` 认定为 `1`。
 	//: 绑定发生在 `buildOperatorOut`（走 `OperatorSkillIDs` 把槽号映射成技能 id）。
-	Skill int
+	Skill       int
+	WaitForCost bool
 }
 
-// BuildDeployRows 复刻 `verify.py:393-480` 的费用模型，返回**按落地时刻稳定排序**
-// 的行。顺序与 `sorted(sch.deployments, key=lambda d: d.time)` 逐个相同。
+// BuildDeployRows resolves loadouts in plan order without predicting dynamic DP.
+// At is an explicit deadline, or zero eligibility time when WaitForCost is true.
 func BuildDeployRows(plan PlayPlan, roster RosterRead,
 	stage *Stage) ([]DeployRow, error) {
 	return buildDeployRowsWithInputs(plan, roster, stage, nil)
 }
 func buildDeployRowsWithInputs(plan PlayPlan, roster RosterRead, stage *Stage, inputs *buildInputs) ([]DeployRow, error) {
-	rate := stage.Options.CostIncreaseTime
-	if rate == 0 {
-		//: 原版在这一支会 `ZeroDivisionError`；Go 的浮点除零静默给 ±Inf，
-		//: 所以这里**必须**自己拦——否则时刻会变成 Inf 而一路不报错。
-		return nil, fmt.Errorf("关卡的 cost_increase_time 是 0，费用速率无法折算")
-	}
-	budget := stage.Options.InitialCost
 	rows := make([]DeployRow, 0, len(plan.Deploys))
-	now := 0.0
 	for i, d := range plan.Deploys {
 		e, err := ResolveLoadout(d, roster)
 		if err != nil {
@@ -157,35 +122,42 @@ func buildDeployRowsWithInputs(plan PlayPlan, roster RosterRead, stage *Stage, i
 		if err != nil {
 			return nil, fmt.Errorf("%s（%s）的部署费用：%v", d.Operator, e.CharID, err)
 		}
-		bonus, err := TalentCostBonus(e.CharID, e.Elite, e.Level, e.Potential)
-		if err != nil {
-			return nil, err
-		}
-		budget += bonus
-
-		var at float64
-		if d.Time == nil {
-			need := math.Max(0.0, float64(cost)-budget)
-			at = now + need*rate
-			budget = budget + need - float64(cost)
-		} else {
+		// No predicted affordability time: the simulator owns the live balance.
+		at := 0.0
+		if d.Time != nil {
 			at = *d.Time
-			if at > now {
-				budget += (at - now) / rate
-			}
-			budget = math.Max(0.0, budget-float64(cost))
 		}
-		now = at
 		rows = append(rows, DeployRow{
 			PlanIdx: i, Operator: d.Operator, Position: d.Position,
 			Direction: d.Direction, Entry: e, Cost: cost, At: at,
-			AutoSkill: d.AutoSkill, Skill: d.Skill,
+			AutoSkill: d.AutoSkill, Skill: d.Skill, WaitForCost: d.Time == nil,
 		})
 	}
-	//: 原版 `sorted(sch.deployments, key=lambda d: d.time)`——**稳定**排序，
-	//: 同时刻的两条保持计划里的先后。
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].At < rows[j].At })
+	// Preserve plan identity/order. Explicit deadlines are independent at runtime.
 	return rows, nil
+}
+
+// squadInitialCostBonus counts each deployed character once, before any action.
+func squadInitialCostBonus(rows []DeployRow) (float64, error) {
+	seen := map[string]DeployRow{}
+	total := 0.0
+	for _, r := range rows {
+		e := r.Entry
+		if previous, ok := seen[e.CharID]; ok {
+			p := previous.Entry
+			if p.Elite != e.Elite || p.Level != e.Level || p.Potential != e.Potential {
+				return 0, fmt.Errorf("%s 重复部署的初费天赋练度冲突：计划第%d条 E%d/L%d/P%d，第%d条 E%d/L%d/P%d", e.CharID, previous.PlanIdx+1, p.Elite, p.Level, p.Potential, r.PlanIdx+1, e.Elite, e.Level, e.Potential)
+			}
+			continue
+		}
+		seen[e.CharID] = r
+		bonus, err := TalentCostBonus(e.CharID, e.Elite, e.Level, e.Potential)
+		if err != nil {
+			return 0, err
+		}
+		total += bonus
+	}
+	return total, nil
 }
 
 // BuildDeploys 造 `deploys` 那一串。
@@ -202,7 +174,7 @@ func deploysFromRows(rows []DeployRow) []SpecDeploy {
 	for i, r := range rows {
 		out = append(out, SpecDeploy{
 			Time: r.At, Index: i, CharID: r.Entry.CharID, Cost: r.Cost,
-			AutoSkill: r.AutoSkill,
+			AutoSkill: r.AutoSkill, WaitForCost: r.WaitForCost, PlanOrder: true,
 		})
 	}
 	return out

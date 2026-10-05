@@ -483,6 +483,11 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 		if err != nil {
 			return out, err
 		}
+		bonus, err := squadInitialCostBonus(deployRows)
+		if err != nil {
+			return out, err
+		}
+		out.Spec.CostInit = env.CostInit + bonus
 		bundle, err := buildOperatorsFromRowsWithInputs(deployRows, OperatorsParams{
 			Plan: q.planLabel(), Roster: q.rosterLabel(),
 			HealMode: q.HealMode}, q.inputs)

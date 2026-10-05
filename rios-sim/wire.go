@@ -500,10 +500,14 @@ type ShieldSpec struct {
 }
 
 type DeploySpec struct {
-	Time   float64 `json:"time"`
-	Index  int     `json:"index"`
-	CharID string  `json:"char_id"`
-	Cost   int     `json:"cost"`
+	// Absent/false preserves legacy timed one-shot requests. True waits on live DP.
+	WaitForCost bool `json:"wait_for_cost,omitempty"`
+	// Producer retains original plan order for same-frame deadline collisions.
+	PlanOrder bool    `json:"plan_order,omitempty"`
+	Time      float64 `json:"time"`
+	Index     int     `json:"index"`
+	CharID    string  `json:"char_id"`
+	Cost      int     `json:"cost"`
 	//: 手动技能在技力满了之后要不要**自动**开（`Deployment.auto_skill`，
 	//: 原版默认 True）。它属于**这一次部署**而不是干员：同一个人两次部署
 	//: 可以带不同的值。

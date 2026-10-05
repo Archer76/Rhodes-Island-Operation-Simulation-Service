@@ -543,7 +543,18 @@ func runSim(spec *Spec) (*Verdict, error) {
 	life := spec.Life
 
 	deploys := append([]DeploySpec(nil), spec.Deploys...)
-	sort.SliceStable(deploys, func(i, j int) bool { return deploys[i].Time < deploys[j].Time })
+	// Timed-only legacy specs keep deadline ordering. Mixed specs preserve plan
+	// order; timed requests can bypass a blocked automatic queue independently.
+	hasAutomatic := false
+	for _, d := range deploys {
+		if d.WaitForCost || d.PlanOrder {
+			hasAutomatic = true
+			break
+		}
+	}
+	if !hasAutomatic {
+		sort.SliceStable(deploys, func(i, j int) bool { return deploys[i].Time < deploys[j].Time })
+	}
 	skillUses := append([]SkillUseSpec(nil), spec.SkillUses...)
 	sort.SliceStable(skillUses, func(i, j int) bool { return skillUses[i].Time < skillUses[j].Time })
 	//: 撤退请求：与部署／开技能同一套「按时刻排序的队列」。**排序是必须的**：
@@ -601,9 +612,20 @@ func runSim(spec *Spec) (*Verdict, error) {
 		}
 
 		// ---- 1. 部署（1694-1695 → _do_deploy 2117）
-		for len(deploys) > 0 && deploys[0].Time <= t {
-			d := deploys[0]
-			deploys = deploys[1:]
+		pending := deploys[:0]
+		autoBlocked := false
+		for _, d := range deploys {
+			if d.WaitForCost && autoBlocked {
+				pending = append(pending, d)
+				continue
+			}
+			if d.Time > t {
+				pending = append(pending, d)
+				if d.WaitForCost {
+					autoBlocked = true
+				}
+				continue
+			}
 			if d.Index < 0 || d.Index >= len(objs) {
 				return nil, fmt.Errorf("部署时刻 %.3fs 的 index=%d 越界（共 %d 个干员）",
 					d.Time, d.Index, len(objs))
@@ -645,6 +667,11 @@ func runSim(spec *Spec) (*Verdict, error) {
 			}
 			// ④ 付得起吗（`_affordable` 2064-2077）
 			if float64(d.Cost) > cost {
+				if d.WaitForCost {
+					pending = append(pending, d)
+					autoBlocked = true
+					continue
+				}
 				verdict.CostDenied = append(verdict.CostDenied,
 					[4]any{t, op.spec.Name, d.Cost, cost})
 				continue
@@ -776,6 +803,8 @@ func runSim(spec *Spec) (*Verdict, error) {
 			verdict.Events = append(verdict.Events,
 				Event{T: t, Kind: "deploy", Who: op.spec.Name})
 		}
+
+		deploys = pending
 
 		// ---- 1b. 手动开技能的请求（原版 2006-2009，紧随部署之后）
 		//
@@ -1210,6 +1239,11 @@ func runSim(spec *Spec) (*Verdict, error) {
 		t += dt
 	}
 
+	for _, d := range deploys {
+		if d.WaitForCost && d.Index >= 0 && d.Index < len(objs) {
+			verdict.DeployRejected = append(verdict.DeployRejected, [3]any{t, objs[d.Index].spec.Name, "自动部署未执行：等待费用或前序自动部署，战斗已结束"})
+		}
+	}
 	verdict.Won = won
 	verdict.Elapsed = t
 	verdict.Life = life

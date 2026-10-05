@@ -109,6 +109,23 @@ func talentMechanismGaps(talents []resolvedTalent, charID, name string) []mechan
 		if _, ok := tfFindLimitDispatch(one); ok {
 			firstClaim("limit_dispatch", "atk")
 		}
+		// A pure cost talent is consumed exactly once by the initial squad balance.
+		sig := []string{}
+		for key := range bb {
+			if !strings.HasPrefix(key, "$") {
+				sig = append(sig, key)
+			}
+		}
+		if len(sig) == 1 && sig[0] == "cost" {
+			if _, ok := toFloat(bb["cost"]); ok {
+				claim("cost")
+				for key := range bb {
+					if strings.HasPrefix(key, "$") {
+						claim(key)
+					}
+				}
+			}
+		}
 		// Baseline panel/redeploy modifiers have dedicated exact consumers.
 		claim("atk", "def", "max_hp", "respawn_time", "attack_speed")
 		if bbValue(bb, "attack_speed_add", 0) != 0 {

@@ -133,14 +133,28 @@ func BuildSpecPart(level, difficulty string, maxTime float64,
 	var deploys []SpecDeploy
 	var skillUses []SpecSkillUse
 	if planPath != "" {
-		var derr error
-		if deploys, derr = BuildDeploysFor(planPath, rosterPath); derr != nil {
-			return SpecPart{}, derr
-		}
 		pl, perr := ReadPlan(planPath)
 		if perr != nil {
 			return SpecPart{}, perr
 		}
+		var roster RosterRead
+		if rosterPath != "" {
+			var err error
+			roster, err = ReadRoster(rosterPath)
+			if err != nil {
+				return SpecPart{}, err
+			}
+		}
+		rows, err := BuildDeployRows(pl, roster, st)
+		if err != nil {
+			return SpecPart{}, err
+		}
+		bonus, err := squadInitialCostBonus(rows)
+		if err != nil {
+			return SpecPart{}, err
+		}
+		env.CostInit += bonus
+		deploys = deploysFromRows(rows)
 		skillUses = BuildSkillUses(pl)
 	}
 	missing := []string{}
