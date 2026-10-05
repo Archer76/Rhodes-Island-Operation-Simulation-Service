@@ -1,10 +1,22 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"rios-sim/mechanisms"
 	"strings"
 )
+
+func cloneRawBlackboard(raw []json.RawMessage) []json.RawMessage {
+	if raw == nil {
+		return nil
+	}
+	out := make([]json.RawMessage, len(raw))
+	for i, b := range raw {
+		out[i] = append(json.RawMessage(nil), b...)
+	}
+	return out
+}
 
 // Claims are source-aware: a shared blackboard parser recognizing a key does
 // not prove that the selected skill/talent has a battle consumer for it.
@@ -13,7 +25,7 @@ func skillMechanismGaps(meta SkillMeta, charID, name string, slot int, baseRange
 	add := func(id, status, key, reason string) {
 		gaps = append(gaps, mechanisms.Gap{ID: id, Status: status, Source: "skill", Operator: name, CharID: charID,
 			SourceID: meta.SkillID, SourceName: meta.Name, Key: key, RawValue: meta.Blackboard[key], Reason: reason,
-			RawBlackboard: meta.RawBlackboard, Description: meta.RawDescription, Slot: slot, Level: meta.Level})
+			RawBlackboard: cloneRawBlackboard(meta.RawBlackboard), Description: meta.RawDescription, Slot: slot, Level: meta.Level})
 	}
 	consumed := map[string]bool{"atk": true, "def": true, "max_hp": true, "attack_speed": true, "base_attack_time": true, "cost": true, "atk_scale": true, "times": true}
 	missing := map[string]string{"heal_scale": "技能自疗未接入战斗", "ability_range_forward_extend": "技能射程前移未接入战斗", "attack@range_scale": "技能溅射范围缩放未接入战斗", "prob": "技能概率事件未完整建模", "attack@prob": "技能概率事件未完整建模", "sp": "技能黑板技力效果未接入战斗", "duration": "黑板持续时间未有来源明确的战斗消费者"}
@@ -202,6 +214,9 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 }
 
 func operatorMechanismGaps(r DeployRow, st *OperatorStats, talents []resolvedTalent) ([]mechanisms.Gap, error) {
+	return operatorMechanismGapsWithInputs(r, st, talents, nil)
+}
+func operatorMechanismGapsWithInputs(r DeployRow, st *OperatorStats, talents []resolvedTalent, inputs *buildInputs) ([]mechanisms.Gap, error) {
 	gaps := talentMechanismGaps(talents, r.Entry.CharID, st.Name)
 	if st.AttackSpeedBonus.WhenFree != 0 {
 		gaps = append(gaps, mechanisms.Gap{ID: "module.attack_speed_when_free", Status: "unimplemented", Source: "module", Operator: st.Name, CharID: r.Entry.CharID, SourceID: st.Module, Key: "aspd_when_free", RawValue: st.AttackSpeedBonus.WhenFree, Reason: "未阻挡条件攻速尚未接入战斗"})
@@ -215,7 +230,7 @@ func operatorMechanismGaps(r DeployRow, st *OperatorStats, talents []resolvedTal
 		slot = 1
 	}
 	if len(ids) > 0 && slot >= 1 && slot <= len(ids) {
-		meta, err := SkillMetaFor(ids[slot-1], SkillLevelDefault)
+		meta, err := inputs.skillMeta(ids[slot-1], SkillLevelDefault)
 		if err != nil {
 			return nil, err
 		}

@@ -635,6 +635,9 @@ func operatorRange(code, direction string, pos [2]int,
 // 就是「两边都没有」这种空洞的相等）。
 func buildOperatorOut(r DeployRow, covered map[string]int,
 	healMode string) (OperatorOut, error) {
+	return buildOperatorOutWithInputs(r, covered, healMode, nil)
+}
+func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode string, inputs *buildInputs) (OperatorOut, error) {
 	e := r.Entry
 	trust := 0.0
 	if e.Trust != nil {
@@ -652,7 +655,7 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		CharID: e.CharID, Elite: e.Elite, Level: e.Level, Trust: trust,
 		Potential: e.Potential, Module: module, ModuleLevel: modLevel,
 	}
-	st, err := OperatorStatsFor(cfg, "round")
+	st, err := inputs.operatorStats(cfg)
 	if err != nil {
 		return OperatorOut{}, err
 	}
@@ -692,10 +695,9 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 	if err != nil {
 		return OperatorOut{}, fmt.Errorf("%s：%v", e.CharID, err)
 	}
-	//: 部署费用走**具名入口** `CostOf`（`deploycost.go`），不在这里另取一遍
-	//: `total["cost"]`——同一个量两份取法迟早会分叉，而 `deploys[].cost` 用的
-	//: 正是 `CostOf`，两处必须是同一个数。
-	cost, err := CostOf(cfg)
+	//: 已有面板时复用 CostOf 的统一转换，不重算同一练度。
+	//: deploys 与 operators 仍通过同一 costFromStats 取值。
+	cost, err := costFromStats(st)
 	if err != nil {
 		return OperatorOut{}, fmt.Errorf("%s（%s）的部署费用：%v",
 			r.Operator, e.CharID, err)
@@ -949,8 +951,8 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 	//:
 	//: ★ 未识别的黑板键**不许静默丢**：计数进 `covered`，名字进 bundle 的
 	//: `SkillUnknownKeys`（调用方在 `BuildOperators` 里汇总）。
-	if sk, act, unknown, err := bindSkillTo(e.CharID, r.Skill, atk, def, res,
-		maxHP, spd, interval, st.TextDerived.DamageType); err != nil {
+	if sk, act, unknown, err := bindSkillToWithInputs(e.CharID, r.Skill, atk, def, res,
+		maxHP, spd, interval, st.TextDerived.DamageType, inputs); err != nil {
 		return OperatorOut{}, fmt.Errorf("%s（%s）的技能绑定：%v", r.Operator, e.CharID, err)
 	} else if sk != nil {
 		covered["skill_bound"]++
@@ -981,7 +983,10 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 			}
 		}
 		if nonzero {
-			out.TalentPanelMods = st.TalentPanelMods
+			out.TalentPanelMods = make(map[string]float64, len(st.TalentPanelMods))
+			for key, value := range st.TalentPanelMods {
+				out.TalentPanelMods[key] = value
+			}
 		}
 	}
 	//: ---- 天赋的**非面板**效果（`talenteffects.go`，2026-09-25）----
@@ -1022,7 +1027,7 @@ func buildOperatorOut(r DeployRow, covered map[string]int,
 		covered["talent_unknown_key_instances"] += len(st.TalentUnknownKeys)
 		out.TalentUnknownKeys = append([]string{}, st.TalentUnknownKeys...)
 	}
-	gaps, err := operatorMechanismGaps(r, st, talents)
+	gaps, err := operatorMechanismGapsWithInputs(r, st, talents, inputs)
 	if err != nil {
 		return OperatorOut{}, err
 	}
@@ -1187,6 +1192,14 @@ func BuildOperators(plan PlayPlan, roster RosterRead,
 	if err != nil {
 		return nil, err
 	}
+	return buildOperatorsFromRows(rows, params)
+}
+
+// buildOperatorsFromRows consumes this plan's already resolved schedule.
+func buildOperatorsFromRows(rows []DeployRow, params OperatorsParams) (*OperatorsBundle, error) {
+	return buildOperatorsFromRowsWithInputs(rows, params, nil)
+}
+func buildOperatorsFromRowsWithInputs(rows []DeployRow, params OperatorsParams, inputs *buildInputs) (*OperatorsBundle, error) {
 	//: ★ **同一 `char_id` 出现多次是合法的**（博士 2026-09-29：「不许一个干员**同时
 	//: 在场**两次；被击倒／撤退回待部署区、冷却结束后可以再次部署」）。
 	//:
@@ -1207,7 +1220,7 @@ func BuildOperators(plan PlayPlan, roster RosterRead,
 	covered := newOperatorsCovered()
 	out := make([]OperatorOut, 0, len(rows))
 	for _, r := range rows {
-		o, err := buildOperatorOut(r, covered, params.HealMode)
+		o, err := buildOperatorOutWithInputs(r, covered, params.HealMode, inputs)
 		if err != nil {
 			return nil, err
 		}

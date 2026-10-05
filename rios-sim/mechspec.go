@@ -104,6 +104,7 @@ var mechFarmlandExcluded = map[string]bool{
 
 // MechQuery 是 `mechspec` 命令的 spec 体。
 type MechQuery struct {
+	inputs     *buildInputs
 	Difficulty string `json:"difficulty,omitempty"`
 	//: ★★ **可选的排程输入**（2026-09-23，第三十九批）：`buildspec` 传、`mechspec`
 	//: **不传**（结构取「甲」：机制名的判据仍然只有这一处）。
@@ -395,11 +396,20 @@ type pileChain struct {
 
 func newPileChain(st *Stage, raw map[string]json.RawMessage, difficulty string,
 	covered map[string]int) (*pileChain, error) {
+	return newPileChainWithInputs(st, raw, difficulty, covered, nil)
+}
+
+func newPileChainWithInputs(st *Stage, raw map[string]json.RawMessage, difficulty string, covered map[string]int, inputs *buildInputs) (*pileChain, error) {
 	defs, err := parseLocalEnemyDefs(raw)
 	if err != nil {
 		return nil, err
 	}
-	lib, err := LoadEnemyLibrary()
+	var lib *EnemyLibrary
+	if inputs != nil {
+		lib, err = inputs.enemies()
+	} else {
+		lib, err = LoadEnemyLibrary()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -629,7 +639,10 @@ func MechSpecBuild(level, path string, q MechQuery) (MechOut, error) {
 			"level": level, "path": path, "difficulty": q.Difficulty,
 		},
 	}
-	st, raw, err := loadStageWithRaw(level, path, q.Difficulty)
+	if q.inputs == nil {
+		q.inputs = newBuildInputs(level, path, q.Difficulty)
+	}
+	st, raw, err := q.inputs.stageData()
 	if err != nil {
 		return out, err
 	}
@@ -663,7 +676,7 @@ func MechSpecBuild(level, path string, q MechQuery) (MechOut, error) {
 		//: **不等于**没有雪。原先这里直接 `return`，会把雪一并漏掉。
 		return out, out.addSnow(st, q)
 	}
-	farm, scanned, err := buildMechFarmland(st, raw, difficulty, params, bb)
+	farm, scanned, err := buildMechFarmlandWithInputs(st, raw, difficulty, params, bb, q.inputs)
 	if err != nil {
 		return out, err
 	}
@@ -843,6 +856,10 @@ func parseInitPollut(text string, mapHeight int) map[mech.Cell]float64 {
 // `mechPolluteFromRunes` 的说明）：`_seed` 读 `init_pollut_value` 用的就是它。
 func buildMechFarmland(st *Stage, raw map[string]json.RawMessage, difficulty string,
 	params mechPollutParams, bb []BlackboardEntry) (mechFarmlandOut, map[string]int, error) {
+	return buildMechFarmlandWithInputs(st, raw, difficulty, params, bb, nil)
+}
+
+func buildMechFarmlandWithInputs(st *Stage, raw map[string]json.RawMessage, difficulty string, params mechPollutParams, bb []BlackboardEntry, inputs *buildInputs) (mechFarmlandOut, map[string]int, error) {
 	scanned := map[string]int{}
 
 	// ---- 田地格（`is_farmland`：低地 且 tileKey 不在排除集里）----
@@ -964,7 +981,7 @@ func buildMechFarmland(st *Stage, raw map[string]json.RawMessage, difficulty str
 			//: 建不出来就**不填** `child`（权威 `return None` 那条），由运行期
 			//: 具名拒跑 —— 一只不会召唤的天桩与「这一关没有天桩」在判决上分不开。
 			if chain == nil {
-				c, err := newPileChain(st, raw, difficulty, covered)
+				c, err := newPileChainWithInputs(st, raw, difficulty, covered, inputs)
 				if err != nil {
 					return mechFarmlandOut{}, scanned, err
 				}

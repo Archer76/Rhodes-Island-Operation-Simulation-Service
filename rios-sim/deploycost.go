@@ -26,6 +26,11 @@ func CostOf(cfg OperatorCalcConfig) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	return costFromStats(st)
+}
+
+// costFromStats shares the exact conversion with callers that already own stats.
+func costFromStats(st *OperatorStats) (int, error) {
 	v, ok := st.Total["cost"]
 	if !ok {
 		return 0, fmt.Errorf("面板 total 里没有 cost")

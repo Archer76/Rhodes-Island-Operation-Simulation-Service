@@ -44,6 +44,9 @@ const SkillLevelDefault = 7
 func bindSkillTo(charID string, slot int, baseATK, baseDEF, baseRES, baseMaxHP,
 	baseASPD, baseInterval float64, baseDamageType string) (*SkillSpec, *Profile,
 	[]string, error) {
+	return bindSkillToWithInputs(charID, slot, baseATK, baseDEF, baseRES, baseMaxHP, baseASPD, baseInterval, baseDamageType, nil)
+}
+func bindSkillToWithInputs(charID string, slot int, baseATK, baseDEF, baseRES, baseMaxHP, baseASPD, baseInterval float64, baseDamageType string, inputs *buildInputs) (*SkillSpec, *Profile, []string, error) {
 	if slot == 0 {
 		//: ★ 博士口径：0 ＝ 默认技能 ＝ 技 1（一二星没有技能槽，下面 `len(ids)==0` 兜住）。
 		slot = 1
@@ -61,7 +64,7 @@ func bindSkillTo(charID string, slot int, baseATK, baseDEF, baseRES, baseMaxHP,
 				"静默截断会让规格里出现一个绑错了技能的干员", charID, slot, len(ids), ids)
 	}
 	sid := ids[slot-1]
-	meta, err := SkillMetaFor(sid, SkillLevelDefault)
+	meta, err := inputs.skillMeta(sid, SkillLevelDefault)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("%s 的技能 %s 第 %d 级取不到：%w",
 			charID, sid, SkillLevelDefault, err)

@@ -167,7 +167,12 @@ type SelfSpecEcho struct {
 // `unsupported`（见文件头第 2 条）。
 func BuildSimSpecFromQuery(level, path string, raw json.RawMessage,
 	m map[string]json.RawMessage) (*Spec, SelfSpecEcho, []string, error) {
+	return buildSimSpecFromQueryWithInputs(level, path, raw, m, nil)
+}
+
+func buildSimSpecFromQueryWithInputs(level, path string, raw json.RawMessage, m map[string]json.RawMessage, inputs *buildInputs) (*Spec, SelfSpecEcho, []string, error) {
 	q, err := ParseSimQuery(raw, m)
+	q.inputs = inputs
 	if err != nil {
 		return nil, SelfSpecEcho{}, nil, err
 	}

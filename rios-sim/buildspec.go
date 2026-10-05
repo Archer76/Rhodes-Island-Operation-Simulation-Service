@@ -63,6 +63,7 @@ import (
 // `plan` / `roster` 给了才造 `operators` / `deploys` / `skill_uses` 里**有内容**的那几份；
 // 键本身**永远在**（原版空排程给的是空列表，不是缺键）。
 type BuildSpecQuery struct {
+	inputs *buildInputs // internal request-owned snapshot; never on the wire
 	//: ⚠ `plan` / `roster` **两种形态都收**：**字符串**＝文件路径（CLI 与历史调用方）；
 	//: **对象**＝内联原样（`sim` 的查询形式要用它 —— Python 侧的 `Roster.from_json(path)`
 	//: 与 `Plan.load(path)` **都不保留来源路径**，而搜索那条路上每场都要造一次规格，
@@ -191,6 +192,9 @@ func (q BuildSpecQuery) loadPlanInput() (PlayPlan, error) {
 }
 
 func (q BuildSpecQuery) loadRosterInput() (RosterRead, error) {
+	if q.inputs != nil && q.inputs.roster != nil {
+		return *q.inputs.roster, nil
+	}
 	return loadRosterTwoForms(q.Roster, q.RosterPath)
 }
 
@@ -409,7 +413,10 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 			"allow_devices": q.AllowDevices, "allow_skills": q.AllowSkills,
 		},
 	}
-	st, _, err := loadStageWithRaw(level, path, q.Difficulty)
+	if q.inputs == nil {
+		q.inputs = newBuildInputs(level, path, q.Difficulty)
+	}
+	st, _, err := q.inputs.stageData()
 	if err != nil {
 		return out, err
 	}
@@ -470,10 +477,15 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 	if err != nil {
 		return out, err
 	}
+	var deployRows []DeployRow
 	if q.hasPlanInput() {
-		bundle, err := BuildOperators(plan, roster, st, OperatorsParams{
+		deployRows, err = buildDeployRowsWithInputs(plan, roster, st, q.inputs)
+		if err != nil {
+			return out, err
+		}
+		bundle, err := buildOperatorsFromRowsWithInputs(deployRows, OperatorsParams{
 			Plan: q.planLabel(), Roster: q.rosterLabel(),
-			HealMode: q.HealMode})
+			HealMode: q.HealMode}, q.inputs)
 		if err != nil {
 			return out, err
 		}
@@ -485,11 +497,7 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 		}
 		out.Scanned["operators.n"] = bundle.Scanned
 
-		rows, err := BuildDeploys(plan, roster, st)
-		if err != nil {
-			return out, err
-		}
-		out.Spec.Deploys = rows
+		out.Spec.Deploys = deploysFromRows(deployRows)
 		out.Spec.SkillUses = BuildSkillUses(plan)
 		//: 撤退请求：**照计划原样搬**（时刻 ＋ 干员名）。这里不做任何解释——
 		//: 「到点该撤谁」是模拟器的事，规格只负责把请求送到。
@@ -504,7 +512,7 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 				RetreatSpec{Time: r.Time, Operator: r.Operator})
 		}
 		out.Scanned["retreats"] = len(out.Spec.Retreats)
-		out.Scanned["deploys"] = len(rows)
+		out.Scanned["deploys"] = len(deployRows)
 		out.Scanned["skill_uses"] = len(out.Spec.SkillUses)
 	}
 
@@ -527,7 +535,7 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 	//: `p3r_armed` 恒 false：见 `buildSpecUnported` 第二条（判据现算可达性）。
 	//: ⚠ **本命令不吃 env**：`plan`／`roster` 是内联对象时连路径都没有，
 	//: 更谈不上「调用方的 env」——所以这里只能传 `false`，并在 unported 里具名。
-	sp, err := SpawnsOf(level, path, difficulty, false)
+	sp, err := spawnsOfWithInputs(level, path, difficulty, false, q.inputs)
 	if err != nil {
 		return out, err
 	}
@@ -539,7 +547,8 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 
 	// ---- unsupported ----
 	gate, err := UnsupportedGate(level, path, GateQuery{
-		Plan: q.Plan, PlanPath: q.PlanPath, Difficulty: difficulty,
+		inputs: q.inputs,
+		Plan:   q.Plan, PlanPath: q.PlanPath, Difficulty: difficulty,
 		AllowDevices: q.AllowDevices, AllowSkills: q.AllowSkills,
 	})
 	if err != nil {
@@ -561,13 +570,9 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 	}
 	var sched *MechSchedule
 	if q.hasPlanInput() {
-		rows, err := BuildDeployRows(plan, roster, st)
-		if err != nil {
-			return out, err
-		}
-		sched = &MechSchedule{Rows: rows, Freeze: freeze}
+		sched = &MechSchedule{Rows: deployRows, Freeze: freeze}
 	}
-	m, err := MechSpecBuild(level, path, MechQuery{Difficulty: difficulty,
+	m, err := MechSpecBuild(level, path, MechQuery{inputs: q.inputs, Difficulty: difficulty,
 		Schedule: sched})
 	if err != nil {
 		return out, err

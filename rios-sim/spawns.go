@@ -834,6 +834,10 @@ func (c *spawnCtx) unitSpec(v *enemyView, t float64, depth int) (map[string]any,
 // 关卡走 `level`（关卡号／levelId）或 `path`（合成关卡 JSON 文件），
 // 与 `routeplans` / `stageenv` 同一口径。
 func SpawnsOf(level, path, difficulty string, p3rArmed bool) (SpawnsOut, error) {
+	return spawnsOfWithInputs(level, path, difficulty, p3rArmed, newBuildInputs(level, path, difficulty))
+}
+
+func spawnsOfWithInputs(level, path, difficulty string, p3rArmed bool, inputs *buildInputs) (SpawnsOut, error) {
 	out := SpawnsOut{
 		Spawns:   []map[string]any{},
 		Unported: append([]string{}, spawnsUnported...),
@@ -846,7 +850,7 @@ func SpawnsOf(level, path, difficulty string, p3rArmed bool) (SpawnsOut, error) 
 	cnt := &spawnCounter{Covered: out.Covered, Scanned: out.Scanned}
 	initSpawnCounters(cnt)
 
-	st, raw, err := loadStageWithRaw(level, path, difficulty)
+	st, raw, err := inputs.stageData()
 	if err != nil {
 		return out, err
 	}
@@ -854,7 +858,7 @@ func SpawnsOf(level, path, difficulty string, p3rArmed bool) (SpawnsOut, error) 
 	if err != nil {
 		return out, err
 	}
-	lib, err := LoadEnemyLibrary()
+	lib, err := inputs.enemies()
 	if err != nil {
 		return out, err
 	}

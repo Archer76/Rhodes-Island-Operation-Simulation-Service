@@ -283,6 +283,10 @@ func planFromState(stageID string, state []CandidateRow,
 // 路径形态顺带省掉每场求值重序列化 200 多条名册。
 func evalState(level, path string, q SolveQuery, st *Stage, state []CandidateRow,
 	roster *core.RosterRead) (*core.PlayPlan, *Verdict, string, error) {
+	return evalStateWithInputs(level, path, q, st, state, roster, nil)
+}
+
+func evalStateWithInputs(level, path string, q SolveQuery, st *Stage, state []CandidateRow, roster *core.RosterRead, inputs *buildInputs) (*core.PlayPlan, *Verdict, string, error) {
 	plan := planFromState(st.LevelID, state, roster)
 	if err := plan.Validate(); err != nil {
 		return nil, nil, "plan_invalid", err
@@ -320,7 +324,7 @@ func evalState(level, path string, q SolveQuery, st *Stage, state []CandidateRow
 	if err != nil {
 		return nil, nil, "spec_failed", err
 	}
-	spec, _, unsup, err := BuildSimSpecFromQuery(level, path, qj, sm)
+	spec, _, unsup, err := buildSimSpecFromQueryWithInputs(level, path, qj, sm, inputs)
 	if err != nil {
 		return nil, nil, "spec_failed", err
 	}
@@ -567,8 +571,12 @@ func SolveWithProgress(level, path string, q SolveQuery, notify func(progress.Sn
 		}
 		roster = &rr
 	}
+	inputs := newBuildInputs(level, path, q.Difficulty)
+	inputs.roster = roster
+	inputs.gateOnce.Do(func() { inputs.gateStage = st })
 	//: 第一层照旧走几何剪枝（同一份实现，不另写）
 	cands, err := CandidatesFor(level, path, q.Difficulty, CandidatesQuery{
+		inputs: inputs,
 		Roster: q.Roster, Operators: q.Operators, PerOp: q.PerOp,
 		Skills: q.Skills, SpeedScale: q.SpeedScale})
 	if err != nil {
@@ -640,7 +648,7 @@ func SolveWithProgress(level, path string, q SolveQuery, notify func(progress.Sn
 		}
 		pool, sub := evalDepthStreaming(states, depth >= minOps,
 			func(s []CandidateRow) (*core.PlayPlan, *Verdict, string, error) {
-				return evalState(level, path, q, st, s, roster)
+				return evalStateWithInputs(level, path, q, st, s, roster, inputs)
 			}, func(sub SolveStats, completed int, got *scoredState) {
 				snap.Evaluated, snap.Completed = stats.Evaluated+sub.Evaluated, completed
 				if got != nil && (liveBest == nil || got.key.better(liveBest.key)) {

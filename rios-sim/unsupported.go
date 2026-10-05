@@ -66,6 +66,7 @@ import (
 // 无分支可走——但字段**照样读**：它们会随 `Params` 原样回显，判据据此核对
 // 「这一趟是按哪个口径问的」。口径只活在散文里，下一个读的人不会去看它。
 type GateQuery struct {
+	inputs *buildInputs
 	//: ⚠ 与 `BuildSpecQuery.Plan` **同一份两形态**（字符串＝路径／对象＝内联），
 	//: 判别与解析都走 `loadPlanTwoForms`（**只此一份实现**）。闸门要读计划里的
 	//: `retreats` 与每位干员的 `skill`，而 `sim` 的查询形式手上是**计划对象**、
@@ -139,7 +140,10 @@ func UnsupportedGate(level, path string, q GateQuery) (GateOut, error) {
 			"allow_devices": q.AllowDevices, "allow_skills": q.AllowSkills,
 		},
 	}
-	st, err := loadGateStage(level, path, q.Difficulty)
+	if q.inputs == nil {
+		q.inputs = newBuildInputs(level, path, q.Difficulty)
+	}
+	st, err := q.inputs.gateData()
 	if err != nil {
 		return out, err
 	}
@@ -195,7 +199,7 @@ func UnsupportedGate(level, path string, q GateQuery) (GateOut, error) {
 	}
 
 	// ---- 敌人侧（`spec.py:450-498`）----
-	lib, err := LoadEnemyLibrary()
+	lib, err := q.inputs.enemies()
 	if err != nil {
 		return out, err
 	}

@@ -83,6 +83,7 @@ type CandidateStats struct {
 
 // CandidatesQuery 是 `candidates` 命令的 spec。
 type CandidatesQuery struct {
+	inputs *buildInputs
 	//: 名册 JSON 的路径（`core.ReadRoster` 读得动的那种）。
 	//:
 	//: ★ 走**文件**而不是走桥的名册应答：桥那边只送 5 个字段（char_id/name/
@@ -215,7 +216,9 @@ func CandidatesFor(level, path, difficulty string, q CandidatesQuery) (Candidate
 			"operators": len(q.Operators)}}
 	var st *Stage
 	var err error
-	if path != "" {
+	if q.inputs != nil {
+		st, err = q.inputs.gateData()
+	} else if path != "" {
 		st, err = loadStageFromFile(path, difficulty)
 	} else {
 		if level == "" {
@@ -229,7 +232,9 @@ func CandidatesFor(level, path, difficulty string, q CandidatesQuery) (Candidate
 	//: 名册：给了路径就必须读得动，读不动**具名失败**（空名册与「这个号一个干员
 	//: 都没有」长得一模一样，而两者的处置完全不同）。
 	var roster *core.RosterRead
-	if q.Roster != "" {
+	if q.inputs != nil && q.inputs.roster != nil {
+		roster = q.inputs.roster
+	} else if q.Roster != "" {
 		rr, rerr := core.ReadRoster(q.Roster)
 		if rerr != nil {
 			return out, fmt.Errorf("读名册 %s 失败：%w", q.Roster, rerr)
@@ -243,7 +248,12 @@ func CandidatesFor(level, path, difficulty string, q CandidatesQuery) (Candidate
 		}
 	}
 
-	lib, err := LoadEnemyLibrary()
+	var lib *EnemyLibrary
+	if q.inputs != nil {
+		lib, err = q.inputs.enemies()
+	} else {
+		lib, err = LoadEnemyLibrary()
+	}
 	if err != nil {
 		return out, err
 	}

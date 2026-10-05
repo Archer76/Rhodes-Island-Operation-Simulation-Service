@@ -117,6 +117,9 @@ type DeployRow struct {
 // 的行。顺序与 `sorted(sch.deployments, key=lambda d: d.time)` 逐个相同。
 func BuildDeployRows(plan PlayPlan, roster RosterRead,
 	stage *Stage) ([]DeployRow, error) {
+	return buildDeployRowsWithInputs(plan, roster, stage, nil)
+}
+func buildDeployRowsWithInputs(plan PlayPlan, roster RosterRead, stage *Stage, inputs *buildInputs) ([]DeployRow, error) {
 	rate := stage.Options.CostIncreaseTime
 	if rate == 0 {
 		//: 原版在这一支会 `ZeroDivisionError`；Go 的浮点除零静默给 ±Inf，
@@ -143,10 +146,14 @@ func BuildDeployRows(plan PlayPlan, roster RosterRead,
 		if e.ModuleLevel != nil {
 			modLevel = *e.ModuleLevel
 		}
-		cost, err := CostOf(OperatorCalcConfig{
+		stats, err := inputs.operatorStats(OperatorCalcConfig{
 			CharID: e.CharID, Elite: e.Elite, Level: e.Level, Trust: trust,
 			Potential: e.Potential, Module: module, ModuleLevel: modLevel,
 		})
+		if err != nil {
+			return nil, fmt.Errorf("%s（%s）的部署费用：%v", d.Operator, e.CharID, err)
+		}
+		cost, err := costFromStats(stats)
 		if err != nil {
 			return nil, fmt.Errorf("%s（%s）的部署费用：%v", d.Operator, e.CharID, err)
 		}
@@ -187,6 +194,10 @@ func BuildDeploys(plan PlayPlan, roster RosterRead, stage *Stage) ([]SpecDeploy,
 	if err != nil {
 		return nil, err
 	}
+	return deploysFromRows(rows), nil
+}
+
+func deploysFromRows(rows []DeployRow) []SpecDeploy {
 	out := make([]SpecDeploy, 0, len(rows))
 	for i, r := range rows {
 		out = append(out, SpecDeploy{
@@ -194,7 +205,7 @@ func BuildDeploys(plan PlayPlan, roster RosterRead, stage *Stage) ([]SpecDeploy,
 			AutoSkill: r.AutoSkill,
 		})
 	}
-	return out, nil
+	return out
 }
 
 // BuildDeploysFor 从两条路径读入，造 `deploys`（命令用）。
