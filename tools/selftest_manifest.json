@@ -1,0 +1,2798 @@
+{
+  "schema_version": 1,
+  "profile": "all-required",
+  "required_ids": [
+    "prerequisites",
+    "c001",
+    "c002",
+    "c003",
+    "c004",
+    "c005",
+    "c006",
+    "c007",
+    "c008",
+    "c009",
+    "c010",
+    "c011",
+    "c012",
+    "c013",
+    "c014",
+    "c015",
+    "c016",
+    "c017",
+    "c018",
+    "c019",
+    "c020",
+    "c021",
+    "c022",
+    "c023",
+    "c024",
+    "c025",
+    "c026",
+    "c027",
+    "c028",
+    "c029",
+    "c030",
+    "c031",
+    "c032",
+    "c033",
+    "c034",
+    "c035",
+    "c037",
+    "c038",
+    "c039",
+    "c040",
+    "c041",
+    "c043",
+    "c044",
+    "c045",
+    "c046",
+    "c047",
+    "c049",
+    "c050",
+    "c051",
+    "c052",
+    "c053",
+    "c054",
+    "c055",
+    "c056",
+    "c057",
+    "c059",
+    "c060",
+    "c061",
+    "c063",
+    "c064",
+    "c065",
+    "c067",
+    "c068",
+    "c069",
+    "c071",
+    "c072",
+    "c073",
+    "c074",
+    "c075",
+    "c077",
+    "c078",
+    "c079",
+    "c080",
+    "c081",
+    "c082",
+    "c083",
+    "c084",
+    "c085",
+    "c086",
+    "c087",
+    "c088",
+    "c090",
+    "c092",
+    "c093",
+    "c094",
+    "c095",
+    "c096",
+    "c097",
+    "c099",
+    "c100",
+    "c101",
+    "c102",
+    "c103",
+    "c104",
+    "c105",
+    "c106",
+    "c107",
+    "c108",
+    "c109",
+    "c111",
+    "c112",
+    "c113",
+    "c114",
+    "c115",
+    "c116",
+    "c117",
+    "c118",
+    "c119",
+    "c120",
+    "c121",
+    "c122",
+    "c123",
+    "c124",
+    "c125",
+    "c126",
+    "c127",
+    "c128",
+    "c129",
+    "c130",
+    "c131",
+    "c132",
+    "c133",
+    "c134",
+    "c135",
+    "c136",
+    "c137",
+    "c138",
+    "c139",
+    "c140",
+    "c141",
+    "c143",
+    "c144",
+    "c145",
+    "c146",
+    "c147",
+    "c148",
+    "c149",
+    "c150",
+    "c151",
+    "c152",
+    "c153",
+    "c154",
+    "c155",
+    "c156",
+    "c157",
+    "c158",
+    "c159",
+    "c160",
+    "c161",
+    "c162",
+    "c163",
+    "c164",
+    "c165",
+    "c166",
+    "c167",
+    "c168",
+    "c169",
+    "c170",
+    "c171",
+    "c172",
+    "c173",
+    "c174",
+    "c175",
+    "c176",
+    "c177",
+    "c178",
+    "c179",
+    "c180",
+    "c181",
+    "c182",
+    "c183",
+    "c184",
+    "c185",
+    "c186",
+    "c187",
+    "c188",
+    "c190",
+    "c191",
+    "c192",
+    "c193",
+    "c194",
+    "c195",
+    "c196",
+    "c197",
+    "c198",
+    "c199",
+    "c200",
+    "c201",
+    "c202",
+    "c203",
+    "c204",
+    "c205",
+    "c206",
+    "c207",
+    "c208",
+    "c209",
+    "c210",
+    "c211",
+    "c212",
+    "c213",
+    "c214",
+    "c215",
+    "c216",
+    "c217",
+    "c218",
+    "c219",
+    "c220",
+    "c221",
+    "c222",
+    "c223",
+    "c225",
+    "c226",
+    "c228",
+    "c230",
+    "c231",
+    "c232",
+    "c234",
+    "c235",
+    "c236",
+    "c237",
+    "c239",
+    "c240",
+    "c241",
+    "c242",
+    "c243",
+    "c244",
+    "c245",
+    "c246",
+    "c247",
+    "c248",
+    "c249",
+    "c250",
+    "c251",
+    "c252",
+    "c254",
+    "c255",
+    "c256",
+    "c257",
+    "c258",
+    "c259",
+    "c260",
+    "c261",
+    "c262",
+    "c263",
+    "c264",
+    "c265",
+    "c266",
+    "c267",
+    "c268",
+    "c269",
+    "c270",
+    "c271",
+    "c272",
+    "c273",
+    "c274",
+    "c275",
+    "c276",
+    "c277",
+    "c278",
+    "c279",
+    "c280",
+    "c281",
+    "c282",
+    "c284",
+    "c286",
+    "c287",
+    "c289",
+    "c290",
+    "c292",
+    "c294",
+    "c295",
+    "c296",
+    "c297",
+    "c298",
+    "c299",
+    "c300",
+    "c301",
+    "c302",
+    "c303",
+    "c304",
+    "c305",
+    "c306",
+    "c307",
+    "c308",
+    "c309",
+    "c310",
+    "c311",
+    "c312",
+    "c313",
+    "c314",
+    "c315",
+    "c318",
+    "c319",
+    "c320",
+    "c321",
+    "c322",
+    "c323",
+    "c324",
+    "c325",
+    "c326",
+    "c327",
+    "c328",
+    "c329",
+    "c330",
+    "c331",
+    "c332",
+    "c333",
+    "c334",
+    "c335",
+    "c336",
+    "c337",
+    "c338",
+    "c339",
+    "c340",
+    "c341",
+    "c342",
+    "c343",
+    "c344",
+    "c345",
+    "c346",
+    "c348",
+    "c349",
+    "engine_wrong_id",
+    "engine_right_id"
+  ],
+  "inventory": [
+    {
+      "id": "c001",
+      "line": 63,
+      "section": "control",
+      "source": "if check(\"负对照：故意造一个假命题（应当判红）\", 1 == 2, \"这一条是刻意造的红\") {",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c002",
+      "line": 85,
+      "section": "== 一 · 取数层 ==",
+      "source": "check(\"章节 91 条（2026-09-27 当晚口径：＋故事集 15 ＋早期活动 7；旧数 69 已过期）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c003",
+      "line": 99,
+      "section": "== 一 · 取数层 ==",
+      "source": "check(\"六星档（险地作战）已在取数面（SIX_STAR 45 行）\", six == 45,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c004",
+      "line": 102,
+      "section": "== 一 · 取数层 ==",
+      "source": "check(\"干员库数得出来（首页那一栏靠它）\", err == nil && n > 1000,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c005",
+      "line": 107,
+      "section": "== 二 · [0] 准备屏 渲染 ==",
+      "source": "check(\"渲染里有服务名\", strings.Contains(v, appTitle), appTitle)",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c006",
+      "line": 110,
+      "section": "== 二 · [0] 准备屏 渲染 ==",
+      "source": "check(\"视觉层：标题配置金色强调\", styleBrand.GetForeground() == colorGold,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c007",
+      "line": 112,
+      "section": "== 二 · [0] 准备屏 渲染 ==",
+      "source": "check(\"视觉层负对照：剥除样式仍保留原文\", ansi.Strip(styleBrand.Render(appTitle)) == appTitle &&",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c008",
+      "line": 114,
+      "section": "== 二 · [0] 准备屏 渲染 ==",
+      "source": "check(\"渲染里有「数据目录」栏\", strings.Contains(v, \"数据目录\"), \"数据目录\")",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c009",
+      "line": 115,
+      "section": "== 二 · [0] 准备屏 渲染 ==",
+      "source": "check(\"渲染里有「登录账号」栏\", strings.Contains(v, \"登录账号\"), \"登录账号\")",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c010",
+      "line": 116,
+      "section": "== 二 · [0] 准备屏 渲染 ==",
+      "source": "check(\"干员库那栏是真读数\", strings.Contains(v, \"干员库：已获取\"),",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c011",
+      "line": 140,
+      "section": "== 二 · [0] 准备屏 渲染 ==",
+      "source": "check(\"登录账号栏四档都有话说（不留空白）\", blank == \"\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c012",
+      "line": 145,
+      "section": "== 二 · [0] 准备屏 渲染 ==",
+      "source": "check(\"★ 刚登录成功 ⇒ 不再说「当前没有登录的账号」（两句提示不许共存）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c013",
+      "line": 151,
+      "section": "== 二 · [0] 准备屏 渲染 ==",
+      "source": "check(\"负对照：真没登录时仍说「当前没有登录的账号」\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c014",
+      "line": 156,
+      "section": "== 二 · [0] 准备屏 渲染 ==",
+      "source": "check(\"负对照：空白检测器认得纯 ANSI 的空白\", ctrl, fmt.Sprintf(\"实得 %v\", ctrl))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c015",
+      "line": 162,
+      "section": "== 三 · 矮窗口降级（优先级：数据 > 标题）==",
+      "source": "check(\"12 行：标题块还在\", strings.Contains(v12, appTitle), \"有服务名\")",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c016",
+      "line": 165,
+      "section": "== 三 · 矮窗口降级（优先级：数据 > 标题）==",
+      "source": "check(\"10 行：标题块收起来了\", !strings.Contains(v10, appTitle), \"无服务名\")",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c017",
+      "line": 166,
+      "section": "== 三 · 矮窗口降级（优先级：数据 > 标题）==",
+      "source": "check(\"10 行：数据目录**仍然看得见**\", strings.Contains(v10, \"数据目录\"), \"数据目录\")",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c018",
+      "line": 167,
+      "section": "== 三 · 矮窗口降级（优先级：数据 > 标题）==",
+      "source": "check(\"10 行：登录账号**仍然看得见**\", strings.Contains(v10, \"登录账号\"), \"登录账号\")",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c019",
+      "line": 172,
+      "section": "== 四 · 屏栈：Enter 进选章、Esc 退回 ==",
+      "source": "check(\"压到选章屏\", screenName(r.top()) == \"*main.chapterScreen\", screenName(r.top()))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c020",
+      "line": 173,
+      "section": "== 四 · 屏栈：Enter 进选章、Esc 退回 ==",
+      "source": "check(\"面包屑含两层\", strings.Contains(r.crumb(), \"准备\") &&",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c021",
+      "line": 175,
+      "section": "== 四 · 屏栈：Enter 进选章、Esc 退回 ==",
+      "source": "check(\"选章屏渲染出第一章\", strings.Contains(r.View(), c.chapters[0].Title),",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c022",
+      "line": 178,
+      "section": "== 四 · 屏栈：Enter 进选章、Esc 退回 ==",
+      "source": "check(\"Esc 退回准备屏\", screenName(r.top()) == \"main.welcomeScreen\", screenName(r.top()))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c023",
+      "line": 179,
+      "section": "== 四 · 屏栈：Enter 进选章、Esc 退回 ==",
+      "source": "check(\"退出后栈深回到 1\", len(r.stack) == 1, fmt.Sprintf(\"%d\", len(r.stack)))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c024",
+      "line": 190,
+      "section": "== 五 · 整条下钻：章 → 部 →（环境）→ 关卡 ==",
+      "source": "check(\"存在多部章（否则选部那一屏永远走不到）\", multi >= 0,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c025",
+      "line": 195,
+      "section": "== 五 · 整条下钻：章 → 部 →（环境）→ 关卡 ==",
+      "source": "check(\"压到选部屏\", screenName(r.top()) == \"*main.partScreen\", screenName(r.top()))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c026",
+      "line": 196,
+      "section": "== 五 · 整条下钻：章 → 部 →（环境）→ 关卡 ==",
+      "source": "check(\"部数 = 章里的 Parts 数\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c027",
+      "line": 201,
+      "section": "== 五 · 整条下钻：章 → 部 →（环境）→ 关卡 ==",
+      "source": "check(\"多档环境的部会先过环境屏\", true, \"envScreen\")",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c028",
+      "line": 202,
+      "section": "== 五 · 整条下钻：章 → 部 →（环境）→ 关卡 ==",
+      "source": "check(\"环境屏首行是「全部关卡」（博士 2026-09-27 定名，逐条见五之九）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c029",
+      "line": 207,
+      "section": "== 五 · 整条下钻：章 → 部 →（环境）→ 关卡 ==",
+      "source": "check(\"到关卡屏\", screenName(r.top()) == \"*main.stageScreen\", screenName(r.top()))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c030",
+      "line": 213,
+      "section": "== 五 · 整条下钻：章 → 部 →（环境）→ 关卡 ==",
+      "source": "check(\"这一部有关卡\", len(ss.rows) > 0, fmt.Sprintf(\"%d 关\", len(ss.rows)))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c031",
+      "line": 221,
+      "section": "== 五 · 整条下钻：章 → 部 →（环境）→ 关卡 ==",
+      "source": "check(\"列出的每一关都属于所选 zone（精确匹配）\", wrong == 0,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c032",
+      "line": 223,
+      "section": "== 五 · 整条下钻：章 → 部 →（环境）→ 关卡 ==",
+      "source": "check(\"关卡屏渲染里有第一关的代号\", strings.Contains(r.View(), ss.rows[0].Code),",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c033",
+      "line": 229,
+      "section": "== 五 · 整条下钻：章 → 部 →（环境）→ 关卡 ==",
+      "source": "check(\"选定关卡后压到「问编队」屏（[2] 的第一步）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c034",
+      "line": 231,
+      "section": "== 五 · 整条下钻：章 → 部 →（环境）→ 关卡 ==",
+      "source": "check(\"还没定编队（要先答「要不要手动加人」）\", len(c.squad) == 0,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c035",
+      "line": 242,
+      "section": "== 五 · 整条下钻：章 → 部 →（环境）→ 关卡 ==",
+      "source": "check(\"逐层 Esc 能退回准备屏\", screenName(r.top()) == \"main.welcomeScreen\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c036",
+      "line": 265,
+      "section": "== 五之二 · 退回的落点：关卡屏 esc／解算屏 q 都退到「选章节」==",
+      "source": "check(\"（前置）走到关卡屏\", false, screenName(r3.top()))",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c037",
+      "line": 268,
+      "section": "== 五之二 · 退回的落点：关卡屏 esc／解算屏 q 都退到「选章节」==",
+      "source": "check(\"关卡屏 esc ⇒ 退回**选章节**（不是准备屏）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c038",
+      "line": 270,
+      "section": "== 五之二 · 退回的落点：关卡屏 esc／解算屏 q 都退到「选章节」==",
+      "source": "check(\"退回后栈里是 [准备屏, 选章节]（关卡屏已被弹掉，栈深 2）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c039",
+      "line": 281,
+      "section": "== 五之二 · 退回的落点：关卡屏 esc／解算屏 q 都退到「选章节」==",
+      "source": "check(\"解算屏按 q（中止）⇒ 退回**选章节**（不是准备屏，也不是「问编队」）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c040",
+      "line": 293,
+      "section": "== 五之二 · 退回的落点：关卡屏 esc／解算屏 q 都退到「选章节」==",
+      "source": "check(\"★ 换屏后旧提示消失（博士：选关那句不许一直显示）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c041",
+      "line": 302,
+      "section": "== 五之二 · 退回的落点：关卡屏 esc／解算屏 q 都退到「选章节」==",
+      "source": "check(\"负对照：换屏时**在 update 里新设**的提示留得住（不是无差别清空）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c042",
+      "line": 318,
+      "section": "== 五之三 · 章节屏的搜索框（Python `Input #kw` 的等价物）==",
+      "source": "check(\"（前置）走到选章屏\", false, screenName(r5.top()))",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c043",
+      "line": 321,
+      "section": "== 五之三 · 章节屏的搜索框（Python `Input #kw` 的等价物）==",
+      "source": "check(\"空关键词 = 不筛（可见条数 = 全部章节）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c044",
+      "line": 330,
+      "section": "== 五之三 · 章节屏的搜索框（Python `Input #kw` 的等价物）==",
+      "source": "check(\"输「月行水上」筛出唯一一条 act54side\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c045",
+      "line": 342,
+      "section": "== 五之三 · 章节屏的搜索框（Python `Input #kw` 的等价物）==",
+      "source": "check(\"全角「ＡＣＴ５４ＳＩＤＥ」筛出同一章（折半角生效）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c046",
+      "line": 351,
+      "section": "== 五之三 · 章节屏的搜索框（Python `Input #kw` 的等价物）==",
+      "source": "check(\"负对照：筛不着时可见 0 条、按 Enter 不推进（不乱选）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c047",
+      "line": 355,
+      "section": "== 五之三 · 章节屏的搜索框（Python `Input #kw` 的等价物）==",
+      "source": "check(\"Esc 先清关键词、再按一次才返回\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c048",
+      "line": 377,
+      "section": "== 五之四 · 关卡屏的搜索框与难度下拉（Python `#kw` ＋ `Select #diff`）==",
+      "source": "check(\"（前置）走到关卡屏\", false, screenName(r6.top()))",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c049",
+      "line": 390,
+      "section": "== 五之四 · 关卡屏的搜索框与难度下拉（Python `#kw` ＋ `Select #diff`）==",
+      "source": "check(\"难度下拉恰是三档，且**关数写进标签**（照参照的「普通（三星）（19 关）」）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c050",
+      "line": 397,
+      "section": "== 五之四 · 关卡屏的搜索框与难度下拉（Python `#kw` ＋ `Select #diff`）==",
+      "source": "check(\"（前置）这一部里普通档与突袭档都有货\", nNormal > 0 && nFour > 0,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c051",
+      "line": 399,
+      "section": "== 五之四 · 关卡屏的搜索框与难度下拉（Python `#kw` ＋ `Select #diff`）==",
+      "source": "check(\"全选（默认档）⇒ 列出的就是基数\", len(ss.shown()) == base,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c052",
+      "line": 405,
+      "section": "== 五之四 · 关卡屏的搜索框与难度下拉（Python `#kw` ＋ `Select #diff`）==",
+      "source": "check(\"D 打开难度下拉（展开态）\", ss.picking, fmt.Sprintf(\"picking=%v\", ss.picking))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c053",
+      "line": 407,
+      "section": "== 五之四 · 关卡屏的搜索框与难度下拉（Python `#kw` ＋ `Select #diff`）==",
+      "source": "check(\"★ 下拉展开时回车**只确认难度**、不选定关卡（对照实现记过的那条坑）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c054",
+      "line": 421,
+      "section": "== 五之四 · 关卡屏的搜索框与难度下拉（Python `#kw` ＋ `Select #diff`）==",
+      "source": "check(\"选「突袭（四星）」⇒ 列出的每一条都是 FOUR_STAR，且条数 = 标签里那个数\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c055",
+      "line": 432,
+      "section": "== 五之四 · 关卡屏的搜索框与难度下拉（Python `#kw` ＋ `Select #diff`）==",
+      "source": "check(\"关键词 = 第一条的代号 ⇒ 至少筛出它自己\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c056",
+      "line": 442,
+      "section": "== 五之四 · 关卡屏的搜索框与难度下拉（Python `#kw` ＋ `Select #diff`）==",
+      "source": "check(\"全角写法的同一个代号 ⇒ 同样筛得出来（折半角生效）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c057",
+      "line": 452,
+      "section": "== 五之四 · 关卡屏的搜索框与难度下拉（Python `#kw` ＋ `Select #diff`）==",
+      "source": "check(\"负对照：筛不着时可见 0 条、按 Enter 不推进\", none == 0 && len(r6.stack) == d1,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c058",
+      "line": 482,
+      "section": "== 五之五 · 鼠标通道 ＋ 分类行命中表（Python `PickerRow`）==",
+      "source": "check(\"（前置）选人屏在栈顶\", false, screenName(r7.top()))",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c059",
+      "line": 485,
+      "section": "== 五之五 · 鼠标通道 ＋ 分类行命中表（Python `PickerRow`）==",
+      "source": "check(\"选人屏实现了 mouseScreen（鼠标消息送得到它）\", isMouse,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c060",
+      "line": 488,
+      "section": "== 五之五 · 鼠标通道 ＋ 分类行命中表（Python `PickerRow`）==",
+      "source": "check(\"分类行 = 「全部」＋ 名册里真有的职业（按游戏序）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c061",
+      "line": 502,
+      "section": "== 五之五 · 鼠标通道 ＋ 分类行命中表（Python `PickerRow`）==",
+      "source": "check(\"→ 切职业：列出的每一条都属于该职业，且比「全部」少\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c062",
+      "line": 520,
+      "section": "== 五之五 · 鼠标通道 ＋ 分类行命中表（Python `PickerRow`）==",
+      "source": "check(\"（前置）医疗那一项在命中表里\", false, fmt.Sprintf(\"idx=%d\", medic))",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c063",
+      "line": 525,
+      "section": "== 五之五 · 鼠标通道 ＋ 分类行命中表（Python `PickerRow`）==",
+      "source": "check(\"★ 鼠标点分类行 ⇒ 切到点中的那一项（博士原来的操作方式）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c064",
+      "line": 531,
+      "section": "== 五之五 · 鼠标通道 ＋ 分类行命中表（Python `PickerRow`）==",
+      "source": "check(\"负对照：点在格子之外 ⇒ 筛选不变\", ss7.prof == keep,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c065",
+      "line": 556,
+      "section": "== 五之五 · 鼠标通道 ＋ 分类行命中表（Python `PickerRow`）==",
+      "source": "check(\"折行后**第二行上的项照样点得到**（格子带行号的理由）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c066",
+      "line": 589,
+      "section": "== 五之六 · 子职业行（Python `PickerRow #sub-row`）==",
+      "source": "check(\"（前置）选人屏在栈顶\", false, screenName(r8.top()))",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c067",
+      "line": 592,
+      "section": "== 五之六 · 子职业行（Python `PickerRow #sub-row`）==",
+      "source": "check(\"没选职业 ⇒ 子职业行**不出现**（整行隐藏，照参照）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c068",
+      "line": 595,
+      "section": "== 五之六 · 子职业行（Python `PickerRow #sub-row`）==",
+      "source": "check(\"（同上）隐藏时命中表是空的 —— 点在一块看不见的行上不许有反应\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c069",
+      "line": 609,
+      "section": "== 五之六 · 子职业行（Python `PickerRow #sub-row`）==",
+      "source": "check(\"选「医疗」⇒ 子职业行 = 「全部」＋ 该职业下真有的子职业（按名册首次出现序）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c070",
+      "line": 623,
+      "section": "== 五之六 · 子职业行（Python `PickerRow #sub-row`）==",
+      "source": "check(\"（前置）「咒愈师」在子职业行的命中表里\", false,",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c071",
+      "line": 632,
+      "section": "== 五之六 · 子职业行（Python `PickerRow #sub-row`）==",
+      "source": "check(\"★ 鼠标点子职业行的「咒愈师」⇒ 只剩该子职业的那一位\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c072",
+      "line": 638,
+      "section": "== 五之六 · 子职业行（Python `PickerRow #sub-row`）==",
+      "source": "check(\"换职业 ⇒ 子职业回到「全部」、可见集合按新职业重算\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c073",
+      "line": 650,
+      "section": "== 五之六 · 子职业行（Python `PickerRow #sub-row`）==",
+      "source": "check(\"Tab 之后焦点在子职业行（有子职业时才切得过去）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c074",
+      "line": 653,
+      "section": "== 五之六 · 子职业行（Python `PickerRow #sub-row`）==",
+      "source": "check(\"焦点在子职业行时 → 改的是子职业（不是职业）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c075",
+      "line": 659,
+      "section": "== 五之六 · 子职业行（Python `PickerRow #sub-row`）==",
+      "source": "check(\"负对照：子职业行隐藏时 Tab **不切焦点**（否则 ←/→ 会像坏了）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c076",
+      "line": 683,
+      "section": "== 五之七 · 练度门槛下拉（Python `Select #f-trained`）==",
+      "source": "check(\"（前置）选人屏在栈顶\", false, screenName(r9.top()))",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c077",
+      "line": 689,
+      "section": "== 五之七 · 练度门槛下拉（Python `Select #f-trained`）==",
+      "source": "check(\"练度门槛恰是三档，且文案与参照逐字相同\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c078",
+      "line": 714,
+      "section": "== 五之七 · 练度门槛下拉（Python `Select #f-trained`）==",
+      "source": "check(\"练度门槛边界：\"+b.why,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c079",
+      "line": 721,
+      "section": "== 五之七 · 练度门槛下拉（Python `Select #f-trained`）==",
+      "source": "check(\"F 打开练度下拉（展开态）\", ss9.trOpen, fmt.Sprintf(\"trOpen=%v\", ss9.trOpen))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c080",
+      "line": 723,
+      "section": "== 五之七 · 练度门槛下拉（Python `Select #f-trained`）==",
+      "source": "check(\"★ 下拉展开时回车**只确认门槛**、不进入下一步（栈深不变）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c081",
+      "line": 731,
+      "section": "== 五之七 · 练度门槛下拉（Python `Select #f-trained`）==",
+      "source": "check(\"选「精英二 90 级」⇒ 只剩 E2L90 的那一位\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c082",
+      "line": 742,
+      "section": "== 五之七 · 练度门槛下拉（Python `Select #f-trained`）==",
+      "source": "check(\"筛到空集时屏上说清原因（名册有 N 人／当前筛选没人），不是含糊一句\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c083",
+      "line": 748,
+      "section": "== 五之七 · 练度门槛下拉（Python `Select #f-trained`）==",
+      "source": "check(\"负对照：门槛回到「不限」⇒ 可见人数回到基数\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c084",
+      "line": 859,
+      "section": "== 五之八 · 控件清单（「这一屏应当有哪个控件」）==",
+      "source": "check(fmt.Sprintf(\"控件清单：%s 有「%s」（%s）\", it.screen, it.widget, it.note),",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c085",
+      "line": 862,
+      "section": "== 五之八 · 控件清单（「这一屏应当有哪个控件」）==",
+      "source": "check(\"控件清单本身不许被清空（至少 7 项，否则这一段会静默变成零行使）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c086",
+      "line": 872,
+      "section": "== 五之八 · 控件清单（「这一屏应当有哪个控件」）==",
+      "source": "check(\"控件清单负对照：章节屏喂匹配不到的关键词 ⇒ 该形状读 false\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c087",
+      "line": 874,
+      "section": "== 五之八 · 控件清单（「这一屏应当有哪个控件」）==",
+      "source": "check(\"控件清单负对照：关卡屏喂匹配不到的关键词 ⇒ 该形状读 false\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c088",
+      "line": 899,
+      "section": "== 五之九 · 环境屏的「全部关卡」那一行（Go 比参照多的一行）==",
+      "source": "check(\"存在多档环境的 zone（这一段的前置）\", zid != \"\", zid)",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c089",
+      "line": 907,
+      "section": "== 五之九 · 环境屏的「全部关卡」那一行（Go 比参照多的一行）==",
+      "source": "check(\"（前置）压到环境屏\", false, screenName(r5.top()))",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c090",
+      "line": 909,
+      "section": "== 五之九 · 环境屏的「全部关卡」那一行（Go 比参照多的一行）==",
+      "source": "check(fmt.Sprintf(\"环境屏首行是「全部关卡」（%s 这一部）\", zid),",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c091",
+      "line": 913,
+      "section": "== 五之九 · 环境屏的「全部关卡」那一行（Go 比参照多的一行）==",
+      "source": "check(\"选「全部关卡」⇒ 进关卡屏\", false, screenName(r5.top()))",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c092",
+      "line": 917,
+      "section": "== 五之九 · 环境屏的「全部关卡」那一行（Go 比参照多的一行）==",
+      "source": "check(\"选「全部关卡」⇒ 列出这一部的全部关卡（不按环境筛）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c093",
+      "line": 927,
+      "section": "== 五之九 · 环境屏的「全部关卡」那一行（Go 比参照多的一行）==",
+      "source": "check(\"负对照：「全部关卡」严格多于任一单个环境档（否则它是假的）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c094",
+      "line": 942,
+      "section": "== 六 · 环境筛选（取数口径）==",
+      "source": "check(\"存在 ≥2 档环境的 zone\", hit != \"\", hit)",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c095",
+      "line": 953,
+      "section": "== 六 · 环境筛选（取数口径）==",
+      "source": "check(\"按环境筛出的行 diff_group 都等于该环境\", len(got) > 0 && mism == 0,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c096",
+      "line": 959,
+      "section": "== 七 · 无关卡那一屏（空数据下的退路）==",
+      "source": "check(\"无章节无关卡时给的是 NoStage 屏\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c097",
+      "line": 963,
+      "section": "== 七 · 无关卡那一屏（空数据下的退路）==",
+      "source": "check(\"NoStage 屏给的是**能照做的话**（含命令）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c098",
+      "line": 969,
+      "section": "== 八 · 路径补全（check_tui.py 那套判据搬过来）==",
+      "source": "check(\"建临时目录\", false, terr.Error())",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c099",
+      "line": 977,
+      "section": "== 八 · 路径补全（check_tui.py 那套判据搬过来）==",
+      "source": "check(\"空输入补成默认目录\", nt == \"/X/guides\"+sep, nt)",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c100",
+      "line": 978,
+      "section": "== 八 · 路径补全（check_tui.py 那套判据搬过来）==",
+      "source": "check(\"补出来带分隔符（好接着往下打）\", strings.HasSuffix(nt, sep), nt)",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c101",
+      "line": 985,
+      "section": "== 八 · 路径补全（check_tui.py 那套判据搬过来）==",
+      "source": "check(\"唯一匹配补到真目录\", serr == nil && sst.IsDir(), nt)",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c102",
+      "line": 986,
+      "section": "== 八 · 路径补全（check_tui.py 那套判据搬过来）==",
+      "source": "check(\"补的是目录就带分隔符\", strings.HasSuffix(nt, sep), nt)",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c103",
+      "line": 987,
+      "section": "== 八 · 路径补全（check_tui.py 那套判据搬过来）==",
+      "source": "check(\"唯一匹配时不返回候选（没什么可挑的）\", len(cd) == 0,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c104",
+      "line": 991,
+      "section": "== 八 · 路径补全（check_tui.py 那套判据搬过来）==",
+      "source": "check(\"正斜杠输入补出来仍是正斜杠（不在一个路径里混两种）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c105",
+      "line": 995,
+      "section": "== 八 · 路径补全（check_tui.py 那套判据搬过来）==",
+      "source": "check(\"多个匹配时只补到公共前缀，并把候选交回\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c106",
+      "line": 998,
+      "section": "== 八 · 路径补全（check_tui.py 那套判据搬过来）==",
+      "source": "check(\"补到前缀之后**不**擅自加分隔符（还没定是哪一个）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c107",
+      "line": 1002,
+      "section": "== 八 · 路径补全（check_tui.py 那套判据搬过来）==",
+      "source": "check(\"以分隔符结尾时列出该目录下全部条目\", len(listed) == 4,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c108",
+      "line": 1007,
+      "section": "== 八 · 路径补全（check_tui.py 那套判据搬过来）==",
+      "source": "check(\"大小写不同的兄弟目录也能补出公共前缀（不能被大小写噎住）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c109",
+      "line": 1012,
+      "section": "== 八 · 路径补全（check_tui.py 那套判据搬过来）==",
+      "source": "check(\"不存在的路径原样退回、不给候选\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c110",
+      "line": 1019,
+      "section": "== 九 · 改目录屏（GuidesDir）==",
+      "source": "check(\"建临时目录\", false, gerr.Error())",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c111",
+      "line": 1025,
+      "section": "== 九 · 改目录屏（GuidesDir）==",
+      "source": "check(\"配置路径已指到临时文件（判据不碰玩家真正的配置）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c112",
+      "line": 1030,
+      "section": "== 九 · 改目录屏（GuidesDir）==",
+      "source": "check(\"D 键压到改目录屏\", screenName(r.top()) == \"*main.guidesDirScreen\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c113",
+      "line": 1033,
+      "section": "== 九 · 改目录屏（GuidesDir）==",
+      "source": "check(\"屏幕上写着怎么用（Tab 补全／留空不改）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c114",
+      "line": 1036,
+      "section": "== 九 · 改目录屏（GuidesDir）==",
+      "source": "check(\"输入框预填的是当前目录\", strings.Contains(gv, c.guidesDir), c.guidesDir)",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c115",
+      "line": 1044,
+      "section": "== 九 · 改目录屏（GuidesDir）==",
+      "source": "check(\"Tab 把输入补到公共前缀\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c116",
+      "line": 1046,
+      "section": "== 九 · 改目录屏（GuidesDir）==",
+      "source": "check(\"并把候选交回界面（不替用户猜）\", len(gs.cands) == 2,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c117",
+      "line": 1048,
+      "section": "== 九 · 改目录屏（GuidesDir）==",
+      "source": "check(\"候选也画在屏上\", strings.Contains(r.View(), \"候选：\"), firstLineWith(r.View(), \"候选：\"))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c118",
+      "line": 1053,
+      "section": "== 九 · 改目录屏（GuidesDir）==",
+      "source": "check(\"回车后回到准备屏\", screenName(r.top()) == \"main.welcomeScreen\", screenName(r.top()))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c119",
+      "line": 1055,
+      "section": "== 九 · 改目录屏（GuidesDir）==",
+      "source": "check(\"配置真的写下来了（值正确）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c120",
+      "line": 1057,
+      "section": "== 九 · 改目录屏（GuidesDir）==",
+      "source": "check(\"共享态跟着更新\", c.guidesDir == pick, c.guidesDir)",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c121",
+      "line": 1058,
+      "section": "== 九 · 改目录屏（GuidesDir）==",
+      "source": "check(\"提示是具名的（说清改成了什么）\", strings.Contains(c.note, \"已改为\"), c.note)",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c122",
+      "line": 1064,
+      "section": "== 九 · 改目录屏（GuidesDir）==",
+      "source": "check(\"Esc 返回且**不修改**配置\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c123",
+      "line": 1075,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "if !check(\"负对照：混入一位 E2 干员时 allMinLevel 必须为假（尺子要判红）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c124",
+      "line": 1081,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "if !check(\"负对照：提示语检查用在别的话上必须为假（尺子要判红）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c125",
+      "line": 1090,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "if !check(\"负对照：把守卫结论反过来读必须不成立（全员低练度＋手选 ⇒ 不是放行）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c126",
+      "line": 1104,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "if !check(\"负对照：防绕过扫描器喂「守卫之外多一处调用」必须报 ≥1 处（尺子要判红）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c127",
+      "line": 1109,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "if !check(\"反向对照：同一把尺子喂「调用只在守卫体内」必须报 0 处（尺子不恒非空）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c128",
+      "line": 1165,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"纯函数边界 isMinLevel \"+b.label, got == b.want, fmt.Sprintf(\"实得 %v\", got))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c129",
+      "line": 1211,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"选人屏把槽位数写在屏上（口径 3：显示照旧）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c130",
+      "line": 1213,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"选人屏列出的是名册里的人（共 4 人）\", strings.Contains(rA.View(), \"共 4 人\"),",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c131",
+      "line": 1216,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"空格真的勾上了人（勾选是新屏自己持有的）\", len(sA.picked) == 2,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c132",
+      "line": 1219,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"手选·拦下：仍停在选人屏（**没**进下一步）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c133",
+      "line": 1221,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"手选·拦下：提示语里含那句话\", strings.Contains(cA.note, squadMinLevelMsg), cA.note)",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c134",
+      "line": 1222,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"手选·拦下：那句话**画在屏上**\", strings.Contains(rA.View(), squadMinLevelMsg),",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c135",
+      "line": 1224,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"手选·拦下：编队没有被定下来\", cA.squad == nil, fmt.Sprintf(\"%v\", cA.squad))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c136",
+      "line": 1225,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"手选·拦下：勾选跟着回到新屏（人还看得见该改哪一个）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c137",
+      "line": 1228,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"行使计数：这一次调用只走了「拦下·手选」这条分支\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c138",
+      "line": 1235,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"放行：混进一位超范围的干员就不拦（压解算屏）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c139",
+      "line": 1237,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"放行：编队定下来了（3 人，按码点序）\", len(cA.squad) == 3,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c140",
+      "line": 1241,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"放行：第一轮命令已排上（不是压了屏却没跑）\", cmdA != nil, \"cmd 非空\")",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c141",
+      "line": 1246,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"放行：池子非空、首轮人数取自阶梯\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c142",
+      "line": 1251,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"放行：栈顶该是解算屏\", false, screenName(rA.top()))",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c143",
+      "line": 1253,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"行使计数：这一次调用只走了「放行·非全员低练度」这条分支\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c144",
+      "line": 1266,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"槽位取不到时屏上仍写「未知」（口径 3：显示照旧，判定不看它）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c145",
+      "line": 1271,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(fmt.Sprintf(\"口径 3：槽位 %d 时判定与槽位无关（非空＋全员低练度 ⇒ 拦）\", slot),",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c146",
+      "line": 1282,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"空编队：不拦（「一位也没选」不是「全员低练度」）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c147",
+      "line": 1284,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"空编队：编队是空的（也没被定成别人）\", len(cF.squad) == 0,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c148",
+      "line": 1286,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"行使计数：这一次调用只走了「放行·空编队」这条分支\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c149",
+      "line": 1301,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"自动路：选定关卡后压的是「问编队」屏\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c150",
+      "line": 1304,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"自动编队·拦下：全员在范围内 ⇒ **拦**（口径 2：没有豁免）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c151",
+      "line": 1308,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"自动编队·拦下：**不是**「没判」——计数必须走在「拦下·自动」这条分支上\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c152",
+      "line": 1310,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"自动编队·拦下：提示语陈述规则本身（口径 3：写明与槽位数无关）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c153",
+      "line": 1312,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"自动编队·拦下：编队没有被定下来\", len(cG.squad) == 0, fmt.Sprintf(\"%v\", cG.squad))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c154",
+      "line": 1321,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"自动路（程序还没挑出人）：放行 —— 走的是「放行·空编队」这条分支\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c155",
+      "line": 1329,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"选定关卡后压的是「问编队」屏（**不许静默跳过**）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c156",
+      "line": 1332,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"选「让程序自己挑」→ 压解算屏（空编队走「放行·空编队」）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c157",
+      "line": 1339,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"选「我自己选」→ 进选人屏\", screenName(rE.top()) == \"*main.squadPickScreen\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c158",
+      "line": 1378,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(fmt.Sprintf(\"防绕过：本包 %d 个界面源码文件里，判定只有守卫那一处\", scanned),",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c159",
+      "line": 1381,
+      "section": "== 十 · 解算入口的守卫（自限拦截：一个守卫，两条路都过它）==",
+      "source": "check(\"防绕过：守卫函数确实定义着（改名或删掉都会判红）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c160",
+      "line": 1391,
+      "section": "== 十一 · 桥客户端：缺件必须具名（不许退化成空名册）==",
+      "source": "check(\"解释器找不到时**具名失败**（报出解释器名与桥脚本路径）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c161",
+      "line": 1407,
+      "section": "== 十一 · 桥客户端：缺件必须具名（不许退化成空名册）==",
+      "source": "check(\"桥真实往返：名册取到了，且每条的 char_id／name 都在\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c162",
+      "line": 1423,
+      "section": "== 十一 · 桥客户端：缺件必须具名（不许退化成空名册）==",
+      "source": "check(\"真名册判定：范围内的人全勾上 ⇒ 拦下（口径 3：与槽位数无关）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c163",
+      "line": 1433,
+      "section": "== 十一 · 桥客户端：缺件必须具名（不许退化成空名册）==",
+      "source": "check(\"真名册渲染：条数与名册一致\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c164",
+      "line": 1436,
+      "section": "== 十一 · 桥客户端：缺件必须具名（不许退化成空名册）==",
+      "source": "check(\"真名册渲染：第一行就是练度最高的那位（排序生效）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c165",
+      "line": 1455,
+      "section": "== 十二 · 询问屏（一问一答）==",
+      "source": "check(\"负对照：编号越界什么都不做（仍停在询问屏）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c166",
+      "line": 1459,
+      "section": "== 十二 · 询问屏（一问一答）==",
+      "source": "check(\"数字键交还的是「值」而不是标签\", got == \"once\", fmt.Sprintf(\"got=%v\", got))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c167",
+      "line": 1460,
+      "section": "== 十二 · 询问屏（一问一答）==",
+      "source": "check(\"选完就退回上一层\", len(r.stack) == 1, fmt.Sprintf(\"栈深=%d\", len(r.stack)))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c168",
+      "line": 1467,
+      "section": "== 十二 · 询问屏（一问一答）==",
+      "source": "check(\"全角数字也一样能选\", got == \"yes\", fmt.Sprintf(\"got=%v\", got))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c169",
+      "line": 1473,
+      "section": "== 十二 · 询问屏（一问一答）==",
+      "source": "check(\"Esc 交还 nil（取消与「选了个空串」是两回事）\", got == nil,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c170",
+      "line": 1478,
+      "section": "== 十二 · 询问屏（一问一答）==",
+      "source": "check(\"渲染里有标题与正文\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c171",
+      "line": 1481,
+      "section": "== 十二 · 询问屏（一问一答）==",
+      "source": "check(\"渲染里有编号行\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c172",
+      "line": 1484,
+      "section": "== 十二 · 询问屏（一问一答）==",
+      "source": "check(\"整框宽度 = 68（Width(66) ＋ 边框 2，照 Python 的 width: 68）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c173",
+      "line": 1490,
+      "section": "== 十二 · 询问屏（一问一答）==",
+      "source": "check(\"模态屏不进面包屑\", r.crumb() == crumbBefore, fmt.Sprintf(\"%q\", r.crumb()))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c174",
+      "line": 1491,
+      "section": "== 十二 · 询问屏（一问一答）==",
+      "source": "check(\"模态屏独占整屏（不画顶栏）\", !strings.Contains(r.View(), appTitle), \"无顶栏\")",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c175",
+      "line": 1506,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"矩阵解析：4×4 且暗格 8 个\", err4 == nil && len(m4) == 4 && dark == 8,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c176",
+      "line": 1513,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"负对照：非方矩阵必须报错\", eNonSquare != nil, fmt.Sprintf(\"%v\", eNonSquare))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c177",
+      "line": 1514,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"负对照：非 0/1 字符必须报错\", eBadChar != nil, fmt.Sprintf(\"%v\", eBadChar))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c178",
+      "line": 1515,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"负对照：空矩阵必须报错\", eEmpty != nil, fmt.Sprintf(\"%v\", eEmpty))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c179",
+      "line": 1518,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"四行压成两行半格\", len(lines) == 2, fmt.Sprintf(\"实得 %d 行\", len(lines)))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c180",
+      "line": 1524,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"负对照：翻一个模块渲染结果必须跟着变（尺子不是恒等映射）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c181",
+      "line": 1529,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"静默区按规范取 4（120×40 放得下）\", pickQRBorder(57, 120, 40) == 4,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c182",
+      "line": 1531,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"窗口不够时逐级退让（80×24 ⇒ 0）\", pickQRBorder(57, 80, 24) == 0,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c183",
+      "line": 1539,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"静默区随窗口变大只增不减（单调）\", mono, \"40→200 逐档比过\")",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c184",
+      "line": 1551,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"120×40 下整屏渲染不超窗口（缺角就废，所以这条要真数）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c185",
+      "line": 1554,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"120×40 下不喊「静默区被压」\", !strings.Contains(bigView, \"静默区已压到\"), \"无提示\")",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c186",
+      "line": 1556,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"小窗口下把「静默区被压」说出来\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c187",
+      "line": 1559,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"贴底提示默认是「等待扫码……」\", strings.Contains(bigView, \"等待扫码\"), \"等待扫码……\")",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c188",
+      "line": 1562,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"setNote 能换掉贴底提示（登录屏轮询时要用）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c189",
+      "line": 1574,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"桥给的矩阵必须解析得动\", false, fmt.Sprintf(\"err=%v\", qerr))",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c190",
+      "line": 1576,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"桥真实往返：扫码会话起了且矩阵是方的\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c191",
+      "line": 1579,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"桥真实往返：矩阵边长 ≥ 21（二维码最小 21×21）\", len(liveQR) >= 21,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c192",
+      "line": 1581,
+      "section": "== 十三 · 扫码屏（矩阵 → 半格图）==",
+      "source": "check(\"桥真实往返：真矩阵能画成半格图且行数对\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c193",
+      "line": 1602,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"登录屏三块齐（登录态／本机账号／扫码）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c194",
+      "line": 1605,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"还没读到登录态时说的是「正在读」\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c195",
+      "line": 1607,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"没账号那栏不留空白（要说清可以跳过）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c196",
+      "line": 1611,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"负对照：同一把尺子对不存在的字给 false\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c197",
+      "line": 1618,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"读登录态失败时具名（★ ＋ 原因）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c198",
+      "line": 1629,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"who：已知账号说昵称与游戏 uid\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c199",
+      "line": 1632,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"who：查不到的账号说「未知」并指出按 U\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c200",
+      "line": 1635,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"who：一个账号都没有时也不留空白\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c201",
+      "line": 1653,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"登录成功带回的话三档互不相同\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c202",
+      "line": 1656,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"三档都说清了账号条数有没有变多\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c203",
+      "line": 1665,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"Esc 有账号 ⇒ 直接退回（actBack，且不问）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c204",
+      "line": 1680,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"Esc 没账号 ⇒ 问「本次／以后都不」（两个取值）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c205",
+      "line": 1693,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"问屏上再按 Esc ⇒ 取消（仍留在登录屏）\", r3.top() == screen(s2),",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c206",
+      "line": 1703,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"答「本次不登录」⇒ 退回主界面且不写配置\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c207",
+      "line": 1712,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"答「以后都不问」⇒ 退回主界面并把 login_prompt 写成空串\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c208",
+      "line": 1717,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"正对照：同一把尺子认得刚写出来的文件\", statNever == nil,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c209",
+      "line": 1725,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"连按两次 L 只起一次扫码（第二次不发命令）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c210",
+      "line": 1738,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"申请二维码失败 ⇒ 具名且放掉 busy（L 还能再按）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c211",
+      "line": 1741,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"失败提示里**不许丢掉原因**（不带 ★ 的文本也要原样带出来）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c212",
+      "line": 1749,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"reasonOf：有 ★ 取 ★ 那一行\", roStar == \"★ 桥报错：没有应答\", roStar)",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c213",
+      "line": 1750,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"reasonOf：没有 ★ 退到第一行非空（不丢原因）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c214",
+      "line": 1752,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"reasonOf：整段都空时给具名占位\", strings.Contains(roEmpty, \"没有给出说明\"), roEmpty)",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c215",
+      "line": 1756,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"负对照：判据用的 firstLineWith 在同一输入上确实会丢原因\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c216",
+      "line": 1765,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"二维码编不出来 ⇒ 说原因并收掉会话\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c217",
+      "line": 1788,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"扫码进度绕过码屏送到登录屏（状态行落在码上）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c218",
+      "line": 1790,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"送完之后码屏仍在栈顶（没被顺手弹掉）\", r7.top() == screen(qr7),",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c219",
+      "line": 1796,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"负对照：栈里没有登录屏时，那条进度改不动码屏\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c220",
+      "line": 1802,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"扫上了 ⇒ 码屏收掉、整屏弹回主界面、带回的话落到账号行\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c221",
+      "line": 1811,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"登录失败 ⇒ 具名、收会话、收码屏\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c222",
+      "line": 1834,
+      "section": "== 十四 · 登录屏（五键／三态 Esc／成功带回的话）==",
+      "source": "check(\"close 可重复调用、空会话不炸、关了之后拒发请求\", closePanic == \"\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c223",
+      "line": 1860,
+      "section": "== 十五 · 桥的常驻会话（登录那条链的前提）==",
+      "source": "check(\"常驻会话：同一进程里连发两条都答得上来（id 自增且不串）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c224",
+      "line": 1866,
+      "section": "== 十五 · 桥的常驻会话（登录那条链的前提）==",
+      "source": "check(\"常驻会话：login_start 起了扫码会话\", false, serr2.Error())",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c225",
+      "line": 1870,
+      "section": "== 十五 · 桥的常驻会话（登录那条链的前提）==",
+      "source": "check(\"常驻会话：login_start 给了矩阵\", len(st.QRMatrix) > 0,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c226",
+      "line": 1875,
+      "section": "== 十五 · 桥的常驻会话（登录那条链的前提）==",
+      "source": "check(\"常驻会话：另起一问能看见那条会话（phase ≠ idle）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c227",
+      "line": 1888,
+      "section": "== 十六 · 引擎客户端（起子进程讲 JSON 行协议）==",
+      "source": "check(\"负对照：引擎 exe 不存在时必须具名失败\", false, \"竟然拿到了客户端\")",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c228",
+      "line": 1895,
+      "section": "== 十六 · 引擎客户端（起子进程讲 JSON 行协议）==",
+      "source": "check(\"负对照：引擎 exe 不存在时必须具名失败\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c229",
+      "line": 1914,
+      "section": "== 十六 · 引擎客户端（起子进程讲 JSON 行协议）==",
+      "source": "check(\"引擎真实往返：ping 必须答上来\", false, fmt.Sprintf(\"err=%v\", cerr))",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c230",
+      "line": 1917,
+      "section": "== 十六 · 引擎客户端（起子进程讲 JSON 行协议）==",
+      "source": "check(\"引擎真实往返：ping 答了且带 pong 段\", hasPong,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c231",
+      "line": 1948,
+      "section": "== 十六 · 引擎客户端（起子进程讲 JSON 行协议）==",
+      "source": "check(\"load main_01-07 的 characterLimit = 8（deployLimit 的真值，\"+",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c232",
+      "line": 1963,
+      "section": "== 十六 · 引擎客户端（起子进程讲 JSON 行协议）==",
+      "source": "check(\"load main_09-12 的 characterLimit = 8（博士当场报的那一关，\"+",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c233",
+      "line": 1968,
+      "section": "== 十六 · 引擎客户端（起子进程讲 JSON 行协议）==",
+      "source": "check(\"负对照：不存在的一关必须具名失败（不许静默给 0）\", false,",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c234",
+      "line": 1971,
+      "section": "== 十六 · 引擎客户端（起子进程讲 JSON 行协议）==",
+      "source": "check(\"负对照：不存在的一关必须具名失败（不许静默给 0）\", true,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c235",
+      "line": 1991,
+      "section": "== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==",
+      "source": "check(fmt.Sprintf(\"阶梯 deployLimit=%d\", c.limit),",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c236",
+      "line": 1999,
+      "section": "== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==",
+      "source": "check(\"池子：勾的 ＋ 按练度补到上限，且点名名册里没有的\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c237",
+      "line": 2004,
+      "section": "== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==",
+      "source": "check(\"池子：「只用我选的」但没勾人 ⇒ 具名说池子是空的\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c238",
+      "line": 2008,
+      "section": "== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==",
+      "source": "check(\"池子：没有名册 ⇒ 具名说名册是空的\", false, note)",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c239",
+      "line": 2010,
+      "section": "== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==",
+      "source": "check(\"池子：没有名册 ⇒ 具名说名册是空的\", true, note)",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c240",
+      "line": 2030,
+      "section": "== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==",
+      "source": "check(\"★ 起屏就写出「第 1/N 轮已发给引擎」（否则分钟级的等待里一个字都没有）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c241",
+      "line": 2036,
+      "section": "== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==",
+      "source": "check(\"★ 一跳 ⇒ 独立计数 +1（不看墙上时钟，屏不重画也不冻）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c242",
+      "line": 2040,
+      "section": "== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==",
+      "source": "check(\"心跳：连跳两次 ⇒ 2 秒（按秒跳，不是按轮跳）\", scr.elapsed == 2,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c243",
+      "line": 2042,
+      "section": "== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==",
+      "source": "check(\"心跳：屏上看得见它在动（转轮 ＋ 第几轮）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c244",
+      "line": 2048,
+      "section": "== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==",
+      "source": "check(\"负对照：停下之后不再排下一跳（也不再加秒，不空转重画）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c245",
+      "line": 2075,
+      "section": "== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==",
+      "source": "check(\"真起一轮：跑完并落到 done（不是卡在 running）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c246",
+      "line": 2078,
+      "section": "== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==",
+      "source": "check(\"真起一轮：日志里有轮摘要\", len(scr.lines) > 0,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c247",
+      "line": 2080,
+      "section": "== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==",
+      "source": "check(\"真起一轮：评估次数非零（真跑了模拟）\", scr.evals > 0,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c248",
+      "line": 2082,
+      "section": "== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==",
+      "source": "check(\"真起一轮：结果写进 appCtx（结果屏要读它）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c249",
+      "line": 2086,
+      "section": "== 十七 · 解算屏（阶梯／池子／真起一轮引擎）==",
+      "source": "check(\"真起一轮：渲染里有「已评估」与进度条\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c250",
+      "line": 2101,
+      "section": "== 十八 · 结果屏（渲染 ＋ **真导出**）==",
+      "source": "check(\"结果屏渲染里有「\"+want+\"」\", false, firstLineWith(rv, \"评价\"))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c251",
+      "line": 2105,
+      "section": "== 十八 · 结果屏（渲染 ＋ **真导出**）==",
+      "source": "check(\"结果屏渲染：判决六栏 ＋ 干员清单 ＋ 汇总都在\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c252",
+      "line": 2109,
+      "section": "== 十八 · 结果屏（渲染 ＋ **真导出**）==",
+      "source": "check(\"结果屏渲染：把没找到三星的**来路**摆出来（不许只说一句没找到）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c253",
+      "line": 2123,
+      "section": "== 十八 · 结果屏（渲染 ＋ **真导出**）==",
+      "source": "check(\"真导出：写出了作业文件\", false, rs.msg)",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c254",
+      "line": 2128,
+      "section": "== 十八 · 结果屏（渲染 ＋ **真导出**）==",
+      "source": "check(\"真导出：文件真的落盘了且是 JSON\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c255",
+      "line": 2139,
+      "section": "== 十八 · 结果屏（渲染 ＋ **真导出**）==",
+      "source": "check(\"真导出：stage_name 用 levelId、opers 条数＝打法里的部署条数\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c256",
+      "line": 2145,
+      "section": "== 十八 · 结果屏（渲染 ＋ **真导出**）==",
+      "source": "check(\"真导出：doc.details 带上了出处那句\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c257",
+      "line": 2152,
+      "section": "== 十八 · 结果屏（渲染 ＋ **真导出**）==",
+      "source": "check(\"负对照：没有结果时导出具名拒绝\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c258",
+      "line": 2160,
+      "section": "== 十八 · 结果屏（渲染 ＋ **真导出**）==",
+      "source": "check(\"负对照：名册读不出来时导出具名失败\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c259",
+      "line": 2166,
+      "section": "== 十八 · 结果屏（渲染 ＋ **真导出**）==",
+      "source": "check(\"结果屏不挂 Esc（按 Esc 什么都不做，且不退出）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c260",
+      "line": 2170,
+      "section": "== 十八 · 结果屏（渲染 ＋ **真导出**）==",
+      "source": "check(\"R 回选关页（连弹到选关卡那一层，编队留着）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c261",
+      "line": 2176,
+      "section": "== 十八 · 结果屏（渲染 ＋ **真导出**）==",
+      "source": "check(\"H 回准备屏（整轮重来）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c262",
+      "line": 2204,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "if !check(\"负对照：不带助战时，12 位全员 ≤E1L1 的编队**仍然拦**（尺子要判红）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c263",
+      "line": 2212,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "if !check(\"负对照：supportForSolve 两个方向都要读到（开⇒名字、关⇒空串）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c264",
+      "line": 2218,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "if !check(\"负对照：不带助战那一行**不含**子串「助战：用」（三种形态分得开）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c265",
+      "line": 2238,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "if check(\"负对照（故意造的红）：零值干员不在「≤E1L1」范围内\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c266",
+      "line": 2253,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"开关初值：关（屏上写着「助战：不用」）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c267",
+      "line": 2256,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"开关关着：上限是 12（自己那 12 格）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c268",
+      "line": 2261,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"按 T：开关变「用」，并**单独压一屏**挑助战\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c269",
+      "line": 2265,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"开关一开：上限就是 13（自己的 12 ＋ 助战 1，助战占一格）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c270",
+      "line": 2294,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"助战屏：候选来自**全部干员**（名册里没有的名字也在列）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c271",
+      "line": 2298,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"助战屏：写明「练度不用填（MAA 不识别）」（口径 3 要看得见）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c272",
+      "line": 2302,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"助战屏：候选里没有装置／召唤物（取的是 is_operator=1 的干员表）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c273",
+      "line": 2310,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"回车：助战名字记下来了（记在 appCtx 上那一位）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c274",
+      "line": 2313,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"回车后：助战屏弹掉、回到选人屏，屏上看得见「用（阿米娅）」\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c275",
+      "line": 2320,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"再按 T：关掉 —— 名字清掉、上限回 12、屏上写「不用」\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c276",
+      "line": 2327,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"助战屏 Esc：取消 = 不用助战 —— 没记名字、退回选人屏、上限回 12\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c277",
+      "line": 2361,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"12 位全员 ≤E1L1：都勾上了（下面两条拦截读数拿的就是这一份编队）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c278",
+      "line": 2364,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"不带助战：12 位全员 ≤E1L1 ⇒ **拦**（走「拦下·手选」，编队没定下来）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c279",
+      "line": 2376,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"挑完助战：回到选人屏，助战记下来了\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c280",
+      "line": 2380,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"带助战：同 12 位全员 ≤E1L1 ⇒ **不拦**（压解算屏），走「放行·带助战」分支\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c281",
+      "line": 2383,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"带助战：编队定下来了（12 人）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c282",
+      "line": 2386,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"带助战：这一轮的命令排上了，且助战进了 solveParams（要交给引擎）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c283",
+      "line": 2391,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"带助战：栈顶该是解算屏\", false, screenName(r12.top()))",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c284",
+      "line": 2393,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"登记：零值干员（Elite 0／Level 0）**落在**「≤E1L1」范围内 ⇒ 助战不能用零值顶替\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c285",
+      "line": 2403,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"导出：名册读得出来（下面两条读数靠它）\", false, fmt.Sprintf(\"err=%v\", rrErr17))",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c286",
+      "line": 2423,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"导出：不带 SupportName 时**不多**那一格（负方向也要看）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c287",
+      "line": 2426,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"导出：带 SupportName ⇒ opers 末尾多一格、且**只有一个键 name**\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c288",
+      "line": 2447,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"结果屏导出（带助战）：写出了作业文件\", false, rsSup17.msg)",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c289",
+      "line": 2458,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"结果屏导出（带助战）：落盘的 opers 末尾就是助战那一格（只有 name）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c290",
+      "line": 2463,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"结果屏渲染：助战**单列一行**（它不在 deploys 里 —— 是要求不是部署）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c291",
+      "line": 2488,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"助战随 solve 送到引擎：回来的不是一轮解算结果\", false,",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c292",
+      "line": 2494,
+      "section": "== 十九 · 助战（开关／单独一屏／上限 13／拦截计入／导出带名字）==",
+      "source": "check(\"助战随 solve 送到引擎：引擎原样回声（solveOutView.Support）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c293",
+      "line": 2507,
+      "section": "== 二十 · 发布形态的两条判定（启动前自检的底座）==",
+      "source": "check(\"建临时目录（发布形态判定的夹具）\", false, err.Error())",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c294",
+      "line": 2526,
+      "section": "== 二十 · 发布形态的两条判定（启动前自检的底座）==",
+      "source": "check(\"发布形态：同级有 eng/ ⇒ 是（正常安装出来的样子）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c295",
+      "line": 2530,
+      "section": "== 二十 · 发布形态的两条判定（启动前自检的底座）==",
+      "source": "check(\"负对照：开发树（没有 eng/、没有引擎 exe）⇒ 不是\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c296",
+      "line": 2532,
+      "section": "== 二十 · 发布形态的两条判定（启动前自检的底座）==",
+      "source": "check(\"半成品：只有引擎 exe、没有 eng/ ⇒ 也算发布树\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c297",
+      "line": 2534,
+      "section": "== 二十 · 发布形态的两条判定（启动前自检的底座）==",
+      "source": "check(\"只有 eng/、引擎 exe 还没摆 ⇒ 也算发布树\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c298",
+      "line": 2545,
+      "section": "== 二十 · 发布形态的两条判定（启动前自检的底座）==",
+      "source": "check(\"数据目录候选里有 eng/data（发布树两侧的共同数据根）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c299",
+      "line": 2550,
+      "section": "== 二十 · 发布形态的两条判定（启动前自检的底座）==",
+      "source": "check(\"负对照：加了 eng/data 之后，原来的候选一个没少\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c300",
+      "line": 2556,
+      "section": "== 二十 · 发布形态的两条判定（启动前自检的底座）==",
+      "source": "check(\"dedupe 去重且保序（缺件报告里不重复列同一个路径）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c301",
+      "line": 2569,
+      "section": "== 二十一 · 首次运行准备的计划（-setup 的判定层）==",
+      "source": "check(\"三项齐全 ⇒ 计划为空（入口每次都会调它，这条路径必须是哑的）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c302",
+      "line": 2580,
+      "section": "== 二十一 · 首次运行准备的计划（-setup 的判定层）==",
+      "source": "check(\"缺解释器 ⇒ 只计划 Python 一项，且**不动**已经齐的数据\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c303",
+      "line": 2582,
+      "section": "== 二十一 · 首次运行准备的计划（-setup 的判定层）==",
+      "source": "check(\"缺数据 ⇒ 计划里有 data（并给出具名原因）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c304",
+      "line": 2586,
+      "section": "== 二十一 · 首次运行准备的计划（-setup 的判定层）==",
+      "source": "check(\"缺派生库 ⇒ 计划里有 derived（具名到 akdb.sqlite）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c305",
+      "line": 2590,
+      "section": "== 二十一 · 首次运行准备的计划（-setup 的判定层）==",
+      "source": "check(\"三样全缺 ⇒ 三步按 python→data→derived 排（先有解释器才谈得上建库）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c306",
+      "line": 2595,
+      "section": "== 二十一 · 首次运行准备的计划（-setup 的判定层）==",
+      "source": "check(\"有 Python 但太旧 ⇒ 计划里有 python，且理由是**版本**不是「没找到」\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c307",
+      "line": 2598,
+      "section": "== 二十一 · 首次运行准备的计划（-setup 的判定层）==",
+      "source": "check(\"太旧 ＋ 缺派生库 ⇒ 两步都在（那两件事互不替代）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c308",
+      "line": 2602,
+      "section": "== 二十一 · 首次运行准备的计划（-setup 的判定层）==",
+      "source": "check(\"版本判定：3.11/3.14 不算旧，3.10 与 3.9 算，2.x 算\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c309",
+      "line": 2610,
+      "section": "== 二十一 · 首次运行准备的计划（-setup 的判定层）==",
+      "source": "check(\"负对照：版本串解析不出来时不判旧（不拿猜的东西当判据）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c310",
+      "line": 2616,
+      "section": "== 二十一 · 首次运行准备的计划（-setup 的判定层）==",
+      "source": "check(\"负对照：齐全与缺一样必须给出**不同**的计划\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c311",
+      "line": 2624,
+      "section": "== 二十一 · 首次运行准备的计划（-setup 的判定层）==",
+      "source": "check(\"真环境（开发树）：解释器与数据都在 ⇒ 计划为空\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c312",
+      "line": 2635,
+      "section": "== 二十一 · 首次运行准备的计划（-setup 的判定层）==",
+      "source": "check(\"一键流程只跑玩家必需的几步，且**不含关卡文件**（随用随取）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c313",
+      "line": 2648,
+      "section": "== 二十一 · 首次运行准备的计划（-setup 的判定层）==",
+      "source": "check(\"「gamedata 源表」排在离线步骤之前（否则干员库必挂）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c314",
+      "line": 2654,
+      "section": "== 二十一 · 首次运行准备的计划（-setup 的判定层）==",
+      "source": "check(\"无参数且缺件才自动跑准备；显式开关与齐全时都不走\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c315",
+      "line": 2665,
+      "section": "== 二十一 · 首次运行准备的计划（-setup 的判定层）==",
+      "source": "check(\"那条「一次做齐」的命令定位得到，且与桥脚本同一个根\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c316",
+      "line": 2680,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"临时目录建得出来（这一段的前置）\", false, derr.Error())",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c317",
+      "line": 2699,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"进度文件写得出来（这一段的前置）\", false, err.Error())",
+      "kind": "error_observation"
+    },
+    {
+      "id": "c318",
+      "line": 2704,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"plan 解析出 2 步\", len(bars.steps) == 2,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c319",
+      "line": 2706,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"步状态：干员库 ok、逐关文件 run\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c320",
+      "line": 2709,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"tick 落到**正在跑**的那一步（tick 事件不带 key 也能对上）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c321",
+      "line": 2712,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"summary 计数拿到了\", bars.haveSum && bars.ok == 1 && bars.failed == 0,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c322",
+      "line": 2714,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"负对照：认不出的 ev 不改任何状态（前向兼容，不炸）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c323",
+      "line": 2720,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"★ 主判据：子进程的原话**一个字节都没漏到屏幕上**\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c324",
+      "line": 2725,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"每项任务一行（2 步 ＋ 汇总行）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c325",
+      "line": 2728,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"正例：带总数的运行中那一步画出真实百分比（50/200 ⇒ 25%）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c326",
+      "line": 2730,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"已完成的画满格、未开始的画空格\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c327",
+      "line": 2752,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"★ 进度条行宽夹住终端宽度（60 列窗口：最宽一行 ≤ 60）\", maxw <= 60,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c328",
+      "line": 2754,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"★ 长中文标题不折行（3 步 ＋ 1 汇总位 ⇒ 内容恰好 4 行；首帧另有 4 行占位）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c329",
+      "line": 2759,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"★ 重画按上一帧行数上移（第二帧以 \\\\x1b[4A 开头 ⇒ 不逐帧往下漂）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c330",
+      "line": 2765,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"★ 第一帧先占位（3 步 ⇒ 先打 4 个空行，再上移 4）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c331",
+      "line": 2768,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"★ 每帧**内容**行数恒定（首帧 4 占位 ＋ 4 内容；之后每帧 4 行）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c332",
+      "line": 2778,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"负对照：汇总行出现后行数仍为 4（不许长高）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c333",
+      "line": 2792,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"负对照：28 列窗口下也不许有行超宽\", tw <= 28, fmt.Sprintf(\"最宽 %d 格\", tw))",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c334",
+      "line": 2803,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"★ VT 开不了时退化成追加式：输出里一个转义序列都没有\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c335",
+      "line": 2806,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"★ 追加式：状态没变就不重复印（第二帧 0 字节 ⇒ 不会堆满屏）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c336",
+      "line": 2811,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"负对照：追加式里状态一变就必须印一行（否则这条路是死的）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c337",
+      "line": 2825,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"★ 运行中的一步报出百分比\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c338",
+      "line": 2828,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"★ 报出下载速度（2 MB / 2 s ⇒ 1.0 MB/s）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c339",
+      "line": 2830,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"★ 报出已下多少\", strings.Contains(rb.String(), \"已下 2.0 MB\"),",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c340",
+      "line": 2839,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"负对照：字节没涨（缓存命中）⇒ 不报速度\", nost.Rate == 0,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c341",
+      "line": 2852,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"★ 同一批读进来的两行 tick 也算得出速度（时刻取 tick 自带的 t）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c342",
+      "line": 2857,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"★ 那一行确实印出了速度\", strings.Contains(sb.String(), \"1.0 MB/s\"),",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c343",
+      "line": 2864,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"★ 完成行带上下载量与平均速度（否则速度一闪就没）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c344",
+      "line": 2869,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"负对照：没有总数时不编百分比（只报已下多少）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c345",
+      "line": 2873,
+      "section": "== 二十二 · 首次运行的进度条（每项任务一条）==",
+      "source": "check(\"负对照：截断的 JSON 行被丢掉，不影响已解析的状态\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c346",
+      "line": 2908,
+      "section": "== 二十三 · 关卡随用随取（选定一关才取那一个文件）==",
+      "source": "check(\"已在盘上的关 ⇒ 桥不发请求（cached），并报出文件大小\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c347",
+      "line": 2915,
+      "section": "== 二十三 · 关卡随用随取（选定一关才取那一个文件）==",
+      "source": "check(\"负对照：索引里没有这一关 ⇒ 具名失败（不许静默当成「这关没地图」）\",",
+      "kind": "error_observation",
+      "merged_into": "c348",
+      "reason": "Same missing-level negative assertion has mutually exclusive success/failure branches; both now record c348."
+    },
+    {
+      "id": "c348",
+      "line": 2918,
+      "section": "== 二十三 · 关卡随用随取（选定一关才取那一个文件）==",
+      "source": "check(\"负对照：索引里没有这一关 ⇒ 具名失败（不许静默当成「这关没地图」）\",",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "c349",
+      "line": 2956,
+      "section": "== 二十四 · 打开工具时的自动更新检查（纯函数判定）==",
+      "source": "check(\"自动更新：\"+c.name, got == c.want,",
+      "kind": "required_callsite"
+    },
+    {
+      "id": "engine_wrong_id",
+      "kind": "required_callsite",
+      "source": "shared production decodeEngineResponse synthetic protocol negative/positive",
+      "section": "engine protocol"
+    },
+    {
+      "id": "engine_right_id",
+      "kind": "required_callsite",
+      "source": "shared production decodeEngineResponse synthetic protocol negative/positive",
+      "section": "engine protocol"
+    }
+  ],
+  "minimum_checks": {
+    "c078": 6,
+    "c084": 9,
+    "c128": 5,
+    "c145": 3,
+    "c235": 6,
+    "c250": 9,
+    "c349": 6
+  }
+}

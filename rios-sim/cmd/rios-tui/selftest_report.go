@@ -22,6 +22,7 @@ type selftestReport struct {
 	Cases         []selftestReportCase  `json:"cases"`
 	Summary       selftestReportSummary `json:"summary"`
 	Errors        []string              `json:"errors"`
+	MinimumChecks map[string]int        `json:"minimum_checks,omitempty"`
 	index         map[string]int
 	emitted       bool
 }
@@ -158,6 +159,10 @@ func (r *selftestReport) Skip(id, reason string) {
 // caller exit code is retained; omissions, skips or failures turn zero into one.
 func (r *selftestReport) Finish(exitcode int) *selftestReport {
 	for i := range r.Cases {
+		c := r.Cases[i]
+		if min := r.MinimumChecks[c.ID]; min > 0 && c.Status == "pass" && c.Exercised < min {
+			r.record(i, selftestReportCheck{CaseID: c.ID, Name: c.Name, Status: "fail", Reason: fmt.Sprintf("required minimum checks %d, exercised %d", min, c.Exercised)})
+		}
 		if len(r.Cases[i].Checks) == 0 {
 			r.record(i, selftestReportCheck{CaseID: r.Cases[i].ID, Name: r.Cases[i].Name, Status: "skip", Reason: "required manifest case not exercised"})
 		}

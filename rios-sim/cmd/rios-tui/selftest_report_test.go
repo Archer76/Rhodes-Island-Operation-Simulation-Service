@@ -9,6 +9,22 @@ import (
 	"testing"
 )
 
+func TestSelftestReportStaticMinimumExercise(t *testing.T) {
+	r := newSelftestReport([]string{"loop"})
+	r.MinimumChecks = map[string]int{"loop": 2}
+	r.Check("loop", "one fixture", true, "actually ran once")
+	if r.Finish(0).Passed || r.RC == 0 {
+		t.Fatal("incomplete fixed loop passed")
+	}
+	r = newSelftestReport([]string{"loop"})
+	r.MinimumChecks = map[string]int{"loop": 2}
+	r.Check("loop", "fixture one", true, "")
+	r.Check("loop", "fixture two", true, "")
+	if !r.Finish(0).Passed {
+		t.Fatal("complete fixed loop failed")
+	}
+}
+
 func TestSelftestReportComplete(t *testing.T) {
 	manifest := []string{"business", "control"}
 	r := newSelftestReport(manifest)

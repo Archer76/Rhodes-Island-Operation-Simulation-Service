@@ -246,6 +246,11 @@ func (e *engineClient) call(cmd string, id int, level string, spec any,
 		return nil, fmt.Errorf("★ 引擎没有给出应答行。exe %s，cwd %s\n    stderr：%s",
 			e.path, e.dir, tailLines(errBuf.String(), 6))
 	}
+	return decodeEngineResponse(text, id)
+}
+
+// Shared by process requests and the selftest wrong-id negative control.
+func decodeEngineResponse(text string, id int) (map[string]json.RawMessage, error) {
 	var head struct {
 		ID    int    `json:"id"`
 		OK    bool   `json:"ok"`

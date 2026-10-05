@@ -102,15 +102,29 @@ func run() int {
 	}
 
 	if err := resolveDataDir(); err != nil {
+		if *selftest {
+			report := newSelftestReport(selftestManifest)
+			report.Skip("prerequisites", err.Error())
+			_ = report.Emit(os.Stdout, 3)
+		}
 		fmt.Fprintln(os.Stderr, err)
-		pauseIfInteractive("")
+		if !*selftest {
+			pauseIfInteractive("")
+		}
 		return 3
 	}
 
 	stages, zones, err := data.LoadStageTable()
 	if err != nil {
+		if *selftest {
+			report := newSelftestReport(selftestManifest)
+			report.Skip("prerequisites", fmt.Sprintf("读关卡表失败：%v", err))
+			_ = report.Emit(os.Stdout, 3)
+		}
 		fmt.Fprintf(os.Stderr, "★ 读关卡表失败：%v\n", err)
-		pauseIfInteractive("")
+		if !*selftest {
+			pauseIfInteractive("")
+		}
 		return 3
 	}
 
