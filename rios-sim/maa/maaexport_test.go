@@ -71,6 +71,31 @@ func goldenPlan() core.PlayPlan {
 	}
 }
 
+// automaticGoldenPlan 保留原 goldenPlan 给人读时刻与负例使用。
+// 正导出只移除显式时刻，并明确启用自动技能；不改练度、动作或模组要求。
+func automaticGoldenPlan() core.PlayPlan {
+	plan := goldenPlan()
+	for i := range plan.Deploys {
+		plan.Deploys[i].Time = nil
+		plan.Deploys[i].AutoSkill = true
+	}
+	return plan
+}
+
+// automaticGoldenFixture 仅转换旧黄金中的人读部署时刻，其余仍逐字节检查。
+func automaticGoldenFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	blob := readFixture(t, name)
+	for _, stamp := range []string{"10s", "28s", "71s"} {
+		old := []byte("| " + stamp + " |")
+		if bytes.Count(blob, old) != 1 {
+			t.Fatalf("黄金必须恰好含一次部署时刻 %q", stamp)
+		}
+		blob = bytes.ReplaceAll(blob, old, []byte("| - |"))
+	}
+	return blob
+}
+
 // goldenRoster 与生成脚本里那份名册逐字段相同（注意 potential 与 plan 不同：
 // 陈 名册 3 / 打法 2 ⇒ `_pick` 取打法的 2，黄金里 `"potential": 2` 就是这么来的）。
 func goldenRoster() *core.RosterRead {
@@ -143,8 +168,8 @@ func sections(t *testing.T, name string) map[string][]string {
 // TestGoldenRulerCanFail 是**尺子的负对照**：把黄金文件改动一个字节，
 // 逐字节比较必须判红。它不通过就说明下面那些「相同」全是假的。
 func TestGoldenRulerCanFail(t *testing.T) {
-	want := readFixture(t, "maajob_golden.json")
-	job, err := ToMaa(goldenPlan(), nil, handTable(), nil,
+	want := automaticGoldenFixture(t, "maajob_golden.json")
+	job, err := ToMaa(automaticGoldenPlan(), nil, handTable(), nil,
 		MaaOptions{Difficulty: "NORMAL", Title: "测试", Details: "详情"})
 	if err != nil {
 		t.Fatalf("组装失败：%v", err)
@@ -179,8 +204,8 @@ func TestGoldenRulerCanFail(t *testing.T) {
 // TestGoldenNoRoster 走 `roster=None` 那条退化路，**不需要库**
 // （模组表由 handTable 提供；这也意味着它证明的是排版与组装，不是库里的值）。
 func TestGoldenNoRoster(t *testing.T) {
-	want := readFixture(t, "maajob_golden_noroster.json")
-	job, err := ToMaa(goldenPlan(), nil, handTable(), nil,
+	want := automaticGoldenFixture(t, "maajob_golden_noroster.json")
+	job, err := ToMaa(automaticGoldenPlan(), nil, handTable(), nil,
 		MaaOptions{Difficulty: "NORMAL", Title: "测试", Details: "详情"})
 	if err != nil {
 		t.Fatalf("组装失败：%v", err)
@@ -198,8 +223,8 @@ func TestGoldenNoRoster(t *testing.T) {
 // 与 Python 的黄金逐字节相同。
 func TestGoldenWithRoster(t *testing.T) {
 	db := openDB(t)
-	want := readFixture(t, "maajob_golden.json")
-	job, err := ToMaa(goldenPlan(), goldenRoster(), nil, db,
+	want := automaticGoldenFixture(t, "maajob_golden.json")
+	job, err := ToMaa(automaticGoldenPlan(), goldenRoster(), nil, db,
 		MaaOptions{Difficulty: "NORMAL", Title: "测试", Details: "详情"})
 	if err != nil {
 		t.Fatalf("组装失败：%v", err)
@@ -311,7 +336,7 @@ func TestDifficultyCodes(t *testing.T) {
 		}
 	}
 	// `difficulty` 为 0 时整个键消失（写 0 会让 MAA 那边的读法变味）
-	job, err := ToMaa(goldenPlan(), goldenRoster(), handTable(), nil, MaaOptions{})
+	job, err := ToMaa(automaticGoldenPlan(), goldenRoster(), handTable(), nil, MaaOptions{})
 	if err != nil {
 		t.Fatalf("组装失败：%v", err)
 	}
@@ -504,12 +529,96 @@ func TestNoDeploys(t *testing.T) {
 	}
 }
 
+// TestH3RejectsUnrepresentablePlans 保留原显式 time 黄金作为真实负例。
+func TestH3RejectsUnrepresentablePlans(t *testing.T) {
+	cases := []struct {
+		name string
+		plan core.PlayPlan
+		want error
+	}{
+		{"original timed golden", goldenPlan(), ErrExplicitDeployTime},
+		{"explicit zero", core.PlayPlan{Deploys: []core.DeployOrder{{Operator: "玫兰莎", Time: ptr(0.0)}}}, ErrExplicitDeployTime},
+		{"manual skill", core.PlayPlan{Deploys: []core.DeployOrder{{Operator: "玫兰莎"}}, Skills: []core.SkillOrder{{Operator: "玫兰莎", Time: 10, Slot: 1}}}, ErrManualSkills},
+		{"interleaved retreat", core.PlayPlan{Deploys: []core.DeployOrder{{Operator: "玫兰莎"}, {Operator: "芬"}}, Retreats: []core.RetreatOrder{{Operator: "玫兰莎", Time: 1}}}, ErrRetreatTiming},
+		{"late retreat", core.PlayPlan{Deploys: []core.DeployOrder{{Operator: "玫兰莎"}}, Retreats: []core.RetreatOrder{{Operator: "玫兰莎", Time: 999}}}, ErrRetreatTiming},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			job, err := ToMaa(c.plan, nil, handTable(), nil, MaaOptions{})
+			if !errors.Is(err, c.want) || !strings.Contains(err.Error(), c.plan.Deploys[0].Operator) {
+				t.Fatalf("要具名拒绝 %v，实得 %v", c.want, err)
+			}
+			if len(job.Actions) != 0 || len(job.Opers) != 0 {
+				t.Fatalf("拒绝后不许返回部分作业：%+v", job)
+			}
+		})
+	}
+}
+
+func TestH3AutomaticMelanthaAndSupport(t *testing.T) {
+	plan := core.PlayPlan{Stage: "main_01-07", Deploys: []core.DeployOrder{
+		{Operator: "玫兰莎", Position: [2]int{1, 2}, Direction: "Right", Skill: 1, AutoSkill: true},
+		{Operator: "芬", Position: [2]int{2, 2}, Direction: "Left", Skill: 1, AutoSkill: false},
+	}}
+	job, err := ToMaa(plan, nil, nil, nil, MaaOptions{SupportName: "令"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(job.Actions) != 4 || job.Actions[0].Name != "玫兰莎" || job.Actions[1].Name != "芬" || job.Actions[2].Type != "SpeedUp" || job.Actions[3].Type != "SkillDaemon" {
+		t.Fatalf("自动 Deploy 必须保序：%+v", job.Actions)
+	}
+	if job.Opers[0].SkillUsage != 1 || job.Opers[1].SkillUsage != 0 {
+		t.Fatalf("AutoSkill true/false 必须分流：%+v", job.Opers)
+	}
+	blob, err := MarshalJob(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back struct {
+		Opers []map[string]any `json:"opers"`
+	}
+	if err := json.Unmarshal(blob, &back); err != nil {
+		t.Fatal(err)
+	}
+	if len(back.Opers) != 3 || len(back.Opers[2]) != 1 || back.Opers[2]["name"] != "令" {
+		t.Fatalf("助战仍须只写名字：%s", blob)
+	}
+}
+
+func TestH3AutoSkillFidelity(t *testing.T) {
+	plan := core.PlayPlan{Deploys: []core.DeployOrder{
+		{Operator: "玫兰莎", Skill: 1, AutoSkill: true},
+		{Operator: "玫兰莎", Skill: 1, AutoSkill: false},
+	}}
+	if _, err := ToMaa(plan, nil, nil, nil, MaaOptions{}); !errors.Is(err, ErrAutoSkillFidelity) {
+		t.Fatalf("同名部署不能用一份 skill_usage 表达相反 AutoSkill：%v", err)
+	}
+	plan.Deploys[1].AutoSkill = true
+	if _, err := ToMaa(plan, nil, nil, nil, MaaOptions{}); err != nil {
+		t.Fatalf("同名相同技能配置正对照：%v", err)
+	}
+	plan.Deploys[1].Skill = 2
+	if _, err := ToMaa(plan, nil, nil, nil, MaaOptions{}); !errors.Is(err, ErrAutoSkillFidelity) {
+		t.Fatalf("同名不同技能也不能静默导出：%v", err)
+	}
+	// 真正 AUTO 技能无需 MAA 点击，无论 AutoSkill 开关均填 0。
+	db := openDB(t)
+	plan = core.PlayPlan{Deploys: []core.DeployOrder{
+		{Operator: "圣聆初雪", Skill: 2, AutoSkill: true},
+		{Operator: "圣聆初雪", Skill: 2, AutoSkill: false},
+	}}
+	job, err := ToMaa(plan, goldenRoster(), nil, db, MaaOptions{})
+	if err != nil || job.Opers[0].SkillUsage != 0 || job.Opers[1].SkillUsage != 0 {
+		t.Fatalf("游戏自动触发技能不应由 MAA 点：job=%+v err=%v", job, err)
+	}
+}
+
 // ------------------------------------------------------------------ 落盘
 
 // TestWriteJob 序号追加、非法字符替换、空关卡名退路，以及**写出去能被读回来**。
 func TestWriteJob(t *testing.T) {
 	dir := t.TempDir()
-	job, err := ToMaa(goldenPlan(), goldenRoster(), handTable(), nil, MaaOptions{})
+	job, err := ToMaa(automaticGoldenPlan(), goldenRoster(), handTable(), nil, MaaOptions{})
 	if err != nil {
 		t.Fatalf("组装失败：%v", err)
 	}
@@ -607,7 +716,7 @@ func TestLineEndingDivergence(t *testing.T) {
 	if crlf != 0 && crlf != lf {
 		t.Fatalf("夹具行尾是混合的（CRLF %d / 总 LF %d）—— 夹具被改坏了", crlf, lf)
 	}
-	job, err := ToMaa(goldenPlan(), nil, handTable(), nil, MaaOptions{})
+	job, err := ToMaa(automaticGoldenPlan(), nil, handTable(), nil, MaaOptions{})
 	if err != nil {
 		t.Fatalf("组装失败：%v", err)
 	}
@@ -644,7 +753,7 @@ func TestSupportOperIsNameOnly(t *testing.T) {
 	base := MaaOptions{Difficulty: "NORMAL", Title: "测试", Details: "详情"}
 	withSup := base
 	withSup.SupportName = "令"
-	job, err := ToMaa(goldenPlan(), nil, handTable(), nil, withSup)
+	job, err := ToMaa(automaticGoldenPlan(), nil, handTable(), nil, withSup)
 	if err != nil {
 		t.Fatalf("组装失败：%v", err)
 	}
@@ -671,7 +780,7 @@ func TestSupportOperIsNameOnly(t *testing.T) {
 		}
 	}
 	//: 负对照：不带助战 ⇒ 仍然 3 条
-	noSup, err := ToMaa(goldenPlan(), nil, handTable(), nil, base)
+	noSup, err := ToMaa(automaticGoldenPlan(), nil, handTable(), nil, base)
 	if err != nil {
 		t.Fatalf("组装失败：%v", err)
 	}

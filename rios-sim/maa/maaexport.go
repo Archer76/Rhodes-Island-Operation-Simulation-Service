@@ -60,6 +60,14 @@ import (
 // 对应 Python 的 `MaaExportError`（那一侧只在这一处抛）。
 var ErrNoDeploys = errors.New("这份打法里一个部署都没有，导出没有意义")
 
+// 本轮只支持纯 nil-time 顺序自动部署；不能表达的计划必须失败，而非丢弃时序。
+var (
+	ErrExplicitDeployTime = errors.New("MAA 导出不支持显式部署时刻")
+	ErrManualSkills       = errors.New("MAA 导出不支持手动技能计划")
+	ErrRetreatTiming      = errors.New("MAA 导出不支持撤退时序")
+	ErrAutoSkillFidelity  = errors.New("MAA 导出无法保真每次部署的 AutoSkill/技能设置")
+)
+
 // ModuleSlots 是模组类型字母 → MAA 的 `module` 编号。见包文档第二节。
 var ModuleSlots = map[string]int{"X": 1, "Y": 2, "A": 3, "D": 4, "B": 5}
 
@@ -501,11 +509,12 @@ func hasModule(plan core.PlayPlan) bool {
 //
 // `stage_name` 缺省用 `plan.Stage`（levelId），**这是刻意的** —— 见包文档第一节。
 //
-// # 为什么不写每次部署的时刻
+// # H3 导出边界
 //
-// 协议里 Deploy 动作**根本没有 `time` 字段**。而 MAA 对 Deploy 的默认行为是
-// 「当费用不够时一直等到够」，与本项目解算时排时刻的规则是同一条；
-// 写 `pre_delay` 反而会把同一段等待算两遍。`UsedOperator.Time` 只用于给人看。
+// 只接收 nil-time 顺序自动部署，拒绝显式时刻、手动技能计划与撤退时序。
+// H3 dynamic 只等待费用，不等待已在场、再部署冷却或位满；MAA 可能等待更多条件。
+// 保留 Deploy 顺序不等于验证两端执行真值，不能据此声称模拟与 MAA 时序相同。
+// AutoSkill 映射到按干员配置的 skill_usage；同名部署的设置不能互相冲突。
 //
 // # 惰性与具名失败
 //
@@ -517,6 +526,17 @@ func ToMaa(plan core.PlayPlan, roster *core.RosterRead, tbl map[string]ModuleInf
 	db *sql.DB, opt MaaOptions) (MaaJob, error) {
 	if len(plan.Deploys) == 0 {
 		return MaaJob{}, ErrNoDeploys
+	}
+	for i, dep := range plan.Deploys {
+		if dep.Time != nil {
+			return MaaJob{}, fmt.Errorf("%w：deploy[%d] %s time=%g", ErrExplicitDeployTime, i, dep.Operator, *dep.Time)
+		}
+	}
+	if len(plan.Skills) != 0 {
+		return MaaJob{}, fmt.Errorf("%w：skills[0] %s", ErrManualSkills, plan.Skills[0].Operator)
+	}
+	if len(plan.Retreats) != 0 {
+		return MaaJob{}, fmt.Errorf("%w：retreats[0] %s", ErrRetreatTiming, plan.Retreats[0].Operator)
 	}
 	if tbl == nil && hasModule(plan) {
 		t, err := ModuleTable(db)
@@ -531,7 +551,16 @@ func ToMaa(plan core.PlayPlan, roster *core.RosterRead, tbl map[string]ModuleInf
 	}
 
 	opers := make([]MaaOper, 0, len(ops)+1)
-	for _, op := range ops {
+	// MAA 的技能配置属于干员而非 Deploy 动作，不能把不同部署配置悄悄合并。
+	byName := make(map[string]MaaOper)
+	for i, op := range ops {
+		usage := 0
+		if plan.Deploys[i].AutoSkill {
+			usage = SkillUsage(db, charIDOf(roster, op.Name), op.Skill)
+		}
+		if prev, ok := byName[op.Name]; ok && (prev.Skill != op.Skill || prev.SkillUsage != usage) {
+			return MaaJob{}, fmt.Errorf("%w：deploy[%d] %s", ErrAutoSkillFidelity, i, op.Name)
+		}
 		req := MaaRequirements{
 			Elite: op.Elite, Level: op.Level,
 			// 官方口径：1–7 是技能等级，8/9/10 即专一/专二/专三
@@ -543,11 +572,12 @@ func ToMaa(plan core.PlayPlan, roster *core.RosterRead, tbl map[string]ModuleInf
 		if op.Potential != nil {
 			req.Potential = op.Potential
 		}
-		opers = append(opers, MaaOper{
+		oper := MaaOper{
 			Name: op.Name, Skill: op.Skill,
-			SkillUsage:   SkillUsage(db, charIDOf(roster, op.Name), op.Skill),
-			Requirements: req,
-		})
+			SkillUsage: usage, Requirements: req,
+		}
+		byName[op.Name] = oper
+		opers = append(opers, oper)
 	}
 	//: 助战那一格加在**末尾**（第 13 位）。它**不进** `doc.details` 的人读编队表 ——
 	//: 那一份写的是「这份打法部署了谁」，而助战是**要求**不是部署。
@@ -555,7 +585,7 @@ func ToMaa(plan core.PlayPlan, roster *core.RosterRead, tbl map[string]ModuleInf
 		opers = append(opers, SupportOper(opt.SupportName))
 	}
 
-	actions := make([]MaaAction, 0, len(ops)+len(plan.Retreats)+2)
+	actions := make([]MaaAction, 0, len(ops)+2)
 	for _, op := range ops {
 		skill := "—"
 		if op.Skill != 0 {
@@ -569,9 +599,6 @@ func ToMaa(plan core.PlayPlan, roster *core.RosterRead, tbl map[string]ModuleInf
 				op.Name, skill, op.Mastery, levelText(op.Elite), levelText(op.Level),
 				levelText(op.Potential)),
 		})
-	}
-	for _, r := range plan.Retreats {
-		actions = append(actions, MaaAction{Type: "Retreat", Name: r.Operator})
 	}
 	actions = append(actions, MaaAction{Type: "SpeedUp"}, MaaAction{Type: "SkillDaemon"})
 
