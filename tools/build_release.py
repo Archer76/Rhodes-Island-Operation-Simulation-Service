@@ -52,12 +52,18 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+try:
+    from .selftest_gate import validate_selftest
+except ImportError:  # direct script execution
+    from selftest_gate import validate_selftest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -153,7 +159,7 @@ def assert_only_runtime_files(tree: Path) -> list:
     这条是**反着判**的：白名单之外的任何文件都要拦下来 —— 否则「顺手把 docs 拷进来」
     或「把 out/ 拖进来」不会被任何人发现。
     """
-    allowed_exact = {"rios-tui.exe", "rios-sim.exe", "SHA256SUMS.txt"}
+    allowed_exact = {"rios-tui.exe", "rios-sim.exe", "SHA256SUMS.txt", "verification.json"}
     bad = []
     files = []
     for p in sorted(tree.rglob("*")):
@@ -226,7 +232,7 @@ def run_preflight(tree: Path):
     return rc, out + err
 
 
-def smoke(tree: Path, data_dir: Path | None) -> None:
+def smoke(tree: Path, data_dir: Path | None) -> dict:
     """装完自己验一遍：一条正例 ＋ 两条负对照（尺子必须先证明它会判红）。"""
     print("  · 正例：全新的树（data 不随包，所以期望是 3 = 起不来，且指出 eng/data）")
     rc, out = run_preflight(tree)
@@ -303,11 +309,10 @@ def smoke(tree: Path, data_dir: Path | None) -> None:
           % (rc4, dt4, named[0]))
 
     if data_dir is None:
-        print("  · 跳过后半段：没有可用的 data 目录（拿它才跑得动全量自检）")
-        return
+        print("  · 发布验收 unverified：--no-selftest 明确跳过 required 自检；构建不等于验收")
+        return {"status": "unverified", "reason": "--no-selftest: required selftest not run"}
     if not (data_dir / "akdb.sqlite").is_file():
-        print("  · 跳过后半段：%s 里没有 akdb.sqlite" % data_dir)
-        return
+        die("发布验收拒绝：required prerequisites 缺数据 %s/akdb.sqlite；不允许静默跳过" % data_dir)
 
     print("  · 发布树的 exe 跑全量自检（RIOS_DB 指到本机数据，只为把界面跑起来）")
     env = dict(os.environ)
@@ -318,39 +323,14 @@ def smoke(tree: Path, data_dir: Path | None) -> None:
     p = subprocess.run([str(tree / "rios-tui.exe"), "-selftest"], cwd=tree, env=env,
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=1800)
-    text = (p.stdout or "") + (p.stderr or "")
-    ticks = text.count("✓")
-    if p.returncode != 0 or "结论：**全绿**" not in text:
-        die("发布树的 exe 跑自检不绿（rc=%d，✓=%d）—— 发布树与开发树行为不一致：\n%s"
-            % (p.returncode, ticks, text[-3000:]))
-    #: ★ 发布树里 ✓ 会比开发树少 **6 条**（2026-09-27 实测：290 → 284），少的是：
-    #:   · 2 条扫本包 Go 源码的防绕过判据（发布树里没有 .go）⇒ 未核说法「读不到本包源码目录」；
-    #:   · 4 条要真名册的判据（名册缓存在 Python 侧认 `eng/data/skland/`，发布树里没有）
-    #:     ⇒ 未核说法「桥这次取不到名册」。
-    #: 所以这里**不盯那个总数**（盯它就会把"环境不同"误判成"少跑了"），
-    #: 盯的是**性质**：少跑的每一条都得有具名说法，不许静默消失。
-    #: ★ 打印里**一个数都不写死**：那两个绝对值每次加判据都会变，写死就是下一个
-    #:   「开发树 216；差的 6 条」—— 它今天就过期了（真值 290 → 284，而差的仍是
-    #:   那两组）。要写就写**分组**，分组才是稳定的。
-    if ticks < 200:
-        die("自检只跑了 %d 条 ⇒ 疑似大面积空跑，不是环境差异：\n%s" % (ticks, text[-3000:]))
-    for needle, why in (("读不到本包源码目录", "扫源码的防绕过判据"),):
-        if needle not in text:
-            die("发布树自检里少了「%s」，但也没有具名的未核说明 —— "
-                "那是**静默少跑**，本仓口径不许：\n%s" % (why, text[-3000:]))
-    #: ★ 2026-09-29 修：名册那一组**两种结局都算过** ——
-    #:   · 取不到 ⇒ 自检印「桥这次取不到名册」的具名未核；
-    #:   · 取得到 ⇒ 那几条**真的跑了**（桥现在缺缓存会**自动去森空岛取**，
-    #:     见 `tools/rios_bridge.py::_try_fetch_roster_from_skland`）。
-    #: 原先只认第一种 ⇒ 一旦名册取得回来就变成**假红**（本轮打包当场撞上）。
-    named_skip = "桥这次取不到名册" in text
-    really_ran = "真名册渲染：条数与名册一致" in text
-    if not (named_skip or really_ran):
-        die("发布树自检里名册那一组既没跑、也没有具名的未核说明 —— "
-            "那是**静默少跑**，本仓口径不许：\n%s" % text[-3000:])
-    print("      名册那组：%s" % ("取到了 ⇒ 真跑了" if really_ran else "取不到 ⇒ 具名未核"))
-    print("      实得 rc=0，✓=%d（比开发树少的那几条＝扫源码的防绕过 ＋ 要真名册的，"
-          "逐条已具名未核），结论全绿" % ticks)
+    try:
+        manifest = json.loads((ROOT / 'tools' / 'selftest_manifest.json').read_text(encoding='utf-8'))
+        report = validate_selftest(p.stdout or '', p.returncode, manifest)
+    except (OSError, ValueError) as exc:
+        die('发布验收拒绝：%s\nstdout:\n%s\nstderr（仅诊断，不参与gate）:\n%s'
+            % (exc, (p.stdout or '')[-3000:], (p.stderr or '')[-3000:]))
+    print('      发布验收 verified：所有静态 required cases 完整、通过且实际行使')
+    return {'status': 'verified', 'reason': 'all-required machine report validated', 'report': report}
 
 
 def main() -> int:
@@ -379,7 +359,13 @@ def main() -> int:
 
     print("[4/5] 装完自查（正例 ＋ 两条负对照 ＋ 入口缺件那条）")
     data_dir = ROOT / "data"
-    smoke(tree, None if args.no_selftest else data_dir)
+    verification = smoke(tree, None if args.no_selftest else data_dir)
+    # A build bypass is never a verified release, even if a future smoke refactor
+    # accidentally returns a green value. Normal verified status comes only from gate.
+    if args.no_selftest:
+        verification = {"status": "unverified", "reason": "--no-selftest: required selftest not run"}
+    (tree / "verification.json").write_text(
+        json.dumps(verification, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     print("[5/5] 清掉自查留下的 Python 编译缓存，然后逐件点名 sha256")
     n_pyc = clean_pycache(tree)
@@ -398,6 +384,8 @@ def main() -> int:
     print("发布树：%s" % tree)
     print("文件 %d 个，合计 %s（含 exe 与 eng/；data/ 与 Python 运行时不随包）"
           % (len(lines), human(total)))
+    print("构建：完成（rc=0）。构建完成与发布验收是不同结论。")
+    print("发布验收：%s —— %s" % (verification["status"], verification["reason"]))
     return 0
 
 
