@@ -1,8 +1,8 @@
 // Package maa 把一份打法（`core.PlayPlan`）编译成 MAA copilot JSON。
 //
 // 它是 `ak_tactic/maa_export.py`（Python，488 行）的 Go 侧对应实现。
-// **参照实现一直是那一份**，本包以「与它逐字节相同」为验收标准（判据见
-// `maaexport_test.go` 与 `out/zz_maa_export_spec.md` §11）。
+// Python 不是协议真值；黄金夹具用于共同可表达子集的排版回归。
+// H3 时序/技能拒绝和 H5 未知模组拒绝是明确的安全边界，不为对拍绿而回退。
 //
 // 官方协议：<https://docs.maa.plus/zh-cn/protocol/copilot-schema.html>
 //
@@ -66,6 +66,7 @@ var (
 	ErrManualSkills       = errors.New("MAA 导出不支持手动技能计划")
 	ErrRetreatTiming      = errors.New("MAA 导出不支持撤退时序")
 	ErrAutoSkillFidelity  = errors.New("MAA 导出无法保真每次部署的 AutoSkill/技能设置")
+	ErrModuleRequirement  = errors.New("MAA 导出无法解析有效模组要求")
 )
 
 // ModuleSlots 是模组类型字母 → MAA 的 `module` 编号。见包文档第二节。
@@ -147,6 +148,26 @@ func ModuleSlot(tbl map[string]ModuleInfo, moduleID *string) *int {
 	return &n
 }
 
+// validateModule distinguishes a known non-effective badge from missing data.
+// Empty type is accepted only on an existing table row; unknown IDs/types fail.
+func validateModule(tbl map[string]ModuleInfo, id *string) error {
+	if id == nil || *id == "" {
+		return nil
+	}
+	info, ok := tbl[*id]
+	if !ok {
+		return fmt.Errorf("%w：module=%q 不在模组表中", ErrModuleRequirement, *id)
+	}
+	typ := strings.ToUpper(strings.TrimSpace(info.TypeName2))
+	if typ == "" {
+		return nil
+	}
+	if _, ok := ModuleSlots[typ]; !ok {
+		return fmt.Errorf("%w：module=%q type=%q 无 MAA 映射", ErrModuleRequirement, *id, info.TypeName2)
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------- 用了哪些干员
 
 // pickStr 复刻 `_pick`：打法自带的优先，退回名册。两者都没有 ⇒ nil。
@@ -204,11 +225,15 @@ type UsedOperator struct {
 // UsedOperators 按部署顺序列出这份打法用到的干员及其练度要求。
 //
 // `roster` 可以为 nil（Python 的 `roster=None` 那条退化路）。
-// `tbl` 为 nil 表示**没有模组表可用** ⇒ 一切模组字段都当「查不到」（nil）。
-// 调用方要么先取好表，要么已经确认这份打法里没人带模组 —— `ToMaa` 就是这么做的
-// （它按需惰性加载，复刻 Python `_uniequip` 的懒加载）。
+// 调用方须先取好有效模组所需表，或确认没有有效模组 ID。
+// 已部署干员的有效 ID 不在表内/类型未映射时具名失败，不退化为无模组。
+// ToMaa 先统一解析有效值，再按部署需求惰性加载。
 func UsedOperators(plan core.PlayPlan, roster *core.RosterRead,
 	tbl map[string]ModuleInfo) ([]UsedOperator, error) {
+	return hydrateModules(resolveUsedOperators(plan, roster), tbl)
+}
+
+func resolveUsedOperators(plan core.PlayPlan, roster *core.RosterRead) []UsedOperator {
 	byName := map[string]core.RosterEntry{}
 	if roster != nil {
 		for _, e := range roster.Entries {
@@ -232,14 +257,24 @@ func UsedOperators(plan core.PlayPlan, roster *core.RosterRead,
 			Potential:   pickInt(dep.Potential, &entry.Potential),
 			Trust:       dep.Trust, // 名册那侧也没有 trust
 			Module:      mod,
-			ModuleName:  moduleName(tbl, mod),
-			ModuleType:  moduleType(tbl, mod),
-			ModuleSlot:  ModuleSlot(tbl, mod),
 			ModuleLevel: pickInt(dep.ModuleLevel, &entry.ModuleLevel),
 			Time:        dep.Time,
 		})
 	}
-	return out, nil
+	return out
+}
+
+func hydrateModules(ops []UsedOperator, tbl map[string]ModuleInfo) ([]UsedOperator, error) {
+	for i := range ops {
+		op := &ops[i]
+		if err := validateModule(tbl, op.Module); err != nil {
+			return nil, fmt.Errorf("deploy[%d] %s：%w", i, op.Name, err)
+		}
+		op.ModuleName = moduleName(tbl, op.Module)
+		op.ModuleType = moduleType(tbl, op.Module)
+		op.ModuleSlot = ModuleSlot(tbl, op.Module)
+	}
+	return ops, nil
 }
 
 // ModText 是一模组一格：`无` / `记忆残页 X 3` —— **模组名 类型字母 等级**。
@@ -496,9 +531,9 @@ const DefaultMinimumRequired = "v6.0.0"
 
 // hasModule 报告这份打法里有没有人带**非空**模组 id。
 // 它是惰性加载的判据：一个都没有就**不许碰** `module` 表。
-func hasModule(plan core.PlayPlan) bool {
-	for _, dep := range plan.Deploys {
-		if dep.Module != nil && *dep.Module != "" {
+func hasModule(ops []UsedOperator) bool {
+	for _, op := range ops {
+		if op.Module != nil && *op.Module != "" {
 			return true
 		}
 	}
@@ -518,7 +553,8 @@ func hasModule(plan core.PlayPlan) bool {
 //
 // # 惰性与具名失败
 //
-// `tbl` 为 nil 且这份打法里有人带模组 ⇒ 调 `ModuleTable(db)` 现取；
+// 先解析部署优先、nil 才继承名册的有效值；只看已部署干员，不扫描整册。
+// `tbl` 为 nil 且有效值有非空模组 ID ⇒ 调 `ModuleTable(db)` 现取；
 // 库不在就**具名失败**（`data.ErrDBMissing`），不许静默退化成「无模组」。
 // 反过来，没人带模组时**完全不碰库** —— 这条退化路在 Python 那边也是成功的
 // （`module_type(None)` 提前返回）。`db` 为 nil 时同上：有人带模组才报缺库。
@@ -538,14 +574,20 @@ func ToMaa(plan core.PlayPlan, roster *core.RosterRead, tbl map[string]ModuleInf
 	if len(plan.Retreats) != 0 {
 		return MaaJob{}, fmt.Errorf("%w：retreats[0] %s", ErrRetreatTiming, plan.Retreats[0].Operator)
 	}
-	if tbl == nil && hasModule(plan) {
+	ops := resolveUsedOperators(plan, roster)
+	if tbl == nil && hasModule(ops) {
 		t, err := ModuleTable(db)
 		if err != nil {
+			for i, op := range ops {
+				if op.Module != nil && *op.Module != "" {
+					return MaaJob{}, fmt.Errorf("deploy[%d] %s module=%q：%w", i, op.Name, *op.Module, err)
+				}
+			}
 			return MaaJob{}, err
 		}
 		tbl = t
 	}
-	ops, err := UsedOperators(plan, roster, tbl)
+	ops, err := hydrateModules(ops, tbl)
 	if err != nil {
 		return MaaJob{}, err
 	}
