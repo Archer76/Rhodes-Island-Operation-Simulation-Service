@@ -16,6 +16,10 @@
 from __future__ import annotations
 
 import json
+import math
+import queue
+import threading
+import time
 import os
 import pathlib
 import subprocess
@@ -123,23 +127,70 @@ class Simgo:
 
     def __init__(self, exe: pathlib.Path | str | None = None,
                  timeout: float = 120.0) -> None:
+        timeout = float(timeout)
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout 必须是有限正数")
         self.exe = pathlib.Path(exe) if exe else require_binary()
         self.timeout = timeout
+        self._call_lock = threading.Lock()
+        self._closed = False
+        self._io_thread: threading.Thread | None = None
+        self._stderr_tail = ""
+        self._stderr_lock = threading.Lock()
         self._proc = subprocess.Popen(
             [str(self.exe)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, encoding="utf-8",
             bufsize=1)
+        self._stderr_thread = threading.Thread(
+            target=self._drain_stderr, name="rios-sim-stderr", daemon=True)
+        self._stderr_thread.start()
+
+    def _drain_stderr(self) -> None:
+        assert self._proc.stderr
+        self._proc.stderr.reconfigure(errors="replace")
+        try:
+            while chunk := self._proc.stderr.read(1024):
+                with self._stderr_lock:
+                    self._stderr_tail = (self._stderr_tail + chunk)[-4000:]
+        except (OSError, ValueError):
+            pass
 
     # -------------------------------------------------- 生命周期
 
-    def close(self) -> None:
-        if self._proc.poll() is None:
+    def _shutdown(self, *, abort: bool) -> None:
+        # Called with _call_lock held. Kill before touching stdin when I/O may
+        # be blocked: closing a TextIOWrapper can itself wait on its writer.
+        self._closed = True
+        if abort and self._proc.poll() is None:
+            self._proc.kill()
+        if not abort and self._proc.poll() is None:
+            assert self._proc.stdin
             try:
-                self._proc.stdin.close()          # type: ignore[union-attr]
-                self._proc.wait(timeout=5)
-            except Exception:                     # noqa: BLE001
+                self._proc.stdin.close()
+            except (OSError, ValueError):
                 self._proc.kill()
+        try:
+            self._proc.wait(timeout=1 if abort else 5)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+            self._proc.wait(timeout=1)
+        if self._io_thread is not None and self._io_thread.ident is not None:
+            self._io_thread.join(timeout=1)
+        self._stderr_thread.join(timeout=1)
+        for stream in (self._proc.stdin, self._proc.stdout, self._proc.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    # A broken stdin may raise again while flushing on close;
+                    # still close the remaining streams and preserve the cause.
+                    pass
+
+    def close(self) -> None:
+        with self._call_lock:
+            if not self._closed:
+                self._shutdown(abort=False)
 
     def __enter__(self) -> "Simgo":
         return self
@@ -162,14 +213,51 @@ class Simgo:
         if extra:
             req.update(extra)
         line = json.dumps(req, ensure_ascii=False, separators=(",", ":"))
-        assert self._proc.stdin and self._proc.stdout
-        self._proc.stdin.write(line + "\n")
-        self._proc.stdin.flush()
-        got = self._proc.stdout.readline()
-        if not got:
-            err = (self._proc.stderr.read() if self._proc.stderr else "") or ""
-            raise RuntimeError(f"rios-sim 没有应答就退出了：{err.strip()[:400]}")
-        return json.loads(got)
+        # One connection has exactly one request in flight. Both a blocked
+        # write and an incomplete response line consume the same deadline.
+        # timeout bounds this exchange, not serialization or lock queueing.
+        with self._call_lock:
+            if self._closed:
+                raise RuntimeError("rios-sim 连接已关闭，不能继续请求")
+            deadline = time.monotonic() + self.timeout
+            result: queue.Queue = queue.Queue(maxsize=1)
+
+            def exchange() -> None:
+                try:
+                    assert self._proc.stdin and self._proc.stdout
+                    self._proc.stdin.write(line + "\n")
+                    self._proc.stdin.flush()
+                    got = self._proc.stdout.readline()
+                    if not got:
+                        raise RuntimeError("rios-sim 未返回完整应答（stdout EOF）")
+                    if not got.endswith("\n"):
+                        raise RuntimeError("rios-sim 应答缺少换行终止符")
+                    response = json.loads(got)
+                    if not isinstance(response, dict):
+                        raise RuntimeError("rios-sim 应答必须是 JSON 对象")
+                    result.put((response, None))
+                except Exception as exc:
+                    result.put((None, exc))
+
+            self._io_thread = threading.Thread(
+                target=exchange, name="rios-sim-request", daemon=True)
+            try:
+                self._io_thread.start()
+                response, error = result.get(timeout=max(0, deadline - time.monotonic()))
+                self._io_thread.join()
+            except queue.Empty:
+                self._shutdown(abort=True)
+                raise TimeoutError(
+                    f"rios-sim 请求 {cmd!r}（id={idx}）超过 {self.timeout:g} 秒，连接已终止") from None
+            except BaseException:
+                self._shutdown(abort=True)
+                raise
+            if error is not None:
+                self._shutdown(abort=True)
+                with self._stderr_lock:
+                    detail = self._stderr_tail.strip()[-400:]
+                raise RuntimeError(f"rios-sim 请求 {cmd!r} 协议/I/O 失败：{error}；{detail}") from error
+            return response
 
     def ping(self) -> dict:
         """握手：核对协议版本。版本不一致**当场炸**，不带着疑问往下跑。"""
