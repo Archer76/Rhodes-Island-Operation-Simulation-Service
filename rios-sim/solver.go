@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -104,6 +105,8 @@ type SolveStats struct {
 	PlanInvalid  int              `json:"plan_invalid"` //: `Validate` 拦下的
 	SpecFailed   int              `json:"spec_failed"`  //: 造不出规格（含拒跑）
 	SimFailed    int              `json:"sim_failed"`   //: 模拟本身报错
+	Canceled     int              `json:"canceled"`
+	Discarded    int              `json:"discarded"`
 	Stars3       int              `json:"stars3"`
 	DedupeHit    int              `json:"dedupe_hit"`
 	//: **首条失败的原因**。整层被丢光时，光看计数只知道"全丢了"，不知道**为什么**
@@ -287,6 +290,13 @@ func evalState(level, path string, q SolveQuery, st *Stage, state []CandidateRow
 }
 
 func evalStateWithInputs(level, path string, q SolveQuery, st *Stage, state []CandidateRow, roster *core.RosterRead, inputs *buildInputs) (*core.PlayPlan, *Verdict, string, error) {
+	return evalStateWithInputsContext(context.Background(), level, path, q, st, state, roster, inputs)
+}
+
+func evalStateWithInputsContext(ctx context.Context, level, path string, q SolveQuery, st *Stage, state []CandidateRow, roster *core.RosterRead, inputs *buildInputs) (*core.PlayPlan, *Verdict, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "canceled", err
+	}
 	plan := planFromState(st.LevelID, state, roster)
 	if err := plan.Validate(); err != nil {
 		return nil, nil, "plan_invalid", err
@@ -335,7 +345,13 @@ func evalStateWithInputs(level, path string, q SolveQuery, st *Stage, state []Ca
 		//: 拒跑：这一条状态**丢弃**，但要与"打输"分开计数
 		return nil, nil, "spec_failed", fmt.Errorf("闸门拒跑：%v", unsup)
 	}
-	v, err := runSim(spec)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "canceled", err
+	}
+	v, err := runSimContext(ctx, spec)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil, nil, "canceled", err
+	}
 	if err != nil {
 		return nil, nil, "sim_failed", err
 	}
@@ -382,21 +398,31 @@ type scoredState struct {
 // evalDepthParallel keeps the original entry point for internal callers.
 func evalDepthParallel(level, path string, q SolveQuery, st *Stage,
 	states [][]CandidateRow, roster *core.RosterRead) ([]scoredState, SolveStats) {
-	return evalDepthStreaming(states, true, func(s []CandidateRow) (*core.PlayPlan, *Verdict, string, error) {
-		return evalState(level, path, q, st, s, roster)
+	return evalDepthStreamingContext(context.Background(), states, true, func(ctx context.Context, s []CandidateRow) (*core.PlayPlan, *Verdict, string, error) {
+		return evalStateWithInputsContext(ctx, level, path, q, st, s, roster, nil)
 	}, nil)
 }
 
 // evalDepthStreaming warms caches with the first state, then consumes outcomes
 // while workers are still running. Only the consumer updates stats/calls notify.
-// Cancellation stops scheduling, not in-flight runSim calls. Returned successes
-// are restored to state-index order before the stable rank sort.
+// The first consumer-observed eligible three-star locks the winner and cancels
+// in-flight work. Later buffered/completed outcomes are discarded, not reranked.
+// The consumer drains all workers before returning; non-early layers retain index order.
 func evalDepthStreaming(states [][]CandidateRow, earlyStop bool,
 	eval func([]CandidateRow) (*core.PlayPlan, *Verdict, string, error),
 	notify func(SolveStats, int, *scoredState)) ([]scoredState, SolveStats) {
+	return evalDepthStreamingContext(context.Background(), states, earlyStop, func(_ context.Context, s []CandidateRow) (*core.PlayPlan, *Verdict, string, error) { return eval(s) }, notify)
+}
+
+func evalDepthStreamingContext(parent context.Context, states [][]CandidateRow, earlyStop bool,
+	eval func(context.Context, []CandidateRow) (*core.PlayPlan, *Verdict, string, error),
+	notify func(SolveStats, int, *scoredState)) ([]scoredState, SolveStats) {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	var winner *scoredState
 	var sub SolveStats
 	pool := make([]scoredState, 0, len(states))
-	if len(states) == 0 {
+	if len(states) == 0 || ctx.Err() != nil {
 		return pool, sub
 	}
 	type outcome struct {
@@ -407,10 +433,16 @@ func evalDepthStreaming(states [][]CandidateRow, earlyStop bool,
 		err   error
 	}
 	indexed := make([]*scoredState, len(states))
-	done := make(chan struct{})
-	var once sync.Once
 	completed := 0
 	record := func(o outcome) {
+		if errors.Is(o.err, context.Canceled) || errors.Is(o.err, context.DeadlineExceeded) {
+			sub.Canceled++
+			return
+		}
+		if winner != nil {
+			sub.Discarded++
+			return
+		}
 		completed++
 		var got *scoredState
 		if o.err != nil {
@@ -436,7 +468,8 @@ func evalDepthStreaming(states [][]CandidateRow, earlyStop bool,
 			if starsOf(o.v) == 3 {
 				sub.Stars3++
 				if earlyStop {
-					once.Do(func() { close(done) })
+					winner = &scoredState{key: rankOf(o.v), state: states[o.index], plan: o.plan, v: o.v}
+					cancel()
 				}
 			}
 			got = &scoredState{key: rankOf(o.v), state: states[o.index], plan: o.plan, v: o.v}
@@ -446,7 +479,7 @@ func evalDepthStreaming(states [][]CandidateRow, earlyStop bool,
 			notify(sub, completed, got)
 		}
 	}
-	p, v, why, err := eval(states[0])
+	p, v, why, err := eval(ctx, states[0])
 	record(outcome{index: 0, plan: p, v: v, why: why, err: err})
 	if len(states) == 1 {
 		if indexed[0] != nil {
@@ -455,7 +488,7 @@ func evalDepthStreaming(states [][]CandidateRow, earlyStop bool,
 		return pool, sub
 	}
 	select {
-	case <-done:
+	case <-ctx.Done():
 		if indexed[0] != nil {
 			pool = append(pool, *indexed[0])
 		}
@@ -478,20 +511,22 @@ func evalDepthStreaming(states [][]CandidateRow, earlyStop bool,
 			defer wg.Done()
 			for index := range jobs {
 				select {
-				case <-done:
+				case <-ctx.Done():
 					return
 				default:
 				}
-				p, v, why, err := eval(states[index])
+				p, v, why, err := eval(ctx, states[index])
 				outc <- outcome{index: index, plan: p, v: v, why: why, err: err}
 			}
 		}()
 	}
+	feederDone := make(chan struct{})
 	go func() {
+		defer close(feederDone)
 		defer close(jobs)
 		for index := 1; index < len(states); index++ {
 			select {
-			case <-done:
+			case <-ctx.Done():
 				return
 			case jobs <- index:
 			}
@@ -501,6 +536,7 @@ func evalDepthStreaming(states [][]CandidateRow, earlyStop bool,
 	for o := range outc {
 		record(o)
 	}
+	<-feederDone
 	for _, got := range indexed {
 		if got != nil {
 			pool = append(pool, *got)
@@ -510,8 +546,9 @@ func evalDepthStreaming(states [][]CandidateRow, earlyStop bool,
 }
 
 // Solve 是兼容旧调用方的 beam 搜索入口，不订阅实时进度。
-// 每层仍先串行预热，再并行求值。三星停止调度，但已启动的模拟会排空；
-// depth < min_ops 时不早停。同分结果在 rank 稳定排序前按状态生成索引归序。
+// 每层先串行预热，再并行求值。首个消费者观察到的合格三星锁定并取消在途；
+// 仍排空/等待回收，但后到结果不参与选优。depth < min_ops 不早停，
+// 该分支及无三星层按索引归序后稳定rank排序。并行首三星可能随完成顺序改变。
 func Solve(level, path string, q SolveQuery) (SolveOut, error) {
 	return SolveWithProgress(level, path, q, nil)
 }
@@ -646,9 +683,9 @@ func SolveWithProgress(level, path string, q SolveQuery, notify func(progress.Sn
 		if overall != nil {
 			liveBest = overall
 		}
-		pool, sub := evalDepthStreaming(states, depth >= minOps,
-			func(s []CandidateRow) (*core.PlayPlan, *Verdict, string, error) {
-				return evalStateWithInputs(level, path, q, st, s, roster, inputs)
+		pool, sub := evalDepthStreamingContext(context.Background(), states, depth >= minOps,
+			func(ctx context.Context, s []CandidateRow) (*core.PlayPlan, *Verdict, string, error) {
+				return evalStateWithInputsContext(ctx, level, path, q, st, s, roster, inputs)
 			}, func(sub SolveStats, completed int, got *scoredState) {
 				snap.Evaluated, snap.Completed = stats.Evaluated+sub.Evaluated, completed
 				if got != nil && (liveBest == nil || got.key.better(liveBest.key)) {
@@ -662,6 +699,8 @@ func SolveWithProgress(level, path string, q SolveQuery, notify func(progress.Sn
 				}
 				emit("evaluating", message)
 			})
+		stats.Canceled += sub.Canceled
+		stats.Discarded += sub.Discarded
 		stats.Incomplete += sub.Incomplete
 		stats.Placeholders = mechanisms.Merge(stats.Placeholders, sub.Placeholders)
 		out.Placeholders = stats.Placeholders
