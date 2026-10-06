@@ -204,6 +204,7 @@ class ReleaseTests(unittest.TestCase):
                 patch.object(build_release, "build_exes"), patch.object(build_release, "copy_eng"), \
                 patch.object(build_release, "assert_only_runtime_files", return_value=[]), \
                 patch.object(build_release, "clean_pycache", return_value=0), \
+                patch.object(build_release, "component_identity", return_value={"schema_version": 1, "components": {"engine": {"sha256": "engine-sha"}, "bridge": {"sha256": "bridge-sha"}}}), \
                 patch.object(build_release, "smoke", return_value={"status": "verified"}) as smoke, \
                 patch("sys.argv", ["build_release.py", "--version", "unit", "--out", "memory", "--no-selftest"]), \
                 redirect_stdout(log):
@@ -212,6 +213,8 @@ class ReleaseTests(unittest.TestCase):
         writes = tree.__truediv__.return_value.write_text.call_args_list
         verification = json.loads(writes[0].args[0])
         self.assertEqual(verification["status"], "unverified")
+        self.assertEqual(verification["identity"]["components"]["engine"]["sha256"], "engine-sha")
+        self.assertEqual(verification["identity"]["components"]["bridge"]["sha256"], "bridge-sha")
         self.assertIn("--no-selftest", verification["reason"])
         self.assertIn("构建完成与发布验收是不同结论", log.getvalue())
         self.assertIn("发布验收：unverified", log.getvalue())

@@ -31,11 +31,10 @@
 （没有 .cmd 可断言了）；那条性质改由「缺 `eng/` 时 `rios-tui.exe -setup` 必须具名
 失败且非零退出」来守 —— 后者验的是**程序自己**的行为，比验一份脚本文本更结实。
 
-## 两件必须记在这里的事（都会让包"装出来才炸"）
+## 发布边界
 
-1. **`tools/fetch_prts_notes.py` 不在 git 索引里**（它是内部件，被 `.gitignore` 摘出过），
-   而首次运行第 3 步要用它 ⇒ 只能从**工作树**取。缺了必须**当场具名报错**，
-   不许"照 git ls-files 找、找不到就少一件"（那正是 §12.3 要防的形状）。
+1. 玩家首次运行只建干员库、关卡索引、敌人库；`fetch_prts_notes.py` 是内部件，
+   不属于 REQUIRED_TOOLS，也不随包分发。运行时必须文件缺失仍须当场具名失败。
 2. **发布树的数据根是 `eng/data/`，不是 `<发布根>/data/`**。Python 侧的
    `DEFAULT_DB_PATH`／名册路径是**硬编码**的 `parents[2]/data`（`ak_tactic/db/build.py:40`、
    `ak_tactic/tui/data.py:239`），而 `ak_tactic` 在 `eng/` 下 ⇒ `parents[2]` 就是 `eng/`。
@@ -107,6 +106,8 @@ def die(msg):
 def build_exes(tree: Path) -> None:
     """建两个 exe。`-trimpath -ldflags "-s -w"` 与 v0.2.0 发布附件同口径。"""
     ldflags = "-s -w"
+    env = {k: v for k, v in os.environ.items()
+           if k.upper() not in {"RIOS_DB", "RIOS_DATA", "RIOS_SIM_BIN", "RIOS_BRIDGE", "RIOS_PYTHON", "PYTHONPATH", "PYTHONHOME"}}
     jobs = [
         (["go", "build", "-trimpath", "-ldflags", ldflags, "-o", str(tree / "rios-sim.exe"), "."],
          ROOT / "rios-sim"),
@@ -114,7 +115,7 @@ def build_exes(tree: Path) -> None:
           "./cmd/rios-tui"], ROOT / "rios-sim"),
     ]
     for cmd, cwd in jobs:
-        rc, out, err = sh(cmd, cwd=cwd)
+        rc, out, err = sh(cmd, cwd=cwd, env=env)
         if rc != 0:
             die("构建失败（%s）：\n%s%s" % (" ".join(cmd[-1:]), out, err))
         print("    建好 %s" % Path(cmd[cmd.index("-o") + 1]).name)
@@ -146,10 +147,7 @@ def copy_eng(tree: Path) -> None:
         for name, why, p in missing:
             lines.append("  · %s（%s）" % (name, why))
             lines.append("    找过：%s" % p)
-        #: ★ 这一条是 §12.6 点名要登记的：fetch_prts_notes.py 是**内部件**，
-        #: 不在 git 索引里 ⇒ 干净克隆里没有它，必须从本机工作树取。
-        lines.append("  处置：fetch_prts_notes.py 属内部件（.gitignore 摘出），"
-                     "干净克隆里本来就没有；打包必须在有它的工作树上做。")
+        lines.append("  处置：恢复上面点名的运行时文件后重新构建；内部备注抓取工具不属于玩家运行时。")
         die("\n".join(lines))
 
 
@@ -219,14 +217,65 @@ def sha256(p: Path) -> str:
     return h.hexdigest()
 
 
+def release_env(tree: Path, *, data_dir: Path | None = None, pin: bool = True) -> dict:
+    """Discard inherited component/data overrides before testing this package."""
+    env = {k: v for k, v in os.environ.items()
+           if k.upper() not in {"RIOS_DB", "RIOS_DATA", "RIOS_SIM_BIN", "RIOS_BRIDGE", "RIOS_PYTHON", "PYTHONPATH", "PYTHONHOME"}}
+    env.update(PYTHONIOENCODING="utf-8", PYTHONUTF8="1", PYTHONDONTWRITEBYTECODE="1", RIOS_PYTHON=sys.executable)
+    if pin:
+        env["RIOS_SIM_BIN"] = str((tree / "rios-sim.exe").resolve())
+        env["RIOS_BRIDGE"] = str((tree / "eng/tools/rios_bridge.py").resolve())
+    if data_dir is not None:
+        env["RIOS_DB"] = str(data_dir.resolve())
+        env["RIOS_DATA"] = str((data_dir / "gamedata").resolve())
+    return env
+
+
+def component_identity(tree: Path) -> dict:
+    """Exercise exact package components offline; fingerprints identify the bytes."""
+    env = release_env(tree)
+    components = {}
+    for name, rel, argv, payload, version_key in (
+        ("engine", "rios-sim.exe", [str((tree / "rios-sim.exe").resolve())], "pong", "version"),
+        ("bridge", "eng/tools/rios_bridge.py", [sys.executable, "-I", str((tree / "eng/tools/rios_bridge.py").resolve())], None, "proto"),
+    ):
+        path = (tree / rel).resolve()
+        if not path.is_file():
+            die("包内组件缺失：%s" % path)
+        before = sha256(path)
+        try:
+            p = subprocess.run(argv, input='{"id":719,"cmd":"ping"}\n', cwd=tree,
+                               env=env, capture_output=True, text=True, encoding="utf-8",
+                               errors="strict", timeout=30)
+        except (OSError, UnicodeError, subprocess.TimeoutExpired):
+            die("包内 %s 身份握手无法完成（启动／编码／超时错误，原始日志不输出）" % name)
+        try:
+            lines = p.stdout.splitlines()
+            reply = json.loads(lines[0]) if len(lines) == 1 else None
+            body = reply.get(payload) if payload and isinstance(reply, dict) else reply
+            if p.returncode != 0 or not isinstance(reply, dict) or reply.get("id") != 719 or reply.get("ok") is not True:
+                raise ValueError("invalid ping envelope/exit")
+            if not isinstance(body, dict) or body.get(version_key) != 1:
+                raise ValueError("unexpected component protocol")
+            if sha256(path) != before:
+                raise ValueError("component changed during probe")
+        except (ValueError, TypeError, IndexError) as exc:
+            die("包内 %s 身份握手失败：%s；rc=%d（原始响应／日志可能包含账号信息，不输出）" % (name, exc, p.returncode))
+        # Do not publish bridge UID/credential state or engine start timestamp.
+        components[name] = {"relative_path": rel, "resolved_path": str(path),
+                            "sha256": before, "size": path.stat().st_size,
+                            "protocol": body[version_key], "ping_id": 719,
+                            "runtime": {k: body[k] for k in ("go", "os", "arch", "python", "impl") if k in body}}
+    return {"schema_version": 1, "components": components}
+
+
 def run_preflight(tree: Path):
     """在**发布树里**跑启动前自检（cwd 就是树本身，免得读到开发树的东西）。
 
     ★ 这一条问的是"**这棵树自己**缺不缺件"，所以显式摘掉 `RIOS_DB`：
     本机环境变量一进来，开发树的库就会被当成"在位"，全新树的读数直接变假绿。
     """
-    env = dict(os.environ)
-    env.pop("RIOS_DB", None)
+    env = release_env(tree, pin=False)
     rc, out, err = sh([str(tree / "rios-tui.exe"), "-preflight"], cwd=tree, timeout=300,
                       env=env)
     return rc, out + err
@@ -281,9 +330,8 @@ def smoke(tree: Path, data_dir: Path | None) -> dict:
     #: （旧的「顺序断言：-setup 在裸 rios-tui.exe 之前」随 `启动.cmd` 一起删掉：没有 .cmd
     #:   就没有那份文本可断言了；等价性质现在落在下面这条，且验的是程序自己而非脚本。）
     print("  · 入口 rios-tui.exe -setup：缺 eng/ 时必须具名失败（stdin 接 NUL，不许暂停）")
-    env_setup = dict(os.environ)
-    #: 与 run_preflight 同理：摘掉 RIOS_DB，让这条判据只问"树自己缺不缺件"。
-    env_setup.pop("RIOS_DB", None)
+    # Negative controls must discover missing package files, never external overrides.
+    env_setup = release_env(tree, pin=False)
     eng_dir2 = tree / "eng"
     bak_dir2 = tree / "eng.bak2"
     eng_dir2.rename(bak_dir2)
@@ -315,11 +363,7 @@ def smoke(tree: Path, data_dir: Path | None) -> dict:
         die("发布验收拒绝：required prerequisites 缺数据 %s/akdb.sqlite；不允许静默跳过" % data_dir)
 
     print("  · 发布树的 exe 跑全量自检（RIOS_DB 指到本机数据，只为把界面跑起来）")
-    env = dict(os.environ)
-    env["RIOS_DB"] = str(data_dir)
-    env["RIOS_SIM_BIN"] = str(tree / "rios-sim.exe")
-    env["PYTHONIOENCODING"] = "utf-8"
-    env["PYTHONUTF8"] = "1"
+    env = release_env(tree, data_dir=data_dir)
     p = subprocess.run([str(tree / "rios-tui.exe"), "-selftest"], cwd=tree, env=env,
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=1800)
@@ -359,11 +403,13 @@ def main() -> int:
 
     print("[4/5] 装完自查（正例 ＋ 两条负对照 ＋ 入口缺件那条）")
     data_dir = ROOT / "data"
+    identity = component_identity(tree)
     verification = smoke(tree, None if args.no_selftest else data_dir)
     # A build bypass is never a verified release, even if a future smoke refactor
     # accidentally returns a green value. Normal verified status comes only from gate.
     if args.no_selftest:
         verification = {"status": "unverified", "reason": "--no-selftest: required selftest not run"}
+    verification["identity"] = identity
     (tree / "verification.json").write_text(
         json.dumps(verification, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 

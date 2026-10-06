@@ -253,13 +253,14 @@ prts.wiki（干员文字资料、敌人页面）。两者的响应都落 `data/c
 | | 位置 | 状态 |
 | --- | --- | --- |
 | Go | `rios-sim/`（由 `ak_tactic/simgo/` 驱动） | **默认引擎**，`Verifier(engine="go")` |
-| Python | `ak_tactic/battle/` | 仍在，且 `verify.py` 称之为**权威实现**；`engine="python"` 显式切换 |
+| Python | `ak_tactic/battle/` | 历史实现保留；`engine="python"` 显式切换。可作差异比较，不是 Go 机制真值标准 |
 
 ★ 这一点必须说清楚，因为它会**静默**改变语义：仓里凡是必须拿到 Python 结果的地方，都要**显式**传
 `engine="python"`。裸 `Verifier()` 现在是 Go。
 
-Go 侧由 `RIOS_SIM_BIN` 指定二进制路径。**不设它不会报错，而是静默落到某个预编译的旧 exe 上**
-——于是同一条命令在两个时刻给出两个数。测任何东西之前先钉住它。
+Python Go 客户端须传明确 exe 或设置 `RIOS_SIM_BIN`；未钉定或指定文件不存在时具名拒绝，**不静默回退到旧二进制或 Python 模拟器**。单次 timeout 覆盖获得连接锁后的写入、flush 和完整响应行等待，不含序列化与锁排队；超时／协议损坏会终止并回收连接，不能继续使用迟到响应。Go TUI 的组件发现规则另有同目录查找，不应混写成 Python 客户端的自动回退。
+
+发布构建隔离继承的引擎、桥、数据与 Python 路径覆盖，包内引擎及桥分别离线握手并记录协议、路径和 SHA256；缺件负例不允许外部组件补位。`--no-selftest` 只生成 **unverified 测试包**，包内 smoke 不等于全部 required 自检或 MAA 实机验证。
 
 ## 作业规程
 
