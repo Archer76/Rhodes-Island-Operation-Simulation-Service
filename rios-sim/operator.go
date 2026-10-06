@@ -588,7 +588,7 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 	//: 行商那一族（`cost: -3` + `interval: 3`）自然落在外面。
 	st.KillCostOnKill = readTraitKillCost(char.Trait)
 	//: 同一条特性的后半句「撤退时返还初始部署费用」（翎羽那一族 7 位都带）。
-	st.RetreatRefund = strings.Contains(stripTraitTags(char.Description), retreatRefundTrait)
+	st.RetreatRefund = isRetreatRefundDescription(char.Description)
 	//: 三个纯文本判据（攻击类型 / 平A 是否治疗 / 弱点伤害）。
 	st.TextDerived = textDerived(char.Description, char.Talents)
 	//: 身份两字段：直接取自 character_table，不做任何推断。

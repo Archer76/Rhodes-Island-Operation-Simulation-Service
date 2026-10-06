@@ -550,6 +550,13 @@ const (
 // 的行使计数会跟着动）——这正是本次跑判据的原因。
 func stripTraitTags(s string) string { return tagRE.ReplaceAllString(s, "") }
 
+// isRetreatRefundDescription 提取面板折算的退费特性判据：剥除富文本标签后
+// 匹配既有短语，不改变取数语义。OperatorStatsFor 将结果传入规格，由模拟器
+// 在实际撤退时处理退款；BuildDeployRows 不预测退款或部署时刻。
+func isRetreatRefundDescription(desc string) bool {
+	return strings.Contains(stripTraitTags(desc), retreatRefundTrait)
+}
+
 // healsOnSkillTrait 是「技能可以治疗友方单位」这条特性的判据词。
 // 与 `Heals` 一样是**整串短语**匹配——差一个字就会静默变成「从不开技能治疗」，
 // 而那个症状（斑点一整场打不出一次治疗）看起来像「治疗没接」。
