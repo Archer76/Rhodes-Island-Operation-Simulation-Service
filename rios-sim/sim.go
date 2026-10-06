@@ -27,6 +27,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -519,6 +520,15 @@ func (o *operator) canBlock(e *enemy) bool {
 
 // runSim 把一份规格推成判决。
 func runSim(spec *Spec) (*Verdict, error) {
+	return runSimContext(context.Background(), spec)
+}
+
+// runSimContext cancels at initialization and frame boundaries. A cancelled run
+// returns no verdict: an unfinished battle is not a simulation result.
+func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
+	if err := cancelCtx.Err(); err != nil {
+		return nil, err
+	}
 	if gaps := specMechanismGaps(spec); len(gaps) > 0 {
 		return nil, &mechanisms.IncompleteError{Placeholders: gaps}
 	}
@@ -599,11 +609,21 @@ func runSim(spec *Spec) (*Verdict, error) {
 			o.sim = ctx
 		}
 	}
-	if err := mechanisms.Start(ctx); err != nil {
+	if err := cancelCtx.Err(); err != nil {
 		return nil, err
+	}
+	startErr := mechanisms.Start(ctx)
+	if err := cancelCtx.Err(); err != nil {
+		return nil, err
+	}
+	if startErr != nil {
+		return nil, startErr
 	}
 	won := false
 	for t < spec.MaxTime {
+		if err := cancelCtx.Err(); err != nil {
+			return nil, err
+		}
 		// ---- 0. 费用回复（1689-1692）
 		costTimer += dt
 		if costTimer >= spec.CostTime && spec.CostTime > 0 {
