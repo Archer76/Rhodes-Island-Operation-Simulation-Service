@@ -66,6 +66,8 @@ type DeployOrder struct {
 	Direction   string   `json:"direction"`
 	Skill       int      `json:"skill"`
 	Mastery     int      `json:"mastery"`
+	MasterySet  bool     `json:"-"`
+	SkillLevel  *int     `json:"skill_level,omitempty"`
 	Elite       *int     `json:"elite"`
 	Level       *int     `json:"level"`
 	Potential   *int     `json:"potential"`
@@ -280,15 +282,27 @@ func ParsePlan(obj map[string]json.RawMessage) (PlayPlan, error) {
 				"%s 的 skill 是对象：`_skill_from_json` 那一支（按槽位/等级解成技能 id）本轮未接",
 				name)
 		}
-		if d.Skill, err = pyIntOr(m, "skill", 0); err != nil {
-			return plan, fmt.Errorf("%s 的%v", name, err)
+		if raw, ok := m["skill"]; ok && strings.TrimSpace(string(raw)) != "null" {
+			if d.Skill, err = trainingInt(raw, "skill", 0, 3); err != nil {
+				return plan, fmt.Errorf("%s 的%v", name, err)
+			}
 		}
 		//: `__post_init__` 第 ③ 条：技能槽 0–3。
 		if d.Skill < 0 || d.Skill > 3 {
 			return plan, fmt.Errorf("%s 的技能槽 %d 越界（0–3）", name, d.Skill)
 		}
-		if d.Mastery, err = pyIntOr(m, "mastery", 0); err != nil {
-			return plan, fmt.Errorf("%s 的%v", name, err)
+		if raw, ok := m["mastery"]; ok && strings.TrimSpace(string(raw)) != "null" {
+			d.MasterySet = true
+			if d.Mastery, err = trainingInt(raw, "mastery", 0, 3); err != nil {
+				return plan, fmt.Errorf("%s 的%v", name, err)
+			}
+		}
+		if raw, ok := m["skill_level"]; ok && strings.TrimSpace(string(raw)) != "null" {
+			v, e := trainingInt(raw, "skill_level", 1, 10)
+			if e != nil {
+				return plan, fmt.Errorf("%s 的%v", name, e)
+			}
+			d.SkillLevel = &v
 		}
 		if d.Elite, err = pyIntOrNil(m, "elite"); err != nil {
 			return plan, fmt.Errorf("%s 的%v", name, err)

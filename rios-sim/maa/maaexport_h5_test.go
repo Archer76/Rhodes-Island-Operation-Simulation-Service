@@ -10,7 +10,7 @@ import (
 )
 
 func h5PlanRoster() (core.PlayPlan, *core.RosterRead) {
-	return core.PlayPlan{Stage: "synthetic", Deploys: []core.DeployOrder{{Operator: "测试干员", Skill: 1}}}, &core.RosterRead{Entries: []core.RosterEntry{{Name: "测试干员", Module: ptr("mod_x"), ModuleLevel: 3}}}
+	return core.PlayPlan{Stage: "synthetic", Deploys: []core.DeployOrder{{Operator: "石英", Skill: 1}}}, &core.RosterRead{Entries: []core.RosterEntry{{Name: "石英", CharID: "char_4063_quartz", Module: ptr("mod_x"), ModuleLevel: 3}}}
 }
 
 func h5DB(t *testing.T, withTable bool) *sql.DB {
@@ -85,7 +85,7 @@ func TestH5UnknownModuleRequirementsFailNamed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			plan, roster := h5PlanRoster()
 			_, err := ToMaa(plan, roster, tc.table, nil, MaaOptions{})
-			if !errors.Is(err, ErrModuleRequirement) || !strings.Contains(err.Error(), "测试干员") || !strings.Contains(err.Error(), tc.id) {
+			if !errors.Is(err, ErrModuleRequirement) || !strings.Contains(err.Error(), "石英") || !strings.Contains(err.Error(), tc.id) {
 				t.Fatalf("not named: %v", err)
 			}
 			if _, err := UsedOperators(plan, roster, tc.table); !errors.Is(err, ErrModuleRequirement) {

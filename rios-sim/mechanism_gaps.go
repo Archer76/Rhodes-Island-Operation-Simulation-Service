@@ -238,16 +238,16 @@ func operatorMechanismGapsWithInputs(r DeployRow, st *OperatorStats, talents []r
 	if st.AttackSpeedBonus.WhenFree != 0 {
 		gaps = append(gaps, mechanisms.Gap{ID: "module.attack_speed_when_free", Status: "unimplemented", Source: "module", Operator: st.Name, CharID: r.Entry.CharID, SourceID: st.Module, Key: "aspd_when_free", RawValue: st.AttackSpeedBonus.WhenFree, Reason: "未阻挡条件攻速尚未接入战斗"})
 	}
-	ids, err := OperatorSkillIDs(r.Entry.CharID)
+	id, slot, err := selectedSkillID(r.Entry.CharID, r.Skill)
 	if err != nil {
 		return nil, err
 	}
-	slot := r.Skill
-	if slot == 0 {
-		slot = 1
+	level, err := deployRowSkillLevel(r)
+	if err != nil {
+		return nil, err
 	}
-	if len(ids) > 0 && slot >= 1 && slot <= len(ids) {
-		meta, err := inputs.skillMeta(ids[slot-1], SkillLevelDefault)
+	if id != "" {
+		meta, err := inputs.skillMeta(id, level)
 		if err != nil {
 			return nil, err
 		}

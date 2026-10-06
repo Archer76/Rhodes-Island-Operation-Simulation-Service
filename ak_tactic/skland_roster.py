@@ -156,6 +156,7 @@ def build_roster(uid: str | None = None, *, raw: dict | None = None,
             "module_alt": best_alt if best_alt != usable else None,
             "module_alt_level": best_alt_lv if best_alt != usable else 0,
             "modules": detail,
+            "mainSkillLvl": o.get("mainSkillLvl"),
             "defaultSkillId": o.get("defaultSkillId") or "",
             "mastery": {s["skillId"]: s["specializeLevel"] for s in o["skills"]},
         })

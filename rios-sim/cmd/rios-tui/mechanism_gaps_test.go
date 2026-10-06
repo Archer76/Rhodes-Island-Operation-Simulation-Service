@@ -60,7 +60,7 @@ func TestCompleteWithExcludedCandidatesDisplaysAndExports(t *testing.T) {
 	}
 	c := &appCtx{roster: &rosterData{Path: roster}, guidesDir: dir, stage: &data.StageRecord{Code: "TEST", LevelID: "test"}}
 	s := newSolveScreen(solveParams{}, []int{4, 6})
-	out := solveOutView{Status: "complete", OK: true, Stars: 3, Plan: json.RawMessage(`{"stage":"test","deploys":[{"operator":"测试干员","position":[1,2],"direction":"right","skill":1}]}`), Verdict: json.RawMessage(`{"status":"complete","won":true,"leaks":0}`), Placeholders: []mechanisms.Gap{testGap()}}
+	out := solveOutView{Status: "complete", OK: true, Stars: 3, Plan: json.RawMessage(`{"stage":"test","deploys":[{"operator":"石英","position":[1,2],"direction":"right","skill":1}]}`), Verdict: json.RawMessage(`{"status":"complete","won":true,"leaks":0}`), Placeholders: []mechanisms.Gap{testGap()}}
 	a := s.onMsg(newRoot(c, s), solveRoundMsg{taskID: s.taskID, depth: 4, out: out})
 	if a.kind != actPush || c.solveStatus != "complete" || c.solveStars != 3 || len(c.solvePlan) == 0 {
 		t.Fatal("complete plan not retained")
@@ -70,7 +70,7 @@ func TestCompleteWithExcludedCandidatesDisplaysAndExports(t *testing.T) {
 	}
 	rs := newResultScreen()
 	view := rs.view(c)
-	for _, want := range []string{"排除候选，非结果缺口", "胜利", "用到的干员", "测试干员"} {
+	for _, want := range []string{"排除候选，非结果缺口", "胜利", "用到的干员", "石英"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("missing %q: %s", want, view)
 		}
@@ -123,7 +123,7 @@ func TestLaterIncompletePreservesEarlierCompletePlan(t *testing.T) {
 	s := newSolveScreen(solveParams{}, []int{4, 6, 8})
 	// A fully judged two-star plan from the earlier round is still usable.
 	s.best = solveOutView{Status: "complete", Stars: 2,
-		Plan:    json.RawMessage(`{"stage":"test","deploys":[{"operator":"测试干员","position":[1,2],"direction":"right","skill":1}]}`),
+		Plan:    json.RawMessage(`{"stage":"test","deploys":[{"operator":"石英","position":[1,2],"direction":"right","skill":1}]}`),
 		Verdict: json.RawMessage(`{"status":"complete","won":true,"leaks":1}`)}
 	s.haveBest, s.idx = true, 1
 	a := s.onMsg(newRoot(c, s), solveRoundMsg{taskID: s.taskID, round: 1, depth: 6,

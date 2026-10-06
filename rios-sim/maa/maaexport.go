@@ -200,11 +200,12 @@ func pickFloat(a, b *float64) *float64 {
 // `ModuleType` / `ModuleLevel` 是给人看的（结果屏与 `doc.details` 都走 `ModText`），
 // 进机器字段的只有 `ModuleSlot` —— 见 `ToMaa`：它逐键组装，多出来的键不会漏进 JSON。
 type UsedOperator struct {
-	Name      string
-	Position  [2]int
-	Direction string
-	Skill     int
-	Mastery   int
+	Name       string
+	Position   [2]int
+	Direction  string
+	Skill      int
+	Mastery    int
+	SkillLevel int
 	// ⚠ Elite / Level / Potential 在本实现里**不会是 nil**：名册那侧的类型是
 	// 非指针整数，取不到就是 0（裁定二）。这里保留指针是为了与 Python 的
 	// `None` 语义对齐、也为了 `requirements` 的 null 分支有地方落。
@@ -230,7 +231,59 @@ type UsedOperator struct {
 // ToMaa 先统一解析有效值，再按部署需求惰性加载。
 func UsedOperators(plan core.PlayPlan, roster *core.RosterRead,
 	tbl map[string]ModuleInfo) ([]UsedOperator, error) {
-	return hydrateModules(resolveUsedOperators(plan, roster), tbl)
+	ops, err := resolveUsedTraining(plan, roster)
+	if err != nil {
+		return nil, err
+	}
+	return hydrateModules(ops, tbl)
+}
+
+func resolveUsedTraining(plan core.PlayPlan, roster *core.RosterRead) ([]UsedOperator, error) {
+	ops := resolveUsedOperators(plan, roster)
+	var catalog *core.SkillCatalog
+	for i := range ops {
+		dep := plan.Deploys[i]
+		var entry *core.RosterEntry
+		if roster != nil {
+			for j := range roster.Entries {
+				if roster.Entries[j].Name == dep.Operator {
+					entry = &roster.Entries[j]
+					break
+				}
+			}
+		}
+		if catalog == nil {
+			var err error
+			catalog, err = core.LoadSkillCatalog()
+			if err != nil {
+				return nil, err
+			}
+		}
+		cid := ""
+		if entry != nil {
+			cid = entry.CharID
+		}
+		if cid == "" {
+			// Saved self-contained plans identify a character by its in-game name.
+			for id, raw := range catalog.Characters {
+				var c struct {
+					Name string `json:"name"`
+				}
+				if json.Unmarshal(raw, &c) == nil && c.Name == dep.Operator {
+					if cid != "" {
+						return nil, fmt.Errorf("%s名称对应多个形态，导出需要名册charId", dep.Operator)
+					}
+					cid = id
+				}
+			}
+		}
+		slot, level, mastery, err := catalog.Resolve(dep, entry, cid)
+		if err != nil {
+			return nil, fmt.Errorf("%s技能练度：%w", dep.Operator, err)
+		}
+		ops[i].Skill, ops[i].SkillLevel, ops[i].Mastery = slot, level, mastery
+	}
+	return ops, nil
 }
 
 func resolveUsedOperators(plan core.PlayPlan, roster *core.RosterRead) []UsedOperator {
@@ -249,7 +302,7 @@ func resolveUsedOperators(plan core.PlayPlan, roster *core.RosterRead) []UsedOpe
 			Position:  dep.Position,
 			Direction: dep.Direction,
 			Skill:     dep.Skill,
-			// 名册那侧没有 mastery 这一列，`_pick` 的退回永远是空 ⇒ 就是打法自带的值。
+			// 此处先保留请求值；resolveUsedTraining统一按名册真值解析并校验冲突。
 			Mastery: dep.Mastery,
 			// 裁定二：取不到写 0（Python 写 None）。见包文档。
 			Elite:       pickInt(dep.Elite, &entry.Elite),
@@ -574,7 +627,10 @@ func ToMaa(plan core.PlayPlan, roster *core.RosterRead, tbl map[string]ModuleInf
 	if len(plan.Retreats) != 0 {
 		return MaaJob{}, fmt.Errorf("%w：retreats[0] %s", ErrRetreatTiming, plan.Retreats[0].Operator)
 	}
-	ops := resolveUsedOperators(plan, roster)
+	ops, err := resolveUsedTraining(plan, roster)
+	if err != nil {
+		return MaaJob{}, err
+	}
 	if tbl == nil && hasModule(ops) {
 		t, err := ModuleTable(db)
 		if err != nil {
@@ -587,7 +643,7 @@ func ToMaa(plan core.PlayPlan, roster *core.RosterRead, tbl map[string]ModuleInf
 		}
 		tbl = t
 	}
-	ops, err := hydrateModules(ops, tbl)
+	ops, err = hydrateModules(ops, tbl)
 	if err != nil {
 		return MaaJob{}, err
 	}
@@ -600,13 +656,13 @@ func ToMaa(plan core.PlayPlan, roster *core.RosterRead, tbl map[string]ModuleInf
 		if plan.Deploys[i].AutoSkill {
 			usage = SkillUsage(db, charIDOf(roster, op.Name), op.Skill)
 		}
-		if prev, ok := byName[op.Name]; ok && (prev.Skill != op.Skill || prev.SkillUsage != usage) {
+		if prev, ok := byName[op.Name]; ok && (prev.Skill != op.Skill || prev.SkillUsage != usage || prev.Requirements.SkillLevel != op.SkillLevel) {
 			return MaaJob{}, fmt.Errorf("%w：deploy[%d] %s", ErrAutoSkillFidelity, i, op.Name)
 		}
 		req := MaaRequirements{
 			Elite: op.Elite, Level: op.Level,
 			// 官方口径：1–7 是技能等级，8/9/10 即专一/专二/专三
-			SkillLevel: 7 + op.Mastery,
+			SkillLevel: op.SkillLevel,
 		}
 		if op.ModuleSlot != nil {
 			req.Module = op.ModuleSlot

@@ -180,20 +180,17 @@ func UnsupportedGate(level, path string, q GateQuery) (GateOut, error) {
 
 	// ---- 逐条部署：技能（`spec.py:181-193`）----
 	//
-	// `_attach_skill_for_spec` 的判据：`skill` 是 0／None 就清空并放行；
-	// 是整数（且非 0）就**报「槽号」**（调用方得先绑 SkillLevel）；
-	// 是对象（已经绑好的 `SkillLevel`）才走「技能可用性」那条路 —— 那一条
-	// 是 `unported`（Go 的计划读取器**故意**拒收对象形态，见 `plan.go:274`
-	// 与 `tools/check_plan_go.py:131` 那条已登记的分歧）。
+	// Go 构造规格已按名册实际等级完成槽号绑定，不能再照旧 Python
+	// 未绑定整数槽的 blanket 理由拒判。槽号计数保留；实际可用性由绑定层
+	// 严格校验，未完成技能机制仍由具名占位拒判。对象技能输入仍具名拒收。
 	out.Scanned["deploy"] = 0
 	if plan != nil {
 		out.Scanned["deploy"] = len(plan.Deploys)
 		for _, d := range plan.Deploys {
 			if d.Skill != 0 {
 				out.Covered["skill_slot"]++
-				out.Reasons = append(out.Reasons, fmt.Sprintf(
-					"技能槽号 %d（%s）：调用方要先把 SkillLevel 绑好再生成规格",
-					d.Skill, d.Operator))
+				// Slots are resolved and bound by BuildDeployRows/BuildOperators.
+				// Skill availability and unimplemented mechanics have their own strict guards.
 			}
 		}
 	}

@@ -48,16 +48,17 @@ const defaultPerOp = 6
 // 漏进排序，把 `perOp` 截断边界上的候选换掉）。
 // 这里排过序只是为了输出确定 —— 判据按集合比，不逐元素比顺序。
 type CandidateRow struct {
-	Operator  string   `json:"operator"`
-	CharID    string   `json:"char_id"`
-	Position  [2]int   `json:"position"`
-	Direction string   `json:"direction"`
-	Skill     int      `json:"skill"`
-	Mastery   int      `json:"mastery"`
-	Dwell     float64  `json:"dwell"`
-	Visits    int      `json:"visits"`
-	Value     float64  `json:"value"`
-	Cells     [][2]int `json:"cells"`
+	Operator   string   `json:"operator"`
+	CharID     string   `json:"char_id"`
+	Position   [2]int   `json:"position"`
+	Direction  string   `json:"direction"`
+	Skill      int      `json:"skill"`
+	Mastery    int      `json:"mastery"`
+	SkillLevel int      `json:"skill_level"`
+	Dwell      float64  `json:"dwell"`
+	Visits     int      `json:"visits"`
+	Value      float64  `json:"value"`
+	Cells      [][2]int `json:"cells"`
 }
 
 // CandidateStats 是**行使计数**：这一层把候选从多少压到了多少。
@@ -214,6 +215,18 @@ func CandidatesFor(level, path, difficulty string, q CandidatesQuery) (Candidate
 		Params: map[string]any{"level": level, "path": path,
 			"difficulty": difficulty, "per_op": q.PerOp,
 			"operators": len(q.Operators)}}
+	selected := map[string]bool{}
+	for _, name := range q.Operators {
+		selected[name] = true
+	}
+	for name, v := range q.Skills {
+		if !selected[name] {
+			return out, fmt.Errorf("skills[%s] 不在搜索名单", name)
+		}
+		if v[0] < 0 || v[0] > 3 || v[1] < 0 || v[1] > 3 {
+			return out, fmt.Errorf("skills[%s] 技能槽/专精越界（0–3）", name)
+		}
+	}
 	var st *Stage
 	var err error
 	if q.inputs != nil {
@@ -307,6 +320,14 @@ func CandidatesFor(level, path, difficulty string, q CandidatesQuery) (Candidate
 			stats.NoCharID++
 			continue
 		}
+		d := DeployOrder{Operator: name}
+		if v, ok := q.Skills[name]; ok {
+			d.Skill, d.Mastery, d.MasterySet = v[0], v[1], true
+		}
+		slot, skillLevel, mastery, err := resolveDeploymentSkill(d, *roster, cid, q.inputs)
+		if err != nil {
+			return out, err
+		}
 		//: 练度折算失败 ⇒ 照 Python 跳过这一位（那一侧是 `except: continue`）
 		cfg := OperatorCalcConfig{CharID: cid, Elite: entry.Elite,
 			Level: entry.Level, Potential: entry.Potential,
@@ -359,11 +380,6 @@ func CandidatesFor(level, path, difficulty string, q CandidatesQuery) (Candidate
 		}
 		base := withSelfCell(raw, coversSelf)
 
-		slot, mastery := 0, 0
-		if v, ok := q.Skills[name]; ok {
-			slot, mastery = v[0], v[1]
-		}
-
 		local := []CandidateRow{}
 		for _, pos := range cells {
 			if !spots[pos] {
@@ -405,7 +421,7 @@ func CandidatesFor(level, path, difficulty string, q CandidatesQuery) (Candidate
 				})
 				local = append(local, CandidateRow{
 					Operator: name, CharID: cid, Position: pos, Direction: d,
-					Skill: slot, Mastery: mastery, Dwell: dwell,
+					Skill: slot, Mastery: mastery, SkillLevel: skillLevel, Dwell: dwell,
 					Visits: index.Count(cs, negInf(), posInf()),
 					Value:  dwell * atk, Cells: cs,
 				})

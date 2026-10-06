@@ -947,11 +947,15 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 	//: ---- 技能那一支（槽号 → 技能 id → 状态机 ＋ active 快照）----
 	//:
 	//: 口径见 `skillbind.go` 的文件头：计划里的槽号 `0` **不等于「不用技能」**
-	//: （博士 2026-09-24），除一二星外 0 即默认技能＝技 1；技能等级取 7。
+	//: 未指定时选技1；技能等级取部署行按名册实际练度解析的等级。
 	//:
 	//: ★ 未识别的黑板键**不许静默丢**：计数进 `covered`，名字进 bundle 的
 	//: `SkillUnknownKeys`（调用方在 `BuildOperators` 里汇总）。
-	if sk, act, unknown, err := bindSkillToWithInputs(e.CharID, r.Skill, atk, def, res,
+	skillLevel, err := deployRowSkillLevel(r)
+	if err != nil {
+		return OperatorOut{}, err
+	}
+	if sk, act, unknown, err := bindSkillAtLevelWithInputs(e.CharID, r.Skill, skillLevel, atk, def, res,
 		maxHP, spd, interval, st.TextDerived.DamageType, inputs); err != nil {
 		return OperatorOut{}, fmt.Errorf("%s（%s）的技能绑定：%v", r.Operator, e.CharID, err)
 	} else if sk != nil {

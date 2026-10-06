@@ -101,10 +101,10 @@ func automaticGoldenFixture(t *testing.T, name string) []byte {
 func goldenRoster() *core.RosterRead {
 	return &core.RosterRead{Entries: []core.RosterEntry{
 		{Name: "赤刃明霄陈", CharID: "char_1050_chen3", Elite: 2, Level: 90, Potential: 3,
-			Module: ptr("uniequip_002_chen3"), ModuleLevel: 3},
-		{Name: "予愿安洁莉娜", CharID: "char_1015_aglna2", Elite: 2, Level: 60, Potential: 1},
+			Module: ptr("uniequip_002_chen3"), ModuleLevel: 3, Mastery: map[string]int{"skchr_chen3_3": 3}},
+		{Name: "予愿安洁莉娜", CharID: "char_1015_aglna2", Elite: 2, Level: 60, Potential: 1, Mastery: map[string]int{"skchr_aglna2_3": 3}},
 		{Name: "圣聆初雪", CharID: "char_1046_sbell2", Elite: 2, Level: 90, Potential: 1,
-			Module: ptr("uniequip_002_sbell2"), ModuleLevel: 0},
+			Module: ptr("uniequip_002_sbell2"), ModuleLevel: 0, Mastery: map[string]int{"skchr_sbell2_2": 3}},
 	}}
 }
 
@@ -336,7 +336,7 @@ func TestDifficultyCodes(t *testing.T) {
 		}
 	}
 	// `difficulty` 为 0 时整个键消失（写 0 会让 MAA 那边的读法变味）
-	job, err := ToMaa(automaticGoldenPlan(), goldenRoster(), handTable(), nil, MaaOptions{})
+	job, err := ToMaa(automaticGoldenPlan(), nil, handTable(), nil, MaaOptions{})
 	if err != nil {
 		t.Fatalf("组装失败：%v", err)
 	}
@@ -501,7 +501,7 @@ func TestSkillUsage(t *testing.T) {
 //	不许静默退化成「无模组」—— 那会让 MAA 少一条要求。
 func TestLazyModuleTable(t *testing.T) {
 	plan := core.PlayPlan{Stage: "s", Deploys: []core.DeployOrder{
-		{Operator: "甲", Position: [2]int{1, 1}, Direction: "Right", Skill: 0},
+		{Operator: "玫兰莎", Position: [2]int{1, 1}, Direction: "Right", Skill: 0},
 	}}
 	job, err := ToMaa(plan, nil, nil, nil, MaaOptions{})
 	if err != nil {
@@ -597,6 +597,7 @@ func TestH3AutoSkillFidelity(t *testing.T) {
 	if _, err := ToMaa(plan, nil, nil, nil, MaaOptions{}); err != nil {
 		t.Fatalf("同名相同技能配置正对照：%v", err)
 	}
+	plan.Deploys[0].Operator, plan.Deploys[1].Operator = "石英", "石英" // both real slots exist
 	plan.Deploys[1].Skill = 2
 	if _, err := ToMaa(plan, nil, nil, nil, MaaOptions{}); !errors.Is(err, ErrAutoSkillFidelity) {
 		t.Fatalf("同名不同技能也不能静默导出：%v", err)
@@ -618,7 +619,7 @@ func TestH3AutoSkillFidelity(t *testing.T) {
 // TestWriteJob 序号追加、非法字符替换、空关卡名退路，以及**写出去能被读回来**。
 func TestWriteJob(t *testing.T) {
 	dir := t.TempDir()
-	job, err := ToMaa(automaticGoldenPlan(), goldenRoster(), handTable(), nil, MaaOptions{})
+	job, err := ToMaa(automaticGoldenPlan(), nil, handTable(), nil, MaaOptions{})
 	if err != nil {
 		t.Fatalf("组装失败：%v", err)
 	}
@@ -677,13 +678,8 @@ func TestWriteJob(t *testing.T) {
 // 这条是 `MarshalJob` 为什么必须走 Encoder 而不是 `json.MarshalIndent` 的理由，
 // 单独立一条，免得日后有人「顺手简化」成 MarshalIndent。
 func TestEscapeHTMLOff(t *testing.T) {
-	plan := core.PlayPlan{Stage: "s", Deploys: []core.DeployOrder{
-		{Operator: "甲&乙", Position: [2]int{1, 1}, Direction: "Right"},
-	}}
-	job, err := ToMaa(plan, nil, nil, nil, MaaOptions{Details: "a<b>c"})
-	if err != nil {
-		t.Fatalf("组装失败：%v", err)
-	}
+	job := MaaJob{Opers: []MaaOper{{Name: "甲&乙"}}}
+	job.Doc.Details = "a<b>c"
 	blob, _ := MarshalJob(job)
 	for _, bad := range []string{`\u0026`, `\u003c`, `\u003e`} {
 		if bytes.Contains(blob, []byte(bad)) {
@@ -809,8 +805,8 @@ func TestSupportOperIsNameOnly(t *testing.T) {
 // 「Go 写 0 ∧ Python 印 None」，哪天口径变了这条会当场变红，提醒改登记。
 func TestDegenerateDivergence(t *testing.T) {
 	plan := core.PlayPlan{Stage: "main_01-07", Deploys: []core.DeployOrder{
-		{Operator: "甲", Position: [2]int{1, 1}, Direction: "Right"},
-		{Operator: "乙", Position: [2]int{2, 1}, Direction: "Right", Skill: 2, Mastery: 1},
+		{Operator: "玫兰莎", Position: [2]int{1, 1}, Direction: "Right"},
+		{Operator: "石英", Position: [2]int{2, 1}, Direction: "Right", Skill: 2, Mastery: 1},
 	}}
 	job, err := ToMaa(plan, nil, nil, nil, MaaOptions{})
 	if err != nil {

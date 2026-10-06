@@ -185,12 +185,19 @@ func newAppCtx(stages []data.StageRecord, zones []data.ZoneRecord) *appCtx {
 // 怎么补，不许静默跑出一个空列表 —— 那与「这游戏没有关卡」长得一样）。
 func resolveDataDir() error {
 	if v := os.Getenv("RIOS_DB"); v != "" {
-		return nil
+		root, err := filepath.Abs(v)
+		if err != nil {
+			return err
+		}
+		return os.Setenv("RIOS_DATA", filepath.Join(root, "gamedata"))
 	}
 	tried := dataDirCandidates()
 	for _, c := range tried {
 		if st, err := os.Stat(filepath.Join(c, "akdb.sqlite")); err == nil && !st.IsDir() {
-			return os.Setenv("RIOS_DB", c)
+			if err := os.Setenv("RIOS_DB", c); err != nil {
+				return err
+			}
+			return os.Setenv("RIOS_DATA", filepath.Join(c, "gamedata"))
 		}
 	}
 	return fmt.Errorf("★ 找不到 akdb.sqlite，找过这两处：\n    %s\n"+

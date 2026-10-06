@@ -249,6 +249,11 @@ func planFromState(stageID string, state []CandidateRow,
 			Operator: c.Operator, Position: c.Position,
 			Direction: c.Direction, Skill: c.Skill, Mastery: c.Mastery,
 		}
+		if c.SkillLevel != 0 {
+			v := c.SkillLevel
+			d.SkillLevel = &v
+			d.MasterySet = true
+		}
 		if e, ok := byName[c.Operator]; ok {
 			//: 只写**名册里真的有**的字段（`RosterEntry` 的零值不算「有」：
 			//: 权威那边判的是 `e.get(k) is not None`）

@@ -83,6 +83,8 @@ type DeployRow struct {
 	//: 没有技能之外，0 都会选到**玩家的默认技能**；测试期间把 `0` 认定为 `1`。
 	//: 绑定发生在 `buildOperatorOut`（走 `OperatorSkillIDs` 把槽号映射成技能 id）。
 	Skill       int
+	Mastery     int
+	SkillLevel  int
 	WaitForCost bool
 }
 
@@ -127,10 +129,14 @@ func buildDeployRowsWithInputs(plan PlayPlan, roster RosterRead, stage *Stage, i
 		if d.Time != nil {
 			at = *d.Time
 		}
+		slot, skillLevel, mastery, err := resolveDeploymentSkill(d, roster, e.CharID, inputs)
+		if err != nil {
+			return nil, fmt.Errorf("%s 的技能练度：%w", d.Operator, err)
+		}
 		rows = append(rows, DeployRow{
 			PlanIdx: i, Operator: d.Operator, Position: d.Position,
 			Direction: d.Direction, Entry: e, Cost: cost, At: at,
-			AutoSkill: d.AutoSkill, Skill: d.Skill, WaitForCost: d.Time == nil,
+			AutoSkill: d.AutoSkill, Skill: slot, Mastery: mastery, SkillLevel: skillLevel, WaitForCost: d.Time == nil,
 		})
 	}
 	// Preserve plan identity/order. Explicit deadlines are independent at runtime.

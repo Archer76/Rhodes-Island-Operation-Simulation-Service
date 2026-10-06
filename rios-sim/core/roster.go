@@ -44,13 +44,15 @@ import (
 
 // RosterEntry 是名册里一名干员的练度那一行。
 type RosterEntry struct {
-	Name        string  `json:"name"`
-	CharID      string  `json:"char_id"`
-	Elite       int     `json:"elite"`
-	Level       int     `json:"level"`
-	Potential   int     `json:"potential"`
-	Module      *string `json:"module"` // nil = 没带模组（**不用空串顶替**）
-	ModuleLevel int     `json:"module_level"`
+	Name        string         `json:"name"`
+	CharID      string         `json:"char_id"`
+	Elite       int            `json:"elite"`
+	Level       int            `json:"level"`
+	Potential   int            `json:"potential"`
+	Module      *string        `json:"module"` // nil = 没带模组（**不用空串顶替**）
+	ModuleLevel int            `json:"module_level"`
+	SkillLevel  *int           `json:"mainSkillLvl,omitempty"`
+	Mastery     map[string]int `json:"mastery,omitempty"`
 }
 
 // RosterRead 是 `roster` 的应答。
@@ -260,12 +262,35 @@ func ParseRosterBlob(data []byte, label string) (RosterRead, error) {
 		} else if has {
 			module = &s
 		}
+		var skillLevel *int
+		if raw, ok := m["mainSkillLvl"]; ok && strings.TrimSpace(string(raw)) != "null" {
+			v, e := trainingInt(raw, "mainSkillLvl", 1, 7)
+			if e != nil {
+				return out, fmt.Errorf("名册 %s：%w", name, e)
+			}
+			skillLevel = &v
+		}
+		mastery := map[string]int{}
+		if raw, ok := m["mastery"]; ok && strings.TrimSpace(string(raw)) != "null" {
+			var values map[string]json.RawMessage
+			if e := json.Unmarshal(raw, &values); e != nil {
+				return out, fmt.Errorf("名册 %s 的 mastery 不是技能ID映射：%w", name, e)
+			}
+			for id, value := range values {
+				v, e := trainingInt(value, "mastery["+id+"]", 0, 3)
+				if e != nil {
+					return out, fmt.Errorf("名册 %s：%w", name, e)
+				}
+				mastery[id] = v
+			}
+		}
 		if _, seen := byName[name]; !seen {
 			order = append(order, name)
 		}
 		byName[name] = RosterEntry{
 			Name: name, CharID: cid, Elite: elite, Level: level,
 			Potential: potential, Module: module, ModuleLevel: modLevel,
+			SkillLevel: skillLevel, Mastery: mastery,
 		}
 	}
 

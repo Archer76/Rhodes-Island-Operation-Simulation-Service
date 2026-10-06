@@ -5,9 +5,8 @@
 //  1. **槽号**：计划里的 `deploys[*].skill` 是**技能槽号**（0–3）。按博士 2026-09-24 的
 //     判定口径，**`0` 不等于「不用技能」**——除了一二星干员是真的没有技能之外，0 都会选到
 //     **玩家的默认技能**；测试期间把 `0` 认定为 `1`。
-//  2. **技能等级**：计划**不带** `skill_level`，按原版 `Deployment` 的默认值
-//     **7**（`ak_tactic/frontend/schedule.py:66` 的 `skill_level: int = 7`）。
-//     专精（`mastery`）是另一个独立入参，3★ 的技能只有 7 级、没有专精，先不接。
+//  2. **技能等级**：生产部署先按名册实际练度解析；普通技能等级缺失默认7，
+//     专一/二/三对应8/9/10。绑定与机制占位必须消费同一个解析等级。
 //
 // ## 为什么两半分开算
 //
@@ -28,9 +27,8 @@ import (
 	"math"
 )
 
-// SkillLevelDefault 是计划不带 `skill_level` 时用的技能等级。
-//
-// 出处：`ak_tactic/frontend/schedule.py:66` 的 `skill_level: int = 7`。
+// SkillLevelDefault 是名册普通技能等级缺失时的默认等级（博士裁定）。
+// 生产先解析名册实际技能等级与专精；兼容无名册调用才直接用此默认值。
 const SkillLevelDefault = 7
 
 // bindSkillTo 算出一名干员这次部署绑的技能的 (状态机, active 快照, 未识别键)。
@@ -47,27 +45,21 @@ func bindSkillTo(charID string, slot int, baseATK, baseDEF, baseRES, baseMaxHP,
 	return bindSkillToWithInputs(charID, slot, baseATK, baseDEF, baseRES, baseMaxHP, baseASPD, baseInterval, baseDamageType, nil)
 }
 func bindSkillToWithInputs(charID string, slot int, baseATK, baseDEF, baseRES, baseMaxHP, baseASPD, baseInterval float64, baseDamageType string, inputs *buildInputs) (*SkillSpec, *Profile, []string, error) {
-	if slot == 0 {
-		//: ★ 博士口径：0 ＝ 默认技能 ＝ 技 1（一二星没有技能槽，下面 `len(ids)==0` 兜住）。
-		slot = 1
-	}
-	ids, err := OperatorSkillIDs(charID)
+	return bindSkillAtLevelWithInputs(charID, slot, SkillLevelDefault, baseATK, baseDEF, baseRES, baseMaxHP, baseASPD, baseInterval, baseDamageType, inputs)
+}
+
+func bindSkillAtLevelWithInputs(charID string, slot, level int, baseATK, baseDEF, baseRES, baseMaxHP, baseASPD, baseInterval float64, baseDamageType string, inputs *buildInputs) (*SkillSpec, *Profile, []string, error) {
+	sid, _, err := selectedSkillID(charID, slot)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if len(ids) == 0 {
+	if sid == "" {
 		return nil, nil, nil, nil
 	}
-	if slot < 1 || slot > len(ids) {
-		return nil, nil, nil, fmt.Errorf(
-			"%s 没有 %d 号技能槽（它有 %d 个：%v）——槽号越界**不截断**，"+
-				"静默截断会让规格里出现一个绑错了技能的干员", charID, slot, len(ids), ids)
-	}
-	sid := ids[slot-1]
-	meta, err := inputs.skillMeta(sid, SkillLevelDefault)
+	meta, err := inputs.skillMeta(sid, level)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("%s 的技能 %s 第 %d 级取不到：%w",
-			charID, sid, SkillLevelDefault, err)
+			charID, sid, level, err)
 	}
 	mods, unknown := ApplyBlackboard(meta.Blackboard)
 
