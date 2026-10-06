@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // SkillMeta 是一个技能在某一级上的状态机参数。
@@ -158,10 +159,31 @@ func RenderDescription(text string, bb map[string]any) string {
 	return out
 }
 
-var skillTableCache map[string]json.RawMessage
+var (
+	skillTableMu    sync.Mutex
+	skillTableCache map[string]json.RawMessage
+)
 
-// LoadSkillTable 读 `skill_table.json` 并缓存。
+// LoadSkillTable returns an owned snapshot, including the RawMessage bytes.
+// Callers cannot mutate the private, successfully published table.
 func LoadSkillTable() (map[string]json.RawMessage, error) {
+	tbl, err := loadSkillTableSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]json.RawMessage, len(tbl))
+	for id, raw := range tbl {
+		out[id] = append(json.RawMessage(nil), raw...)
+	}
+	return out, nil
+}
+
+// loadSkillTableSnapshot serializes cold loads and publishes only a complete
+// table. After publication it is read-only. Errors are not cached: a later call
+// can retry, preserving the historical loader behavior.
+func loadSkillTableSnapshot() (map[string]json.RawMessage, error) {
+	skillTableMu.Lock()
+	defer skillTableMu.Unlock()
 	if skillTableCache != nil {
 		return skillTableCache, nil
 	}
@@ -184,7 +206,7 @@ func LoadSkillTable() (map[string]json.RawMessage, error) {
 
 // SkillIDs 返回全部技能 id（已排序），供判据遍历。
 func SkillIDs() ([]string, error) {
-	tbl, err := LoadSkillTable()
+	tbl, err := loadSkillTableSnapshot()
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +220,7 @@ func SkillIDs() ([]string, error) {
 
 // SkillMetaFor 取一个技能某一级的元数据。`level` 是 **1 起算**的普通等级。
 func SkillMetaFor(skillID string, level int) (*SkillMeta, error) {
-	tbl, err := LoadSkillTable()
+	tbl, err := loadSkillTableSnapshot()
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +334,7 @@ func SkillMetaFor(skillID string, level int) (*SkillMeta, error) {
 
 // SkillLevelCount 返回一个技能有几级。
 func SkillLevelCount(skillID string) (int, error) {
-	tbl, err := LoadSkillTable()
+	tbl, err := loadSkillTableSnapshot()
 	if err != nil {
 		return 0, err
 	}
