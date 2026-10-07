@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"rios-sim/mechanisms"
 	"strings"
 )
@@ -213,6 +214,14 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 		add := func(key string, value float64, reason string) {
 			gaps = mechanisms.Merge(gaps, []mechanisms.Gap{{ID: "runtime." + key, Status: "unimplemented", Source: "operator_spec", Operator: op.Name, CharID: op.CharID, Key: key, RawValue: value, Reason: reason, Instance: i}})
 		}
+		if op.AttackSpeedWhenFree != 0 {
+			if math.IsNaN(op.AttackSpeedWhenFree) || math.IsInf(op.AttackSpeedWhenFree, 0) || op.AttackSpeedWhenFree < 0 || !validAttackTiming(op.AttackTiming) {
+				add("conditional_attack_speed", op.AttackSpeedWhenFree, "条件攻速缺少有效原始计算上下文")
+			}
+			if op.Active != nil && !validAttackTiming(op.Active.AttackTiming) {
+				add("active.conditional_attack_speed", op.AttackSpeedWhenFree, "技能条件攻速缺少有效原始计算上下文")
+			}
+		}
 		if (op.TalentProcFactor != 0 && op.TalentProcFactor != 1) || len(op.TalentProcProbabilities) > 0 || len(op.TalentProcScales) > 0 {
 			exact := len(op.TalentProcProbabilities) > 0 && len(op.TalentProcProbabilities) == len(op.TalentProcScales)
 			expected := 1.0
@@ -262,7 +271,12 @@ func operatorMechanismGapsWithInputs(r DeployRow, st *OperatorStats, talents []r
 		return nil, err
 	}
 	gaps = mechanisms.Merge(gaps, talentMechanismGaps(talents, r.Entry.CharID, st.Name))
-	if st.AttackSpeedBonus.WhenFree != 0 {
+	exactFree, moduleGaps, err := conditionalModuleSpeed(st)
+	if err != nil {
+		return nil, err
+	}
+	gaps = mechanisms.Merge(gaps, moduleGaps)
+	if st.AttackSpeedBonus.WhenFree != exactFree {
 		gaps = append(gaps, mechanisms.Gap{ID: "module.attack_speed_when_free", Status: "unimplemented", Source: "module", Operator: st.Name, CharID: r.Entry.CharID, SourceID: st.Module, Key: "aspd_when_free", RawValue: st.AttackSpeedBonus.WhenFree, Reason: "未阻挡条件攻速尚未接入战斗"})
 	}
 	id, slot, err := selectedSkillID(r.Entry.CharID, r.Skill)

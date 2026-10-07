@@ -148,16 +148,18 @@ type OperatorOut struct {
 	Name   string `json:"name"`
 	Cell   [2]int `json:"cell"`
 
-	MaxHP          float64  `json:"max_hp"`
-	ATK            float64  `json:"atk"`
-	DEF            float64  `json:"def"`
-	RES            float64  `json:"res"`
-	AttackInterval float64  `json:"interval"`
-	DamageType     string   `json:"damage_type"`
-	BlockCnt       int      `json:"block_cnt"`
-	DeployCost     int      `json:"deploy_cost"`
-	RedeployTime   float64  `json:"redeploy_time"`
-	Range          [][2]int `json:"range"`
+	MaxHP               float64           `json:"max_hp"`
+	ATK                 float64           `json:"atk"`
+	DEF                 float64           `json:"def"`
+	RES                 float64           `json:"res"`
+	AttackInterval      float64           `json:"interval"`
+	DamageType          string            `json:"damage_type"`
+	BlockCnt            int               `json:"block_cnt"`
+	DeployCost          int               `json:"deploy_cost"`
+	RedeployTime        float64           `json:"redeploy_time"`
+	Range               [][2]int          `json:"range"`
+	AttackSpeedWhenFree float64           `json:"attack_speed_when_free,omitempty"`
+	AttackTiming        *AttackTimingSpec `json:"attack_timing,omitempty"`
 
 	NationID   *string `json:"nation_id,omitempty"`
 	Profession *string `json:"profession,omitempty"`
@@ -756,6 +758,14 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 		RedeployTime: redeploy,
 		Range:        cells,
 	}
+	freeASPD, _, err := conditionalModuleSpeed(st)
+	if err != nil {
+		return OperatorOut{}, err
+	}
+	if freeASPD != 0 {
+		out.AttackSpeedWhenFree = freeASPD
+		out.AttackTiming = &AttackTimingSpec{BaseAttackTime: base, ASPD: spd}
+	}
 	//: 势力代号：取不到就是空串（等于不翻倍），原版据此**不送这个键**。
 	if st.NationID != "" {
 		v := st.NationID
@@ -965,6 +975,23 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 		//: 「伤害类型变为 …」时按那句话切换（`DamageTypeFromSkillText`，按短语不按名字）。
 		//: 留空串会让技能期间每一次出手都带空类型往下走：`sim.go` 按它选物理/法术，
 		//: 空串既不是物理也不是法术，**不报错**，只是伤害算错。
+		if out.AttackSpeedWhenFree != 0 {
+			id, _, err := selectedSkillID(e.CharID, r.Skill)
+			if err != nil {
+				return OperatorOut{}, err
+			}
+			meta, err := inputs.skillMeta(id, skillLevel)
+			if err != nil {
+				return OperatorOut{}, err
+			}
+			mods, _ := ApplyBlackboard(meta.Blackboard)
+			rawBase := base
+			if mods.BaseAttackTime > 0 {
+				rawBase = mods.BaseAttackTime
+			}
+			act.AttackTiming = &AttackTimingSpec{BaseAttackTime: rawBase, ASPD: spd + mods.AttackSpeed}
+			act.Interval = timingInterval(act.AttackTiming, 0)
+		}
 		act.TargetRange, err = bindSkillTargetRange(r, inputs)
 		if err != nil {
 			return OperatorOut{}, fmt.Errorf("%s技能范围绑定：%w", r.Operator, err)

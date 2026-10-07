@@ -364,6 +364,13 @@ func (o *operator) dodgeVs(damageType string) float64 {
 }
 
 func (o *operator) interval() float64 {
+	if o.spec.AttackSpeedWhenFree != 0 {
+		timing := o.spec.AttackTiming
+		if p := o.profile(); p != nil {
+			timing = p.AttackTiming
+		}
+		return timingInterval(timing, o.freeAttackSpeed())
+	}
 	if p := o.profile(); p != nil {
 		return p.Interval
 	}
