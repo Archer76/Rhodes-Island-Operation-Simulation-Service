@@ -22,6 +22,8 @@ type Gap struct {
 	RawValue      any               `json:"raw_value,omitempty"`
 	Reason        string            `json:"reason"`
 	RawBlackboard []json.RawMessage `json:"raw_blackboard,omitempty"`
+	RawSource     json.RawMessage   `json:"raw_source,omitempty"`
+	RawSlot       json.RawMessage   `json:"raw_slot,omitempty"`
 	Description   string            `json:"description,omitempty"`
 	Slot          int               `json:"slot,omitempty"`
 	Level         int               `json:"level,omitempty"`

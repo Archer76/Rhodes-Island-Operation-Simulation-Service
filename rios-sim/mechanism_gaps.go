@@ -25,7 +25,7 @@ func skillMechanismGaps(meta SkillMeta, charID, name string, slot int, baseRange
 	add := func(id, status, key, reason string) {
 		gaps = append(gaps, mechanisms.Gap{ID: id, Status: status, Source: "skill", Operator: name, CharID: charID,
 			SourceID: meta.SkillID, SourceName: meta.Name, Key: key, RawValue: meta.Blackboard[key], Reason: reason,
-			RawBlackboard: cloneRawBlackboard(meta.RawBlackboard), Description: meta.RawDescription, Slot: slot, Level: meta.Level})
+			RawBlackboard: cloneRawBlackboard(meta.RawBlackboard), RawSource: append(json.RawMessage(nil), meta.RawSource...), Description: meta.RawDescription, Slot: slot, Level: meta.Level})
 	}
 	consumed := map[string]bool{"atk": true, "def": true, "max_hp": true, "attack_speed": true, "base_attack_time": true, "cost": true, "atk_scale": true, "times": true}
 	missing := map[string]string{"heal_scale": "技能自疗未接入战斗", "ability_range_forward_extend": "技能射程前移未接入战斗", "attack@range_scale": "技能溅射范围缩放未接入战斗", "prob": "技能概率事件未完整建模", "attack@prob": "技能概率事件未完整建模", "sp": "技能黑板技力效果未接入战斗", "duration": "黑板持续时间未有来源明确的战斗消费者"}
@@ -46,7 +46,7 @@ func skillMechanismGaps(meta SkillMeta, charID, name string, slot int, baseRange
 	if strings.Contains(meta.Description, "弱点伤害") {
 		add("damage.weakness", "unimplemented", "description", "弱点伤害尚未完整建模")
 	}
-	return gaps
+	return mechanisms.Merge(gaps, semanticMechanismGaps("skill", meta.SkillID, meta.Name, charID, name, meta.RawDescription, meta.Blackboard, meta.RawBlackboard, meta.RawSource, meta.OverrideTokenKey, "overrideTokenKey", slot, meta.Level))
 }
 
 func talentMechanismGaps(talents []resolvedTalent, charID, name string) []mechanisms.Gap {
@@ -63,7 +63,7 @@ func talentMechanismGaps(talents []resolvedTalent, charID, name string) []mechan
 		add := func(id, status, key, reason string) {
 			gaps = append(gaps, mechanisms.Gap{ID: id, Status: status, Source: "talent", Operator: name, CharID: charID,
 				SourceID: fmt.Sprintf("talent:%d:%d", t.GroupIndex, t.CandidateIndex), SourceName: t.Name,
-				Key: key, RawValue: bb[key], Reason: reason, RawBlackboard: t.RawBlackboard, Description: t.RawDescription})
+				Key: key, RawValue: bb[key], Reason: reason, RawBlackboard: cloneRawBlackboard(t.RawBlackboard), RawSource: append(json.RawMessage(nil), t.RawSource...), Description: t.RawDescription})
 			claim(key)
 		}
 		firstClaim := func(consumer string, keys ...string) {
@@ -161,13 +161,32 @@ func talentMechanismGaps(talents []resolvedTalent, charID, name string) []mechan
 			}
 		}
 		if _, ok := bb["damage_resistance"]; ok {
-			add("talent.species_damage_resistance", "unimplemented", "damage_resistance", "按敌人种族减伤尚未建模")
+			// The key alone says nothing about species: Bena's value belongs to
+			// her substitute form. Preserve the source without inventing its scope.
+			add("talent.damage_resistance", "unimplemented", "damage_resistance", "来源条件减伤尚无完整战斗消费者")
 		}
 		if strings.Contains(t.Description, "弱点伤害") {
 			add("damage.weakness", "unimplemented", "description", "弱点伤害尚未完整建模")
 		}
 		if strings.Contains(t.Description, "攻击变为物理伤害") {
 			add("talent.damage_type_override", "unimplemented", "description", "天赋伤害类型改写未接入战斗")
+		}
+		semantic := semanticMechanismGaps("talent", fmt.Sprintf("talent:%d:%d", t.GroupIndex, t.CandidateIndex), t.Name, charID, name, t.RawDescription, bb, t.RawBlackboard, t.RawSource, t.TokenKey, "tokenKey", 0, 0)
+		// Consumer recognition is source-local, never the generic panel claim.
+		// A shield's break SP and an aura's conditional panel are exact consumers.
+		_, teamAura, _ := tfFindTeamAura(one)
+		_, _, classAura := tfFindClassAura(one)
+		_, ammoAura := tfFindAmmoCovenant(one)
+		_, angelAura := tfFindAngelBlessing(one)
+		_, dispatchAura := tfFindLimitDispatch(one)
+		for _, g := range semantic {
+			if g.ID == "talent.conditional_panel" && ((teamAura || classAura || ammoAura) && (g.Key == "atk" || g.Key == "def") || (angelAura || dispatchAura) && g.Key == "atk") {
+				continue
+			}
+			if g.ID == "talent.event_sp" && (max > 0 || layers > 0) {
+				continue
+			}
+			gaps = mechanisms.Merge(gaps, []mechanisms.Gap{g})
 		}
 		for _, k := range mechanisms.Keys(bb) {
 			if !claimed[k] {
@@ -234,7 +253,11 @@ func operatorMechanismGaps(r DeployRow, st *OperatorStats, talents []resolvedTal
 	return operatorMechanismGapsWithInputs(r, st, talents, nil)
 }
 func operatorMechanismGapsWithInputs(r DeployRow, st *OperatorStats, talents []resolvedTalent, inputs *buildInputs) ([]mechanisms.Gap, error) {
-	gaps := talentMechanismGaps(talents, r.Entry.CharID, st.Name)
+	gaps, err := traitMechanismGaps(r.Entry.CharID, st.Name, r.Entry.Elite, r.Entry.Level, r.Entry.Potential)
+	if err != nil {
+		return nil, err
+	}
+	gaps = mechanisms.Merge(gaps, talentMechanismGaps(talents, r.Entry.CharID, st.Name))
 	if st.AttackSpeedBonus.WhenFree != 0 {
 		gaps = append(gaps, mechanisms.Gap{ID: "module.attack_speed_when_free", Status: "unimplemented", Source: "module", Operator: st.Name, CharID: r.Entry.CharID, SourceID: st.Module, Key: "aspd_when_free", RawValue: st.AttackSpeedBonus.WhenFree, Reason: "未阻挡条件攻速尚未接入战斗"})
 	}
@@ -255,7 +278,34 @@ func operatorMechanismGapsWithInputs(r DeployRow, st *OperatorStats, talents []r
 		if err != nil {
 			return nil, err
 		}
-		gaps = mechanisms.Merge(gaps, skillMechanismGaps(*meta, r.Entry.CharID, st.Name, slot, baseRange))
+		// A shared skill level is not its character slot: token overrides live
+		// on character_table.skills[]. Never mutate the shared cached metadata.
+		selected := *meta
+		table, err := loadCharTable()
+		if err != nil {
+			return nil, err
+		}
+		var char struct {
+			Skills []json.RawMessage `json:"skills"`
+		}
+		if err := json.Unmarshal(table[r.Entry.CharID], &char); err != nil {
+			return nil, err
+		}
+		if slot > 0 && slot <= len(char.Skills) {
+			var source struct {
+				OverrideTokenKey string `json:"overrideTokenKey"`
+			}
+			if err := json.Unmarshal(char.Skills[slot-1], &source); err != nil {
+				return nil, err
+			}
+			selected.OverrideTokenKey = source.OverrideTokenKey
+			selected.RawSlot = append(json.RawMessage(nil), char.Skills[slot-1]...)
+		}
+		skillGaps := skillMechanismGaps(selected, r.Entry.CharID, st.Name, slot, baseRange)
+		for i := range skillGaps {
+			skillGaps[i].RawSlot = append(json.RawMessage(nil), selected.RawSlot...)
+		}
+		gaps = mechanisms.Merge(gaps, skillGaps)
 	}
 	return gaps, nil
 }

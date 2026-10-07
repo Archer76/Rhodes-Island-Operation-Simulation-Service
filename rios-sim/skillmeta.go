@@ -57,8 +57,11 @@ type SkillMeta struct {
 	//: 也照样落 0），**另有 `$key` 落 valueStr**（只有当它非空时）。
 	//: 两套都要——字符串键是「召唤什么/给哪个装置」唯一的住处，丢掉不报错，
 	//: 只是上层把它当「没这项机制」。
-	Blackboard    map[string]any    `json:"blackboard"`
-	RawBlackboard []json.RawMessage `json:"raw_blackboard,omitempty"`
+	Blackboard       map[string]any    `json:"blackboard"`
+	RawBlackboard    []json.RawMessage `json:"raw_blackboard,omitempty"`
+	RawSource        json.RawMessage   `json:"raw_source,omitempty"`
+	OverrideTokenKey string            `json:"override_token_key,omitempty"`
+	RawSlot          json.RawMessage   `json:"raw_slot,omitempty"`
 	//: 级号：**0 起算**（`SkillLevel.index`）。级别用的是 1 起算的 `Level`，
 	//: 两个都在——混用会让「第 3 级」与「index 3」差一位。
 	Index int `json:"index"`
@@ -256,8 +259,13 @@ func SkillMetaFor(skillID string, level int) (*SkillMeta, error) {
 		return nil, fmt.Errorf("%s 只有 %d 级，收到 %d", skillID, len(entry.Levels), level)
 	}
 	lv := entry.Levels[level-1]
+	var source struct {
+		Levels []json.RawMessage `json:"levels"`
+	}
+	_ = json.Unmarshal(raw, &source)
 	out := &SkillMeta{
-		SkillID: skillID, Level: level, Name: lv.Name,
+		RawSource: append(json.RawMessage(nil), source.Levels[level-1]...),
+		SkillID:   skillID, Level: level, Name: lv.Name,
 		SkillType: lv.SkillType, DurationType: lv.DurationType,
 		RangeID: lv.RangeID, SPType: normalizeSPType(lv.SPData.SPType, lv.SkillType),
 		BlackboardEntries: len(lv.Blackboard),

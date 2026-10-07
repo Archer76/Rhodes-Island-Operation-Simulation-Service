@@ -50,6 +50,9 @@ type resolvedTalent struct {
 	CandidateIndex int
 	RawDescription string
 	RawBlackboard  []json.RawMessage
+	RawSource      json.RawMessage
+	TokenKey       string
+	RangeID        string
 	Blackboard     map[string]any
 	//: **渲染后**的天赋正文（`talent.py:164-178` 的 `render_description`，
 	//: 与 `OperatorStats` 那份 `TextDerived` 同源）。
@@ -87,11 +90,17 @@ func resolveTalents(talents []json.RawMessage, elite, level, potential int) []re
 				Blackboard            []json.RawMessage `json:"blackboard"`
 				//: 天赋正文的**原文**（`{key}` 占位符还没填）；渲染见下。
 				Description *string `json:"description"`
+				TokenKey    string  `json:"tokenKey"`
+				RangeID     string  `json:"rangeId"`
 			} `json:"candidates"`
 		}
 		if err := json.Unmarshal(gRaw, &group); err != nil {
 			continue
 		}
+		var source struct {
+			Candidates []json.RawMessage `json:"candidates"`
+		}
+		_ = json.Unmarshal(gRaw, &source)
 		for ci, cand := range group.Candidates {
 			phase := phaseOf(cand.UnlockCondition.Phase)
 			needLv := 1
@@ -119,8 +128,10 @@ func resolveTalents(talents []json.RawMessage, elite, level, potential int) []re
 				Name:       cand.Name,
 				GroupIndex: gi, CandidateIndex: ci,
 				RawDescription: desc,
-				RawBlackboard:  append([]json.RawMessage(nil), cand.Blackboard...),
-				Blackboard:     bb,
+				RawBlackboard:  cloneRawBlackboard(cand.Blackboard),
+				RawSource:      append(json.RawMessage(nil), source.Candidates[ci]...),
+				TokenKey:       cand.TokenKey, RangeID: cand.RangeID,
+				Blackboard: bb,
 				//: 与 `_build`（`talent.py:163-164`）同一句：
 				//: `render_description(cand.get("description") or "", bb)`。
 				//: 缺正文就是空串（`or ""`）——渲染一个空串仍是空串。
