@@ -137,6 +137,9 @@ func conditionalModuleSpeed(st *OperatorStats) (float64, []mechanisms.Gap, error
 					bonus += 8
 					continue
 				}
+				if bundle.Name == "trait" && exactHPModuleCandidate(st.CharID, st.Module, st.ModuleLevel, pi, ci, raw, c) {
+					continue
+				}
 				// Missing a condition regex is not proof of an unconditional source.
 				gaps = append(gaps, mechanisms.Gap{ID: "module.conditional_attack_speed", Status: "unimplemented", Source: "module", CharID: st.CharID, Operator: st.Name, SourceID: st.Module, Key: "attack_speed", Description: c.text(), RawBlackboard: cloneRawBlackboard(c.Blackboard), RawSource: append(json.RawMessage(nil), raw...), RawSlot: append(json.RawMessage(nil), craw...), Slot: pi, Level: st.ModuleLevel, Instance: ci, Reason: "模组攻速来源或条件尚无精确战斗消费者"})
 			}

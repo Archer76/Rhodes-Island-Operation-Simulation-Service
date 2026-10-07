@@ -148,18 +148,19 @@ type OperatorOut struct {
 	Name   string `json:"name"`
 	Cell   [2]int `json:"cell"`
 
-	MaxHP               float64           `json:"max_hp"`
-	ATK                 float64           `json:"atk"`
-	DEF                 float64           `json:"def"`
-	RES                 float64           `json:"res"`
-	AttackInterval      float64           `json:"interval"`
-	DamageType          string            `json:"damage_type"`
-	BlockCnt            int               `json:"block_cnt"`
-	DeployCost          int               `json:"deploy_cost"`
-	RedeployTime        float64           `json:"redeploy_time"`
-	Range               [][2]int          `json:"range"`
-	AttackSpeedWhenFree float64           `json:"attack_speed_when_free,omitempty"`
-	AttackTiming        *AttackTimingSpec `json:"attack_timing,omitempty"`
+	MaxHP               float64            `json:"max_hp"`
+	ATK                 float64            `json:"atk"`
+	DEF                 float64            `json:"def"`
+	RES                 float64            `json:"res"`
+	AttackInterval      float64            `json:"interval"`
+	DamageType          string             `json:"damage_type"`
+	BlockCnt            int                `json:"block_cnt"`
+	DeployCost          int                `json:"deploy_cost"`
+	RedeployTime        float64            `json:"redeploy_time"`
+	Range               [][2]int           `json:"range"`
+	AttackSpeedWhenFree float64            `json:"attack_speed_when_free,omitempty"`
+	HPAttackSpeed       *HPAttackSpeedSpec `json:"hp_attack_speed,omitempty"`
+	AttackTiming        *AttackTimingSpec  `json:"attack_timing,omitempty"`
 
 	NationID   *string `json:"nation_id,omitempty"`
 	Profession *string `json:"profession,omitempty"`
@@ -690,7 +691,15 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 	if err != nil {
 		return OperatorOut{}, fmt.Errorf("%s：%v", e.CharID, err)
 	}
+	hpASPD, err := hpModuleSpeed(st)
+	if err != nil {
+		return OperatorOut{}, err
+	}
 	spd := aspd + st.AttackSpeedBonus.Flat
+	// Only this exact unlocked candidate's known old Flat contribution is removed.
+	if hpASPD != nil {
+		spd -= hpASPD.Bonus
+	}
 	interval := math.Max(opsMinInterval, base*100.0/math.Max(opsAspdMin, spd))
 
 	blockCnt, err := totalOrDef(t, "blockCnt", 0.0)
@@ -762,7 +771,8 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 	if err != nil {
 		return OperatorOut{}, err
 	}
-	if freeASPD != 0 {
+	out.HPAttackSpeed = hpASPD
+	if freeASPD != 0 || hpASPD != nil {
 		out.AttackSpeedWhenFree = freeASPD
 		out.AttackTiming = &AttackTimingSpec{BaseAttackTime: base, ASPD: spd}
 	}
@@ -975,7 +985,7 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 		//: 「伤害类型变为 …」时按那句话切换（`DamageTypeFromSkillText`，按短语不按名字）。
 		//: 留空串会让技能期间每一次出手都带空类型往下走：`sim.go` 按它选物理/法术，
 		//: 空串既不是物理也不是法术，**不报错**，只是伤害算错。
-		if out.AttackSpeedWhenFree != 0 {
+		if out.AttackSpeedWhenFree != 0 || out.HPAttackSpeed != nil {
 			id, _, err := selectedSkillID(e.CharID, r.Skill)
 			if err != nil {
 				return OperatorOut{}, err

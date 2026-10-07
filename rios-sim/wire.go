@@ -210,9 +210,10 @@ type OperatorSpec struct {
 	TalentDodgeArts float64 `json:"talent_dodge_arts,omitempty"`
 
 	//: 攻击范围（**绝对格**，已按落点与朝向展开；技能改范围在最小版本里不支持）
-	Range               [][2]int          `json:"range"`
-	AttackSpeedWhenFree float64           `json:"attack_speed_when_free,omitempty"`
-	AttackTiming        *AttackTimingSpec `json:"attack_timing,omitempty"`
+	Range               [][2]int           `json:"range"`
+	AttackSpeedWhenFree float64            `json:"attack_speed_when_free,omitempty"`
+	HPAttackSpeed       *HPAttackSpeedSpec `json:"hp_attack_speed,omitempty"`
+	AttackTiming        *AttackTimingSpec  `json:"attack_timing,omitempty"`
 	//: 干员**所属势力**（`operator.nation_id`，如 `rhodes`）。与 `team_id` 不是
 	//: 一回事：那是**小队**。消费者有两个：「医者丰碑」的"对【罗德岛】
 	//: 干员的效果翻倍"，以及全场光环里"只发给/翻倍某个势力"那两条
