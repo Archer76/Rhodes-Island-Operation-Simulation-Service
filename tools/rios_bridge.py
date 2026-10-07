@@ -349,7 +349,14 @@ def _try_fetch_roster_from_skland() -> tuple[object | None, str]:
             return None, "从森空岛取回来了、但 load_roster() 仍认不出（%s）" % path
         return got, "已从森空岛取到并落盘：%s" % path
     except Exception as exc:                                 # noqa: BLE001
-        return None, "%s: %s" % (exc.__class__.__name__, exc)
+        note = "%s: %s" % (exc.__class__.__name__, exc)
+        #: ★ 2026-10-07：`code 10000 请求异常` 与签名写错**同码**，字面看不出是
+        #: 登录态过期（实测：cred 过期时 `binding_list` 就回它）。这里补一句人话，
+        #: 免得玩家只看到"名册取不到"却不知道下一步该按 L 重新登录。
+        if "10000" in note:
+            note += ("；像是登录态过期（森空岛的 10000 与签名写错同码）→ "
+                     "在准备屏按 L 重新扫码登录，或跑 `python tools/skland.py cred` 补一次")
+        return None, note
 
 
 def cmd_roster(req: dict) -> dict:

@@ -66,7 +66,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # ---------------------------------------------------------------- 常量
 
@@ -408,6 +408,51 @@ def binding_list(cred: str, token: str) -> list[dict[str, Any]]:
     raise SklandError("该账号未绑定明日方舟")
 
 
+def with_cred_refresh(fn: Callable, *, home: Path | None = None,
+                      state: dict[str, Any] | None = None,
+                      allow_refresh: bool = True
+                      ) -> tuple[Any, dict[str, Any]]:
+    """拿可用凭据调一次 `fn(cred, token)`；凭据过期就**补一次 cred 再调一次**。
+
+    ## 为什么每个要 cred 的调用都得走这里
+
+    `cred` 的寿命只有约两天，过期之后任何接口回的都是泛泛的
+    `code 10000 请求异常`——**与签名写错同码**，字面完全看不出是过期。
+    实测（2026-10-07）：9 月 29 日那份凭据 `binding_list` 回 10000，
+    而缓存的 hgToken 还能静默换到新 cred（换完立刻就好）。
+
+    `fetch_all()` 原先**没有**这一步：于是"自动去森空岛取名册"这条链在凭据过期时
+    必然以 `10000` 收场，而外层只显示成"名册取不到"——玩家看不出该重新登录。
+    这个 helper 就是把 `resolve_game_uid` 早就有的那条重试提出来共用，**不再各写一份**。
+
+    语义（原样保留 `resolve_game_uid` 的约定）：
+    - `fn` 抛 `SklandError` 才算"这条请求失败"；
+    - 补 cred 失败、或补完再失败 ⇒ 抛**第一次那个错**（不拿"补登录失败"顶掉真正原因）；
+    - `allow_refresh=False` ⇒ 一次都不补（给非当前账号用：拿当前账号的 hgToken 去救
+      别的号会**静默换错号**）；
+    - `state` 给了就用它当初始凭据（指名读某个账号的凭据文件时用），否则读当前账号。
+
+    返回 `(fn 的返回值, 实际用了的那份凭据状态)`：补过 cred 时返回的是**新的那一份**，
+    调用方必须拿它继续发后续请求（否则又用回过期的旧 cred）。
+    """
+    st = state if state is not None else load_cred(home)
+    cred, token = require_ready(st)
+    try:
+        return fn(cred, token), st
+    except SklandError as first:
+        if not allow_refresh:
+            raise
+        try:
+            fresh = finish_login(home)
+        except Exception:                                     # noqa: BLE001
+            raise first from None
+        cred2, token2 = require_ready(fresh)
+        try:
+            return fn(cred2, token2), fresh
+        except SklandError:
+            raise first from None
+
+
 def player_info(cred: str, token: str, uid: str) -> dict[str, Any]:
     url = f"{URL_PLAYER_INFO}?uid={urllib.parse.quote(str(uid))}"
     data = _get_json(url, signed_headers(cred, token, url, "get"), timeout=120.0)
@@ -694,19 +739,8 @@ def resolve_game_uid(*, home: Path | None = None, uid: str | None = None,
     hgToken 也过期时要重新扫码，那不是这一步能修的，诚实报错。
     """
     st = load_cred(home)
-    cred, token = require_ready(st)
-    try:
-        target = pick_binding(binding_list(cred, token), uid)
-    except SklandError as first:
-        try:
-            fresh = finish_login(home)
-        except Exception:                                 # noqa: BLE001
-            raise first from None
-        cred2, token2 = require_ready(fresh)
-        try:
-            target = pick_binding(binding_list(cred2, token2), uid)
-        except SklandError:
-            raise first from None
+    target, st = with_cred_refresh(
+        lambda c, t: pick_binding(binding_list(c, t), uid), home=home)
 
     g = str(target.get("uid") or "").strip()
     if not g:
@@ -745,25 +779,12 @@ def resolve_game_uid_for(login_uid: str, *, home: Path | None = None,
     st = read_json(cred_path_for(login_uid, home))
     if not st:
         raise SklandError(f"账号 {login_uid} 的凭据文件不见了，补不了信息。")
-    cred, token = require_ready(st)
-
     def _ask(c: str, t: str) -> dict[str, Any]:
         return pick_binding(binding_list(c, t), uid)
 
-    try:
-        target = _ask(cred, token)
-    except SklandError as first:
-        if current_uid(home) != login_uid:
-            raise
-        try:
-            fresh = finish_login(home)
-        except Exception:                                     # noqa: BLE001
-            raise first from None
-        cred2, token2 = require_ready(fresh)
-        try:
-            target = _ask(cred2, token2)
-        except SklandError:
-            raise first from None
+    target, _ = with_cred_refresh(
+        _ask, home=home, state=st,
+        allow_refresh=current_uid(home) == login_uid)
 
     g = str(target.get("uid") or "").strip()
     if not g:
@@ -859,12 +880,21 @@ def fetch_all(*, uid: str | None = None, home: Path | None = None,
 
     顺带把"通行证账号 ↔ 游戏 uid"这个映射记下来：**只有这里能学到它**，
     而名册是按游戏 uid 存的（见上面那一段）。
-    """
-    st = load_cred(home)
-    cred, token = require_ready(st)
 
-    blist = binding_list(cred, token)
+    ## 凭据过期必须在这里补（2026-10-07 修，实测）
+
+    原先这里直接拿存着的 `cred` 去问 —— 而 `cred` 寿命约两天，过期后
+    `binding_list` 回 `code 10000 请求异常`（与签名写错同码），于是**自动去森空岛
+    取名册这条路在凭据过期时必然失败**，界面只显示"名册取不到"，看不出该重新登录。
+    实测：9 月 29 日的凭据回 10000，`finish_login()` 用缓存 hgToken 换到新 cred 后
+    同一请求立刻成功。现在这条链也走 `with_cred_refresh`，与 `resolve_game_uid` 同一条路。
+    """
+    blist, st = with_cred_refresh(
+        lambda c, t: binding_list(c, t), home=home)
     target = pick_binding(blist, uid)
+    #: ★ 补过 cred 时 `st` 是**新的那一份**：后面 player_info 必须用新 cred，
+    #: 否则又拿回过期的旧凭据去问，白补一次。
+    cred, token = require_ready(st)
 
     real_uid = str(target["uid"])
     login_uid = str(st.get("userId") or current_uid(home) or "").strip()
@@ -1144,7 +1174,15 @@ def main(argv: list[str] | None = None) -> int:
             cred, token = require_ready(st)
             print("check:", json.dumps(check_cred(cred, token),
                                        ensure_ascii=False))
-            for b in binding_list(cred, token):
+            #: ★ 2026-10-07：绑定列表这一步过期时回 `10000`（与签名写错同码），
+            #: 于是 `status` 会先印 `check: OK` 再吐一句看不出原因的"请求异常"。
+            #: 现在走 `with_cred_refresh` 补一次再说，补到了就**明说补过**。
+            before = (st.get("cred"), st.get("token"))
+            blist, st2 = with_cred_refresh(
+                lambda c, t: binding_list(c, t), home=home, state=st)
+            if (st2.get("cred"), st2.get("token")) != before:
+                print("旧 cred 已过期：已用缓存的 hgToken 补了一份新的（不必重扫）。")
+            for b in blist:
                 print(f"  [{b.get('channelName')}] {b.get('nickName')} "
                       f"uid={b.get('uid')} default={b.get('isDefault')}")
             return 0
