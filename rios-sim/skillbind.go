@@ -79,6 +79,9 @@ func bindSkillAtLevelWithInputs(charID string, slot, level int, baseATK, baseDEF
 	if meta.Duration != nil {
 		spec.Duration = *meta.Duration
 	}
+	if ratio, exact := instantSelfHealRatio(*meta); exact {
+		spec.SelfHealMaxHPRatio = ratio
+	}
 	//: ⚠ `MaxCharge` 的缺省是 **1**（`skillmeta.go` 的注释：`or 1`）。
 	//: 落成 0 会让「每秒回一次」变成「永不回」。
 	if spec.MaxCharge < 1 {

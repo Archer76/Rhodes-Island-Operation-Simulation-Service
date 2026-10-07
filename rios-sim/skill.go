@@ -139,7 +139,7 @@ func skillTick(ops []*operator, dt, t float64, spec *Spec, cost *float64,
 func activate(op *operator, t float64, spec *Spec, cost *float64,
 	verdict *Verdict, passive bool) {
 	sk := op.spec.Skill
-	if sk == nil {
+	if sk == nil || !op.alive() {
 		return
 	}
 	if !passive {
@@ -177,6 +177,14 @@ func activate(op *operator, t float64, spec *Spec, cost *float64,
 	if p := op.profile(); p != nil && p.MaxHP != nil {
 		base := op.spec.MaxHP
 		op.hp = math.Min(*p.MaxHP, op.hp+(*p.MaxHP-base))
+	}
+	// Heal once on activation, after any max-HP bonus; use the current cap.
+	// This is own recovery, independent of ordinary ally-heal targeting rules.
+	if sk.SelfHealMaxHPRatio > 0 {
+		want := op.maxHP() * sk.SelfHealMaxHPRatio
+		got := op.heal(want)
+		trace("SELFHEAL t=%.4f op=%s ratio=%.4f got=%.3f hp=%.3f", t, op.spec.Name, sk.SelfHealMaxHPRatio, got, op.hp)
+		verdict.Events = append(verdict.Events, Event{T: t, Kind: "self_heal", Who: op.spec.Name, Heal: &HealEventDetail{Want: want, Got: got, HPAfter: op.hp, MaxHP: op.maxHP()}})
 	}
 	if sk.CostGain != 0 {
 		*cost = math.Min(spec.CostMax, *cost+sk.CostGain)

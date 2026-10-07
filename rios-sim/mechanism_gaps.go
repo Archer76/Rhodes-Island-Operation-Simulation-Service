@@ -28,7 +28,10 @@ func skillMechanismGaps(meta SkillMeta, charID, name string, slot int, baseRange
 			RawBlackboard: cloneRawBlackboard(meta.RawBlackboard), RawSource: append(json.RawMessage(nil), meta.RawSource...), Description: meta.RawDescription, Slot: slot, Level: meta.Level})
 	}
 	consumed := map[string]bool{"atk": true, "def": true, "max_hp": true, "attack_speed": true, "base_attack_time": true, "cost": true, "atk_scale": true, "times": true}
-	missing := map[string]string{"heal_scale": "技能自疗未接入战斗", "ability_range_forward_extend": "技能射程前移未接入战斗", "attack@range_scale": "技能溅射范围缩放未接入战斗", "prob": "技能概率事件未完整建模", "attack@prob": "技能概率事件未完整建模", "sp": "技能黑板技力效果未接入战斗", "duration": "黑板持续时间未有来源明确的战斗消费者"}
+	if _, exact := instantSelfHealRatio(meta); exact {
+		consumed["heal_scale"] = true
+	}
+	missing := map[string]string{"heal_scale": "该来源的治疗、吸血或治疗修正尚无完整战斗消费者", "ability_range_forward_extend": "技能射程前移未接入战斗", "attack@range_scale": "技能溅射范围缩放未接入战斗", "prob": "技能概率事件未完整建模", "attack@prob": "技能概率事件未完整建模", "sp": "技能黑板技力效果未接入战斗", "duration": "黑板持续时间未有来源明确的战斗消费者"}
 	for _, k := range mechanisms.Keys(meta.Blackboard) {
 		if consumed[k] {
 			continue

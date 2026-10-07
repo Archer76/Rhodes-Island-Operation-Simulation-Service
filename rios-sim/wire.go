@@ -408,7 +408,7 @@ type Profile struct {
 
 // SkillSpec 是一个技能槽的**状态机参数**。
 //
-// 只放"时间怎么走"需要的东西；写在谁身上的百分比、倍率、类型全在 `Profile` 里。
+// 放状态机及开启瞬间的一次性效果；持续面板倍率、类型在 `Profile` 里。
 type SkillSpec struct {
 	//: INCREASE_WITH_TIME（自动回复）/ INCREASE_WHEN_ATTACK（攻击回复）/
 	//: INCREASE_WHEN_TAKEN_DAMAGE（受击回复）/ PASSIVE（被动，无技力）
@@ -443,6 +443,9 @@ type SkillSpec struct {
 
 	//: 开启那一刻回的费用（德克萨斯、桃金娘这一类）
 	CostGain float64 `json:"cost_gain"`
+	// Instant own healing on successful activation, fraction of current max HP.
+	// Not attack healing, regen or lifesteal; the producer claims exact sources.
+	SelfHealMaxHPRatio float64 `json:"self_heal_max_hp_ratio,omitempty"`
 }
 
 // SkillUseSpec 是一次**手动开技能**的请求。
@@ -799,7 +802,17 @@ type Verdict struct {
 
 // Event 是时间线上的一笔。
 type Event struct {
-	T    float64 `json:"t"`
-	Kind string  `json:"kind"`
-	Who  string  `json:"who"`
+	T    float64          `json:"t"`
+	Kind string           `json:"kind"`
+	Who  string           `json:"who"`
+	Heal *HealEventDetail `json:"heal,omitempty"`
+}
+
+// Optional recovery witness; zero actual recovery at full HP remains explicit.
+// Existing non-heal event JSON is unchanged.
+type HealEventDetail struct {
+	Want    float64 `json:"want"`
+	Got     float64 `json:"got"`
+	HPAfter float64 `json:"hp_after"`
+	MaxHP   float64 `json:"max_hp"`
 }
