@@ -42,7 +42,8 @@ func skillMechanismGaps(meta SkillMeta, charID, name string, slot int, baseRange
 			add("skill.blackboard."+k, "unidentified", k, "当前技能载荷尚无已认领的战斗机制")
 		}
 	}
-	if meta.RangeID != nil && *meta.RangeID != "" && *meta.RangeID != baseRange {
+	_, exactRange := exactSkillTargetRange(meta)
+	if meta.RangeID != nil && *meta.RangeID != "" && *meta.RangeID != baseRange && !exactRange {
 		add("skill.range_override", "unimplemented", "range_id", "技能期间范围改写尚未接入战斗")
 		gaps[len(gaps)-1].RawValue = *meta.RangeID
 	}
@@ -283,26 +284,9 @@ func operatorMechanismGapsWithInputs(r DeployRow, st *OperatorStats, talents []r
 		}
 		// A shared skill level is not its character slot: token overrides live
 		// on character_table.skills[]. Never mutate the shared cached metadata.
-		selected := *meta
-		table, err := loadCharTable()
+		selected, err := selectedSkillSource(meta, r.Entry.CharID, slot)
 		if err != nil {
 			return nil, err
-		}
-		var char struct {
-			Skills []json.RawMessage `json:"skills"`
-		}
-		if err := json.Unmarshal(table[r.Entry.CharID], &char); err != nil {
-			return nil, err
-		}
-		if slot > 0 && slot <= len(char.Skills) {
-			var source struct {
-				OverrideTokenKey string `json:"overrideTokenKey"`
-			}
-			if err := json.Unmarshal(char.Skills[slot-1], &source); err != nil {
-				return nil, err
-			}
-			selected.OverrideTokenKey = source.OverrideTokenKey
-			selected.RawSlot = append(json.RawMessage(nil), char.Skills[slot-1]...)
 		}
 		skillGaps := skillMechanismGaps(selected, r.Entry.CharID, st.Name, slot, baseRange)
 		for i := range skillGaps {

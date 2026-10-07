@@ -2650,7 +2650,7 @@ func pickHeals(op *operator, ops []*operator, n int) []*operator {
 			continue
 		}
 		cell := [2]int{int(math.RoundToEven(o.cell[0])), int(math.RoundToEven(o.cell[1]))}
-		if !inCells(op.spec.Range, cell) {
+		if !inCells(op.targetRange(), cell) {
 			continue
 		}
 		pool = append(pool, cand{o: o, rat: o.hp / o.spec.MaxHP})
@@ -2691,7 +2691,7 @@ func pickTargets(op *operator, enemies []*enemy, n int, t float64) []*enemy {
 			continue
 		}
 		cell := [2]int{int(math.RoundToEven(e.position[0])), int(math.RoundToEven(e.position[1]))}
-		if !inCells(op.spec.Range, cell) {
+		if !inCells(op.targetRange(), cell) {
 			continue
 		}
 		inRange = append(inRange, e)
@@ -2829,7 +2829,7 @@ func inRangeOf(op *operator, enemies []*enemy) []*enemy {
 			continue
 		}
 		cell := [2]int{int(math.RoundToEven(e.position[0])), int(math.RoundToEven(e.position[1]))}
-		if inCells(op.spec.Range, cell) {
+		if inCells(op.targetRange(), cell) {
 			out = append(out, e)
 		}
 	}

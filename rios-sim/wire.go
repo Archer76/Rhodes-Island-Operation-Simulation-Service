@@ -383,6 +383,9 @@ type Profile struct {
 	AtkScale float64 `json:"atk_scale"`
 	//: 一次出手打几下（`effects.hit_count`）；无技能时是 1
 	HitCount int `json:"hit_count"`
+	// Optional active attack/heal footprint. Nil inherits the base footprint;
+	// an explicit empty object means no geometric targets. Not an aura/field.
+	TargetRange *TargetRangeSpec `json:"target_range,omitempty"`
 	//: 技能开启期间的**生命上限**（原版 `apply_max_hp_bonus`，unit.py:947）。
 	//:
 	//: 用指针的理由与 `FinalHitScale` 同族，但方向相反：这里"没有这个键"
@@ -404,6 +407,11 @@ type Profile struct {
 	//: 而天赋那份常驻抵挡住在 `OperatorSpec` 上（见那里的注释）。
 	DodgePhys float64 `json:"dodge_phys,omitempty"`
 	DodgeArts float64 `json:"dodge_arts,omitempty"`
+}
+
+// TargetRangeSpec is a deployment-oriented absolute-cell targeting footprint.
+type TargetRangeSpec struct {
+	Cells [][2]int `json:"cells"`
 }
 
 // SkillSpec 是一个技能槽的**状态机参数**。

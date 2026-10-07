@@ -965,6 +965,13 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 		//: 「伤害类型变为 …」时按那句话切换（`DamageTypeFromSkillText`，按短语不按名字）。
 		//: 留空串会让技能期间每一次出手都带空类型往下走：`sim.go` 按它选物理/法术，
 		//: 空串既不是物理也不是法术，**不报错**，只是伤害算错。
+		act.TargetRange, err = bindSkillTargetRange(r, inputs)
+		if err != nil {
+			return OperatorOut{}, fmt.Errorf("%s技能范围绑定：%w", r.Operator, err)
+		}
+		if act.TargetRange != nil {
+			covered["skill_target_range_bound"]++
+		}
 		out.Skill, out.Active = sk, act
 		if len(unknown) > 0 {
 			covered["skill_unknown_key_instances"] += len(unknown)
