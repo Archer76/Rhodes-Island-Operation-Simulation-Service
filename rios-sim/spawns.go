@@ -353,9 +353,10 @@ func ViewFields() []string {
 // 把两个函数的 `e.<attr>` / `mark.<attr>` 读取点全抽出来，逐条核对这份结构
 // 覆盖了它——权威哪天多读一个字段，判据会红，而不是这里静默给零值。
 type enemyView struct {
-	Name    string
-	EnemyID string
-	Level   int
+	RawSources []EnemyRawSource
+	Name       string
+	EnemyID    string
+	Level      int
 
 	MaxHP          float64
 	Atk            float64
@@ -440,7 +441,7 @@ type enemyView struct {
 // 自己那条），所以这里显式走 `lib.Name`——与 `unsupported.go` 的闸门同一条口径。
 func viewOf(es *EnemyStats, enemyID string, level int, legs []RouteLeg,
 	route [][2]float64, lib *EnemyLibrary, p3rArmed bool) *enemyView {
-	v := &enemyView{EnemyID: enemyID, Level: level}
+	v := &enemyView{EnemyID: enemyID, Level: level, RawSources: cloneEnemySources(es.RawSources)}
 	v.Name = es.Name
 	if v.Name == "" {
 		v.Name = lib.Name(enemyID)
@@ -562,10 +563,11 @@ func pathLengthPy(pts [][2]float64) float64 {
 // 两回事——「没送」正是这一族此前静默的根因（见 `wire.go` 里 P3R 那一段的注释）。
 func unitSpecOf(v *enemyView, t float64, reborn []map[string]any) map[string]any {
 	return map[string]any{
-		"time":     t,
-		"name":     v.Name,
-		"enemy_id": v.EnemyID,
-		"level":    v.Level,
+		"raw_sources": cloneEnemySources(v.RawSources),
+		"time":        t,
+		"name":        v.Name,
+		"enemy_id":    v.EnemyID,
+		"level":       v.Level,
 
 		"hp":         v.MaxHP,
 		"atk":        v.Atk,

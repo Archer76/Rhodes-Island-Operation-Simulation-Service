@@ -55,6 +55,14 @@ func sceneUsesCount(spec *Spec) bool {
 	}
 	return false
 }
+func countVisibilityGap(e SpawnSpec, index int) mechanisms.Gap {
+	raw, err := json.Marshal(cloneEnemySources(e.RawSources))
+	reason := "敌数攻速缺少完整隐匿/迷彩状态消费者，不能从原始来源默认可计数"
+	if err != nil {
+		reason += "；原始来源JSON损坏无法编码: " + err.Error()
+	}
+	return mechanisms.Gap{ID: "runtime.enemy_count_visibility", Status: "unimplemented", Source: "enemy_spec", SourceID: e.EnemyID, Operator: e.Name, Level: e.Level, Instance: index, RawSource: raw, Reason: reason}
+}
 func countTimingGaps(spec *Spec) []mechanisms.Gap {
 	var gaps []mechanisms.Gap
 	enabled := false
@@ -70,7 +78,7 @@ func countTimingGaps(spec *Spec) []mechanisms.Gap {
 	if enabled {
 		for i, e := range spec.Spawns {
 			if e.CountVisibility == nil {
-				gaps = append(gaps, mechanisms.Gap{ID: "runtime.enemy_count_visibility", Status: "unimplemented", Source: "enemy_spec", SourceID: e.EnemyID, Operator: e.Name, Instance: i, Reason: "敌数攻速场景缺少隐匿/迷彩状态上下文，不能默认可计数"})
+				gaps = append(gaps, countVisibilityGap(e, i))
 			}
 		}
 	}
@@ -99,7 +107,7 @@ func (o *operator) intervalForEnemies(enemies []*enemy) (float64, error) {
 		}
 		visibility := e.spec.CountVisibility
 		if visibility == nil {
-			return 0, &mechanisms.IncompleteError{Placeholders: []mechanisms.Gap{countRuleGap(o.spec, "实时敌人缺少隐匿/迷彩计数状态")}}
+			return 0, &mechanisms.IncompleteError{Placeholders: []mechanisms.Gap{countVisibilityGap(e.spec, e.index)}}
 		}
 		if visibility.Hidden || visibility.Camouflage {
 			continue

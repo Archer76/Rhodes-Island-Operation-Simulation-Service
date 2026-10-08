@@ -288,12 +288,13 @@ func (c *simCtx) Summon(template json.RawMessage, cell [2]float64) int {
 // 甲被"复活"过一次、刚贴上来的阻挡被清掉过一次，只是那几帧里没人受影响。
 // 这一类缺口不会自己报错，只会偶尔改一个判决——所以把口子合成一个。
 func newEnemy(spec SpawnSpec, index int, position [2]float64, c *simCtx) *enemy {
+	spec.RawSources = cloneEnemySources(spec.RawSources)
 	if spec.CountVisibility != nil {
 		v := *spec.CountVisibility
 		spec.CountVisibility = &v
 	}
 	if c != nil && c.spec != nil && sceneUsesCount(c.spec) && spec.CountVisibility == nil {
-		c.countError = &mechanisms.IncompleteError{Placeholders: []mechanisms.Gap{{ID: "runtime.enemy_count_visibility", Status: "unimplemented", Source: "enemy_spec", SourceID: spec.EnemyID, Reason: "出怪或召唤缺少隐匿/迷彩计数状态"}}}
+		c.countError = &mechanisms.IncompleteError{Placeholders: []mechanisms.Gap{countVisibilityGap(spec, index)}}
 	}
 	e := &enemy{
 		spec:       spec,
