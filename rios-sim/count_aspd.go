@@ -76,9 +76,39 @@ func countTimingGaps(spec *Spec) []mechanisms.Gap {
 		}
 	}
 	if enabled {
-		for i, e := range spec.Spawns {
+		seen := map[*SpawnSpec]bool{}
+		var visit func(*SpawnSpec, int, string)
+		visit = func(e *SpawnSpec, index int, path string) {
+			if e == nil || seen[e] {
+				return
+			}
+			seen[e] = true
 			if e.CountVisibility == nil {
-				gaps = append(gaps, countVisibilityGap(e, i))
+				g := countVisibilityGap(*e, index)
+				g.Key = path
+				gaps = append(gaps, g)
+			}
+			for j, s := range e.RebornSummons {
+				visit(s.Template, index, fmt.Sprintf("%s.reborn_summons[%d].template", path, j))
+			}
+			visit(e.Summon, index, path+".summon")
+			visit(e.Mark, index, path+".mark")
+		}
+		for i := range spec.Spawns {
+			visit(&spec.Spawns[i], i, fmt.Sprintf("spawns[%d]", i))
+		}
+		if raw := spec.MechConfig["huai_shu_li.farmland"]; len(raw) > 0 {
+			var cfg struct {
+				Devices []struct {
+					Child *SpawnSpec `json:"child"`
+				} `json:"devices"`
+			}
+			if err := json.Unmarshal(raw, &cfg); err != nil {
+				gaps = append(gaps, mechanisms.Gap{ID: "runtime.enemy_count_template", Status: "unimplemented", Source: "mech_config", SourceID: "huai_shu_li.farmland", RawSource: raw, Reason: "敌数攻速无法检查田地召唤模板: " + err.Error()})
+			} else {
+				for i, d := range cfg.Devices {
+					visit(d.Child, i, fmt.Sprintf("mech_config.huai_shu_li.farmland.devices[%d].child", i))
+				}
 			}
 		}
 	}
