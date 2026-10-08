@@ -59,21 +59,30 @@ var immuneFields = []string{
 //
 // ★ 每个数值都用指针：`null`（这一档没有这个量）与 `0` 是两回事，
 // 用零值会让「没有」与「是 0」塌成一个。
+// EnemyRawSource retains ordered source layers, not a guessed effective state.
+// Later enemy visibility consumers must explicitly interpret inheritance/overrides.
+type EnemyRawSource struct {
+	Kind    string          `json:"kind"`
+	EnemyID string          `json:"enemy_id"`
+	Level   int             `json:"level"`
+	Raw     json.RawMessage `json:"raw"`
+}
 type EnemyStats struct {
-	EnemyID         string   `json:"enemy_id"`
-	Level           int      `json:"level"`
-	Name            string   `json:"name"`
-	MaxHP           *float64 `json:"max_hp"`
-	Atk             *float64 `json:"atk"`
-	Defense         *float64 `json:"defense"`
-	MagicRes        *float64 `json:"magic_resistance"`
-	MoveSpeed       *float64 `json:"move_speed"`
-	AttackSpeed     *float64 `json:"attack_speed"`
-	BaseAttackTime  *float64 `json:"base_attack_time"`
-	Weight          *float64 `json:"weight"`
-	LifePointReduce *float64 `json:"life_point_reduce"`
-	RangeRadius     *float64 `json:"range_radius"`
-	HPRecovery      *float64 `json:"hp_recovery_per_sec"`
+	RawSources      []EnemyRawSource `json:"raw_sources,omitempty"`
+	EnemyID         string           `json:"enemy_id"`
+	Level           int              `json:"level"`
+	Name            string           `json:"name"`
+	MaxHP           *float64         `json:"max_hp"`
+	Atk             *float64         `json:"atk"`
+	Defense         *float64         `json:"defense"`
+	MagicRes        *float64         `json:"magic_resistance"`
+	MoveSpeed       *float64         `json:"move_speed"`
+	AttackSpeed     *float64         `json:"attack_speed"`
+	BaseAttackTime  *float64         `json:"base_attack_time"`
+	Weight          *float64         `json:"weight"`
+	LifePointReduce *float64         `json:"life_point_reduce"`
+	RangeRadius     *float64         `json:"range_radius"`
+	HPRecovery      *float64         `json:"hp_recovery_per_sec"`
 	//: 原样透传（可能是数字也可能是字符串代号），所以用 any。
 	LevelType  any             `json:"level_type"`
 	Immunities map[string]bool `json:"immunities"`
@@ -206,6 +215,7 @@ func LoadEnemyLibrary() (*EnemyLibrary, error) {
 		merged := map[string]json.RawMessage{}
 		mergedBB := map[string]any{}
 		var mergedSkills json.RawMessage
+		var rawSources []EnemyRawSource
 		for _, itemRaw := range e.Value {
 			var item struct {
 				Level     *int            `json:"level"`
@@ -267,8 +277,10 @@ func LoadEnemyLibrary() (*EnemyLibrary, error) {
 			if s, ok := ed["skills"]; ok && string(s) != "null" {
 				mergedSkills = s
 			}
+			rawSources = append(rawSources, EnemyRawSource{Kind: "database_level", EnemyID: e.Key, Level: lv, Raw: append(json.RawMessage(nil), item.EnemyData...)})
 			st := &EnemyStats{
-				EnemyID: e.Key, Level: lv,
+				RawSources: cloneEnemySources(rawSources),
+				EnemyID:    e.Key, Level: lv,
 				// ⚠ 名字**不参与合并**：原版读的是**当前档**的 `enemyData.name`
 				// （`enemy.py:967`），不是逐档累积的那个。下面再取一次。
 				Name:             "",
@@ -385,8 +397,20 @@ func (l *EnemyLibrary) At(key string, level int) (*EnemyStats, error) {
 }
 
 // Clone 深拷贝一份——`WithOverwrite` 要在副本上改，**绝不写回库**。
+func cloneEnemySources(s []EnemyRawSource) []EnemyRawSource {
+	if s == nil {
+		return nil
+	}
+	out := make([]EnemyRawSource, len(s))
+	for i, v := range s {
+		out[i] = v
+		out[i].Raw = append(json.RawMessage(nil), v.Raw...)
+	}
+	return out
+}
 func (s *EnemyStats) Clone() *EnemyStats {
 	c := *s
+	c.RawSources = cloneEnemySources(s.RawSources)
 	c.Immunities = make(map[string]bool, len(s.Immunities))
 	for k, v := range s.Immunities {
 		c.Immunities[k] = v
@@ -466,6 +490,11 @@ func (l *EnemyLibrary) WithOverwrite(id string, level int,
 			id, prefab, err)
 	}
 	out := base.Clone()
+	rawOverwrite, err := json.Marshal(overwritten)
+	if err != nil {
+		return nil, fmt.Errorf("%s 本地敌人来源无法保存: %w", id, err)
+	}
+	out.RawSources = append(out.RawSources, EnemyRawSource{Kind: "stage_overwrite", EnemyID: id, Level: level, Raw: append(json.RawMessage(nil), rawOverwrite...)})
 	out.EnemyID = id
 
 	var attrs map[string]json.RawMessage
