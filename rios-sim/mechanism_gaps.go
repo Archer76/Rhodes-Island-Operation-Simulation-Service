@@ -205,7 +205,7 @@ func talentMechanismGaps(talents []resolvedTalent, charID, name string) []mechan
 // Raw/prebuilt specs are guarded too: callers cannot bypass the no-approximation
 // policy by omitting the producer's placeholder list.
 func specMechanismGaps(spec *Spec) []mechanisms.Gap {
-	gaps := mechanisms.Merge(spec.Placeholders)
+	gaps := mechanisms.Merge(spec.Placeholders, countTimingGaps(spec))
 	for _, reason := range spec.Unsupported {
 		gaps = mechanisms.Merge(gaps, []mechanisms.Gap{{ID: "spec.unsupported." + reason, Status: "unimplemented", Source: "spec", Key: "unsupported", RawValue: reason, Reason: reason}})
 	}

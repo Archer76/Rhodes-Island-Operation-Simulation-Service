@@ -288,6 +288,13 @@ func (c *simCtx) Summon(template json.RawMessage, cell [2]float64) int {
 // 甲被"复活"过一次、刚贴上来的阻挡被清掉过一次，只是那几帧里没人受影响。
 // 这一类缺口不会自己报错，只会偶尔改一个判决——所以把口子合成一个。
 func newEnemy(spec SpawnSpec, index int, position [2]float64, c *simCtx) *enemy {
+	if spec.CountVisibility != nil {
+		v := *spec.CountVisibility
+		spec.CountVisibility = &v
+	}
+	if c != nil && c.spec != nil && sceneUsesCount(c.spec) && spec.CountVisibility == nil {
+		c.countError = &mechanisms.IncompleteError{Placeholders: []mechanisms.Gap{{ID: "runtime.enemy_count_visibility", Status: "unimplemented", Source: "enemy_spec", SourceID: spec.EnemyID, Reason: "出怪或召唤缺少隐匿/迷彩计数状态"}}}
+	}
 	e := &enemy{
 		spec:       spec,
 		hp:         spec.HP,
@@ -1199,8 +1206,13 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		// （帧序 7）就该吃得上；放到帧末递减会让「刚治完就被打」的那一下白挂。
 		talentTick(ops, dt)
 
+		if ctx.countError != nil {
+			return nil, ctx.countError
+		}
 		// ---- 6. 我方出手（1870 → 2687）
-		operatorsAttack(ops, enemies, dt, t, spec, verdict)
+		if err := operatorsAttack(ops, enemies, dt, t, spec, verdict); err != nil {
+			return nil, err
+		}
 		// ---- 7. 敌方出手（1873 → 2882）
 		enemiesAttack(ops, enemies, dt, t, spec, verdict)
 
@@ -1296,6 +1308,9 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 	verdict.SimMS = float64(time.Since(start).Microseconds()) / 1000.0
 	// 机制状态进判决，供对拍逐项比（判决本身不读它，见 `mech.Snapshotter`）。
 	verdict.MechState = mechanisms.States()
+	if ctx.countError != nil {
+		return nil, ctx.countError
+	}
 	return verdict, nil
 }
 
@@ -1307,6 +1322,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 // 每次现取，不能在第一帧把切片头存下来（否则机制看到的是一个冻结的、越用越旧的
 // 列表——这类错只在"敌人变多的那一刻"才现形）。
 type simCtx struct {
+	countError error
 	spec       *Spec
 	objs       *[]*operator
 	enemies    *[]*enemy
@@ -2174,7 +2190,7 @@ func traitDrainTick(ops []*operator, dt, t float64) {
 //   - `hit_count` 是"一次出手打几下"，**每一击都各减一次防御**；
 //   - `final_hit_scale` 只改最后一击的倍率。
 func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
-	spec *Spec, verdict *Verdict) {
+	spec *Spec, verdict *Verdict) error {
 	for _, op := range ops {
 		if !op.alive() {
 			continue
@@ -2192,8 +2208,12 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 		if op.freezeTimer > 0 {
 			continue
 		}
+		interval, err := op.intervalForEnemies(enemies)
+		if err != nil {
+			return err
+		}
 		op.attackTimer += dt
-		if op.attackTimer < op.interval() {
+		if op.attackTimer < interval {
 			continue
 		}
 		targets := pickTargets(op, enemies, op.maxTarget(), t)
@@ -2249,7 +2269,7 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 			//: 空格会破坏 `key=value` 的切分。
 			trace("OPATK t=%.4f op=%s skill=%v interval=%.4f timer=%.4f "+
 				"block=%s pick=%s inrange=%s heals=%s",
-				t, op.spec.Name, op.skillActive, op.interval(), op.attackTimer,
+				t, op.spec.Name, op.skillActive, interval, op.attackTimer,
 				strings.Join(names(op.blocking), "|"),
 				strings.Join(names(targets), "|"),
 				strings.Join(names(inRangeOf(op, enemies)), "|"),
@@ -2451,6 +2471,7 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 			op.ammoLeft--
 		}
 	}
+	return nil
 }
 
 // splashTiles 以 `center` 为心、`radius` 为半径的圆**盖到的地块**——**重叠判定**

@@ -364,6 +364,9 @@ func (o *operator) dodgeVs(damageType string) float64 {
 }
 
 func (o *operator) interval() float64 {
+	if o.spec.EnemyCountAttackSpeed != nil {
+		panic("敌数攻速必须使用显式实时场景intervalForEnemies")
+	}
 	if o.spec.AttackSpeedWhenFree != 0 || o.spec.HPAttackSpeed != nil {
 		timing := o.spec.AttackTiming
 		if p := o.profile(); p != nil {
