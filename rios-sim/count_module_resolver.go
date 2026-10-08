@@ -20,18 +20,40 @@ func exactModuleTalentGaps(op OperatorSpec, instance int) []mechanisms.Gap {
 	if e != nil || picked == nil || !reflect.DeepEqual(picked, r) {
 		return []mechanisms.Gap{{ID: "runtime.exact_module_talent", Status: "unimplemented", Source: "operator_spec", CharID: op.CharID, Operator: op.Name, Key: "exact_module_talent", RawSource: append(json.RawMessage(nil), r.RawPart...), Instance: instance, Reason: "升级候选规格与精确原始来源或练度选择不一致"}}
 	}
-	key := fmt.Sprintf("parts[1].addOrOverrideTalentDataBundle.candidates[%d]", r.CandidateIndex)
-	for _, g := range op.Placeholders {
-		if g.ID == "module.talent_override" && g.CharID == op.CharID && g.SourceID == r.ModuleID && g.Key == key && g.Level == r.ModuleLevel {
-			return nil
+	// Inventory is independent from the single effective selection. Rebuild all
+	// eligible candidates in the authenticated part without fetching other parts.
+	var part struct {
+		Bundle struct {
+			Candidates []json.RawMessage `json:"candidates"`
+		} `json:"addOrOverrideTalentDataBundle"`
+	}
+	_ = json.Unmarshal(r.RawPart, &part)
+	var gaps []mechanisms.Gap
+	for ci, raw := range part.Bundle.Candidates {
+		var c struct {
+			Name        string            `json:"name"`
+			Rank        int               `json:"requiredPotentialRank"`
+			Description string            `json:"upgradeDescription"`
+			BB          []json.RawMessage `json:"blackboard"`
 		}
+		_ = json.Unmarshal(raw, &c)
+		if c.Rank > r.Potential-1 {
+			continue
+		}
+		key := fmt.Sprintf("parts[1].addOrOverrideTalentDataBundle.candidates[%d]", ci)
+		present := false
+		for _, g := range op.Placeholders {
+			if g.ID == "module.talent_override" && g.CharID == op.CharID && g.SourceID == r.ModuleID && g.Key == key && g.Level == r.ModuleLevel {
+				present = true
+				break
+			}
+		}
+		if present {
+			continue
+		}
+		gaps = append(gaps, mechanisms.Gap{ID: "module.talent_override", Status: "unimplemented", Source: "module", CharID: op.CharID, Operator: op.Name, SourceID: r.ModuleID, SourceName: c.Name, Key: key, Description: c.Description, RawBlackboard: cloneRawBlackboard(c.BB), RawSource: append(json.RawMessage(nil), r.RawPart...), RawSlot: append(json.RawMessage(nil), raw...), Slot: 1, Level: r.ModuleLevel, Instance: instance, Reason: "升级part内符合资格的来源仍有未完成事件消费者；单一选中项不能删除其它来源"})
 	}
-	var c struct {
-		Name string            `json:"name"`
-		BB   []json.RawMessage `json:"blackboard"`
-	}
-	_ = json.Unmarshal(r.RawCandidate, &c)
-	return []mechanisms.Gap{{ID: "module.talent_override", Status: "unimplemented", Source: "module", CharID: op.CharID, Operator: op.Name, SourceID: r.ModuleID, SourceName: c.Name, Key: key, Description: r.UpgradeDescription, RawBlackboard: cloneRawBlackboard(c.BB), RawSource: append(json.RawMessage(nil), r.RawPart...), RawSlot: append(json.RawMessage(nil), r.RawCandidate...), Slot: 1, Level: r.ModuleLevel, Instance: instance, Reason: "选中升级来源已送达但事件消费者未完成"}}
+	return gaps
 }
 
 type ExactModuleTalent struct {

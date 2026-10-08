@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"rios-sim/mechanisms"
 	"testing"
 )
@@ -43,8 +44,25 @@ func TestCountModuleSelectedSourceProductionAndRawGuards(t *testing.T) {
 				op.SkillRangedExemption = nil
 				op.FriendlyHealRestriction = nil
 				gaps := exactModuleTalentGaps(op, 0)
-				if len(gaps) != 1 || gaps[0].ID != "module.talent_override" || gaps[0].Instance != 0 || len(gaps[0].RawSlot) == 0 {
+				want := 1
+				if owner.char == "char_4010_etlchi" && pot >= 5 {
+					want = 2
+				}
+				if len(gaps) != want || gaps[0].ID != "module.talent_override" || gaps[0].Instance != 0 || len(gaps[0].RawSlot) == 0 {
 					t.Fatal("raw selected source bypassed missing effect")
+				}
+				for idx, g := range gaps {
+					if g.Key != fmt.Sprintf("parts[1].addOrOverrideTalentDataBundle.candidates[%d]", idx) || g.Instance != 0 || g.Description == "" || string(g.RawSource) != string(op.ExactModuleTalent.RawPart) || len(g.RawBlackboard) == 0 {
+						t.Fatal("eligible source provenance lost")
+					}
+				}
+				if want == 2 {
+					partial := op
+					partial.Placeholders = []mechanisms.Gap{gaps[1]}
+					pending := exactModuleTalentGaps(partial, 0)
+					if len(pending) != 1 || pending[0].Key != gaps[0].Key {
+						t.Fatal("selected gap suppressed other eligible source")
+					}
 				}
 				spec := deploymentPrimitiveSpec(1)
 				spec.Operators = []OperatorSpec{op}
