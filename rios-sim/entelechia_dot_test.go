@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -47,6 +48,74 @@ func TestEntelechiaDOTPulseActualDamageAndNoRecursiveRecovery(t *testing.T) {
 		}
 	}
 }
+func TestEntelechiaDOTReportIndependentStateAndWireWitness(t *testing.T) {
+	chdirRepoRootForData(t)
+	r, e := resolveExactCountModuleTalent(&OperatorStats{CharID: "char_4010_etlchi", Module: "uniequip_003_etlchi", ModuleLevel: 3, Elite: 2, Level: 60, Potential: 5})
+	if e != nil || r == nil {
+		t.Fatal(e)
+	}
+	o := selfHealUnit(100)
+	o.spec.CharID = "char_4010_etlchi"
+	o.spec.ExactModuleTalent = r
+	for _, report := range []bool{false, true} {
+		for _, blocked := range []bool{false, true} {
+			enemy := countedEnemy(1)
+			enemy.index = 42
+			enemy.rebornAt = -1
+			enemy.hp = 10
+			enemy.spec.RES = 50
+			enemy.invincible = blocked
+			var v *Verdict
+			if report {
+				v = &Verdict{}
+			}
+			got, e := o.consumeEntelechiaDOTPulse(7, enemy, v)
+			want := 10.0
+			if blocked {
+				want = 0
+			}
+			if e != nil || got != want || enemy.hp != 10-want {
+				t.Fatal("report changed damage")
+			}
+			if !blocked && enemy.deathTime != 7 {
+				t.Fatal("nil report suppressed death state")
+			}
+			if report {
+				if len(v.Events) == 0 || v.Events[0].Damage == nil {
+					t.Fatal("damage witness missing")
+				}
+				d := v.Events[0].Damage
+				if d.TargetIndex != 42 || d.Target != enemy.spec.Name || d.Raw != 500 || d.Resolved != 250 || d.Dealt != want || d.HPAfter != enemy.hp || d.DamageType != "MAGIC" || d.ModuleLevel != 3 || d.CandidateIndex != 1 || d.ModuleID != r.ModuleID {
+					t.Fatal("damage witness wrong")
+				}
+				blob, e := json.Marshal(v.Events[0])
+				if e != nil {
+					t.Fatal(e)
+				}
+				var event Event
+				if e = json.Unmarshal(blob, &event); e != nil || event.Damage == nil || *event.Damage != *d {
+					t.Fatal("witness JSON lost")
+				}
+				n := 2
+				if blocked {
+					n = 1
+				}
+				if len(v.Events) != n {
+					t.Fatal("zero damage recorded kill")
+				}
+			}
+		}
+	}
+	b, e := json.Marshal(Event{T: 1, Kind: "kill", Who: "old"})
+	if e != nil || strings.Contains(string(b), "damage") {
+		t.Fatal("old event JSON changed")
+	}
+	v := &Verdict{}
+	if got, e := o.consumeEntelechiaDOTPulse(1, nil, v); e != nil || got != 0 || len(v.Events) != 0 {
+		t.Fatal("nil target emitted pulse")
+	}
+}
+
 func TestEntelechiaDOTPulseRefusesUnprovedSourceLifetime(t *testing.T) {
 	chdirRepoRootForData(t)
 	r, e := resolveExactCountModuleTalent(&OperatorStats{CharID: "char_4010_etlchi", Module: "uniequip_003_etlchi", ModuleLevel: 3, Elite: 2, Level: 60, Potential: 5})

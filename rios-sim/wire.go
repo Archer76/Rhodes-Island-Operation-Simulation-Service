@@ -825,10 +825,25 @@ type Verdict struct {
 
 // Event 是时间线上的一笔。
 type Event struct {
-	T    float64          `json:"t"`
-	Kind string           `json:"kind"`
-	Who  string           `json:"who"`
-	Heal *HealEventDetail `json:"heal,omitempty"`
+	T      float64            `json:"t"`
+	Kind   string             `json:"kind"`
+	Who    string             `json:"who"`
+	Heal   *HealEventDetail   `json:"heal,omitempty"`
+	Damage *DamageEventDetail `json:"damage,omitempty"`
+}
+
+// Optional per-target damage witness; raw source remains in operator provenance.
+type DamageEventDetail struct {
+	Target         string  `json:"target"`
+	TargetIndex    int     `json:"target_index"`
+	DamageType     string  `json:"damage_type"`
+	Raw            float64 `json:"raw"`
+	Resolved       float64 `json:"resolved"`
+	Dealt          float64 `json:"dealt"`
+	HPAfter        float64 `json:"hp_after"`
+	ModuleID       string  `json:"module_id"`
+	ModuleLevel    int     `json:"module_level"`
+	CandidateIndex int     `json:"candidate_index"`
 }
 
 // Optional recovery witness; zero actual recovery at full HP remains explicit.
