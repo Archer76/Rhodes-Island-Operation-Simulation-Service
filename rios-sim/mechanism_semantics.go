@@ -40,6 +40,9 @@ func semanticMechanismGaps(source, sourceID, sourceName, charID, name, desc stri
 	} else if entityText.MatchString(text) {
 		add("summon_entity", "description", desc, "召唤实体或召唤物作用对象尚无完整战斗消费者")
 	}
+	if charID == wangCharID && source == "trait" && strings.Contains(text, "陷阱") {
+		add("trap_placement", "description", desc, "陷阱放置限制尚无实体部署消费者")
+	}
 	if displacementText.MatchString(text) {
 		add("displacement", "description", desc, "推拉或自身位移尚未接入战斗位置与路径")
 	}

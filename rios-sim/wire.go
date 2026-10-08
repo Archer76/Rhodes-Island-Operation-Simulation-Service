@@ -173,6 +173,8 @@ type TeamAuraSpec struct {
 // 被动技能与常驻天赋/光环的影响**已经折进这些数字**（`atk` 就是
 // `OperatorUnit.current_atk()` 在无技能帧的值），所以 Go 这边不需要任何再计算。
 type OperatorSpec struct {
+	// Evidence only; deliberately not read by battle consumers.
+	WangSource   *WangSourceSpec  `json:"wang_source,omitempty"`
 	Placeholders []mechanisms.Gap `json:"mechanism_placeholders,omitempty"`
 	CharID       string           `json:"char_id"`
 	Name         string           `json:"name"`

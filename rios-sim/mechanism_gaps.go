@@ -29,6 +29,9 @@ func skillMechanismGaps(meta SkillMeta, charID, name string, slot int, baseRange
 			RawBlackboard: cloneRawBlackboard(meta.RawBlackboard), RawSource: append(json.RawMessage(nil), meta.RawSource...), Description: meta.RawDescription, Slot: slot, Level: meta.Level})
 	}
 	consumed := map[string]bool{"atk": true, "def": true, "max_hp": true, "attack_speed": true, "base_attack_time": true, "cost": true, "atk_scale": true, "times": true}
+	if charID == wangCharID {
+		consumed = map[string]bool{}
+	}
 	if _, exact := instantSelfHealRatio(meta); exact {
 		consumed["heal_scale"] = true
 	}
@@ -341,6 +344,11 @@ func operatorMechanismGapsWithInputs(r DeployRow, st *OperatorStats, talents []r
 		return nil, err
 	}
 	gaps = mechanisms.Merge(gaps, characterModuleGaps)
+	wangModuleGaps, err := wangModuleMechanismGaps(st)
+	if err != nil {
+		return nil, err
+	}
+	gaps = mechanisms.Merge(gaps, wangModuleGaps)
 	if st.AttackSpeedBonus.WhenFree != exactFree {
 		gaps = append(gaps, mechanisms.Gap{ID: "module.attack_speed_when_free", Status: "unimplemented", Source: "module", Operator: st.Name, CharID: r.Entry.CharID, SourceID: st.Module, Key: "aspd_when_free", RawValue: st.AttackSpeedBonus.WhenFree, Reason: "未阻挡条件攻速尚未接入战斗"})
 	}

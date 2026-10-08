@@ -201,8 +201,9 @@ type OperatorOut struct {
 	//: 与 `wire.go::OperatorSpec` 的 `Skill` / `Active` 同名同形。在那之前，
 	//: 这两个键在 `OperatorUnported` 里（「Python 有、Go 没有」）——现在是 Go 自己算。
 	//: 口径见 `skillbind.go` 的文件头：槽号 `0` ⇒ 技 1；等级取 7。
-	Skill  *SkillSpec `json:"skill,omitempty"`
-	Active *Profile   `json:"active,omitempty"`
+	WangSource *WangSourceSpec `json:"wang_source,omitempty"`
+	Skill      *SkillSpec      `json:"skill,omitempty"`
+	Active     *Profile        `json:"active,omitempty"`
 
 	//: **只在本进程内用**：这一位干员的技能黑板里落在首发表之外的键。
 	//: 不出去（`json:"-"`）——出去的那一份是 bundle 上汇总+去重的 `SkillUnknownKeys`，
@@ -999,6 +1000,10 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 	if err != nil {
 		return OperatorOut{}, err
 	}
+	out.WangSource, err = buildWangSourceSpec(st, r.Skill, skillLevel)
+	if err != nil {
+		return OperatorOut{}, err
+	}
 	if sk, act, unknown, err := bindSkillAtLevelWithInputs(e.CharID, r.Skill, skillLevel, atk, def, res,
 		maxHP, spd, interval, st.TextDerived.DamageType, inputs); err != nil {
 		return OperatorOut{}, fmt.Errorf("%s（%s）的技能绑定：%v", r.Operator, e.CharID, err)
@@ -1043,6 +1048,10 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 		}
 	} else {
 		covered["skill_none"]++
+		if len(unknown) > 0 {
+			covered["skill_unknown_key_instances"] += len(unknown)
+			out.SkillUnknownKeys = append(out.SkillUnknownKeys, unknown...)
+		}
 	}
 	//: **天赋折进面板的三个比例**原样透出（判据靠它把两边还原到同一个量）。
 	//: 没有天赋给面板加成时**不送这个键**（`omitempty`）——与「有这条、比例是 0」

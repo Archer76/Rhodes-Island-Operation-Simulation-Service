@@ -25,6 +25,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"rios-sim/mechanisms"
 )
 
 // SkillLevelDefault 是名册普通技能等级缺失时的默认等级（博士裁定）。
@@ -62,6 +63,11 @@ func bindSkillAtLevelWithInputs(charID string, slot, level int, baseATK, baseDEF
 			charID, sid, level, err)
 	}
 	mods, unknown := ApplyBlackboard(meta.Blackboard)
+	if charID == wangCharID {
+		// Stone passives and inventory actions are not ordinary owner buffs.
+		// Keep the source gaps; no runtime skill is claimed by source serialization.
+		return nil, nil, mechanisms.Keys(meta.Blackboard), nil
+	}
 
 	spec := &SkillSpec{
 		SPType:       spTypeString(meta.SPType),
