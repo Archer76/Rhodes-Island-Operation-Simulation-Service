@@ -214,6 +214,38 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 		add := func(key string, value float64, reason string) {
 			gaps = mechanisms.Merge(gaps, []mechanisms.Gap{{ID: "runtime." + key, Status: "unimplemented", Source: "operator_spec", Operator: op.Name, CharID: op.CharID, Key: key, RawValue: value, Reason: reason, Instance: i}})
 		}
+		if r := op.SkillRangedExemption; r != nil {
+			if !validSkillRangedExemption(op.CharID, r) {
+				add("skill_ranged_exemption", 0, "技能远程倍率豁免缺少精确模组来源")
+			} else {
+				// A valid exemption source still contains unimplemented notes and
+				// penetration. Raw callers must not erase that source's gaps.
+				var part struct {
+					Talent struct {
+						Candidates []json.RawMessage `json:"candidates"`
+					} `json:"addOrOverrideTalentDataBundle"`
+				}
+				_ = json.Unmarshal(r.Part, &part)
+				var c struct {
+					Description string            `json:"upgradeDescription"`
+					Blackboard  []json.RawMessage `json:"blackboard"`
+					Name        string            `json:"name"`
+				}
+				_ = json.Unmarshal(part.Talent.Candidates[0], &c)
+				// Only this operator's own same-source gap can suppress synthesis;
+				// another deployment's matching gap must never hide a missing one.
+				present := false
+				for _, g := range op.Placeholders {
+					if g.ID == "module.talent_override" && g.CharID == op.CharID && g.SourceID == r.ModuleID && g.Level == r.ModuleLevel && g.Slot == 1 && g.Key == "parts[1].addOrOverrideTalentDataBundle.candidates[0]" {
+						present = true
+						break
+					}
+				}
+				if !present {
+					gaps = mechanisms.Merge(gaps, []mechanisms.Gap{{ID: "module.talent_override", Status: "unimplemented", Source: "module", CharID: op.CharID, Operator: op.Name, SourceID: r.ModuleID, SourceName: c.Name, Key: "parts[1].addOrOverrideTalentDataBundle.candidates[0]", Slot: 1, Level: r.ModuleLevel, Instance: i, Description: c.Description, RawBlackboard: cloneRawBlackboard(c.Blackboard), RawSource: append(json.RawMessage(nil), r.Part...), RawSlot: append(json.RawMessage(nil), part.Talent.Candidates[0]...), Reason: "仅技能远程倍率豁免已消费；该模组来源的持续攻击、音符与穿透仍未完成"}})
+				}
+			}
+		}
 		if op.AttackSpeedWhenFree != 0 {
 			if math.IsNaN(op.AttackSpeedWhenFree) || math.IsInf(op.AttackSpeedWhenFree, 0) || op.AttackSpeedWhenFree < 0 || !validAttackTiming(op.AttackTiming) {
 				add("conditional_attack_speed", op.AttackSpeedWhenFree, "条件攻速缺少有效原始计算上下文")

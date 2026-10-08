@@ -2410,12 +2410,18 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 			//: ⚠ 逐**目标**算，不是每次出手算一次：同一次出手可能打到"被挡的那个"
 			//: 与"没被挡的那个"，两个倍率不同。写在出手那一层会让其中一个用错倍率。
 			atkBase := power
-			if op.spec.RangedAtkScale > 0 && op.spec.RangedAtkScale != 1.0 &&
-				target.blockedBy != op {
-				atkBase = power * op.spec.RangedAtkScale
+			rangedScale := op.rangedScaleFor(target)
+			if target.blockedBy != op && op.skillActive && op.spec.RangedAtkScale > 0 && op.spec.RangedAtkScale != 1 && validSkillRangedExemption(op.spec.CharID, op.spec.SkillRangedExemption) {
+				verdict.SkillRangedExemptions++
+				if traceOn {
+					trace("MODRANGED t=%.4f op=%s target=%s module=%s level=%d", t, op.spec.Name, target.spec.Name, op.spec.SkillRangedExemption.ModuleID, op.spec.SkillRangedExemption.ModuleLevel)
+				}
+			}
+			if rangedScale != 1 {
+				atkBase = power * rangedScale
 				if traceOn {
 					trace("TRAITRANGED t=%.4f op=%s target=%s scale=%.4f atk=%.3f→%.3f",
-						t, op.spec.Name, target.spec.Name, op.spec.RangedAtkScale,
+						t, op.spec.Name, target.spec.Name, rangedScale,
 						power, atkBase)
 				}
 			}

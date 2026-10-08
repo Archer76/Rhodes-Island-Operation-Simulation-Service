@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"rios-sim/mechanisms"
@@ -57,6 +58,61 @@ func exactCountModuleCandidate(st *OperatorStats, pi, ci int, raw json.RawMessag
 		delete(expected, b.Key)
 	}
 	return len(expected) == 0
+}
+
+// SkillRangedExemption preserves the full module part identity. It claims only
+// the explicit active-skill ranged penalty exemption, not the note subsystem.
+type SkillRangedExemption struct {
+	ModuleID    string          `json:"module_id"`
+	ModuleLevel int             `json:"module_level"`
+	Part        json.RawMessage `json:"part"`
+}
+
+func validSkillRangedExemption(charID string, r *SkillRangedExemption) bool {
+	if r == nil || charID != "char_4182_oblvns" || r.ModuleID != "uniequip_002_oblvns" {
+		return false
+	}
+	want := map[int]string{2: "13dbd63de1baf7b6e5c944aeda777a96bfa7da94b32e8f17ab81d4fa373f90c1", 3: "150880c247b986ed398106372cec1dbc868bb82cd9b3f8026c11f7247915b44e"}[r.ModuleLevel]
+	if want == "" {
+		return false
+	}
+	var part any
+	if json.Unmarshal(r.Part, &part) != nil {
+		return false
+	}
+	canonical, err := json.Marshal(part)
+	return err == nil && fmt.Sprintf("%x", sha256.Sum256(canonical)) == want
+}
+
+func sakikoSkillRangedExemption(st *OperatorStats) (*SkillRangedExemption, error) {
+	if st.CharID != "char_4182_oblvns" || st.Module != "uniequip_002_oblvns" || st.ModuleLevel < 2 || st.ModuleLevel > 3 || st.Elite < 2 || st.Level < 60 || st.Potential < 1 {
+		return nil, nil
+	}
+	parts, err := moduleParts(st.Module, st.ModuleLevel)
+	if err != nil {
+		return nil, err
+	}
+	if len(parts) < 2 {
+		return nil, nil
+	}
+	r := &SkillRangedExemption{ModuleID: st.Module, ModuleLevel: st.ModuleLevel, Part: append(json.RawMessage(nil), parts[1]...)}
+	if !validSkillRangedExemption(st.CharID, r) {
+		return nil, nil
+	}
+	return r, nil
+}
+
+func (o *operator) rangedScaleFor(target *enemy) float64 {
+	if target.blockedBy == o {
+		return 1
+	}
+	if o.skillActive && validSkillRangedExemption(o.spec.CharID, o.spec.SkillRangedExemption) {
+		return 1
+	}
+	if o.spec.RangedAtkScale > 0 {
+		return o.spec.RangedAtkScale
+	}
+	return 1
 }
 
 // countCharacterModuleGaps guards the non-ASPD bundles of these two exact

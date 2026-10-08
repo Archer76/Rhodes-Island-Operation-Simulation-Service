@@ -187,7 +187,8 @@ type OperatorOut struct {
 	//: 特性「可以进行远程攻击，但攻击力降低至 v」的 v（月见夜 领主）。
 	//: ⚠ 判据是**目标有没有被她挡住**（博士 2026-09-25 裁定），不是格子几何。
 	//: **「没有这条」是 1.0**（乘数），所以只在 v ≠ 1 时才送。
-	RangedAtkScale *float64 `json:"ranged_atk_scale,omitempty"`
+	RangedAtkScale       *float64              `json:"ranged_atk_scale,omitempty"`
+	SkillRangedExemption *SkillRangedExemption `json:"skill_ranged_exemption,omitempty"`
 	//: 特性「击杀敌人后获得 N 点部署费用」（翎羽 冲锋手）。**「没有这条」是 0。**
 	KillCostOnKill *int `json:"kill_cost_on_kill,omitempty"`
 	//: 同一条特性的后半句「撤退时返还初始部署费用」。消费者是撤退动作。
@@ -816,6 +817,10 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 		covered["ranged_atk_scale_nonzero"]++
 		v := st.RangedAtkScale
 		out.RangedAtkScale = &v
+	}
+	out.SkillRangedExemption, err = sakikoSkillRangedExemption(st)
+	if err != nil {
+		return OperatorOut{}, err
 	}
 	//: 特性「击杀得费」（翎羽）。
 	if st.KillCostOnKill > 0 {
