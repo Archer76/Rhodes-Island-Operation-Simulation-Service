@@ -77,12 +77,22 @@
 |---|---|---|---|
 | M-A1 | `module.attack_speed_when_free` | 🔶 `1af069b` 已覆盖五名干员 `uniequip_002` 未阻挡 +8 攻速（全 15 档）；其余条件攻速模组拒判 | 被击倒后、元素伤害、友方条件等族 |
 | M-A2 | `module.conditional_attack_speed` | 🔶 `25fd79b` 已覆盖 demetr002／chyue003 「生命高于 50%」两档；同句的 15 个单 BB 来源仍拒判 | 逐族扩展 |
-| M-A3 | `runtime.enemy_count_attack_speed` ／ `runtime.enemy_count_visibility` | 🔶 `951079f` 实现显式计时核心，`7c59ed6` 接入祥子／隐德来希两模组的攻速部分，`81755a8` 保留敌人来源层；整模组候选仍保留缺口，因为 `atk_scale`／`value` 尚未认领 | 博士已裁定：隐匿／迷彩不计，其余在场敌人计（含空中／无敌）；一般跟随当前技能范围，祥子使用基础范围。来源映射及动态可见性生命周期仍须完整接入，不能以缺省 false 代替 |
+| M-A3 | `runtime.enemy_count_attack_speed` ／ `runtime.enemy_count_visibility` | 🔶 计时核心及祥子／隐德来希两模组六档攻速部分已接入；`aa24de4` 原始范围／计时 JSON presence，`965f09a` 已知召唤模板预检，`6b86aa0` 有效隐匿／迷彩及免疫快照消费者，`dcaa7c8` 两种隐形弩手 lv0 固有来源与恢复状态，`4e6eab7` 有效来源动态正负回归。最近已验证定向 24 PASS／0 FAIL／0 SKIP，8 个 Go 测试包 PASS，vet rc0；整项未完成 | 裁定：仅当前生效的隐匿／迷彩排除，其余在场敌人计（含空中／无敌）；反隐使迷彩失效后计入、恢复后排除；一般随技能范围，祥子用基础范围。外来完整状态来源、反隐生产生命周期仍未闭合；整模组候选 `atk_scale`／`value` 未完整认领，继续拒判。见下方交接 |
 | M-A4 | `active.conditional_attack_speed` | ⬜ | 技能期间的条件攻速 |
 | M-A5 | `active.dodge_phys` ／ `active.dodge_arts` | ⬜ | 闪避在 Python 里是期望值法；按「不做近似」须改精确事件或保持拒判 |
 | M-A6 | `trait.blackboard.*` | ⬜ | 特性未认领键 |
 | M-A7 | 行商分支特性 | ⬜ | `operator_traits.go` 注释登记「未实现」 |
 | M-A8 | `damage.weakness` | ⬜ | 弱点伤害 |
+
+### M-A3 新会话交接（2026-10-08，已验证基线 `4e6eab7`）
+
+- **人物范围**：丰川祥子 `char_4182_oblvns / uniequip_002_oblvns` 与隐德来希 `char_4010_etlchi / uniequip_003_etlchi`，各模组 1–3 级。精确来源为 part0／trait candidate0、阈值 2、条件 ASPD +12。旧常驻 Flat 仅扣 12 一次，不扣静态模组攻速；仍保留整候选占位，不能据此宣布人物完整。
+- **已经接线**：逐干员出手前实时计数，读取当前场景与原始 BAT／ASPD；前序同帧击杀可见；条件变化不重置累计攻击计时。显式状态 JSON 的 hidden／camouflage 必填，未知状态不能当 false。已知 SpawnSpec 的重生／召唤／天标树及田地 devices.child 模板在出生前预检，动态出生另有守卫；不声称全部机制配置已扫描。
+- **固有来源边界**：仅 `enemy_1019_jshoot` 与 `_2` lv0，以完整 EnemyData 的 Go 规范 SHA 锁定；阻挡抑制固有隐匿，解除阻挡 3 秒恢复。3 秒来自 PRTS 普通隐匿术语说明，不是 raw BB 数值。固有源与外来 held 状态做 OR，不清除外来迷彩；反隐免疫抑制有效限制。完整外来 CountVisibility 未证仍 nil／Incomplete，不能用固有规则替代。业余／专业竞演者有狂欢条件，未按描述直接做永久隐匿。
+- **下一步人物工作**：核实并闭合上述精确模组来源的剩余 `atk_scale=.8`／`value=50` 消费者和其他人物占位；先读现有领主远程倍率、回复消费者，不能因为 BB 数值相同就认领模组来源。只有完整来源闭合才能移除对应占位，其余继续拒判。另需不靠人工补完整状态的生产正负与实际战斗证据。
+- **本会话未验工作树**：`rios-sim/count_module_test.go` 尚有第 8 轮未提交测试改动，拟补无模组对照、静态 ASPD 5／6／7 保留及技能 active BAT／ASPD 数值；尚未运行，不计 PASS，不覆盖已验证基线。新会话先读 diff 并验证，勿当已完成或直接覆盖。
+- **最新验证口径**：`4e6eab7` 定向 24 PASS／0 FAIL／0 SKIP，8 个测试包 PASS，progress 无测试文件，vet rc0。实际 Ctx.Summon 正负已行使；部分恢复边界另由 tick 测试验证，不声称真实技能施加免疫或 runSim 全 phase 已验证。未重建发布包、未扩搜索策略。
+- **仓外详细证据**：`D:/home/DSH/tmp/rios-count-aspd-20261008/` 下 `producer-partial.md`、`effective-visibility.md`、`intrinsic-visibility.md`、`intrinsic-paired-guards.md`。这些是本机审计材料，不是可移植产品文件。
 
 ### 2.4 跨来源的语义族（`mechanism_semantics.go`，技能／天赋都会触发）
 
@@ -159,7 +169,7 @@
 
 | ID | 问题 | 在等什么 |
 |---|---|---|
-| V-1 | 敌数攻速：规则已裁，生产状态来源与动态行为仍需核验 | 隐匿／迷彩不计，空中／无敌计；后续用来源对照、动态状态测试与实机证据核验接线，而不是重开已裁规则 |
+| V-1 | 敌数攻速：规则已裁，生产状态来源与动态行为仍需核验 | 当前生效的隐匿／迷彩不计，反隐令迷彩失效后计入；空中／无敌计。`dcaa7c8`／`4e6eab7` 已有固有来源与动态召唤正负回归，但外来完整状态生产及真实人物战斗仍未闭合；见 M-A3 新会话交接，不重开已裁规则 |
 | V-2 | 概率机制的结果语义 | 博士裁定：精确事件下判决如何表达（逐次随机、最坏情况、还是枚举） |
 | V-3 | 怀黍离 E1–E17 | 实机观察（[verdicts-pending.md](verdicts-pending.md)） |
 | V-4 | 召唤物取哪个精英阶段 | 实机确认（[batch2-plan.md](batch2-plan.md)） |
