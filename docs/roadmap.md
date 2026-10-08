@@ -114,6 +114,7 @@
 | E-4 | 关卡字段 | `levelscripts` 未解析；`tile_replace_wall/road` 改写后能否站人未实机验证 | [limitations.md](limitations.md) |
 | E-5 | 敌人重量 | Go 写了 `EnemyStats.Weight` 但无消费者（依赖 M-X2 位移） | `sim.go` 注释 |
 | E-6 | 怀黍离一族的待裁口径 | E1–E17 共 17 条，均需实机观察 | [verdicts-pending.md](verdicts-pending.md) |
+| E-7 | P3R 相性「击破值 ⇒ 倒地」未建模 | ⬜ Go 只解析参数（`TotalAttack.weak_max`／`fall_duration`）不消费，`p3r_armed` 恒为 False；**且闸门不报拒跑理由**（`act54side_*` 全章，含 `#f#`），与「不做近似」冲突——当前这一章可能得到肯定判决。先补具名占位拒判，再移植 `BreakState`（掉血累积、倒地时刻、次数）进模拟主循环 | [python-to-go-migration.md](python-to-go-migration.md) §12.21；单一入口对拍 681＋25 处差异即此项（9-29 读数） |
 
 逐关能否完整模拟的验收线是「机制行使计数全 > 0」，台账在
 [level-full-sim-ledger.md](level-full-sim-ledger.md)。
@@ -165,18 +166,19 @@
 | W-1 | [limitations.md](limitations.md) 第 12 条「验证器不支持二次部署」已过期（Go 模拟器已支持，见 `c95b302`） |
 | W-2 | [limitations.md](limitations.md) 与 [batch2-plan.md](batch2-plan.md) 仍以 Python `battle/` 为「已建模」判据；Go 为主之后需要改成以占位 ID 为准 |
 | W-3 | README「已建模的机制」一节需与第二节的占位清单对齐 |
+| W-4 | Python 参照 `stage_mul._parse_one` 遇同一条 rune 内多个 `enemy` 键时后者覆盖前者（Go 累加，正确）：FA-7 四星档 `enemy_1008_ghost` 漏乘 ×1.3，单一入口对拍 3 处 hp 差异（2530 vs 3289）即此。只影响对拍参照，不影响产品 |
 
 ---
 
 ## 八 · 建议顺序
 
-1. **补识别层**（M-D1）：先保证「不该肯定的不会被肯定」，再谈实现。
+1. **补识别层**（M-D1、E-7 的占位部分）：先保证「不该肯定的不会被肯定」，再谈实现。
 2. **单字段、单来源的机制**：M-T1、M-T6、M-T7、M-S3、M-S6、M-A4、M-A8。
    每项都按已形成的做法——精确来源谓词、生产与占位共用同一谓词、正负对照、真实数据端到端。
 3. **条件与事件族**：M-T2、M-T3、M-A1/M-A2 余下部分、M-S1 余下部分、M-T8/M-T9。
 4. **等裁定的族**：V-2 定了再做 M-S5、M-T4、M-T5、M-A5；V-1 有证据再收 M-A3。
 5. **需要新系统的大件**：M-X1 召唤 → M-X2 位移 → M-X3/M-X4 形态与变体，
-   以及 E-2 敌方共同边界。
+   以及 E-2 敌方共同边界、E-7 P3R 倒地。
 6. **搜索与交付**：S-3、S-1/S-4 测量，D-2 后再做 D-1 正式发布。
 
 每一步的边界由博士逐项授权；本文只给建议顺序，不代表已授权实施。
