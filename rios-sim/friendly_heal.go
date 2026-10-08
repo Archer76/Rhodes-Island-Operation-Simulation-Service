@@ -67,6 +67,32 @@ func (o *operator) healFromCharacter(source *operator, amount float64, v *Verdic
 	}
 	return o.heal(amount)
 }
+
+// Exact source inventory; no recovery amounts or timings are executed here.
+// Public branch notes: https://prts.wiki/w/隐德来希#特性 (2026-10-08).
+// The 0.05s accumulation window and 0.12s recovery spacing are not raw BB;
+// endpoint, multi-hit and immunity semantics remain unproved.
+func entelechiaRemainingTraitGaps(charID, name string, raw json.RawMessage, instance int) []mechanisms.Gap {
+	if !validFriendlyHealRestriction(charID, &FriendlyHealRestriction{Trait: raw}) {
+		return nil
+	}
+	base := friendlyHealRestrictionGap(OperatorSpec{CharID: charID, Name: name, FriendlyHealRestriction: &FriendlyHealRestriction{Trait: raw}}, instance)
+	var gaps []mechanisms.Gap
+	for _, r := range []struct{ id, key, reason string }{
+		{"trait.reaper.group_attack", "group_attack", "群体攻击完整目标集合尚未闭合；不能由治疗阻挡数上限反推攻击数"},
+		{"trait.reaper.recovery_lifecycle", "recovery_lifecycle", "逐伤害触发恢复、0.05秒累加窗口与0.12秒生效间隔尚无精确事件消费者；窗口端点、多段与免疫边界未证；持续伤害不触发"},
+	} {
+		g := base
+		g.ID = r.id
+		g.Key = r.key
+		g.Status = "unimplemented"
+		g.RawValue = nil
+		g.Reason = r.reason
+		gaps = append(gaps, g)
+	}
+	return gaps
+}
+
 func friendlyHealRestrictionGap(op OperatorSpec, instance int) mechanisms.Gap {
 	r := op.FriendlyHealRestriction
 	var c struct {

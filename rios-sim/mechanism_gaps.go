@@ -228,6 +228,18 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 				if !present {
 					gaps = mechanisms.Merge(gaps, []mechanisms.Gap{friendlyHealRestrictionGap(op, i)})
 				}
+				for _, pending := range entelechiaRemainingTraitGaps(op.CharID, op.Name, r.Trait, i) {
+					found := false
+					for _, g := range op.Placeholders {
+						if g.ID == pending.ID && g.CharID == pending.CharID && g.SourceID == pending.SourceID && g.Key == pending.Key {
+							found = true
+							break
+						}
+					}
+					if !found {
+						gaps = mechanisms.Merge(gaps, []mechanisms.Gap{pending})
+					}
+				}
 			}
 		}
 		if r := op.SkillRangedExemption; r != nil {

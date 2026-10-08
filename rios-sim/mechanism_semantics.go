@@ -140,6 +140,7 @@ func traitMechanismGaps(charID, name string, elite, level, potential int) ([]mec
 	for _, t := range resolveTalents([]json.RawMessage{group}, elite, level, potential) {
 		raw := char.Trait.Candidates[t.CandidateIndex]
 		sourceID := fmt.Sprintf("trait:%d", t.CandidateIndex)
+		gaps = mechanisms.Merge(gaps, entelechiaRemainingTraitGaps(charID, name, raw, 0))
 		gaps = mechanisms.Merge(gaps, semanticMechanismGaps("trait", sourceID, "职业特性", charID, name, t.RawDescription, t.Blackboard, t.RawBlackboard, raw, t.TokenKey, "tokenKey", 0, 0))
 		// Only exact existing trait consumers may claim a key. Unknown trait keys
 		// must not disappear merely because numeric panel parsing recognizes them.
