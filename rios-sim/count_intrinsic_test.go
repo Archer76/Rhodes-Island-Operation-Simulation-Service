@@ -149,6 +149,101 @@ func TestCountIntrinsicSameFrameDeathAndRawContext(t *testing.T) {
 		}
 	}
 }
+func TestCountIntrinsicValidSourcePairedDynamicGuards(t *testing.T) {
+	chdirRepoRootForData(t)
+	lib, err := LoadEnemyLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := lib.At("enemy_1019_jshoot", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewOf(source, source.EnemyID, 0, nil, nil, lib, false)
+	raw, err := json.Marshal(unitSpecOf(v, 0, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var base SpawnSpec
+	if err := json.Unmarshal(raw, &base); err != nil {
+		t.Fatal(err)
+	}
+	base.CountVisibility = &CountVisibility{}
+	ctxNew := func() *simCtx {
+		enemies := []*enemy{}
+		now := 20.0
+		return &simCtx{spec: &Spec{Operators: []OperatorSpec{countSpeedUnit().spec}}, enemies: &enemies, time: &now, nextEnemyIndex: 17}
+	}
+	positive := ctxNew()
+	newEnemy(base, 0, [2]float64{}, positive)
+	if positive.countError != nil {
+		t.Fatal("valid source positive failed", positive.countError)
+	}
+	for _, delay := range []float64{-1, 0, 99, math.NaN(), math.Inf(1), math.Inf(-1), math.Nextafter(3, 0), math.Nextafter(3, 4)} {
+		s := base
+		s.IntrinsicCountVisibility = &IntrinsicCountVisibility{UnblockedHidden: true, RecoveryDelay: delay}
+		ctx := ctxNew()
+		newEnemy(s, 0, [2]float64{}, ctx)
+		if ctx.countError == nil {
+			t.Fatal("valid-source illegal delay escaped dynamic guard", delay)
+		}
+		if intrinsicForSpawn(s) == nil {
+			t.Fatal("negative control unexpectedly lost valid source")
+		}
+		e := newEnemy(s, 0, [2]float64{}, nil)
+		if _, err := countSpeedUnit().intervalForEnemies([]*enemy{e}); err == nil {
+			t.Fatal("valid-source illegal delay escaped realtime guard", delay)
+		}
+		if len(countTimingGaps(&Spec{Operators: positive.spec.Operators, Spawns: []SpawnSpec{s}})) == 0 {
+			t.Fatal("valid-source illegal delay escaped preflight", delay)
+		}
+	}
+	template, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summon := ctxNew()
+	idx := summon.Summon(template, [2]float64{1, 0})
+	if idx != 17 || summon.countError != nil || len(*summon.enemies) != 1 {
+		t.Fatal("actual summon positive failed")
+	}
+	born := (*summon.enemies)[0]
+	if born.countClock != 20 || !born.effectiveCountVisibility().blocksCount() {
+		t.Fatal("newborn clock or immediate source hidden lost")
+	}
+	owner := hpSpeedUnit()
+	born.blockedBy = owner
+	if born.effectiveCountVisibility().blocksCount() {
+		t.Fatal("newborn blocked hidden")
+	}
+	owner.hp = 0
+	if born.effectiveCountVisibility().blocksCount() || born.countHiddenRestoreAt != 23 {
+		t.Fatal("newborn same-frame loss uses stale zero clock")
+	}
+	wrong := base
+	wrong.RawSources = cloneEnemySources(base.RawSources)
+	wrong.RawSources[0].Raw = json.RawMessage(`{"description":"source altered"}`)
+	template, err = json.Marshal(wrong)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summon = ctxNew()
+	summon.Summon(template, [2]float64{})
+	if summon.countError == nil {
+		t.Fatal("actual summon admitted altered source")
+	}
+	unknown := base
+	unknown.CountVisibility = nil
+	template, err = json.Marshal(unknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summon = ctxNew()
+	summon.Summon(template, [2]float64{})
+	if summon.countError == nil {
+		t.Fatal("actual summon inferred external state")
+	}
+}
 func TestCountIntrinsicActualAttackTimerAndRawRuleGuard(t *testing.T) {
 	chdirRepoRootForData(t)
 	lib, err := LoadEnemyLibrary()
