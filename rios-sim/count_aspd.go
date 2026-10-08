@@ -20,6 +20,10 @@ type EnemyCountASPD struct {
 type CountVisibility struct {
 	Hidden     bool `json:"hidden"`
 	Camouflage bool `json:"camouflage"`
+	// Explicit snapshots may omit immunity to retain the original no-immunity
+	// contract. Producers without a proven whole state still omit this object.
+	InvisibleImmune  bool `json:"invisible_immune,omitempty"`
+	CamouflageImmune bool `json:"camouflage_immune,omitempty"`
 }
 
 func (v *CountVisibility) UnmarshalJSON(raw []byte) error {
@@ -37,9 +41,27 @@ func (v *CountVisibility) UnmarshalJSON(raw []byte) error {
 	if hidden == nil || camo == nil {
 		return fmt.Errorf("计数状态不能为null")
 	}
+	var invisImmune, camoImmune bool
+	for key, dst := range map[string]*bool{"invisible_immune": &invisImmune, "camouflage_immune": &camoImmune} {
+		if raw, ok := fields[key]; ok {
+			var value *bool
+			if err := json.Unmarshal(raw, &value); err != nil || value == nil {
+				return fmt.Errorf("计数%s免疫必须为显式布尔值", key)
+			}
+			*dst = *value
+		}
+	}
 	v.Hidden = *hidden
 	v.Camouflage = *camo
+	v.InvisibleImmune = invisImmune
+	v.CamouflageImmune = camoImmune
 	return nil
+}
+
+// Count effective restrictions, not the persistent held camouflage flag.
+// Human ruling: invisible immunity makes camouflage count until immunity ends.
+func (v *CountVisibility) blocksCount() bool {
+	return v.Hidden && !v.InvisibleImmune || v.Camouflage && !v.CamouflageImmune && !v.InvisibleImmune
 }
 func validCountRule(r *EnemyCountASPD) bool {
 	return r != nil && (r.Scope == "current" || r.Scope == "base") && r.Minimum > 0 && r.Bonus > 0 && !math.IsNaN(r.Bonus) && !math.IsInf(r.Bonus, 0)
@@ -139,7 +161,7 @@ func (o *operator) intervalForEnemies(enemies []*enemy) (float64, error) {
 		if visibility == nil {
 			return 0, &mechanisms.IncompleteError{Placeholders: []mechanisms.Gap{countVisibilityGap(e.spec, e.index)}}
 		}
-		if visibility.Hidden || visibility.Camouflage {
+		if visibility.blocksCount() {
 			continue
 		}
 		cell := [2]int{int(math.RoundToEven(e.position[0])), int(math.RoundToEven(e.position[1]))}
