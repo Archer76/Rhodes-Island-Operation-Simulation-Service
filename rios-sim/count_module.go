@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"rios-sim/mechanisms"
+	"strings"
 )
 
 // Recognize ONLY the attack-speed part. This predicate deliberately does not
@@ -56,6 +58,61 @@ func exactCountModuleCandidate(st *OperatorStats, pi, ci int, raw json.RawMessag
 	}
 	return len(expected) == 0
 }
+
+// countCharacterModuleGaps guards the non-ASPD bundles of these two exact
+// module owners. The existing producer resolves base character talents only;
+// equal numeric keys in a base talent do not consume a module upgrade. This is
+// an eligible-source inventory, not an effective-talent override resolver.
+func countCharacterModuleGaps(st *OperatorStats) ([]mechanisms.Gap, error) {
+	if !(st.CharID == "char_4182_oblvns" && st.Module == "uniequip_002_oblvns" || st.CharID == "char_4010_etlchi" && st.Module == "uniequip_003_etlchi") {
+		return nil, nil
+	}
+	parts, err := moduleParts(st.Module, st.ModuleLevel)
+	if err != nil {
+		return nil, err
+	}
+	var gaps []mechanisms.Gap
+	for pi, raw := range parts {
+		var part struct {
+			Talent struct {
+				Candidates []json.RawMessage `json:"candidates"`
+			} `json:"addOrOverrideTalentDataBundle"`
+		}
+		if err := json.Unmarshal(raw, &part); err != nil {
+			return nil, err
+		}
+		for ci, craw := range part.Talent.Candidates {
+			var c struct {
+				Name               string  `json:"name"`
+				Description        *string `json:"description"`
+				UpgradeDescription *string `json:"upgradeDescription"`
+				UnlockCondition    struct {
+					Phase any `json:"phase"`
+					Level int `json:"level"`
+				} `json:"unlockCondition"`
+				RequiredPotentialRank int               `json:"requiredPotentialRank"`
+				Blackboard            []json.RawMessage `json:"blackboard"`
+			}
+			if err := json.Unmarshal(craw, &c); err != nil {
+				return nil, err
+			}
+			if phaseOf(c.UnlockCondition.Phase) > st.Elite || c.UnlockCondition.Level > st.Level || c.RequiredPotentialRank > st.Potential-1 {
+				continue
+			}
+			var desc []string
+			for _, s := range []*string{c.Description, c.UpgradeDescription} {
+				if s != nil {
+					desc = append(desc, *s)
+				}
+			}
+			// Even an empty hidden prefab can alter battle behaviour. Preserve it
+			// rather than treating an empty BB as a proven no-op.
+			gaps = append(gaps, mechanisms.Gap{ID: "module.talent_override", Status: "unimplemented", Source: "module", CharID: st.CharID, Operator: st.Name, SourceID: st.Module, SourceName: c.Name, Key: fmt.Sprintf("parts[%d].addOrOverrideTalentDataBundle.candidates[%d]", pi, ci), Description: strings.Join(desc, "\n"), RawBlackboard: cloneRawBlackboard(c.Blackboard), RawSource: append(json.RawMessage(nil), raw...), RawSlot: append(json.RawMessage(nil), craw...), Slot: pi, Level: st.ModuleLevel, Instance: ci, Reason: "该人物模组天赋及隐藏行为来源尚无完整覆盖与战斗消费者；基础天赋同名键不能代为认领"})
+		}
+	}
+	return gaps, nil
+}
+
 func countModuleSpeed(st *OperatorStats) (*EnemyCountASPD, error) {
 	parts, err := moduleParts(st.Module, st.ModuleLevel)
 	if err != nil {

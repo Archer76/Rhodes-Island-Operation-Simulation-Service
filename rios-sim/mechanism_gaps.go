@@ -276,6 +276,11 @@ func operatorMechanismGapsWithInputs(r DeployRow, st *OperatorStats, talents []r
 		return nil, err
 	}
 	gaps = mechanisms.Merge(gaps, moduleGaps)
+	characterModuleGaps, err := countCharacterModuleGaps(st)
+	if err != nil {
+		return nil, err
+	}
+	gaps = mechanisms.Merge(gaps, characterModuleGaps)
 	if st.AttackSpeedBonus.WhenFree != exactFree {
 		gaps = append(gaps, mechanisms.Gap{ID: "module.attack_speed_when_free", Status: "unimplemented", Source: "module", Operator: st.Name, CharID: r.Entry.CharID, SourceID: st.Module, Key: "aspd_when_free", RawValue: st.AttackSpeedBonus.WhenFree, Reason: "未阻挡条件攻速尚未接入战斗"})
 	}
