@@ -116,6 +116,45 @@ func TestEntelechiaDOTReportIndependentStateAndWireWitness(t *testing.T) {
 	}
 }
 
+func TestEntelechiaDOTActualHitCallbackOrdering(t *testing.T) {
+	chdirRepoRootForData(t)
+	r, e := resolveExactCountModuleTalent(&OperatorStats{CharID: "char_4010_etlchi", Module: "uniequip_003_etlchi", ModuleLevel: 3, Elite: 2, Level: 60, Potential: 5})
+	if e != nil || r == nil {
+		t.Fatal(e)
+	}
+	o := selfHealUnit(100)
+	o.spec.CharID = "char_4010_etlchi"
+	o.spec.ExactModuleTalent = r
+	o.deploySeq = 17
+	now := 2.0
+	v := &Verdict{}
+	ctx := &simCtx{time: &now, verdict: v}
+	target := countedEnemy(1)
+	target.sim = ctx
+	target.rebornAt = -1
+	target.spec.HP = 1000
+	target.spec.RES = 50
+	target.pm2Active = true
+	target.spec.PhitCnt = 1
+	target.spec.PhitMaxStack = 1
+	target.spec.PhitRes = -20
+	got, e := o.consumeEntelechiaDOTPulse(now, target, v)
+	if e != nil || got != 250 || target.hp != 750 || target.phitStacks != 1 || target.spec.RES != 30 || !target.marked[17] || target.lastHitBy != o {
+		t.Fatal("real onEnemyHit was not exercised in order", got, e)
+	}
+	if len(v.Events) != 1 || v.Events[0].Damage.ResBefore != 50 || v.Events[0].Damage.Resolved != 250 {
+		t.Fatal("witness incorrectly read post-hit resistance")
+	}
+	now = 3
+	got, e = o.consumeEntelechiaDOTPulse(now, target, v)
+	if e != nil || got != 350 || target.hp != 400 || target.spec.RES != 30 || len(v.Events) != 2 || v.Events[1].Damage.ResBefore != 30 {
+		t.Fatal("next damage failed to consume callback state")
+	}
+	if o.hp != 100 || o.spec.MaxHP != 1000 {
+		t.Fatal("callback path recursively recovered/stole")
+	}
+}
+
 func TestEntelechiaDOTPulseRefusesUnprovedSourceLifetime(t *testing.T) {
 	chdirRepoRootForData(t)
 	r, e := resolveExactCountModuleTalent(&OperatorStats{CharID: "char_4010_etlchi", Module: "uniequip_003_etlchi", ModuleLevel: 3, Elite: 2, Level: 60, Potential: 5})

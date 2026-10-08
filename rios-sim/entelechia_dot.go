@@ -25,7 +25,8 @@ func (o *operator) consumeEntelechiaDOTPulse(t float64, target *enemy, v *Verdic
 		return 0, nil
 	}
 	raw := bbValue(p.Blackboard, "magic_value", 0)
-	dmg := resolveDamage(raw, "MAGIC", 1, target.spec.DEF, target.res(), 0)
+	resBefore := target.res()
+	dmg := resolveDamage(raw, "MAGIC", 1, target.spec.DEF, resBefore, 0)
 	got := target.take(dmg, o)
 	killed := got > 0 && !target.alive() && !target.pendingReborn()
 	if killed {
@@ -33,7 +34,7 @@ func (o *operator) consumeEntelechiaDOTPulse(t float64, target *enemy, v *Verdic
 	}
 	if v != nil {
 		v.DamageDealt += got
-		v.Events = append(v.Events, Event{T: t, Kind: "entelechia_dot_pulse", Who: o.spec.Name, Damage: &DamageEventDetail{Target: target.spec.Name, TargetIndex: target.index, DamageType: "MAGIC", Raw: raw, Resolved: dmg, Dealt: got, HPAfter: target.hp, ModuleID: p.ModuleID, ModuleLevel: p.ModuleLevel, CandidateIndex: p.CandidateIndex}})
+		v.Events = append(v.Events, Event{T: t, Kind: "entelechia_dot_pulse", Who: o.spec.Name, Damage: &DamageEventDetail{Target: target.spec.Name, TargetIndex: target.index, DamageType: "MAGIC", ResBefore: resBefore, Raw: raw, Resolved: dmg, Dealt: got, HPAfter: target.hp, ModuleID: p.ModuleID, ModuleLevel: p.ModuleLevel, CandidateIndex: p.CandidateIndex}})
 		if killed {
 			v.Events = append(v.Events, Event{T: t, Kind: "kill", Who: target.spec.Name})
 		}

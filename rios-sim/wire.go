@@ -839,6 +839,7 @@ type DamageEventDetail struct {
 	DamageType     string  `json:"damage_type"`
 	Raw            float64 `json:"raw"`
 	Resolved       float64 `json:"resolved"`
+	ResBefore      float64 `json:"res_before"`
 	Dealt          float64 `json:"dealt"`
 	HPAfter        float64 `json:"hp_after"`
 	ModuleID       string  `json:"module_id"`
