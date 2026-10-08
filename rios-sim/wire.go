@@ -312,7 +312,8 @@ type OperatorSpec struct {
 	//: **「没有这条」是 1.0**（乘数）。
 	RangedAtkScale float64 `json:"ranged_atk_scale,omitempty"`
 	// Exact module source; active skill alone is insufficient to authorize this.
-	SkillRangedExemption *SkillRangedExemption `json:"skill_ranged_exemption,omitempty"`
+	SkillRangedExemption    *SkillRangedExemption    `json:"skill_ranged_exemption,omitempty"`
+	FriendlyHealRestriction *FriendlyHealRestriction `json:"friendly_heal_restriction,omitempty"`
 	//: 特性「击杀敌人后获得 N 点部署费用」（先锋·冲锋手那一族，翎羽）。
 	//: 消费者 `sim.go::resolve`：敌人倒下时看**最后打它的那一名干员**是不是她。
 	//: ⚠ 与敌人自己的 `kill_cost`（`enemy_derive.go` 读敌方天赋 `Talent1.cost`）
@@ -785,6 +786,7 @@ type Verdict struct {
 	DamageDealt    float64 `json:"damage_dealt"`
 	// Per-target attacks where an exact active module source removes the ranged penalty.
 	SkillRangedExemptions int  `json:"skill_ranged_exemptions,omitempty"`
+	FriendlyHealsRejected int  `json:"friendly_heals_rejected,omitempty"`
 	SpawnsPlaced          int  `json:"spawns_placed"`
 	SpawnsTotal           int  `json:"spawns_total"`
 	TimedOut              bool `json:"timed_out"`

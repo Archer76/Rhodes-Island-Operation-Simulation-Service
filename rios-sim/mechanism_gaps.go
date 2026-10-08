@@ -214,6 +214,22 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 		add := func(key string, value float64, reason string) {
 			gaps = mechanisms.Merge(gaps, []mechanisms.Gap{{ID: "runtime." + key, Status: "unimplemented", Source: "operator_spec", Operator: op.Name, CharID: op.CharID, Key: key, RawValue: value, Reason: reason, Instance: i}})
 		}
+		if r := op.FriendlyHealRestriction; r != nil {
+			if !validFriendlyHealRestriction(op.CharID, r) {
+				add("friendly_heal_restriction", 0, "禁止友方治疗缺少精确特性来源")
+			} else {
+				present := false
+				for _, g := range op.Placeholders {
+					if g.ID == "trait.blackboard.value" && g.CharID == op.CharID && g.SourceID == "trait:0" && g.Key == "value" {
+						present = true
+						break
+					}
+				}
+				if !present {
+					gaps = mechanisms.Merge(gaps, []mechanisms.Gap{friendlyHealRestrictionGap(op, i)})
+				}
+			}
+		}
 		if r := op.SkillRangedExemption; r != nil {
 			if !validSkillRangedExemption(op.CharID, r) {
 				add("skill_ranged_exemption", 0, "技能远程倍率豁免缺少精确模组来源")

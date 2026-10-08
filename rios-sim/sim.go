@@ -2365,7 +2365,7 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 			// 治疗量 = 当前攻击力 × 治疗倍率（医疗干员平A 的倍率是 1）。
 			// `heal` 自己夹在生命上限，返回**实际回复量**。
 			for _, ally := range heals {
-				got := ally.heal(power)
+				got := ally.healFromCharacter(op, power, verdict)
 				if traceOn && got > 0 {
 					trace("%8.4f %s 治疗 %s +%.0f（%.0f/%.0f）",
 						t, op.spec.Name, ally.spec.Name, got, ally.hp, ally.spec.MaxHP)
@@ -2384,7 +2384,7 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 			//: 额外那一名：期望值口径，所以**每次都治、每次只治 `p × 治疗量`**。
 			if extraHeal != nil {
 				amount := power * op.spec.TalentExtraHealProb
-				got := extraHeal.heal(amount)
+				got := extraHeal.healFromCharacter(op, amount, verdict)
 				if traceOn {
 					trace("TALXHEAL t=%.4f op=%s target=%s prob=%.6f amount=%.4f got=%.4f",
 						t, op.spec.Name, extraHeal.spec.Name,
@@ -2687,7 +2687,7 @@ func pickHeals(op *operator, ops []*operator, n int) []*operator {
 		// 只是永远治不到自己；于是"医疗是全场唯一没人治的人"，她会比原版
 		// 早 107 秒倒下（k=4：84.3667 vs 191.2000），而她的治疗量看起来
 		// 完全正常——顺着治疗量查一辈子也查不到。
-		if !o.alive() || o.hp >= o.spec.MaxHP {
+		if !o.alive() || o.hp >= o.spec.MaxHP || !o.acceptsFriendlyHealing() {
 			continue
 		}
 		cell := [2]int{int(math.RoundToEven(o.cell[0])), int(math.RoundToEven(o.cell[1]))}
