@@ -561,12 +561,13 @@ type RebornSummonSpec struct {
 // 「按 id 再查一次」就等于在 Go 侧重写一遍 `_build_enemy`，而它里面有关卡乘区、
 // 难度档位、召唤体默认档这些东西——多一处就会漂。
 type SpawnSpec struct {
-	RawSources      []EnemyRawSource `json:"raw_sources,omitempty"`
-	CountVisibility *CountVisibility `json:"count_visibility,omitempty"`
-	Time            float64          `json:"time"`
-	Name            string           `json:"name"`
-	EnemyID         string           `json:"enemy_id"`
-	Level           int              `json:"level"`
+	IntrinsicCountVisibility *IntrinsicCountVisibility `json:"intrinsic_count_visibility,omitempty"`
+	RawSources               []EnemyRawSource          `json:"raw_sources,omitempty"`
+	CountVisibility          *CountVisibility          `json:"count_visibility,omitempty"`
+	Time                     float64                   `json:"time"`
+	Name                     string                    `json:"name"`
+	EnemyID                  string                    `json:"enemy_id"`
+	Level                    int                       `json:"level"`
 
 	HP         float64 `json:"hp"`
 	ATK        float64 `json:"atk"`

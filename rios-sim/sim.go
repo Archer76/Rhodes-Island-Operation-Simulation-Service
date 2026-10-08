@@ -68,7 +68,10 @@ const coldASPDDown = 30.0
 const frozenResDown = 15.0
 
 type enemy struct {
-	spec SpawnSpec
+	countWasBlocked      bool
+	countHiddenRestoreAt float64
+	countClock           float64
+	spec                 SpawnSpec
 
 	hp        float64
 	position  [2]float64
@@ -289,14 +292,20 @@ func (c *simCtx) Summon(template json.RawMessage, cell [2]float64) int {
 // 这一类缺口不会自己报错，只会偶尔改一个判决——所以把口子合成一个。
 func newEnemy(spec SpawnSpec, index int, position [2]float64, c *simCtx) *enemy {
 	spec.RawSources = cloneEnemySources(spec.RawSources)
+	spec.IntrinsicCountVisibility = cloneIntrinsic(spec.IntrinsicCountVisibility)
 	if spec.CountVisibility != nil {
 		v := *spec.CountVisibility
 		spec.CountVisibility = &v
 	}
-	if c != nil && c.spec != nil && sceneUsesCount(c.spec) && spec.CountVisibility == nil {
+	if c != nil && c.spec != nil && sceneUsesCount(c.spec) && (spec.CountVisibility == nil || spec.IntrinsicCountVisibility != nil && (!validIntrinsicRule(spec.IntrinsicCountVisibility) || intrinsicForSpawn(spec) == nil)) {
 		c.countError = &mechanisms.IncompleteError{Placeholders: []mechanisms.Gap{countVisibilityGap(spec, index)}}
 	}
+	birthClock := 0.0
+	if c != nil && c.time != nil {
+		birthClock = *c.time
+	}
 	e := &enemy{
+		countClock: birthClock,
 		spec:       spec,
 		hp:         spec.HP,
 		position:   position,
@@ -1170,6 +1179,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 
 		// ---- 4. 阻挡（1846 → 2289）
 		updateBlocking(ops, enemies)
+		intrinsicCountTick(enemies, t)
 
 		// ---- 4.9 职业特性「**自身生命会不断流失**」（怪杰那一族；原版 `_trait_tick`）
 		//
@@ -1207,6 +1217,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		// （帧序 7）就该吃得上；放到帧末递减会让「刚治完就被打」的那一下白挂。
 		talentTick(ops, dt)
 
+		intrinsicCountTick(enemies, t)
 		if ctx.countError != nil {
 			return nil, ctx.countError
 		}
@@ -1243,6 +1254,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 
 		// ---- 8. 结算（1886 → 3720）
 		resolve(enemies, &cost, &life, t, verdict)
+		intrinsicCountTick(enemies, t)
 		// 离场时刻（1743-1750）：阵亡统一在这里记一次，再部署冷却靠它
 		for _, op := range ops {
 			if op.leftAt < 0 && (op.retreated || op.hp <= 0) {
@@ -1267,6 +1279,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		// 空机制（通用关卡）整段跳过，一帧都不多花。
 		if !mechanisms.Empty() {
 			mechanisms.Frame(ctx, dt)
+			intrinsicCountTick(enemies, t)
 		}
 		frameNo++
 		t += dt

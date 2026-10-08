@@ -105,6 +105,12 @@ func countTimingGaps(spec *Spec) []mechanisms.Gap {
 				return
 			}
 			seen[e] = true
+			if r := e.IntrinsicCountVisibility; r != nil && (!validIntrinsicRule(r) || intrinsicForSpawn(*e) == nil) {
+				g := countVisibilityGap(*e, index)
+				g.Key = path + ".intrinsic_count_visibility"
+				g.Reason = "无效固有计数隐匿规则"
+				gaps = append(gaps, g)
+			}
 			if e.CountVisibility == nil {
 				g := countVisibilityGap(*e, index)
 				g.Key = path
@@ -157,7 +163,10 @@ func (o *operator) intervalForEnemies(enemies []*enemy) (float64, error) {
 		if e == nil || e.hp <= 0 || e.leaked || e.offMap {
 			continue
 		}
-		visibility := e.spec.CountVisibility
+		if r := e.spec.IntrinsicCountVisibility; r != nil && (!validIntrinsicRule(r) || intrinsicForSpawn(e.spec) == nil) {
+			return 0, &mechanisms.IncompleteError{Placeholders: []mechanisms.Gap{countVisibilityGap(e.spec, e.index)}}
+		}
+		visibility := e.effectiveCountVisibility()
 		if visibility == nil {
 			return 0, &mechanisms.IncompleteError{Placeholders: []mechanisms.Gap{countVisibilityGap(e.spec, e.index)}}
 		}

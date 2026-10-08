@@ -68,21 +68,22 @@ type EnemyRawSource struct {
 	Raw     json.RawMessage `json:"raw"`
 }
 type EnemyStats struct {
-	RawSources      []EnemyRawSource `json:"raw_sources,omitempty"`
-	EnemyID         string           `json:"enemy_id"`
-	Level           int              `json:"level"`
-	Name            string           `json:"name"`
-	MaxHP           *float64         `json:"max_hp"`
-	Atk             *float64         `json:"atk"`
-	Defense         *float64         `json:"defense"`
-	MagicRes        *float64         `json:"magic_resistance"`
-	MoveSpeed       *float64         `json:"move_speed"`
-	AttackSpeed     *float64         `json:"attack_speed"`
-	BaseAttackTime  *float64         `json:"base_attack_time"`
-	Weight          *float64         `json:"weight"`
-	LifePointReduce *float64         `json:"life_point_reduce"`
-	RangeRadius     *float64         `json:"range_radius"`
-	HPRecovery      *float64         `json:"hp_recovery_per_sec"`
+	IntrinsicCountVisibility *IntrinsicCountVisibility `json:"intrinsic_count_visibility,omitempty"`
+	RawSources               []EnemyRawSource          `json:"raw_sources,omitempty"`
+	EnemyID                  string                    `json:"enemy_id"`
+	Level                    int                       `json:"level"`
+	Name                     string                    `json:"name"`
+	MaxHP                    *float64                  `json:"max_hp"`
+	Atk                      *float64                  `json:"atk"`
+	Defense                  *float64                  `json:"defense"`
+	MagicRes                 *float64                  `json:"magic_resistance"`
+	MoveSpeed                *float64                  `json:"move_speed"`
+	AttackSpeed              *float64                  `json:"attack_speed"`
+	BaseAttackTime           *float64                  `json:"base_attack_time"`
+	Weight                   *float64                  `json:"weight"`
+	LifePointReduce          *float64                  `json:"life_point_reduce"`
+	RangeRadius              *float64                  `json:"range_radius"`
+	HPRecovery               *float64                  `json:"hp_recovery_per_sec"`
 	//: 原样透传（可能是数字也可能是字符串代号），所以用 any。
 	LevelType  any             `json:"level_type"`
 	Immunities map[string]bool `json:"immunities"`
@@ -331,6 +332,7 @@ func LoadEnemyLibrary() (*EnemyLibrary, error) {
 			}
 			// ★ 派生字段必须在**黑板合并完之后**算（`enemy.py:997`）。
 			st.DeriveBlackboardFields()
+			st.IntrinsicCountVisibility = intrinsicCountSource(st)
 			levels[lv] = st
 		}
 		lib.ByKey[e.Key] = levels
@@ -411,6 +413,7 @@ func cloneEnemySources(s []EnemyRawSource) []EnemyRawSource {
 func (s *EnemyStats) Clone() *EnemyStats {
 	c := *s
 	c.RawSources = cloneEnemySources(s.RawSources)
+	c.IntrinsicCountVisibility = intrinsicCountSource(&c)
 	c.Immunities = make(map[string]bool, len(s.Immunities))
 	for k, v := range s.Immunities {
 		c.Immunities[k] = v
@@ -587,6 +590,7 @@ func (l *EnemyLibrary) WithOverwrite(id string, level int,
 	// 相性/屏障/击杀费用/重生/技能攻击这几支已接，且必须在这里**重算**
 	// （`enemy.py:1118-1121`：本地定义换了 prefab，不重算会按老黑板召错单位）。
 	out.DeriveBlackboardFields()
+	out.IntrinsicCountVisibility = intrinsicCountSource(out)
 	return out, nil
 }
 
