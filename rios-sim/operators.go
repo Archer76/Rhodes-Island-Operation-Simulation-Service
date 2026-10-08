@@ -190,6 +190,7 @@ type OperatorOut struct {
 	RangedAtkScale          *float64                 `json:"ranged_atk_scale,omitempty"`
 	SkillRangedExemption    *SkillRangedExemption    `json:"skill_ranged_exemption,omitempty"`
 	FriendlyHealRestriction *FriendlyHealRestriction `json:"friendly_heal_restriction,omitempty"`
+	ExactModuleTalent       *ExactModuleTalent       `json:"exact_module_talent,omitempty"`
 	//: 特性「击杀敌人后获得 N 点部署费用」（翎羽 冲锋手）。**「没有这条」是 0。**
 	KillCostOnKill *int `json:"kill_cost_on_kill,omitempty"`
 	//: 同一条特性的后半句「撤退时返还初始部署费用」。消费者是撤退动作。
@@ -824,6 +825,10 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 		return OperatorOut{}, err
 	}
 	out.FriendlyHealRestriction, err = entelechiaFriendlyHealRestriction(st)
+	if err != nil {
+		return OperatorOut{}, err
+	}
+	out.ExactModuleTalent, err = resolveExactCountModuleTalent(st)
 	if err != nil {
 		return OperatorOut{}, err
 	}

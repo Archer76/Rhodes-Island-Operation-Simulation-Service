@@ -4,11 +4,38 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"rios-sim/mechanisms"
 )
 
-// ExactModuleTalent is an analysis result, NOT an authorized combat effect.
+// ExactModuleTalent carries selected source provenance, NOT an authorized combat effect.
 // Eligible inventory gaps remain intact even when a single override is selected.
+func exactModuleTalentGaps(op OperatorSpec, instance int) []mechanisms.Gap {
+	r := op.ExactModuleTalent
+	if r == nil {
+		return nil
+	}
+	st := &OperatorStats{CharID: op.CharID, Name: op.Name, Module: r.ModuleID, ModuleLevel: r.ModuleLevel, Elite: r.Elite, Level: r.Level, Potential: r.Potential}
+	picked, e := resolveExactCountModuleTalentPart(st, r.RawPart)
+	if e != nil || picked == nil || !reflect.DeepEqual(picked, r) {
+		return []mechanisms.Gap{{ID: "runtime.exact_module_talent", Status: "unimplemented", Source: "operator_spec", CharID: op.CharID, Operator: op.Name, Key: "exact_module_talent", RawSource: append(json.RawMessage(nil), r.RawPart...), Instance: instance, Reason: "升级候选规格与精确原始来源或练度选择不一致"}}
+	}
+	key := fmt.Sprintf("parts[1].addOrOverrideTalentDataBundle.candidates[%d]", r.CandidateIndex)
+	for _, g := range op.Placeholders {
+		if g.ID == "module.talent_override" && g.CharID == op.CharID && g.SourceID == r.ModuleID && g.Key == key && g.Level == r.ModuleLevel {
+			return nil
+		}
+	}
+	var c struct {
+		Name string            `json:"name"`
+		BB   []json.RawMessage `json:"blackboard"`
+	}
+	_ = json.Unmarshal(r.RawCandidate, &c)
+	return []mechanisms.Gap{{ID: "module.talent_override", Status: "unimplemented", Source: "module", CharID: op.CharID, Operator: op.Name, SourceID: r.ModuleID, SourceName: c.Name, Key: key, Description: r.UpgradeDescription, RawBlackboard: cloneRawBlackboard(c.BB), RawSource: append(json.RawMessage(nil), r.RawPart...), RawSlot: append(json.RawMessage(nil), r.RawCandidate...), Slot: 1, Level: r.ModuleLevel, Instance: instance, Reason: "选中升级来源已送达但事件消费者未完成"}}
+}
+
 type ExactModuleTalent struct {
+	Elite, Level, Potential                             int
 	ModuleID                                            string
 	ModuleLevel, PartIndex, CandidateIndex, TalentIndex int
 	UpgradeDescription                                  string
@@ -17,6 +44,9 @@ type ExactModuleTalent struct {
 }
 
 func resolveExactCountModuleTalent(st *OperatorStats) (*ExactModuleTalent, error) {
+	if !(st.CharID == "char_4182_oblvns" && st.Module == "uniequip_002_oblvns" || st.CharID == "char_4010_etlchi" && st.Module == "uniequip_003_etlchi") {
+		return nil, nil
+	}
 	if st.ModuleLevel < 2 || st.ModuleLevel > 3 || st.Elite < 2 || st.Level < 60 || st.Potential < 1 || st.Potential > 6 {
 		return nil, nil
 	}
@@ -89,5 +119,5 @@ func resolveExactCountModuleTalentPart(st *OperatorStats, raw json.RawMessage) (
 	if e = json.Unmarshal(craw, &c); e != nil {
 		return nil, e
 	}
-	return &ExactModuleTalent{ModuleID: st.Module, ModuleLevel: st.ModuleLevel, PartIndex: 1, CandidateIndex: best, TalentIndex: c.Index, UpgradeDescription: c.Description, Blackboard: blackboardOf(c.Blackboard), RawPart: append(json.RawMessage(nil), raw...), RawCandidate: append(json.RawMessage(nil), craw...)}, nil
+	return &ExactModuleTalent{Elite: st.Elite, Level: st.Level, Potential: st.Potential, ModuleID: st.Module, ModuleLevel: st.ModuleLevel, PartIndex: 1, CandidateIndex: best, TalentIndex: c.Index, UpgradeDescription: c.Description, Blackboard: blackboardOf(c.Blackboard), RawPart: append(json.RawMessage(nil), raw...), RawCandidate: append(json.RawMessage(nil), craw...)}, nil
 }

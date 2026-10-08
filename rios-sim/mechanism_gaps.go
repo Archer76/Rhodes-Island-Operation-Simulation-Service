@@ -210,7 +210,7 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 		gaps = mechanisms.Merge(gaps, []mechanisms.Gap{{ID: "spec.unsupported." + reason, Status: "unimplemented", Source: "spec", Key: "unsupported", RawValue: reason, Reason: reason}})
 	}
 	for i, op := range spec.Operators {
-		gaps = mechanisms.Merge(gaps, op.Placeholders, hpTimingGaps(op))
+		gaps = mechanisms.Merge(gaps, op.Placeholders, hpTimingGaps(op), exactModuleTalentGaps(op, i))
 		add := func(key string, value float64, reason string) {
 			gaps = mechanisms.Merge(gaps, []mechanisms.Gap{{ID: "runtime." + key, Status: "unimplemented", Source: "operator_spec", Operator: op.Name, CharID: op.CharID, Key: key, RawValue: value, Reason: reason, Instance: i}})
 		}

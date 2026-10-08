@@ -314,6 +314,7 @@ type OperatorSpec struct {
 	// Exact module source; active skill alone is insufficient to authorize this.
 	SkillRangedExemption    *SkillRangedExemption    `json:"skill_ranged_exemption,omitempty"`
 	FriendlyHealRestriction *FriendlyHealRestriction `json:"friendly_heal_restriction,omitempty"`
+	ExactModuleTalent       *ExactModuleTalent       `json:"exact_module_talent,omitempty"`
 	//: 特性「击杀敌人后获得 N 点部署费用」（先锋·冲锋手那一族，翎羽）。
 	//: 消费者 `sim.go::resolve`：敌人倒下时看**最后打它的那一名干员**是不是她。
 	//: ⚠ 与敌人自己的 `kill_cost`（`enemy_derive.go` 读敌方天赋 `Talent1.cost`）
