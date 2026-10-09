@@ -3,6 +3,8 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"math/big"
 	"os"
 	"strconv"
 	"strings"
@@ -91,17 +93,33 @@ type SkillOrder struct {
 	Slot     int     `json:"slot"`
 }
 
+// EntityDeployOrder deploys an entity belonging to a planned operator.
+// Entity occupancy and owner readiness are runtime decisions, not static collisions.
+type EntityDeployOrder struct {
+	Owner    string  `json:"owner"`
+	Position [2]int  `json:"position"`
+	Time     float64 `json:"time"`
+}
+
+// SkillStopOrder requests an explicit skill stop, independently of skill starts.
+type SkillStopOrder struct {
+	Operator string  `json:"operator"`
+	Time     float64 `json:"time"`
+}
+
 // PlayPlan 是一份完整的打法。
 //
 // ⚠ 不叫 `Plan`：本包里 `Spec` 一族已经在用「规格」这个词，而「计划」是它的
 // 上游输入，两个名字混在一起读代码时会分不清谁喂谁。
 type PlayPlan struct {
-	Stage    string         `json:"stage"`
-	Deploys  []DeployOrder  `json:"deploys"`
-	Retreats []RetreatOrder `json:"retreats"`
-	Skills   []SkillOrder   `json:"skills"`
-	Title    string         `json:"title"`
-	Notes    string         `json:"notes"`
+	Stage         string              `json:"stage"`
+	Deploys       []DeployOrder       `json:"deploys"`
+	Retreats      []RetreatOrder      `json:"retreats"`
+	Skills        []SkillOrder        `json:"skills"`
+	Title         string              `json:"title"`
+	Notes         string              `json:"notes"`
+	EntityDeploys []EntityDeployOrder `json:"entity_deploys,omitempty"`
+	SkillStops    []SkillStopOrder    `json:"skill_stops,omitempty"`
 }
 
 // pyIntOrNil 复刻 `None if d.get(k) is None else int(d[k])`。
@@ -223,8 +241,18 @@ func ReadPlan(path string) (PlayPlan, error) {
 	return ParsePlan(obj)
 }
 
-// ParsePlan 复刻 `Plan.from_dict`，末尾照样跑一遍 `validate`。
+// ParsePlan is the production entry: parse shape, then reject unconsumed actions.
 func ParsePlan(obj map[string]json.RawMessage) (PlayPlan, error) {
+	plan, err := ParsePlanShape(obj)
+	if err != nil {
+		return plan, err
+	}
+	return plan, plan.Validate()
+}
+
+// ParsePlanShape parses and validates structure only. It does not certify runtime
+// support; production callers must use ParsePlan or call Validate before execution.
+func ParsePlanShape(obj map[string]json.RawMessage) (PlayPlan, error) {
 	var plan PlayPlan
 
 	//: `data.get("deploys") or data.get("deploy") or []`——注意 `or`，空数组会落到下一个键。
@@ -390,10 +418,120 @@ func ParsePlan(obj map[string]json.RawMessage) (PlayPlan, error) {
 		}
 	}
 
-	if err := plan.Validate(); err != nil {
+	if err := plan.parseEntityActions(obj); err != nil {
+		return plan, err
+	}
+	if err := plan.ValidateShape(); err != nil {
 		return plan, err
 	}
 	return plan, nil
+}
+
+// New action fields deliberately do not use legacy Python null/falsy coercions.
+func strictActionRows(obj map[string]json.RawMessage, key string) ([]map[string]json.RawMessage, error) {
+	raw, present := obj[key]
+	if !present {
+		return nil, nil
+	}
+	if strings.TrimSpace(string(raw)) == "null" {
+		return nil, fmt.Errorf("%s must be an array, not null", key)
+	}
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return nil, fmt.Errorf("%s must be an array of objects: %v", key, err)
+	}
+	for i, row := range rows {
+		if row == nil {
+			return nil, fmt.Errorf("%s[%d] must be an object, not null", key, i)
+		}
+	}
+	return rows, nil
+}
+
+func strictActionName(row map[string]json.RawMessage, key string) (string, error) {
+	raw, present := row[key]
+	var name string
+	if !present || json.Unmarshal(raw, &name) != nil || strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("%s must be a nonempty string", key)
+	}
+	return name, nil
+}
+
+func strictActionTime(row map[string]json.RawMessage) (float64, error) {
+	raw, present := row["time"]
+	var time float64
+	if !present || strings.TrimSpace(string(raw)) == "null" || json.Unmarshal(raw, &time) != nil || !validActionTime(time) {
+		return 0, fmt.Errorf("time must be a finite nonnegative number")
+	}
+	return time, nil
+}
+
+func validActionTime(time float64) bool {
+	return !math.IsNaN(time) && !math.IsInf(time, 0) && time >= 0
+}
+
+func strictEntityPosition(raw json.RawMessage) ([2]int, error) {
+	var position [2]int
+	var parts []json.RawMessage
+	if json.Unmarshal(raw, &parts) != nil || len(parts) != 2 {
+		return position, fmt.Errorf("position must be two integer coordinates")
+	}
+	for i, part := range parts {
+		// Use exact rational arithmetic: float64 rounding must not turn a fractional
+		// JSON coordinate into an integer, or change a large integer's value.
+		text := strings.TrimSpace(string(part))
+		if text == "" || (text[0] != '-' && (text[0] < '0' || text[0] > '9')) {
+			return position, fmt.Errorf("position[%d] must be an integer", i)
+		}
+		rational, ok := new(big.Rat).SetString(text)
+		if !ok || !rational.IsInt() || !rational.Num().IsInt64() {
+			return position, fmt.Errorf("position[%d] must be an in-range integer", i)
+		}
+		n := rational.Num().Int64()
+		position[i] = int(n)
+		if int64(position[i]) != n {
+			return position, fmt.Errorf("position[%d] must be an in-range integer", i)
+		}
+	}
+	return position, nil
+}
+
+func (p *PlayPlan) parseEntityActions(obj map[string]json.RawMessage) error {
+	entities, err := strictActionRows(obj, "entity_deploys")
+	if err != nil {
+		return err
+	}
+	for i, row := range entities {
+		owner, err := strictActionName(row, "owner")
+		if err != nil {
+			return fmt.Errorf("entity_deploys[%d]: %w", i, err)
+		}
+		position, err := strictEntityPosition(row["position"])
+		if err != nil {
+			return fmt.Errorf("entity_deploys[%d]: %w", i, err)
+		}
+		time, err := strictActionTime(row)
+		if err != nil {
+			return fmt.Errorf("entity_deploys[%d]: %w", i, err)
+		}
+		p.EntityDeploys = append(p.EntityDeploys, EntityDeployOrder{Owner: owner, Position: position, Time: time})
+	}
+	stops, err := strictActionRows(obj, "skill_stops")
+	if err != nil {
+		return err
+	}
+	for i, row := range stops {
+		operator, err := strictActionName(row, "operator")
+		if err != nil {
+			return fmt.Errorf("skill_stops[%d]: %w", i, err)
+		}
+		time, err := strictActionTime(row)
+		if err != nil {
+			return fmt.Errorf("skill_stops[%d]: %w", i, err)
+		}
+		p.SkillStops = append(p.SkillStops, SkillStopOrder{Operator: operator, Time: time})
+	}
+	return nil
 }
 
 // Validate 复刻 `Plan.validate`（`plan.py:262-289`），**其中一条按博士 2026-09-29
@@ -429,6 +567,26 @@ func ParsePlan(obj map[string]json.RawMessage) (PlayPlan, error) {
 // 一条具名占格拒收（现在没有），所以这里**先不放开**：**这是能力缺口，不是裁定**。
 // 副作用要具名——**同一干员在同一格「撤了再上」也会撞到这条**。
 func (p PlayPlan) Validate() error {
+	if err := p.ValidateShape(); err != nil {
+		return err
+	}
+	var unsupported []string
+	if len(p.EntityDeploys) != 0 {
+		unsupported = append(unsupported, "entity_deploys")
+	}
+	if len(p.SkillStops) != 0 {
+		unsupported = append(unsupported, "skill_stops")
+	}
+	if len(unsupported) != 0 {
+		return fmt.Errorf("%s: runtime unsupported", strings.Join(unsupported, ", "))
+	}
+	return nil
+}
+
+// ValidateShape checks plan structure without authorizing runtime execution.
+// New entity actions are not compared against static occupied cells: multiple
+// entities, reused cells and owner readiness must be decided by the consumer.
+func (p PlayPlan) ValidateShape() error {
 	if p.Stage == "" {
 		return fmt.Errorf("打法必须有关卡号（stage）")
 	}
@@ -454,6 +612,22 @@ func (p PlayPlan) Validate() error {
 	for _, s := range p.Skills {
 		if _, ok := seen[s.Operator]; !ok {
 			return fmt.Errorf("给没部署的干员开技能：%s", s.Operator)
+		}
+	}
+	for i, d := range p.EntityDeploys {
+		if strings.TrimSpace(d.Owner) == "" || !seen[d.Owner] {
+			return fmt.Errorf("entity_deploys[%d].owner must match a planned operator: %q", i, d.Owner)
+		}
+		if !validActionTime(d.Time) {
+			return fmt.Errorf("entity_deploys[%d].time must be finite and nonnegative", i)
+		}
+	}
+	for i, s := range p.SkillStops {
+		if strings.TrimSpace(s.Operator) == "" || !seen[s.Operator] {
+			return fmt.Errorf("skill_stops[%d].operator must match a planned operator: %q", i, s.Operator)
+		}
+		if !validActionTime(s.Time) {
+			return fmt.Errorf("skill_stops[%d].time must be finite and nonnegative", i)
 		}
 	}
 	return nil
