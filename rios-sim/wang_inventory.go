@@ -44,7 +44,7 @@ func (w *wangInventory) commitManualPlacement(success bool) error {
 	}
 	w.Count--
 	if w.SkillThree {
-		w.Ammo--
+		// Manual stone consumes inventory only (Doctor corrected 2026-10-09).
 		if w.Count == 0 || w.Ammo == 0 {
 			w.endSkillThree()
 		}

@@ -53,7 +53,7 @@ func TestWangDeploymentS3OccupiedTileExceptionIsRangeBound(t *testing.T) {
 	if _, err := w.deployManual(0, cell, &cost); err != nil {
 		t.Fatal(err)
 	}
-	if cost != 8 || w.Inventory.Ammo != 19 || w.Inventory.Count != 2 {
+	if cost != 8 || w.Inventory.Ammo != 20 || w.Inventory.Count != 2 {
 		t.Fatal("wrong S3 cost")
 	}
 }

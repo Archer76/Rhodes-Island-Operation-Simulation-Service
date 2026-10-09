@@ -11,7 +11,7 @@ func TestWangInventoryActualGenerationAndEndCap(t *testing.T) {
 	}
 	w.commitManualPlacement(true)
 	w.commitExtraPlacement(true)
-	if w.Count != 4 || w.Ammo != 18 {
+	if w.Count != 4 || w.Ammo != 19 {
 		t.Fatalf("actual placement count %+v", w)
 	}
 	w.endSkillThree()
