@@ -121,14 +121,18 @@ func buildWangSourceSpec(st *OperatorStats, slot, skillLevel int) (*WangSourceSp
 	}
 	out := &WangSourceSpec{Elite: st.Elite, Level: st.Level, Potential: st.Potential, Slot: slot, SkillLevel: skillLevel, RawSlot: char.Skills[slot-1], Evidence: map[string]json.RawMessage{},
 		UserRulings: map[string]string{
-			"activation":    "orthogonal adjacency only; diagonal and empty gaps do not activate",
-			"line_talent":   "continuous straight lines only",
-			"trigger_count": "one stone each time",
-			"s1_trigger":    "enemy steps on stone cell",
-			"s2_trigger":    "enemy steps on stone cell",
-			"s2_damage":     "seven-cell straight line or thirteen-cell cross",
-			"s3_trigger":    "enemy enters stone trigger range",
-			"s3_damage":     "thirteen-cell diamond",
+			"activation":         "orthogonal adjacency only; diagonal and empty gaps do not activate",
+			"line_talent":        "longest remaining continuous straight line including self, capped at three; crossed lines never union",
+			"s1_tick_assumption": "Doctor authorized provisional instant first tick, then once per second; first tick awaits measurement",
+			"s2_cross_center":    "one damage application per enemy, center not doubled",
+			"s3_end":             "inventory zero or ammo zero or manual stop ends; remaining ammo returns to inventory capped at maximum",
+			"s3_ammo":            "manual stones and successful extra stones consume ammo; failed placement consumes none; up to four extras (three skill plus one talent)",
+			"trigger_count":      "one stone each time",
+			"s1_trigger":         "enemy steps on stone cell",
+			"s2_trigger":         "enemy steps on stone cell",
+			"s2_damage":          "seven-cell straight line or thirteen-cell cross",
+			"s3_trigger":         "enemy enters stone trigger range",
+			"s3_damage":          "thirteen-cell diamond",
 		}, Unresolved: []string{"s1 damage geometry pending verification", "event timing not established by raw source", "runtime consumers not implemented"}}
 	for _, records := range []map[string]json.RawMessage{chars, skills, modules, ranges} {
 		for id, raw := range records {
