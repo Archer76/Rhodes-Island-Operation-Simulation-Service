@@ -58,6 +58,16 @@ func (w *wangDeploymentState) deployManual(now float64, cell wangDeploymentCell,
 	if deployed >= w.Config.DeployMaximum {
 		return 0, fmt.Errorf("wang token deployment maximum")
 	}
+	// If replacing an existing projectile stone, remove it first.
+	for _, s := range w.Field.stones {
+		if s.Position == cell.Position {
+			if s.Projectile {
+				w.Field.remove(s.ID)
+				break
+			}
+			return 0, fmt.Errorf("cell already occupied by deployed token")
+		}
+	}
 	id, err := w.Field.add(w.Owner, cell.Position, false, w.Config.Slot)
 	if err != nil {
 		return 0, err
