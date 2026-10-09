@@ -80,8 +80,15 @@ func (s *entelechiaStealStore) beforeDamage(t float64, target *enemy, class ente
 	enemyAmount := math.Min(cap, entry.amount+step)
 	ownMax := s.base + own
 	enemyMax := math.Max(1, entry.base-enemyAmount)
-	ownHP := s.owner.hp / s.expected * ownMax
-	enemyHP := target.hp / entry.expected * enemyMax
+	ownHP, enemyHP := s.owner.hp, target.hp
+	// Only a real attribute change resizes HP; capped/no-change events must not
+	// introduce a divide-then-multiply rounding update.
+	if ownMax != s.expected {
+		ownHP = s.owner.hp / s.expected * ownMax
+	}
+	if enemyMax != entry.expected {
+		enemyHP = target.hp / entry.expected * enemyMax
+	}
 	if !validEntelechiaHP(ownMax, ownHP) || !validEntelechiaHP(enemyMax, enemyHP) {
 		return 0, fmt.Errorf("萃血偷取结果血量非法")
 	}
