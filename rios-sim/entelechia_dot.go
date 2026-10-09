@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 )
 
@@ -9,6 +10,9 @@ import (
 // Public talent notes exclude this DoT from steal/reapplication and reaper heals.
 // Unknown first tick, refresh phase and death/retreat persistence remain refused.
 func (o *operator) consumeEntelechiaDOTPulse(t float64, target *enemy, v *Verdict) (float64, error) {
+	if math.IsNaN(t) || math.IsInf(t, 0) || t < 0 {
+		return 0, fmt.Errorf("萃血持续伤害脉冲时间非法")
+	}
 	if o.spec.CharID != "char_4010_etlchi" || o.spec.ExactModuleTalent == nil {
 		return 0, fmt.Errorf("萃血持续伤害事件缺少精确升级来源")
 	}

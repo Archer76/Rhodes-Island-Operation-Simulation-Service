@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 )
 
@@ -9,6 +10,9 @@ import (
 // effect discovery, tick scheduling or expiry inference is authorized here.
 // Public condition: https://prts.wiki/w/隐德来希#天赋 . Lifecycle remains refused.
 func (o *operator) consumeEntelechiaRecoveryPulse(t float64, hasEffect bool, v *Verdict) (float64, error) {
+	if math.IsNaN(t) || math.IsInf(t, 0) || t < 0 {
+		return 0, fmt.Errorf("萃血恢复脉冲时间非法")
+	}
 	if o.spec.CharID != "char_4010_etlchi" || o.spec.ExactModuleTalent == nil {
 		return 0, fmt.Errorf("萃血恢复脉冲缺少精确隐德来希升级来源")
 	}
