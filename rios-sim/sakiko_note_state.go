@@ -19,7 +19,9 @@ const (
 type sakikoOrdinaryNote struct {
 	phase            sakikoNotePhase
 	born, lastUpdate float64
+	freeEntered      float64
 	firstFree        bool
+	freeGeneration   uint64
 	target           int // -1 is explicitly no target; index 0 is a valid identity.
 }
 
@@ -30,7 +32,7 @@ func newSakikoOrdinaryNote(source OperatorSpec, t float64, target int) (*sakikoO
 	if math.IsNaN(t) || math.IsInf(t, 0) || t < 0 || target < -1 {
 		return nil, fmt.Errorf("祥子音符初态参数非法")
 	}
-	return &sakikoOrdinaryNote{phase: sakikoNoteFree, born: t, lastUpdate: t, firstFree: true, target: target}, nil
+	return &sakikoOrdinaryNote{phase: sakikoNoteFree, born: t, lastUpdate: t, freeEntered: t, firstFree: true, target: target}, nil
 }
 
 // An already-dispatched update. Caller provides target validity and, only when
@@ -56,6 +58,8 @@ func (n *sakikoOrdinaryNote) update(t float64, valid bool, nearest int) error {
 	case sakikoNoteTracking:
 		if !valid {
 			n.phase = sakikoNoteFree
+			n.freeGeneration++
+			n.freeEntered = t
 			n.target = -1
 		}
 	}
