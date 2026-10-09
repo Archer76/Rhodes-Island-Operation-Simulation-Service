@@ -11,6 +11,7 @@ import (
 type wangCombatState struct {
 	Deployment wangDeploymentState
 	Slows      map[*enemy]*wangSlowEffects
+	DOTs       []wangTargetDOT
 }
 
 func (w *wangCombatState) triggerAOE(stoneID uint64, entering *enemy, targets []*enemy, atk, now float64, verdict *Verdict) ([]wangHitWitness, error) {
@@ -64,9 +65,10 @@ func (w *wangCombatState) triggerAOE(stoneID uint64, entering *enemy, targets []
 			if w.Slows == nil {
 				w.Slows = map[*enemy]*wangSlowEffects{}
 			}
-			if w.Slows[e] == nil {
-				w.Slows[e] = &wangSlowEffects{}
+			if e.wangSlows == nil {
+				e.wangSlows = &wangSlowEffects{}
 			}
+			w.Slows[e] = e.wangSlows
 			if err := w.Slows[e].add(now, cfg.EffectDuration, cfg.SlowFactor); err != nil {
 				return hits, err
 			}

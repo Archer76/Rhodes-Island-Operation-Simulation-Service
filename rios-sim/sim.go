@@ -190,6 +190,8 @@ type enemy struct {
 	//: 裁定之后以 −80% 为准，**这不只改梓兰**：怒潮凛冬的高台溅射停顿
 	//: （`attack@sluggish`，0.5 秒）与技能里的 `sluggish` 走的是同一个计时器。
 	sluggishTimer float64
+	// Run-local independent Wang slow layers. Nil preserves legacy movement.
+	wangSlows *wangSlowEffects
 	//: 冻结剩余秒数（原版 `freeze_timer` / `frozen`，unit.py:1015-1023）。
 	//: 冻结与停顿**不是**一回事：停顿只是走得慢，冻结是**这一帧既不走也不出手**
 	//: （`advance` 与 `_enemies_attack` 两处都拦）。目前唯一的来源是圣聆初雪的
@@ -2002,6 +2004,9 @@ func advance(e *enemy, dt, speedScale, speedMult float64) {
 	//: 判决因此差出 杀 +1 / 用时 +12.7s。排查全过程见
 	//: `AK-TACTIC-进度.md` §3.12–§3.15。
 	speed := e.spec.MoveSpeed * speedScale * speedMult * e.haste * e.sluggishFactor()
+	if e.wangSlows != nil && e.sim != nil && e.sim.time != nil {
+		speed = e.wangSlows.speed(speed, *e.sim.time)
+	}
 	if speed <= 0 {
 		return
 	}
