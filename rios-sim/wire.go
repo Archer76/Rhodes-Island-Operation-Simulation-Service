@@ -174,7 +174,10 @@ type TeamAuraSpec struct {
 // `OperatorUnit.current_atk()` 在无技能帧的值），所以 Go 这边不需要任何再计算。
 type OperatorSpec struct {
 	// Evidence only; deliberately not read by battle consumers.
-	WangSource   *WangSourceSpec  `json:"wang_source,omitempty"`
+	WangSource   *WangSourceSpec   `json:"wang_source,omitempty"`
+	Chen3Source  *Chen3SourceSpec  `json:"chen3_source,omitempty"`
+	LingSource   *LingSourceSpec   `json:"ling_source,omitempty"`
+	WisdelSource *WisdelSourceSpec `json:"wisdel_source,omitempty"`
 	Placeholders []mechanisms.Gap `json:"mechanism_placeholders,omitempty"`
 	CharID       string           `json:"char_id"`
 	Name         string           `json:"name"`

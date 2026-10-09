@@ -201,8 +201,11 @@ type OperatorOut struct {
 	//: 与 `wire.go::OperatorSpec` 的 `Skill` / `Active` 同名同形。在那之前，
 	//: 这两个键在 `OperatorUnported` 里（「Python 有、Go 没有」）——现在是 Go 自己算。
 	//: 口径见 `skillbind.go` 的文件头：槽号 `0` ⇒ 技 1；等级取 7。
-	WangSource *WangSourceSpec `json:"wang_source,omitempty"`
-	Skill      *SkillSpec      `json:"skill,omitempty"`
+	WangSource   *WangSourceSpec   `json:"wang_source,omitempty"`
+	Chen3Source  *Chen3SourceSpec  `json:"chen3_source,omitempty"`
+	LingSource   *LingSourceSpec   `json:"ling_source,omitempty"`
+	WisdelSource *WisdelSourceSpec `json:"wisdel_source,omitempty"`
+	Skill        *SkillSpec        `json:"skill,omitempty"`
 	Active     *Profile        `json:"active,omitempty"`
 
 	//: **只在本进程内用**：这一位干员的技能黑板里落在首发表之外的键。
@@ -1001,6 +1004,18 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 		return OperatorOut{}, err
 	}
 	out.WangSource, err = buildWangSourceSpec(st, r.Skill, skillLevel)
+	if err != nil {
+		return OperatorOut{}, err
+	}
+	out.Chen3Source, err = buildChen3SourceSpec(st, r.Skill, skillLevel)
+	if err != nil {
+		return OperatorOut{}, err
+	}
+	out.LingSource, err = buildLingSourceSpec(st, r.Skill, skillLevel)
+	if err != nil {
+		return OperatorOut{}, err
+	}
+	out.WisdelSource, err = buildWisdelSourceSpec(st, r.Skill, skillLevel)
 	if err != nil {
 		return OperatorOut{}, err
 	}

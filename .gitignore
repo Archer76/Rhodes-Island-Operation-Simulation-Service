@@ -245,3 +245,12 @@ tools/variant_provenance.py
 tools/variant_provenance.json
 tools/variant-provenance.md
 docs/variant-schema-plan.md
+
+# Local worklog and assignment inventories: not public product artifacts.
+docs/worklog.md
+docs/batch4-enemy-families.md
+docs/kl-level-families.md
+tools/opfamily_inventory.py
+# Detailed game-data-derived stage/enemy inventories stay local.
+docs/enemies-hs-8.md
+docs/stage-hs-8.md
