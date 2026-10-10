@@ -555,8 +555,8 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		return nil, fmt.Errorf("这一局用到了最小版本还没覆盖的机制，不跑：%v",
 			spec.Unsupported)
 	}
-	if spec.FPS <= 0 {
-		return nil, fmt.Errorf("fps 必须是正整数，收到 %d", spec.FPS)
+	if err := validateLogicFPS(spec.FPS); err != nil {
+		return nil, err
 	}
 	// **关卡特有机制按需取用**（mech 包）：点名的名字取不到就整场拒跑，
 	// 见 `mech.Load` 与 wire.go 里那段注释。规格按名字一起交出去。
@@ -566,7 +566,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 	}
 	start := time.Now()
 
-	dt := 1.0 / float64(spec.FPS)
+	dt := gameLogicDT
 	cost := spec.CostInit
 	costTimer := 0.0
 	life := spec.Life
@@ -645,7 +645,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		}
 		// ---- 0. 费用回复（1689-1692）
 		costTimer += dt
-		if costTimer >= spec.CostTime && spec.CostTime > 0 {
+		if costTimer+1e-12 >= spec.CostTime && spec.CostTime > 0 {
 			costTimer -= spec.CostTime
 			cost = math.Min(spec.CostMax, cost+1.0)
 		}
@@ -1284,7 +1284,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 			intrinsicCountTick(enemies, t)
 		}
 		frameNo++
-		t += dt
+		t = float64(frameNo) * gameLogicDT
 	}
 
 	for _, d := range deploys {
@@ -1374,7 +1374,7 @@ type simCtx struct {
 
 func (c *simCtx) Time() float64 { return *c.time }
 func (c *simCtx) Frame() int    { return *c.frame }
-func (c *simCtx) DT() float64   { return 1.0 / float64(c.spec.FPS) }
+func (c *simCtx) DT() float64   { return gameLogicDT }
 
 // speedFor 是某一只敌人此刻的速度乘区（没请求过就是 1.0）。
 func (c *simCtx) speedFor(index int) float64 {
@@ -2231,8 +2231,14 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 		if err != nil {
 			return err
 		}
+		if op.skillActive {
+			interval, err = quantizedSkillInterval(interval)
+			if err != nil {
+				return err
+			}
+		}
 		op.attackTimer += dt
-		if op.attackTimer < interval {
+		if op.attackTimer+1e-12 < interval {
 			continue
 		}
 		targets := pickTargets(op, enemies, op.maxTarget(), t)

@@ -9,7 +9,7 @@ import (
 
 func costPrimitive(init, cap, period float64) *Spec {
 	s := deploymentPrimitiveSpec(5)
-	s.FPS = 4
+	s.FPS = gameLogicFPS
 	s.CostInit = init
 	s.CostMax = cap
 	s.CostTime = period
@@ -79,7 +79,7 @@ func TestCostAutomaticUsesEnvironmentAndDiscreteBalance(t *testing.T) {
 	for _, c := range []struct {
 		scale string
 		want  float64
-	}{{"0.5", 3.75}, {"2", 0.75}} {
+	}{{"0.5", 119.0 / 30}, {"2", 29.0 / 30}} {
 		t.Run(c.scale, func(t *testing.T) {
 			env := StageEnv(StageOptions{CostIncreaseTime: 1, MaxCost: 2}, []Rune{{Key: "cbuff_cost_recovery", Blackboard: []BlackboardEntry{{Key: "scale", Value: json.RawMessage(c.scale)}}}}, "NORMAL")
 			s := costPrimitive(env.CostInit, env.CostMax, env.CostTime)
@@ -93,7 +93,7 @@ func TestCostAutomaticUsesEnvironmentAndDiscreteBalance(t *testing.T) {
 	}
 	s := costPrimitive(0.5, 99, 1)
 	addCostPrimitive(s, "A", 1, 0, true)
-	assertCostTime(t, runCostPrimitive(t, s), "A", 0.75)
+	assertCostTime(t, runCostPrimitive(t, s), "A", 29.0/30)
 	s = costPrimitive(0, 99, 0.25)
 	addCostPrimitive(s, "A", 1, 0, true)
 	assertCostTime(t, runCostPrimitive(t, s), "A", 0)

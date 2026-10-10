@@ -14,7 +14,7 @@ import (
 // first frame gives the cancelled run a real event that must not escape.
 func simContextTinyFixture() *Spec {
 	s := deploymentPrimitiveSpec(1)
-	s.FPS = 4
+	s.FPS = gameLogicFPS
 	addDeploymentPrimitive(s, "context-unit", "context unit", [2]int{0, 0}, 0, 0)
 	return s
 }
