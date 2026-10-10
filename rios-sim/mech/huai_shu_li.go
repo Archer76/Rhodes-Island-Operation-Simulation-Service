@@ -43,6 +43,7 @@ import (
 	"strings"
 
 	"rios-sim/num"
+	"rios-sim/timing"
 )
 
 // FarmlandID 是这一层的机制名（Python 与 Go 之间的契约，改名等于改协议）。
@@ -643,14 +644,16 @@ func (m *farmlandMech) IsClear(cell [2]int, allies [][2]int) bool {
 
 // Farmland 是运行态的田地系统。
 type Farmland struct {
-	spec     *FarmlandSpec
-	fields   []*Field
-	actual   map[Cell]float64
-	severed  map[Cell]bool
-	allCells map[Cell]bool
-	index    map[Cell]*Field
-	tCache   float64
-	tActual  float64
+	spec        *FarmlandSpec
+	fields      []*Field
+	actual      map[Cell]float64
+	severed     map[Cell]bool
+	allCells    map[Cell]bool
+	index       map[Cell]*Field
+	tCache      float64
+	tActual     float64
+	cacheClock  timing.Accumulator
+	actualClock timing.Accumulator
 	//: 已释放/已施加的累计量，进判决日志用（对拍时能看出机制什么时候动的手）。
 	Released float64
 }
@@ -1012,14 +1015,33 @@ func (fs *Farmland) Pump(cell Cell, direction string, allyOnSource bool) *PumpRe
 // ---- 演化 ----
 
 // Tick 推进 `dt` 秒：0.2s 释缓存、1s 靠拢，各自累加到点才触发。
-func (fs *Farmland) Tick(dt float64) {
+func (fs *Farmland) Tick(dt float64) { fs.tickMode(dt, false) }
+func (fs *Farmland) TickFrame()      { fs.tickMode(timing.DT, true) }
+func (fs *Farmland) tickMode(dt float64, frameMode bool) {
 	if dt <= 0 {
 		return
 	}
-	fs.tCache += dt
-	fs.tActual += dt
-	for fs.tCache >= fs.spec.CacheInterval {
-		fs.tCache -= fs.spec.CacheInterval
+	if frameMode {
+		fs.tCache = fs.cacheClock.StepTime(fs.tCache, 1)
+		fs.tActual = fs.actualClock.StepTime(fs.tActual, 1)
+	} else {
+		fs.cacheClock.Reset()
+		fs.actualClock.Reset()
+		fs.tCache += dt
+		fs.tActual += dt
+	}
+	cacheDue := func() bool {
+		if frameMode {
+			return fs.cacheClock.TimeAtLeast(fs.spec.CacheInterval)
+		}
+		return fs.tCache >= fs.spec.CacheInterval
+	}
+	for cacheDue() {
+		if frameMode {
+			fs.tCache = fs.cacheClock.ConsumeTime(fs.spec.CacheInterval)
+		} else {
+			fs.tCache -= fs.spec.CacheInterval
+		}
 		for _, f := range fs.fields {
 			if f.Cache > 0 {
 				moved := fs.spec.CachePerTick
@@ -1033,8 +1055,18 @@ func (fs *Farmland) Tick(dt float64) {
 			}
 		}
 	}
-	for fs.tActual >= fs.spec.ActualInterval {
-		fs.tActual -= fs.spec.ActualInterval
+	actualDue := func() bool {
+		if frameMode {
+			return fs.actualClock.TimeAtLeast(fs.spec.ActualInterval)
+		}
+		return fs.tActual >= fs.spec.ActualInterval
+	}
+	for actualDue() {
+		if frameMode {
+			fs.tActual = fs.actualClock.ConsumeTime(fs.spec.ActualInterval)
+		} else {
+			fs.tActual -= fs.spec.ActualInterval
+		}
 		for _, f := range fs.fields {
 			for c := range f.Cells {
 				cur := fs.actual[c]
@@ -1234,6 +1266,7 @@ type farmlandMech struct {
 	//: "≥1 秒就清零"：掉帧时 dt 会一次跨过不止一秒，只结一次等于把伤害漏掉，
 	//: 而 `fps=1` 的粗扫正是搜索里用得最多的档（原版 1344-1351 写的就是这个）。
 	envTimer float64
+	envClock timing.Accumulator
 	//: 已经结算过"被击倒"效果的那几只（原版每只敌人身上的 `death_done`）。
 	dead map[int]bool
 	//: 敌方技能出手的计时（键 = 出怪顺序下标），见 `AttackTick`。
@@ -1283,15 +1316,27 @@ func (m *farmlandMech) ID() ID { return FarmlandID }
 // EnvTick 对应原版 `sim.py:1327-1375` 的 `_environment_tick`。
 // 三个节拍各归各的：【缓存】每 0.2s 释放、【实际】每秒靠拢（都在 `field.Tick`
 // 里），而**环境伤害按整秒**结算——因为原文写的是「每秒受到 … 环境法术伤害」。
-func (m *farmlandMech) EnvTick(ctx Ctx, dt float64) {
-	m.field.Tick(dt)
-
-	m.envTimer += dt
-	ticks := int(m.envTimer)
+func (m *farmlandMech) EnvTick(ctx Ctx, dt float64) { m.envTickMode(ctx, dt, false) }
+func (m *farmlandMech) EnvTickFrame(ctx Ctx)        { m.envTickMode(ctx, timing.DT, true) }
+func (m *farmlandMech) envTickMode(ctx Ctx, dt float64, frameMode bool) {
+	ticks := 0
+	if frameMode {
+		m.field.TickFrame()
+		m.envTimer = m.envClock.StepTime(m.envTimer, 1)
+		for m.envClock.TimeAtLeast(1) {
+			m.envTimer = m.envClock.ConsumeTime(1)
+			ticks++
+		}
+	} else {
+		m.envClock.Reset()
+		m.field.Tick(dt)
+		m.envTimer += dt
+		ticks = int(m.envTimer)
+		m.envTimer -= float64(ticks)
+	}
 	if ticks <= 0 {
 		return
 	}
-	m.envTimer -= float64(ticks)
 
 	// 泵水必须排在伤害结算**之前**：泵水改的是病害值，而这一秒的伤害要按**泵过
 	// 之后**的值算。反过来写的话，玩家用泵站压低病害值的那一秒仍会按旧值挨打，
@@ -1364,7 +1409,25 @@ func init() { RegisterFactory(FarmlandID, newFarmlandMech) }
 //     （原版 3496-3498 写明了"不是把两部分加起来当一次伤害打"）。
 //  4. **法术附加与"目标地块 +5"共用一个条件**：出手者**自己**站在受污染的田地上
 //     （`actual_at(自己那格) > 0`）——不是目标那格，也不是"这一关有田地"。
-func (m *farmlandMech) AttackTick(ctx Ctx, dt float64) {
+func (m *farmlandMech) AttackTick(ctx Ctx, dt float64) { m.attackTickMode(ctx, dt, false) }
+func (m *farmlandMech) AttackTickFrame(ctx Ctx) error {
+	for _, e := range ctx.Enemies() {
+		if e.SkillAtkScalePhys == 0 && e.SkillAtkScaleMagic == 0 {
+			continue
+		}
+		st := &skillAtkState{first: true}
+		if _, err := timing.SkillFrames(st.need(e)); err != nil {
+			return fmt.Errorf("敌人%d首拍: %w", e.Index, err)
+		}
+		st.first = false
+		if _, err := timing.SkillFrames(st.need(e)); err != nil {
+			return fmt.Errorf("敌人%d技能间隔: %w", e.Index, err)
+		}
+	}
+	m.attackTickMode(ctx, timing.DT, true)
+	return nil
+}
+func (m *farmlandMech) attackTickMode(ctx Ctx, dt float64, frameMode bool) {
 	if m.skillTimers == nil {
 		m.skillTimers = map[int]*skillAtkState{}
 	}
@@ -1396,11 +1459,24 @@ func (m *farmlandMech) AttackTick(ctx Ctx, dt float64) {
 			st = &skillAtkState{first: true}
 			m.skillTimers[e.Index] = st
 		}
-		st.timer += dt
-		if st.timer < st.need(e) {
+		due := false
+		if frameMode {
+			need, err := timing.SkillFrames(st.need(e))
+			if err != nil {
+				panic(err)
+			} // Invalid source cannot silently become a normal attack.
+			st.timer = st.clock.StepTime(st.timer, 1)
+			due = st.clock.TimeAtLeast(float64(need) / timing.FPS)
+		} else {
+			st.clock.Reset()
+			st.timer += dt
+			due = st.timer >= st.need(e)
+		}
+		if !due {
 			continue
 		}
 		st.timer = 0
+		st.clock.Reset()
 		st.first = false
 		target, ok := skillAtkTarget(ctx, e)
 		if !ok {
@@ -1450,6 +1526,7 @@ func (m *farmlandMech) AttackTick(ctx Ctx, dt float64) {
 // `skill_atk_timer` 与 `skill_atk_first` 两个字段）。
 type skillAtkState struct {
 	timer float64
+	clock timing.Accumulator
 	first bool
 }
 

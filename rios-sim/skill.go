@@ -47,6 +47,14 @@ const (
 // `self.cost = min(self.max_cost, self.cost + gain)`）。
 func skillTick(ops []*operator, dt, t float64, spec *Spec, cost *float64,
 	verdict *Verdict) {
+	skillTickMode(ops, dt, t, spec, cost, verdict, false)
+}
+
+func skillTickFrame(ops []*operator, t float64, spec *Spec, cost *float64, verdict *Verdict) {
+	skillTickMode(ops, gameLogicDT, t, spec, cost, verdict, true)
+}
+
+func skillTickMode(ops []*operator, dt, t float64, spec *Spec, cost *float64, verdict *Verdict, frameMode bool) {
 	for _, op := range ops {
 		if !op.alive() {
 			continue
@@ -58,7 +66,16 @@ func skillTick(ops []*operator, dt, t float64, spec *Spec, cost *float64,
 		// `op.skill is None` 那道 continue 之前递减。放后面的话，**没带技能的
 		// 干员被冻住就永远解不开**——而这类偏差在判决上完全看不出来。
 		if op.freezeTimer > 0 {
-			op.freezeTimer = math.Max(0.0, op.freezeTimer-dt)
+			if frameMode {
+				op.freezeTimer = op.freezeClock.StepTime(op.freezeTimer, -1)
+				if op.freezeClock.TimeAtMost(0) {
+					op.freezeTimer = 0
+					op.freezeClock.Reset()
+				}
+			} else {
+				op.freezeClock.Reset()
+				op.freezeTimer = math.Max(0.0, op.freezeTimer-dt)
+			}
 		}
 		// 「每 N 秒获得 1 层护盾」（泥岩「沃土予身」）**与技能无关**，所以必须
 		// 放在下面 `if sk == nil { continue }` **之前**——原版就是这么排的
@@ -68,9 +85,24 @@ func skillTick(ops []*operator, dt, t float64, spec *Spec, cost *float64,
 		// 满层时这一次"获得"**作废、计时照走不攒着**：正文只说"每 9 秒获得 1 层
 		// （最多 3 层）"，没说满层挂起（原版 `_shield_tick` 的 while 循环同义）。
 		if op.shieldInterval > 0 && op.shieldMaxLayers > 0 {
-			op.shieldTimer += dt
-			for op.shieldTimer >= op.shieldInterval {
-				op.shieldTimer -= op.shieldInterval
+			if frameMode {
+				op.shieldTimer = op.shieldClock.StepTime(op.shieldTimer, 1)
+			} else {
+				op.shieldClock.Reset()
+				op.shieldTimer += dt
+			}
+			shieldDue := func() bool {
+				if frameMode {
+					return op.shieldClock.TimeAtLeast(op.shieldInterval)
+				}
+				return op.shieldTimer >= op.shieldInterval
+			}
+			for shieldDue() {
+				if frameMode {
+					op.shieldTimer = op.shieldClock.ConsumeTime(op.shieldInterval)
+				} else {
+					op.shieldTimer -= op.shieldInterval
+				}
 				if op.shieldLayers < op.shieldMaxLayers {
 					op.shieldLayers++
 					if traceOn && op.sim != nil {
@@ -94,8 +126,16 @@ func skillTick(ops []*operator, dt, t float64, spec *Spec, cost *float64,
 		if op.skillActive {
 			// 持续时间倒计时（无限持续减不完）
 			if !sk.Infinite {
-				op.skillTimer -= dt
-				if op.skillTimer <= 0 {
+				ended := false
+				if frameMode {
+					op.skillTimer = op.skillClock.StepTime(op.skillTimer, -1)
+					ended = op.skillClock.TimeAtMost(0)
+				} else {
+					op.skillClock.Reset()
+					op.skillTimer -= dt
+					ended = op.skillTimer <= 0
+				}
+				if ended {
 					deactivate(op)
 					continue
 				}
@@ -107,8 +147,12 @@ func skillTick(ops []*operator, dt, t float64, spec *Spec, cost *float64,
 			}
 			// 只有多充能技能在**开启期间**还继续攒技力
 			if sk.MaxCharge > 1 && sk.SPType == spAuto {
-				op.sp = math.Min(sk.SPCost*float64(sk.MaxCharge),
-					op.sp+sk.Increment*dt)
+				if frameMode {
+					op.sp = op.spClock.StepRate(op.sp, sk.Increment, sk.SPCost*float64(sk.MaxCharge))
+				} else {
+					op.spClock.Reset()
+					op.sp = math.Min(sk.SPCost*float64(sk.MaxCharge), op.sp+sk.Increment*dt)
+				}
 			}
 			op.skillReq = false
 			continue
@@ -116,9 +160,17 @@ func skillTick(ops []*operator, dt, t float64, spec *Spec, cost *float64,
 		// 未开启：按回复方式攒技力（上限见文件头那两条）
 		if sk.SPType == spAuto {
 			cap := sk.SPCost * math.Max(1, float64(sk.MaxCharge))
-			op.sp = math.Min(cap, op.sp+sk.Increment*dt)
+			if frameMode {
+				op.sp = op.spClock.StepRate(op.sp, sk.Increment, cap)
+			} else {
+				op.spClock.Reset()
+				op.sp = math.Min(cap, op.sp+sk.Increment*dt)
+			}
 		}
 		ready := op.sp >= sk.SPCost
+		if frameMode {
+			ready = op.spClock.ReadyNumeric(op.sp, sk.SPCost)
+		}
 		want := op.skillReq || sk.AutoTrigger || op.autoSkill
 		if sk.OncePerBattle && op.spCharges >= 1 {
 			want = false
@@ -143,8 +195,9 @@ func activate(op *operator, t float64, spec *Spec, cost *float64,
 		return
 	}
 	if !passive {
-		op.sp = math.Max(0, op.sp-sk.SPCost)
+		op.sp = op.spClock.SpendNumeric(op.sp, sk.SPCost)
 	}
+	op.skillClock.Reset()
 	op.skillActive = true
 	//: ★ **行使见证**（2026-09-24）：技能这条机制以前**没有任何运行期痕迹**——
 	//: 规格里有没有 `skill` 键、模拟里有没有真开过，在输出上长得一模一样。
@@ -198,6 +251,8 @@ func activate(op *operator, t float64, spec *Spec, cost *float64,
 // 原版还会清击杀叠层、闪避、屏障——那些都不在白名单里（拒跑），所以这里不写；
 // 写了反而是给"以后接了它们"埋一个假的已完成状态。
 func deactivate(op *operator) {
+	op.skillClock.Reset()
+	op.spClock.Reset()
 	op.skillActive = false
 	op.skillTimer = 0
 	op.ammoLeft = 0
@@ -230,7 +285,7 @@ func spOnAttack(op *operator) {
 	if sk.SPType != spAttack || sk.Increment == 0 {
 		return
 	}
-	op.sp = math.Min(sk.SPCost, op.sp+sk.Increment)
+	op.sp = op.spClock.AddNumeric(op.sp, sk.Increment, sk.SPCost)
 }
 
 // spOnHit 受击回复的技力（`_enemies_attack` 尾部）：这一下**真的掉血了**才回。
@@ -242,7 +297,7 @@ func spOnHit(op *operator, dealt float64) {
 	if sk.SPType != spHit || sk.Increment == 0 {
 		return
 	}
-	op.sp = math.Min(sk.SPCost, op.sp+sk.Increment)
+	op.sp = op.spClock.AddNumeric(op.sp, sk.Increment, sk.SPCost)
 }
 
 // useSkill 手动开技能的一次请求：时刻到了，找**站在这一格上的、活着的**干员

@@ -50,6 +50,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"rios-sim/timing"
 	"sort"
 	"strconv"
 	"strings"
@@ -192,6 +193,7 @@ type SnowField struct {
 	//: 表住在规格上，片只读它。
 	nbrs  map[string][][2]int
 	timer float64
+	clock timing.Accumulator
 	//: 技能期才非 0（见文件头"没有移植的一处"）。
 	spreadCap int
 	dotScale  float64
@@ -270,7 +272,9 @@ func (s *Snow) Start(ctx Ctx) error {
 }
 
 // SnowTick 是帧序 3.5 的那一次（原版 `_snow_tick`）。
-func (s *Snow) SnowTick(ctx Ctx, dt float64) {
+func (s *Snow) SnowTick(ctx Ctx, dt float64) { s.snowTickMode(ctx, dt, false) }
+func (s *Snow) SnowTickFrame(ctx Ctx)        { s.snowTickMode(ctx, timing.DT, true) }
+func (s *Snow) snowTickMode(ctx Ctx, dt float64, frameMode bool) {
 	if s == nil || len(s.fields) == 0 {
 		ctx.Trace("SNOWTICKT 空：fields=%d（这一层被挂上了但没有雪片）",
 			len(s.fields))
@@ -339,7 +343,7 @@ func (s *Snow) SnowTick(ctx Ctx, dt float64) {
 			}
 			continue
 		}
-		f.tick(dt)
+		f.tickMode(dt, frameMode)
 	}
 
 	// ---- 敌人：减速、冻结、踏入伤害 ----
@@ -524,13 +528,29 @@ func (s *Snow) SnowTick(ctx Ctx, dt float64) {
 //
 // 返回值在原版是"这一帧新增层数"（只用于 verbose 日志），Go 侧不记日志，
 // 故不返回。
-func (f *SnowField) tick(dt float64) {
+func (f *SnowField) tick(dt float64) { f.tickMode(dt, false) }
+func (f *SnowField) tickMode(dt float64, frameMode bool) {
 	if f.spec.Interval <= 0 {
 		return
 	}
-	f.timer += dt
-	for f.timer >= f.spec.Interval {
-		f.timer -= f.spec.Interval
+	if frameMode {
+		f.timer = f.clock.StepTime(f.timer, 1)
+	} else {
+		f.clock.Reset()
+		f.timer += dt
+	}
+	due := func() bool {
+		if frameMode {
+			return f.clock.TimeAtLeast(f.spec.Interval)
+		}
+		return f.timer >= f.spec.Interval
+	}
+	for due() {
+		if frameMode {
+			f.timer = f.clock.ConsumeTime(f.spec.Interval)
+		} else {
+			f.timer -= f.spec.Interval
+		}
 		f.cast()
 		if f.spreadCap > 0 {
 			f.spreadFrontier()

@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"math"
+	"rios-sim/timing"
 )
 
 // Doctor ruling: game battle logic is fixed at 30 Hz. Presentation / wall-clock
@@ -13,14 +13,7 @@ const gameLogicDT = 1.0 / gameLogicFPS
 // Round half up for nonnegative skill intervals, not ceil or ties-to-even.
 // Zero is retained rather than inventing a one-frame minimum.
 func skillIntervalFrames(seconds float64) (int64, error) {
-	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 {
-		return 0, fmt.Errorf("技能间隔必须为有限非负秒数")
-	}
-	frames := math.Round(seconds * gameLogicFPS)
-	if frames >= float64(math.MaxInt64) {
-		return 0, fmt.Errorf("技能间隔帧数溢出")
-	}
-	return int64(frames), nil
+	return timing.SkillFrames(seconds)
 }
 func quantizedSkillInterval(seconds float64) (float64, error) {
 	frames, err := skillIntervalFrames(seconds)

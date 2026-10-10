@@ -96,18 +96,18 @@ func TestCostAutomaticUsesEnvironmentAndDiscreteBalance(t *testing.T) {
 	assertCostTime(t, runCostPrimitive(t, s), "A", 29.0/30)
 	s = costPrimitive(0, 99, 0.25)
 	addCostPrimitive(s, "A", 1, 0, true)
-	assertCostTime(t, runCostPrimitive(t, s), "A", 0)
+	assertCostTime(t, runCostPrimitive(t, s), "A", 7.0/30)
 }
 
 func TestCostAutomaticOrderAndIndependentExplicit(t *testing.T) {
 	s := costPrimitive(0, 99, 1)
 	addCostPrimitive(s, "A", 3, 0, true)
 	addCostPrimitive(s, "B", 1, 0, true)
-	addCostPrimitive(s, "C", 1, 0.75, false)
+	addCostPrimitive(s, "C", 1, 29.0/30, false)
 	v := runCostPrimitive(t, s)
-	assertCostTime(t, v, "C", 0.75)
-	assertCostTime(t, v, "A", 3.75)
-	assertCostTime(t, v, "B", 4.75)
+	assertCostTime(t, v, "C", 29.0/30)
+	assertCostTime(t, v, "A", 119.0/30)
+	assertCostTime(t, v, "B", 149.0/30)
 	// At the same frame plan order decides which request spends the available DP.
 	s = costPrimitive(1, 99, 100)
 	addCostPrimitive(s, "A", 1, 0, true)
@@ -136,7 +136,7 @@ func TestCostCapAndExplicitDenial(t *testing.T) {
 	}
 	s = costPrimitive(0, 3, 1)
 	addCostPrimitive(s, "A", 3, 0, true)
-	assertCostTime(t, runCostPrimitive(t, s), "A", 2.75)
+	assertCostTime(t, runCostPrimitive(t, s), "A", 89.0/30)
 	s = costPrimitive(0, 99, 1)
 	addCostPrimitive(s, "A", 1, 0.5, false)
 	v = runCostPrimitive(t, s)
@@ -167,7 +167,7 @@ func TestCostAutomaticKillAwardAndGuard(t *testing.T) {
 	if killTime < 0 {
 		t.Fatalf("kill event not exercised: %v", v.Events)
 	}
-	assertCostTime(t, v, "waiter", killTime+0.25)
+	assertCostTime(t, v, "waiter", killTime+gameLogicDT)
 	if v.Kills != 1 {
 		t.Fatalf("kill award path unexercised %v", v)
 	}
@@ -229,13 +229,14 @@ func TestCostAutomaticSnowUsesActualOwnerNotPlanTime(t *testing.T) {
 
 func TestCostPlanOrderForSameFrameAndLegacyTimeOrder(t *testing.T) {
 	s := costPrimitive(1, 99, 100)
-	addCostPrimitive(s, "plan-first", 1, 0.2, false)
-	addCostPrimitive(s, "earlier-deadline", 1, 0.1, false)
+	// Both deadlines fall after frame 3 and before frame 4 at fixed 30 Hz.
+	addCostPrimitive(s, "plan-first", 1, 0.12, false)
+	addCostPrimitive(s, "earlier-deadline", 1, 0.11, false)
 	for i := range s.Deploys {
 		s.Deploys[i].PlanOrder = true
 	}
 	v := runCostPrimitive(t, s)
-	assertCostTime(t, v, "plan-first", 0.25)
+	assertCostTime(t, v, "plan-first", 4.0/30)
 	if len(v.CostDenied) != 1 {
 		t.Fatal(v.CostDenied)
 	}
@@ -243,7 +244,7 @@ func TestCostPlanOrderForSameFrameAndLegacyTimeOrder(t *testing.T) {
 		s.Deploys[i].PlanOrder = false
 	}
 	v = runCostPrimitive(t, s)
-	assertCostTime(t, v, "earlier-deadline", 0.25)
+	assertCostTime(t, v, "earlier-deadline", 4.0/30)
 }
 
 func TestCostAutomaticUsesSkillAndRetreatOnNextFrame(t *testing.T) {
@@ -253,12 +254,12 @@ func TestCostAutomaticUsesSkillAndRetreatOnNextFrame(t *testing.T) {
 	s.SkillUses = []SkillUseSpec{{Time: 0.5, Cell: s.Operators[0].Cell}}
 	addCostPrimitive(s, "waiter", 3, 0, true)
 	v := runCostPrimitive(t, s)
-	assertCostTime(t, v, "waiter", 0.75)
+	assertCostTime(t, v, "waiter", 16.0/30)
 	s = costPrimitive(3, 99, 100)
 	addCostPrimitive(s, "giver", 3, 0, false)
 	s.Operators[0].RetreatRefund = true
 	s.Retreats = []RetreatSpec{{Time: 0.5, Operator: "giver"}}
 	addCostPrimitive(s, "waiter", 3, 0, true)
 	v = runCostPrimitive(t, s)
-	assertCostTime(t, v, "waiter", 0.75)
+	assertCostTime(t, v, "waiter", 16.0/30)
 }

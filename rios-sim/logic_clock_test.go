@@ -36,14 +36,14 @@ func TestSkillAttackIntervalRuntimeRoundsDown(t *testing.T) {
 	target := countedEnemy(1)
 	verdict := &Verdict{}
 	for frame := 0; frame < 22; frame++ {
-		if e := operatorsAttack([]*operator{op}, []*enemy{target}, gameLogicDT, float64(frame)*gameLogicDT, &Spec{}, verdict); e != nil {
+		if e := operatorsAttackFrame([]*operator{op}, []*enemy{target}, float64(frame)*gameLogicDT, &Spec{}, verdict); e != nil {
 			t.Fatal(e)
 		}
 	}
 	if verdict.DamageDealt != 0 {
 		t.Fatal("attack before 23rd frame", verdict.DamageDealt)
 	}
-	if e := operatorsAttack([]*operator{op}, []*enemy{target}, gameLogicDT, 22*gameLogicDT, &Spec{}, verdict); e != nil {
+	if e := operatorsAttackFrame([]*operator{op}, []*enemy{target}, 22*gameLogicDT, &Spec{}, verdict); e != nil {
 		t.Fatal(e)
 	}
 	if verdict.DamageDealt <= 0 {

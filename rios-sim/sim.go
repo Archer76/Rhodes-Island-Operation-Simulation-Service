@@ -39,6 +39,7 @@ import (
 	"rios-sim/mech"
 	"rios-sim/mechanisms"
 	"rios-sim/num"
+	"rios-sim/timing"
 )
 
 // : 与原版同源的两个常量（`unit.py` 27-40）。攻击间隔的下限与攻速下限一起用。
@@ -111,6 +112,7 @@ type enemy struct {
 	invincible bool
 
 	attackTimer float64
+	attackClock timing.Accumulator
 	attackPause float64
 	hits        int
 	leaked      bool
@@ -149,11 +151,14 @@ type enemy struct {
 	// ⚠ 等重生的（`rebornAt >= 0`）既不算活、也不算死：它不推路（帧序 3 的
 	// 条件是 `alive()`）、不出手（帧序 7 同理）、**不进击杀数**（收尾结算里
 	// 由 `pendingReborn()` 排除）。少排一条，判决就会多记一次击杀。
-	rebornLeft     int
-	rebornAt       float64 //: >= 0 = 倒下等重生；-1 = 不在窗口里
-	rebornChargeAt float64
-	rebornCharge   int
-	rebornDefBase  float64 //: 防御力基准：充能加成每次都按它重算，不能累乘
+	rebornLeft            int
+	rebornAt              float64 //: >= 0 = 倒下等重生；-1 = 不在窗口里
+	rebornChargeAt        float64
+	rebornDeadline        timing.Deadline
+	rebornChargeDeadline  timing.Deadline
+	rebornSummonDeadlines []timing.Deadline
+	rebornCharge          int
+	rebornDefBase         float64 //: 防御力基准：充能加成每次都按它重算，不能累乘
 	//: 重生期召唤的下一拍时刻（与 `spec.RebornSummons` 一一对应，-1 = 不排了）
 	rebornSummonAt []float64
 
@@ -331,6 +336,7 @@ func newEnemy(spec SpawnSpec, index int, position [2]float64, c *simCtx) *enemy 
 	if n := len(spec.RebornSummons); n > 0 {
 		// 原版 `_build_enemy` 就给每只排好这一列（-1 = 不在窗口里，不排拍）
 		e.rebornSummonAt = make([]float64, n)
+		e.rebornSummonDeadlines = make([]timing.Deadline, n)
 		for i := range e.rebornSummonAt {
 			e.rebornSummonAt[i] = -1.0
 		}
@@ -355,7 +361,12 @@ func legLength(pts [][2]float64) float64 {
 }
 
 type operator struct {
-	spec OperatorSpec
+	spec        OperatorSpec
+	attackClock timing.Accumulator
+	shieldClock timing.Accumulator
+	skillClock  timing.Accumulator
+	spClock     timing.Accumulator
+	freezeClock timing.Accumulator
 
 	hp          float64
 	cell        [2]float64
@@ -569,6 +580,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 	dt := gameLogicDT
 	cost := spec.CostInit
 	costTimer := 0.0
+	var costClock timing.Accumulator
 	life := spec.Life
 
 	deploys := append([]DeploySpec(nil), spec.Deploys...)
@@ -616,6 +628,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 
 	t := 0.0
 	frameNo := 0
+	successfulDeploys := 0
 	// 机制看到的世界：**读**用只读视图，**写**一律走效果请求，由主循环施加
 	// （帧内顺序的权威只有一处）。空机制时这一层不产生任何行为——`Empty()` 直接跳。
 	ctx := &simCtx{spec: spec, objs: &objs, enemies: &enemies, mechanisms: mechanisms,
@@ -644,9 +657,9 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 			return nil, err
 		}
 		// ---- 0. 费用回复（1689-1692）
-		costTimer += dt
-		if costTimer+1e-12 >= spec.CostTime && spec.CostTime > 0 {
-			costTimer -= spec.CostTime
+		costTimer = costClock.StepTime(costTimer, 1)
+		if spec.CostTime > 0 && costClock.TimeAtLeast(spec.CostTime) {
+			costTimer = costClock.ConsumeTime(spec.CostTime)
 			cost = math.Min(spec.CostMax, cost+1.0)
 		}
 
@@ -715,6 +728,15 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 					[4]any{t, op.spec.Name, d.Cost, cost})
 				continue
 			}
+			op.freezeTimer = 0
+			op.freezeClock.Reset()
+			op.blessingUsed = false
+			op.blessingFreeze = 0
+			op.deathLogged = false
+			op.attackClock.Reset()
+			op.shieldClock.Reset()
+			op.skillClock.Reset()
+			op.spClock.Reset()
 			op.hp = op.spec.MaxHP
 			op.blocking = nil
 			op.attackTimer = 0
@@ -762,13 +784,13 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 			//: （`spCost × maxCharge`）。不夹的话，技力超过消耗会让 `sp` 这个数
 			//: 与两侧的其他读数分叉（它同时是"还差多少"的分子）。
 			if op.spec.TalentDeploySP != 0 {
-				ceiling := op.sp + op.spec.TalentDeploySP
+				cap := math.Inf(1)
 				if sk := op.spec.Skill; sk != nil && sk.SPCost > 0 {
-					c := sk.SPCost * float64(sk.MaxCharge)
-					if c > 0 && ceiling > c {
-						ceiling = c
+					if c := sk.SPCost * float64(sk.MaxCharge); c > 0 {
+						cap = c
 					}
 				}
+				ceiling := op.spClock.AddNumeric(op.sp, op.spec.TalentDeploySP, cap)
 				gained := ceiling - op.sp
 				op.sp = ceiling
 				if traceOn {
@@ -812,7 +834,16 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 						op.shieldMaxLayers, op.shieldInterval, op.shieldBreakHeal)
 				}
 			}
-			ops = append(ops, op)
+			// A reused deployment object must have exactly one runtime entry.
+			// Remove its historical entry before appending in latest deployment order.
+			unique := ops[:0]
+			for _, existing := range ops {
+				if existing != op {
+					unique = append(unique, existing)
+				}
+			}
+			ops = append(unique, op)
+			successfulDeploys++
 			onField[d.CharID] = op
 			// 部署瞬间的**一次性**环境伤害（原版 `sim.py:3383-3394`，在 `_do_deploy`
 			// 里：技能/天赋的部署时效果之后，扣费用与建积雪之前）。
@@ -850,15 +881,12 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		// 与原版同一套判据：**按格子找人**，找不到就什么也不发生。这里只记请求，
 		// 真正开不开在下面的技能阶段判（那一刻的技力说了算）。
 		//
-		// 时间对不齐（离任何一帧都超过 dt/2）的请求**丢掉**——原版也是这么做的
-		// （它每帧筛 `abs(s.time - t) < dt/2`），丢掉时要往前走，否则它会一直
-		// 卡在队头把后面的请求全堵住。
-		for len(skillUses) > 0 && skillUses[0].Time <= t+dt/2 {
+		// Doctor ruling: execute on the first frame not earlier than the request.
+		// Half-frame requests are no longer silently discarded or executed early.
+		for len(skillUses) > 0 && timing.Reached(int64(frameNo), skillUses[0].Time) {
 			u := skillUses[0]
 			skillUses = skillUses[1:]
-			if math.Abs(u.Time-t) < dt/2 {
-				useSkill(ops, u.Cell)
-			}
+			useSkill(ops, u.Cell)
 		}
 
 		// ---- 1c. 撤退请求（博士 2026-09-25：「你现在把撤退机制做了吧」）----
@@ -1067,26 +1095,28 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 				// 排在充能之前（原版 4176-4184 在 4188 那段之前），
 				// 所以同一帧既召唤又充能是可能的。
 				for i := range e.rebornSummonAt {
-					for e.rebornSummonAt[i] >= 0 && t >= e.rebornSummonAt[i] {
+					for e.rebornSummonAt[i] >= 0 && e.rebornSummonDeadlines[i].Due(int64(frameNo)) {
 						// 间隔非正就是"没有这一拍"，先退出——否则 while 不收敛
 						if e.spec.RebornSummons[i].Interval <= 0 {
 							e.rebornSummonAt[i] = -1.0
 							break
 						}
 						e.rebornSummonAt[i] += e.spec.RebornSummons[i].Interval
+						e.rebornSummonDeadlines[i].Add(e.spec.RebornSummons[i].Interval)
 						ctx.summonReborn(e, i, t, verdict)
 					}
 				}
 
 				// 充能：窗口内按 interval 逐个结算。用 while 而不是 if——
 				// fps 高时不会漏，fps=1 的粗扫时又会一次补上欠下的所有拍。
-				for e.rebornChargeAt >= 0 && t >= e.rebornChargeAt {
+				for e.rebornChargeAt >= 0 && e.rebornChargeDeadline.Due(int64(frameNo)) {
 					// 间隔非正就是"没有充能节拍"，先退出——否则
 					// `rebornChargeAt` 会原地踏步，这个 while 永不收敛。
 					if e.spec.RebornInterval <= 0 {
 						break
 					}
 					e.rebornChargeAt += e.spec.RebornInterval
+					e.rebornChargeDeadline.Add(e.spec.RebornInterval)
 					// 原文把"降低病害值"与"获得1层充能"写在同一个条件里：
 					// 本格病害值 > 0 才**同时**发生两件事，否则一件都不发生。
 					// `DrainPollution` 在 ≤0 时返回 0，正好当这个条件用。
@@ -1100,7 +1130,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 						e.rebornCharge++
 					}
 				}
-				if t >= e.rebornAt {
+				if e.rebornDeadline.Due(int64(frameNo)) {
 					e.rebornAt = -1.0
 					e.rebornChargeAt = -1.0
 					// 召唤的排期随窗口一起清掉（原版 4214）
@@ -1124,9 +1154,11 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 			} else if e.hp <= 0 && e.rebornLeft > 0 {
 				e.rebornLeft--
 				e.rebornAt = t + e.spec.RebornDelay
+				e.rebornDeadline.Set(int64(frameNo), e.spec.RebornDelay)
 				// 充能窗口与重生窗口同长：进来就排第一拍
 				if e.spec.RebornInterval > 0 {
 					e.rebornChargeAt = t + e.spec.RebornInterval
+					e.rebornChargeDeadline.Set(int64(frameNo), e.spec.RebornInterval)
 				} else {
 					e.rebornChargeAt = -1.0
 				}
@@ -1134,6 +1166,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 				for i := range e.rebornSummonAt {
 					if e.spec.RebornSummons[i].Interval > 0 {
 						e.rebornSummonAt[i] = t + e.spec.RebornSummons[i].Interval
+						e.rebornSummonDeadlines[i].Set(int64(frameNo), e.spec.RebornSummons[i].Interval)
 					}
 				}
 			}
@@ -1157,11 +1190,11 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		// 写下的减速给**下一帧**的 `advance` 用（见 `mech.SnowTicker`）。
 		// 挪到推进之前，踏入判定会晚一帧、减速也晚一帧生效。
 		if !mechanisms.Empty() {
-			mechanisms.SnowTick(ctx, dt)
+			mechanisms.SnowTickFrame(ctx)
 		}
 		blessingTick(ops, enemies, t, verdict)
 		if !mechanisms.Empty() {
-			mechanisms.EnvTick(ctx, dt)
+			mechanisms.EnvTickFrame(ctx)
 			// ---- 3.9 天桩链（原版 3884，紧跟 `_device_tick` 之后）
 			//
 			// 和 3.7 同一处"推进之后、阻挡之前"。甲监测的是**这一帧已经被环境
@@ -1197,7 +1230,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		// ---- 5. 技能（原版 2156，**阻挡之后、我方出手之前**）
 		//
 		// 位置是定的：刚攒满技力的那一帧就得算数，晚一帧会让每次开技都慢一个 dt。
-		skillTick(ops, dt, t, spec, &cost, verdict)
+		skillTickFrame(ops, t, spec, &cost, verdict)
 
 		// ---- 5.4 全场光环（原版 2831-2832）
 		//
@@ -1224,18 +1257,20 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 			return nil, ctx.countError
 		}
 		// ---- 6. 我方出手（1870 → 2687）
-		if err := operatorsAttack(ops, enemies, dt, t, spec, verdict); err != nil {
+		if err := operatorsAttackFrame(ops, enemies, t, spec, verdict); err != nil {
 			return nil, err
 		}
 		// ---- 7. 敌方出手（1873 → 2882）
-		enemiesAttack(ops, enemies, dt, t, spec, verdict)
+		enemiesAttackFrame(ops, enemies, t, spec, verdict)
 
 		// ---- 7.2 关卡特有机制：敌方**技能出手**（原版 2221 之前那一处，帧序 7.2）
 		//
 		// 排在普攻之后、被击倒效果之前：技能出手自己会占住敌人的动作时间，
 		// 也可能正好把人打死——那个"打死"要到 7.5 才结算。
 		if !mechanisms.Empty() {
-			mechanisms.AttackTick(ctx, dt)
+			if err := mechanisms.AttackTickFrame(ctx); err != nil {
+				return nil, err
+			}
 		}
 
 		// ---- 7.5 关卡特有机制：**两次出手之后、结算之前**（原版 2221）
@@ -1296,7 +1331,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 	verdict.Elapsed = t
 	verdict.Life = life
 	verdict.SpawnsPlaced = spawnsPlaced
-	verdict.Deployed = len(ops)
+	verdict.Deployed = successfulDeploys
 	verdict.TimedOut = !won && life > 0
 	for _, e := range enemies {
 		// 等重生的既不算活也不算死（原版收尾结算里同样排除 `pending_reborn`）：
@@ -2210,6 +2245,12 @@ func traitDrainTick(ops []*operator, dt, t float64) {
 //   - `final_hit_scale` 只改最后一击的倍率。
 func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 	spec *Spec, verdict *Verdict) error {
+	return operatorsAttackMode(ops, enemies, dt, t, spec, verdict, false)
+}
+func operatorsAttackFrame(ops []*operator, enemies []*enemy, t float64, spec *Spec, verdict *Verdict) error {
+	return operatorsAttackMode(ops, enemies, gameLogicDT, t, spec, verdict, true)
+}
+func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec, verdict *Verdict, frameMode bool) error {
 	for _, op := range ops {
 		if !op.alive() {
 			continue
@@ -2237,8 +2278,16 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 				return err
 			}
 		}
-		op.attackTimer += dt
-		if op.attackTimer+1e-12 < interval {
+		due := false
+		if frameMode {
+			op.attackTimer = op.attackClock.StepTime(op.attackTimer, 1)
+			due = op.attackClock.TimeAtLeast(interval)
+		} else {
+			op.attackClock.Reset()
+			op.attackTimer += dt
+			due = op.attackTimer >= interval
+		}
+		if !due {
 			continue
 		}
 		targets := pickTargets(op, enemies, op.maxTarget(), t)
@@ -2304,6 +2353,7 @@ func operatorsAttack(ops []*operator, enemies []*enemy, dt, t float64,
 			continue
 		}
 		op.attackTimer = 0
+		op.attackClock.Reset()
 		scale := scaleNow
 		hits := op.hitCount()
 		//: ★ 行使指纹两族（建模族清点用）：**公式层**（这一击真的走了倍率解析）
@@ -3091,6 +3141,12 @@ func inCells(cells [][2]int, cell [2]int) bool {
 // enemiesAttack 敌方出手（`_enemies_attack`，sim.py 2882）。
 func enemiesAttack(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec,
 	verdict *Verdict) {
+	enemiesAttackMode(ops, enemies, dt, t, spec, verdict, false)
+}
+func enemiesAttackFrame(ops []*operator, enemies []*enemy, t float64, spec *Spec, verdict *Verdict) {
+	enemiesAttackMode(ops, enemies, gameLogicDT, t, spec, verdict, true)
+}
+func enemiesAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec, verdict *Verdict, frameMode bool) {
 	for _, e := range enemies {
 		if e.hp <= 0 || e.leaked || e.offMap {
 			continue
@@ -3115,11 +3171,20 @@ func enemiesAttack(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec,
 		if op == nil || !op.alive() {
 			continue
 		}
-		e.attackTimer += dt
-		if e.attackTimer < e.interval() {
+		due := false
+		if frameMode {
+			e.attackTimer = e.attackClock.StepTime(e.attackTimer, 1)
+			due = e.attackClock.TimeAtLeast(e.interval())
+		} else {
+			e.attackClock.Reset()
+			e.attackTimer += dt
+			due = e.attackTimer >= e.interval()
+		}
+		if !due {
 			continue
 		}
 		e.attackTimer = 0
+		e.attackClock.Reset()
 		e.hits++
 		// 出手占用一段动作时间，这期间它不走路（但动作一结束就继续推进）
 		e.attackPause = math.Max(e.attackPause, spec.EnemyWindup)
@@ -3251,7 +3316,7 @@ func resolve(enemies []*enemy, cost *float64, life *int, t float64,
 // anyActive：场上还有"活着的、没漏的、清得掉的"敌人吗（run 1907-1912）。
 func anyActive(enemies []*enemy) bool {
 	for _, e := range enemies {
-		if e.alive() && !e.leaked && !e.cannotClear() {
+		if (e.alive() || e.pendingReborn() || e.rebornLeft > 0) && !e.leaked && !e.cannotClear() {
 			return true
 		}
 	}
@@ -3717,7 +3782,7 @@ func (o *operator) take(amount float64) float64 {
 			o.hp = math.Min(o.maxHP(), o.hp+o.shieldBreakHeal)
 		}
 		if o.shieldBreakSP > 0 {
-			o.sp += o.shieldBreakSP
+			o.sp = o.spClock.AddNumeric(o.sp, o.shieldBreakSP, math.Inf(1))
 		}
 		if traceOn && o.sim != nil {
 			//: 这一族**没有别可观测量**：它把伤害变成 0，判决里只剩"谁活到最后"。
@@ -3780,6 +3845,7 @@ func (o *operator) hurt(dealt float64) {
 		// 自冻结：取 `max`（原版 `unit.py:646` 就是 `max`），递减在 `skillTick`。
 		if o.spec.BlessingSelfFreeze > 0 {
 			o.freezeTimer = math.Max(o.freezeTimer, o.spec.BlessingSelfFreeze)
+			o.freezeClock.Reset()
 		}
 		if traceOn && o.sim != nil {
 			trace("BLESSING t=%.4f op=%s 免死→满血 %.1f（待冻结攻击范围内敌人 %.2fs；自冻结 %.2fs）",

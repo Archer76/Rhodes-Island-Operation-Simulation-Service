@@ -670,6 +670,19 @@ func (s *Set) EnvTick(ctx Ctx, dt float64) {
 	}
 }
 
+func (s *Set) EnvTickFrame(ctx Ctx) {
+	if s == nil {
+		return
+	}
+	for _, h := range s.envs {
+		if m, ok := h.m.(interface{ EnvTickFrame(Ctx) }); ok {
+			m.EnvTickFrame(ctx)
+		} else {
+			h.m.EnvTick(ctx, ctx.DT())
+		}
+	}
+}
+
 // PileTick 依次调用各机制的 PileTick（位置见 `PileTicker` 的注释：紧跟 EnvTick）。
 func (s *Set) PileTick(ctx Ctx, dt float64) {
 	if s == nil {
@@ -688,6 +701,21 @@ func (s *Set) SnowTick(ctx Ctx, dt float64) {
 	}
 	for _, h := range s.snows {
 		h.m.SnowTick(ctx, dt)
+	}
+}
+
+// SnowTickFrame is the explicit fixed-clock production dispatch. Legacy
+// arbitrary-dt mechanisms retain their existing interface.
+func (s *Set) SnowTickFrame(ctx Ctx) {
+	if s == nil {
+		return
+	}
+	for _, h := range s.snows {
+		if m, ok := h.m.(interface{ SnowTickFrame(Ctx) }); ok {
+			m.SnowTickFrame(ctx)
+		} else {
+			h.m.SnowTick(ctx, ctx.DT())
+		}
 	}
 }
 
@@ -767,6 +795,22 @@ func (s *Set) AttackTick(ctx Ctx, dt float64) {
 	for _, h := range s.attacks {
 		h.m.AttackTick(ctx, dt)
 	}
+}
+
+func (s *Set) AttackTickFrame(ctx Ctx) error {
+	if s == nil {
+		return nil
+	}
+	for _, h := range s.attacks {
+		if m, ok := h.m.(interface{ AttackTickFrame(Ctx) error }); ok {
+			if err := m.AttackTickFrame(ctx); err != nil {
+				return err
+			}
+		} else {
+			h.m.AttackTick(ctx, ctx.DT())
+		}
+	}
+	return nil
 }
 
 // PostAttack 依次调用各机制的 PostAttack（位置见 `PostAttacker` 的注释）。
