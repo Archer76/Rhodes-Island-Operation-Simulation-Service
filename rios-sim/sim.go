@@ -202,6 +202,7 @@ type enemy struct {
 	//: （`advance` 与 `_enemies_attack` 两处都拦）。目前唯一的来源是圣聆初雪的
 	//: 「圣山的祝福」免死那一下——她攻击范围内的敌人被冻 `c2e_freeze` 秒。
 	freezeTimer float64
+	freezeClock timing.Accumulator
 	//: 上面这段冻结是**友方冻结**还是**敌方冻结**。
 	//:
 	//: 判据出处（2026-09-19 抓到，PRTS `可抵抗状态` 页原文）：
@@ -606,7 +607,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 	var ops []*operator
 	var enemies []*enemy
 	onField := map[string]*operator{} //: char_id → 当前在场的那一个（含已阵亡的）
-	lastLeft := map[string]float64{}  //: char_id → 最近一次离场时刻
+	lastLeft := map[string]int64{}    //: char_id → 最近一次离场时刻
 
 	cursor := 0
 	spawnsPlaced := 0
@@ -690,8 +691,12 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 				continue
 			}
 			// ② 再部署冷却（2102-2108）：只看**同一个 char_id**
-			if last, ok := lastLeft[d.CharID]; ok &&
-				t < last+op.spec.RedeployTime {
+			last, previouslyLeft := lastLeft[d.CharID]
+			var cooldown timing.Deadline
+			if previouslyLeft {
+				cooldown.Set(last, op.spec.RedeployTime)
+			}
+			if previouslyLeft && !cooldown.Due(int64(frameNo)) {
 				verdict.DeployRejected = append(verdict.DeployRejected,
 					[3]any{t, op.spec.Name, "再部署冷却中"})
 				continue
@@ -1020,7 +1025,11 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 				e.sluggishTimer = math.Max(0.0, e.sluggishTimer-dt)
 			}
 			if e.freezeTimer > 0 {
-				e.freezeTimer = math.Max(0.0, e.freezeTimer-dt)
+				e.freezeTimer = e.freezeClock.StepTime(e.freezeTimer, -1)
+				if e.freezeClock.TimeAtMost(0) {
+					e.freezeTimer = 0
+					e.freezeClock.Reset()
+				}
 				// 冻完了就把来源形别一起清掉：留着它，下一段"敌方冻结"会继承上一段的
 				// 友方形别，凭空多出 −15（这正是"改写类机制要单一入口"的那类坑）。
 				if e.freezeTimer == 0 {
@@ -1296,7 +1305,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		for _, op := range ops {
 			if op.leftAt < 0 && (op.retreated || op.hp <= 0) {
 				op.leftAt = t
-				lastLeft[op.spec.CharID] = t
+				lastLeft[op.spec.CharID] = int64(frameNo)
 			}
 		}
 		if life <= 0 {
@@ -1319,7 +1328,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 			intrinsicCountTick(enemies, t)
 		}
 		frameNo++
-		t = float64(frameNo) * gameLogicDT
+		t = float64(frameNo) / gameLogicFPS
 	}
 
 	for _, d := range deploys {
@@ -3421,8 +3430,10 @@ func (e *enemy) applyFreeze(secs float64, friendly bool) {
 	// 到期而结束。当前项目里没有混合来源的用法，先按"较长者定形别"实现并登记。
 	if secs >= e.freezeTimer {
 		e.freezeFriendly = friendly
+		e.freezeTimer = secs
+		e.freezeClock.Reset()
 	}
-	e.freezeTimer = math.Max(e.freezeTimer, secs)
+	// A shorter reapplication must not reset the hidden exact remainder.
 }
 
 func (e *enemy) take(amount float64, src *operator) float64 {
