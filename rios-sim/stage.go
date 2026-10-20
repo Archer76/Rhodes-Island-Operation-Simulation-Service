@@ -216,8 +216,12 @@ func ResolveLevel(idx LevelIndex, query string) (string, LevelEntry, error) {
 	return hits[0], idx[hits[0]], nil
 }
 
-// LoadStage 读一份关卡并解析。`code`/`difficulty` 由索引那条给（见 LevelEntry）。
+// LoadStage 读一份关卡并解析。优先尝试活动关卡资源包，未命中再读散落文件。
 func LoadStage(query string) (*Stage, error) {
+	if st, ok, err := TryLoadStageFromPacks(query); ok && err == nil && st != nil {
+		return st, nil
+	}
+
 	idx, err := LoadIndex()
 	if err != nil {
 		return nil, err

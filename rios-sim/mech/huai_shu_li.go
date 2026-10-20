@@ -1271,6 +1271,8 @@ type farmlandMech struct {
 	dead map[int]bool
 	//: 敌方技能出手的计时（键 = 出怪顺序下标），见 `AttackTick`。
 	skillTimers map[int]*skillAtkState
+	//: 敌方技能静态合法性是否已通过初检
+	checkedSkills map[int]bool
 }
 
 func newFarmlandMech(cfg json.RawMessage) (Mechanism, error) {
@@ -1411,7 +1413,8 @@ func init() { RegisterFactory(FarmlandID, newFarmlandMech) }
 //     （`actual_at(自己那格) > 0`）——不是目标那格，也不是"这一关有田地"。
 func (m *farmlandMech) AttackTick(ctx Ctx, dt float64) { m.attackTickMode(ctx, dt, false) }
 func (m *farmlandMech) AttackTickFrame(ctx Ctx) error {
-	for _, e := range ctx.Enemies() {
+	enemies := ctx.Enemies()
+	for _, e := range enemies {
 		if e.SkillAtkScalePhys == 0 && e.SkillAtkScaleMagic == 0 {
 			continue
 		}
@@ -1495,13 +1498,18 @@ func (m *farmlandMech) attackTickMode(ctx Ctx, dt float64, frameMode bool) {
 		}
 		// 一次技能出手的账：出手者、出手者自己的格、目标格、十字五格、中标者。
 		// 与 `SPLASH-CENTER` 同一用意——"打到了谁"必须能从痕迹上点数。
-		victims := make([]string, 0, len(cells))
+		var victims []string
+		if TraceOn {
+			victims = make([]string, 0, len(cells))
+		}
 		for _, c := range cells {
 			op, ok := opAtCell(ctx, c)
 			if !ok {
 				continue
 			}
-			victims = append(victims, fmt.Sprintf("%s@%d,%d", op.Name, c[0], c[1]))
+			if TraceOn {
+				victims = append(victims, fmt.Sprintf("%s@%d,%d", op.Name, c[0], c[1]))
+			}
 			// ① 基础物理（正文 100% → `skill_atk_scale_phys`），逐目标减防
 			ctx.HitOperator(op.Index, e.ATK*e.SkillAtkScalePhys, "PHYSICAL")
 			// ② 附加法术，单独再减一次法抗
@@ -1509,9 +1517,11 @@ func (m *farmlandMech) attackTickMode(ctx Ctx, dt float64, frameMode bool) {
 				ctx.HitOperator(op.Index, mag, "MAGIC")
 			}
 		}
-		ctx.Trace("SKILLATK t=%.4f enemy=%s ecell=%d,%d target=%s tcell=%d,%d polluted=%t mag=%.2f victims=%s",
-			ctx.Now(), e.Name, e.Cell[0], e.Cell[1], target.Name, cx, cy, polluted, mag,
-			strings.Join(victims, "|"))
+		if TraceOn {
+			ctx.Trace("SKILLATK t=%.4f enemy=%s ecell=%d,%d target=%s tcell=%d,%d polluted=%t mag=%.2f victims=%s",
+				ctx.Now(), e.Name, e.Cell[0], e.Cell[1], target.Name, cx, cy, polluted, mag,
+				strings.Join(victims, "|"))
+		}
 		// ③ 令**目标地块**病害值 +N（记入【缓存】，不是直接改【实际】）
 		if polluted && e.SkillAtkPollut > 0 {
 			if got := m.field.PolluteCell(cx, cy, e.SkillAtkPollut); got > 0 {
