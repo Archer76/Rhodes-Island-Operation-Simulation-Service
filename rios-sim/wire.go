@@ -179,6 +179,7 @@ type OperatorSpec struct {
 	LingSource       *LingSourceSpec       `json:"ling_source,omitempty"`
 	WisdelSource     *WisdelSourceSpec     `json:"wisdel_source,omitempty"`
 	EntelechiaSource *EntelechiaSourceSpec `json:"entelechia_source,omitempty"`
+	SakikoSource     *SakikoSourceSpec     `json:"sakiko_source,omitempty"`
 	Placeholders     []mechanisms.Gap      `json:"mechanism_placeholders,omitempty"`
 	CharID       string           `json:"char_id"`
 	Name         string           `json:"name"`

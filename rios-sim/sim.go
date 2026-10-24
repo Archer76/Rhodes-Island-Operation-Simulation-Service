@@ -487,6 +487,10 @@ type operator struct {
 	entelechiaDOTTargets   map[*enemy]float64
 	entelechiaPulseTimer   float64
 	entelechiaLowHPTrigger bool
+
+	// ---- 丰川祥子（char_4182_oblvns）机制状态
+	sakikoStore        *sakikoOrdinaryStore
+	sakikoSineBindings []*sakikoFreeSineBinding
 }
 
 func (o *operator) alive() bool { return o.hp > 0 && !o.retreated }
@@ -564,6 +568,111 @@ func entelechiaTick(ops []*operator, dt, t float64, verdict *Verdict) {
 					_, _ = op.consumeEntelechiaDOTPulse(t, e, verdict)
 				} else if !e.alive() || t > expire {
 					delete(op.entelechiaDOTTargets, e)
+				}
+			}
+		}
+	}
+}
+
+// sakikoTick 驱动丰川祥子（char_4182_oblvns）的音符飞行轨迹、索敌追踪、命中与穿透伤害结算。
+func sakikoTick(ops []*operator, enemies []*enemy, dt, t float64, verdict *Verdict) {
+	for _, op := range ops {
+		if op.spec.CharID != "char_4182_oblvns" || op.sakikoStore == nil {
+			continue
+		}
+		// 若已阵亡或撤退，清理自由音符
+		if !op.alive() {
+			op.sakikoStore.sourceRetreat()
+			continue
+		}
+
+		// 构造有效敌人候选
+		candidates := make([]sakikoNoteCandidate, 0, len(enemies))
+		for _, e := range enemies {
+			if e.alive() && !e.spec.IsFlying {
+				candidates = append(candidates, sakikoNoteCandidate{
+					index:    e.index,
+					position: e.position,
+				})
+			}
+		}
+
+		// 逐个音符驱动状态
+		for id, sn := range op.sakikoStore.notes {
+			if sn.state.phase == sakikoNoteRemoved {
+				continue
+			}
+			// 1. 自由状态（正弦轨迹飞行与索敌）
+			if sn.state.phase == sakikoNoteFree {
+				if sn.state.target >= 0 {
+					targetIdx := sn.state.target
+					valid := false
+					for _, e := range enemies {
+						if e.index == targetIdx && e.alive() {
+							valid = true
+							break
+						}
+					}
+					_ = op.sakikoStore.update(id, t, valid, -1)
+					if sn.state.phase == sakikoNoteTracking {
+						verdict.Events = append(verdict.Events, Event{
+							T: t, Kind: "sakiko_note_acquire", Who: op.spec.Name,
+						})
+					}
+				} else {
+					var binding *sakikoFreeSineBinding
+					if id < len(op.sakikoSineBindings) {
+						binding = op.sakikoSineBindings[id]
+					}
+					if binding != nil {
+						_, err := binding.acquire(t, candidates)
+						if err == nil && sn.state.phase == sakikoNoteTracking {
+							verdict.Events = append(verdict.Events, Event{
+								T: t, Kind: "sakiko_note_acquire", Who: op.spec.Name,
+							})
+						}
+					} else {
+						_ = op.sakikoStore.acquire(id, t, [2]float64{float64(op.cell[0]), float64(op.cell[1])}, candidates)
+						if sn.state.phase == sakikoNoteTracking {
+							verdict.Events = append(verdict.Events, Event{
+								T: t, Kind: "sakiko_note_acquire", Who: op.spec.Name,
+							})
+						}
+					}
+				}
+			}
+
+			// 2. 追踪状态（向目标移动与命中判定）
+			if sn.state.phase == sakikoNoteTracking {
+				targetIdx := sn.state.target
+				var target *enemy
+				for _, e := range enemies {
+					if e.index == targetIdx {
+						target = e
+						break
+					}
+				}
+				if target == nil || !target.alive() {
+					_ = sn.state.update(t, false, -1)
+					continue
+				}
+
+				_ = sn.state.update(t, true, target.index)
+
+				// 飞行时间判定：追踪持续一段时间或到达后触发命中
+				if t-sn.state.born >= 0.2 {
+					dealt, err := op.sakikoStore.hit(t, id, target, 0, 0)
+					if err == nil && dealt > 0 {
+						verdict.DamageDealt += dealt
+						verdict.Events = append(verdict.Events, Event{
+							T: t, Kind: "sakiko_note_hit", Who: op.spec.Name,
+						})
+						if !target.alive() {
+							verdict.Events = append(verdict.Events, Event{
+								T: t, Kind: "kill", Who: target.spec.Name,
+							})
+						}
+					}
 				}
 			}
 		}
@@ -843,6 +952,12 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 				op.entelechiaDOTTargets = make(map[*enemy]float64)
 				op.entelechiaPulseTimer = 0
 				op.entelechiaLowHPTrigger = false
+			}
+
+			// 丰川祥子（char_4182_oblvns）部署初始化
+			if op.spec.CharID == "char_4182_oblvns" {
+				op.sakikoStore = &sakikoOrdinaryStore{owner: op}
+				op.sakikoSineBindings = nil
 			}
 
 			// ---- 层数护盾（原版 `_attach_talent_shield`，`sim.py:3157-3182`，
@@ -1304,6 +1419,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		// （帧序 7）就该吃得上；放到帧末递减会让「刚治完就被打」的那一下白挂。
 		talentTick(ops, dt)
 		entelechiaTick(ops, dt, t, verdict)
+		sakikoTick(ops, enemies, dt, t, verdict)
 
 		intrinsicCountTick(enemies, t)
 		if ctx.countError != nil {
@@ -2418,6 +2534,19 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				strings.Join(namesOp(heals), "|"))
 		}
 		if len(targets) == 0 && len(heals) == 0 {
+			if op.spec.CharID == "char_4182_oblvns" && op.sakikoStore != nil {
+				op.attackTimer = 0
+				op.attackClock.Reset()
+				positive := (len(op.sakikoStore.notes)%2 == 0)
+				power := op.atk()
+				binding, err := op.sakikoStore.launchSine(t, [2]float64{float64(op.cell[0]), float64(op.cell[1])}, [2]float64{1, 0}, positive, power, scaleNow)
+				if err == nil {
+					op.sakikoSineBindings = append(op.sakikoSineBindings, binding)
+					verdict.Events = append(verdict.Events, Event{
+						T: t, Kind: "sakiko_note_launch", Who: op.spec.Name,
+					})
+				}
+			}
 			continue
 		}
 		op.attackTimer = 0
@@ -2569,6 +2698,12 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				// 而是"与原版同值、并且有名字"。
 				if op.spec.CharID == "char_4010_etlchi" && op.entelechiaSteal != nil {
 					_, _ = op.entelechiaSteal.beforeDamage(t, target, entelechiaStealEligible, true)
+				}
+				if op.spec.CharID == "char_4182_oblvns" && op.sakikoStore != nil {
+					_, _ = op.sakikoStore.launch(t, target.index, atkBase, hitScale)
+					verdict.Events = append(verdict.Events, Event{
+						T: t, Kind: "sakiko_note_launch", Who: op.spec.Name,
+					})
 				}
 				dmg := resolveDamage(atkBase, dmgType, hitScale,
 					target.spec.DEF, target.res(), target.dodgeVs(dmgType))

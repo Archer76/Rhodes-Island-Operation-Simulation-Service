@@ -250,6 +250,8 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 		if r := op.SkillRangedExemption; r != nil {
 			if !validSkillRangedExemption(op.CharID, r) {
 				add("skill_ranged_exemption", 0, "技能远程倍率豁免缺少精确模组来源")
+			} else if op.CharID == "char_4182_oblvns" && op.SakikoSource != nil && op.SakikoSource.ConsumerImplemented {
+				// 祥子模组特性、音符发射、正弦运动与穿透伤害已在主战斗循环真行使
 			} else {
 				// A valid exemption source still contains unimplemented notes and
 				// penetration. Raw callers must not erase that source's gaps.

@@ -206,6 +206,7 @@ type OperatorOut struct {
 	LingSource       *LingSourceSpec       `json:"ling_source,omitempty"`
 	WisdelSource     *WisdelSourceSpec     `json:"wisdel_source,omitempty"`
 	EntelechiaSource *EntelechiaSourceSpec `json:"entelechia_source,omitempty"`
+	SakikoSource     *SakikoSourceSpec     `json:"sakiko_source,omitempty"`
 	Skill        *SkillSpec        `json:"skill,omitempty"`
 	Active     *Profile        `json:"active,omitempty"`
 
