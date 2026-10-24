@@ -411,8 +411,11 @@ func derefInt(p *int) int {
 	return *p
 }
 
-// TestModuleDistribution 现查类型分布：既证明查询真跑成功了（X=301 必须出现），
+// TestModuleDistribution 现查类型分布：既证明查询真跑成功了（X=302 必须出现），
 // 又证明 `Z` 确实是死项（0 条）。
+//
+// 2026-10-24 重取：gamedata 更新后 module 表由 905 行变 911 行，
+// X 301→302、Y 181→184、NULL 396→398；A/D/B/Z 未变。
 func TestModuleDistribution(t *testing.T) {
 	db := openDB(t)
 	var total int
@@ -425,7 +428,7 @@ func TestModuleDistribution(t *testing.T) {
 	for _, c := range []struct {
 		letter string
 		want   int
-	}{{"X", 301}, {"Y", 181}, {"A", 20}, {"D", 6}, {"B", 1}, {"Z", 0}} {
+	}{{"X", 302}, {"Y", 184}, {"A", 20}, {"D", 6}, {"B", 1}, {"Z", 0}} {
 		var n int
 		if err := db.QueryRow(
 			`select count(*) from module where type_name2 = ?`, c.letter).Scan(&n); err != nil {
@@ -440,11 +443,11 @@ func TestModuleDistribution(t *testing.T) {
 	if err := db.QueryRow(`select count(*) from module where type_name2 is null`).Scan(&nulls); err != nil {
 		t.Fatalf("数 NULL 失败：%v", err)
 	}
-	if nulls != 396 {
-		t.Errorf("type_name2 为 NULL 的有 %d 条，规格记的是 396", nulls)
+	if nulls != 398 {
+		t.Errorf("type_name2 为 NULL 的有 %d 条，规格记的是 398", nulls)
 	}
-	// 正对照：五个字母加起来必须小于全表（否则说明有的行没字母，与 396 那条冲突）
-	sum := 301 + 181 + 20 + 6 + 1
+	// 正对照：五个字母加起来必须小于全表（否则说明有的行没字母，与 398 那条冲突）
+	sum := 302 + 184 + 20 + 6 + 1
 	if sum+nulls != total {
 		t.Errorf("五个字母 %d + NULL %d ≠ 全表 %d —— 有一类既没字母也没被算成 NULL", sum, nulls, total)
 	}

@@ -35,16 +35,20 @@ func chaptersForTest(t *testing.T) []Chapter {
 	return ch
 }
 
-// TestChapterCountIs91：2026-09-27 当晚加回故事集与早期活动后的口径
-// （69 → 91；旧金标 116 与中间态 69 都已过期）。
-func TestChapterCountIs91(t *testing.T) {
+// TestChapterCountIs92：2026-10-24 的数据源更新口径。
+//
+// 历史：2026-09-27 加回故事集与早期活动后 69 → 91（旧金标 116 与中间态 69
+// 都已过期）；2026-10-24 重取 gamedata + 补齐 activity_table 后新增 1 条活动
+// 章节，现为 92 条（`out/zz_golden.txt` 的 CH 段同步由
+// `out/acceptance/_regolden_ch.py` 重录，不是手改）。
+func TestChapterCountIs92(t *testing.T) {
 	ch := chaptersForTest(t)
-	if len(ch) != 91 {
+	if len(ch) != 92 {
 		ids := make([]string, 0, len(ch))
 		for _, c := range ch {
 			ids = append(ids, c.Key)
 		}
-		t.Fatalf("应有 91 条 chapter（18 主线含序章＋剿灭＋sre/side ＋ 故事集 mini 15 ＋ 早期活动 dN 7），实得 %d 条：%v", len(ch), ids)
+		t.Fatalf("应有 92 条 chapter（2026-09-27 的 91 条 ＋ 数据源更新新增 1 条活动章节），实得 %d 条：%v", len(ch), ids)
 	}
 }
 
