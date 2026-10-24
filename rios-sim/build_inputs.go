@@ -22,6 +22,9 @@ type buildInputs struct {
 	library                 *EnemyLibrary
 	libraryErr              error
 	roster                  *RosterRead
+	spawnsOnce              sync.Once
+	spawnsVal               SpawnsOut
+	spawnsErr               error
 	statsMu                 sync.Mutex
 	stats                   map[OperatorCalcConfig]*statsEntry
 	skillsMu                sync.Mutex

@@ -481,6 +481,12 @@ type operator struct {
 	//: 递减写在 `talentTick`（帧序 5.6），每次部署从 0 起。
 	dodgeGrantLeft float64
 	dodgeGrantPhys float64
+
+	// ---- 隐德来希（char_4010_etlchi）机制状态
+	entelechiaSteal        *entelechiaStealStore
+	entelechiaDOTTargets   map[*enemy]float64
+	entelechiaPulseTimer   float64
+	entelechiaLowHPTrigger bool
 }
 
 func (o *operator) alive() bool { return o.hp > 0 && !o.retreated }
@@ -537,6 +543,29 @@ func talentTick(ops []*operator, dt float64) {
 		op.dodgeGrantLeft = math.Max(0, op.dodgeGrantLeft-dt)
 		if op.dodgeGrantLeft <= 0 {
 			op.dodgeGrantPhys = 0
+		}
+	}
+}
+
+// entelechiaTick 驱动隐德来希（char_4010_etlchi）的周期性自愈脉冲与 DoT 法术脉冲。
+func entelechiaTick(ops []*operator, dt, t float64, verdict *Verdict) {
+	for _, op := range ops {
+		if op.spec.CharID != "char_4010_etlchi" || !op.alive() {
+			continue
+		}
+		op.entelechiaPulseTimer += dt
+		if op.entelechiaPulseTimer >= 1.0 {
+			op.entelechiaPulseTimer -= 1.0
+			// 1. 自身回血脉冲
+			_, _ = op.consumeEntelechiaRecoveryPulse(t, true, verdict)
+			// 2. 目标 DoT 脉冲
+			for e, expire := range op.entelechiaDOTTargets {
+				if t <= expire && e.alive() {
+					_, _ = op.consumeEntelechiaDOTPulse(t, e, verdict)
+				} else if !e.alive() || t > expire {
+					delete(op.entelechiaDOTTargets, e)
+				}
+			}
 		}
 	}
 }
@@ -806,6 +835,16 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 						t, op.spec.Name, op.spec.TalentDeploySP, gained, op.sp)
 				}
 			}
+			// 隐德来希（char_4010_etlchi）部署初始化
+			if op.spec.CharID == "char_4010_etlchi" {
+				if store, err := newEntelechiaStealStore(op); err == nil {
+					op.entelechiaSteal = store
+				}
+				op.entelechiaDOTTargets = make(map[*enemy]float64)
+				op.entelechiaPulseTimer = 0
+				op.entelechiaLowHPTrigger = false
+			}
+
 			// ---- 层数护盾（原版 `_attach_talent_shield`，`sim.py:3157-3182`，
 			// 在 `_do_deploy` 里、紧随部署时技能/天赋效果之后）
 			//
@@ -864,12 +903,16 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 			// 反推"是不是少挨了一整下"，而从下游猜是猜不是测。
 			// **无条件打**（含 dmg=0 的情形）：为 0 才是最需要看见的那种情况——
 			// 分不清"这一下不适用"与"落位格读错了"。
-			ctx.Trace("DEPLOYDMG t=%.4f name=%s cell=%d,%d dmg=%.3f",
-				t, op.spec.Name, op.spec.Cell[0], op.spec.Cell[1], dmg)
+			if traceOn {
+				ctx.Trace("DEPLOYDMG t=%.4f name=%s cell=%d,%d dmg=%.3f",
+					t, op.spec.Name, op.spec.Cell[0], op.spec.Cell[1], dmg)
+			}
 			if dmg > 0 {
 				dealt := op.take(dmg)
-				ctx.Trace("DEPLOYDMG t=%.4f name=%s 扣血 dealt=%.3f 余=%.3f",
-					t, op.spec.Name, dealt, op.hp)
+				if traceOn {
+					ctx.Trace("DEPLOYDMG t=%.4f name=%s 扣血 dealt=%.3f 余=%.3f",
+						t, op.spec.Name, dealt, op.hp)
+				}
 				verdict.Events = append(verdict.Events, Event{
 					T: t, Kind: "env", Who: op.spec.Name})
 			}
@@ -1260,6 +1303,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		// 位置是定的：排在**我方出手之前**——本帧刚授出的那一份，本帧敌方出手
 		// （帧序 7）就该吃得上；放到帧末递减会让「刚治完就被打」的那一下白挂。
 		talentTick(ops, dt)
+		entelechiaTick(ops, dt, t, verdict)
 
 		intrinsicCountTick(enemies, t)
 		if ctx.countError != nil {
@@ -1414,6 +1458,10 @@ type simCtx struct {
 	//:
 	//: 实测（HS-EX-8，k=3）：`idx=5` 同一帧同时属于「失控天桩-甲」与「除秽」。
 	nextEnemyIndex int
+
+	//: 机制视图切片复用缓冲：避免机制包每帧多次调用产生大量短命堆切片
+	opViewBuf    []mech.OpView
+	enemyViewBuf []mech.EnemyView
 }
 
 func (c *simCtx) Time() float64 { return *c.time }
@@ -1435,9 +1483,14 @@ func (c *simCtx) speedFor(index int) float64 {
 // 为 false）。用对象下标而不是"在场列表的下标"：后者随部署顺序增长，机制拿到的
 // 编号会随着场上人数变化而漂。
 func (c *simCtx) Operators() []mech.OpView {
-	out := make([]mech.OpView, 0, len(*c.objs))
-	for i, op := range *c.objs {
-		out = append(out, mech.OpView{
+	objs := *c.objs
+	if cap(c.opViewBuf) < len(objs) {
+		c.opViewBuf = make([]mech.OpView, 0, len(objs))
+	} else {
+		c.opViewBuf = c.opViewBuf[:0]
+	}
+	for i, op := range objs {
+		c.opViewBuf = append(c.opViewBuf, mech.OpView{
 			Index: i, CharID: op.spec.CharID, Name: op.spec.Name,
 			Cell: [2]int{int(op.cell[0]), int(op.cell[1])}, HP: op.hp,
 			MaxHP: op.spec.MaxHP,
@@ -1447,12 +1500,17 @@ func (c *simCtx) Operators() []mech.OpView {
 			ATK: op.atk(),
 		})
 	}
-	return out
+	return c.opViewBuf
 }
 
 func (c *simCtx) Enemies() []mech.EnemyView {
-	out := make([]mech.EnemyView, 0, len(*c.enemies))
-	for _, e := range *c.enemies {
+	enemies := *c.enemies
+	if cap(c.enemyViewBuf) < len(enemies) {
+		c.enemyViewBuf = make([]mech.EnemyView, 0, len(enemies))
+	} else {
+		c.enemyViewBuf = c.enemyViewBuf[:0]
+	}
+	for _, e := range enemies {
 		ex, ey := e.cell()
 		v := mech.EnemyView{
 			Index: e.index, Name: e.spec.Name, Position: e.position,
@@ -1476,9 +1534,9 @@ func (c *simCtx) Enemies() []mech.EnemyView {
 			v.HasBlocker = true
 			v.BlockerCell = [2]int{int(b.cell[0]), int(b.cell[1])}
 		}
-		out = append(out, v)
+		c.enemyViewBuf = append(c.enemyViewBuf, v)
 	}
-	return out
+	return c.enemyViewBuf
 }
 
 // DamageOperator 施加机制请求的伤害。
@@ -1993,6 +2051,7 @@ func (c *simCtx) Trace(format string, args ...any) {
 func initMechTrace() {
 	if traceOn {
 		mech.Trace = trace
+		mech.TraceOn = true
 	}
 }
 
@@ -2469,6 +2528,7 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 			spOnAttack(op)
 			continue
 		}
+		entelechiaHits := 0
 		for _, target := range targets {
 			//: ---- 特性「可以进行远程攻击，但攻击力降低至 v」（领主那一族，月见夜）----
 			//:
@@ -2507,6 +2567,9 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				// 的 `dodge_phys + talent_dodge_phys`（`sim.py:3921`）。那个值恒为 0
 				// （原因写在 `enemy.dodgeVs` 上），所以这里不是"先不管"，
 				// 而是"与原版同值、并且有名字"。
+				if op.spec.CharID == "char_4010_etlchi" && op.entelechiaSteal != nil {
+					_, _ = op.entelechiaSteal.beforeDamage(t, target, entelechiaStealEligible, true)
+				}
 				dmg := resolveDamage(atkBase, dmgType, hitScale,
 					target.spec.DEF, target.res(), target.dodgeVs(dmgType))
 				// 连击的 `ComboDamageScale` **乘在这里**：原版是
@@ -2516,9 +2579,17 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				// 防御也一起被缩放，症状是"伤害偏低且随目标防御变化"。
 				dmg *= comboDmgScale
 				dealt := target.take(dmg, op)
-				trace("        打 %s 攻=%.1f 类型=%s 倍率=%.3f 防=%.1f 抗=%.1f 伤害=%.3f 实扣=%.3f 剩=%.3f",
-					target.spec.Name, atkBase, dmgType, hitScale, target.spec.DEF,
-					target.res(), dmg, dealt, target.hp)
+				if dealt > 0 && op.spec.CharID == "char_4010_etlchi" {
+					entelechiaHits++
+					if op.entelechiaDOTTargets != nil {
+						op.entelechiaDOTTargets[target] = t + 5.0
+					}
+				}
+				if traceOn {
+					trace("        打 %s 攻=%.1f 类型=%s 倍率=%.3f 防=%.1f 抗=%.1f 伤害=%.3f 实扣=%.3f 剩=%.3f",
+						target.spec.Name, atkBase, dmgType, hitScale, target.spec.DEF,
+						target.res(), dmg, dealt, target.hp)
+				}
 				if dealt <= 0 {
 					continue
 				}
@@ -2553,6 +2624,14 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 						sluggishSlowPct, target.sluggishTimer)
 				}
 			}
+		}
+		// 收割者特性（隐德来希）：每击中一名敌人回复 50 点生命值，上限为自身阻挡数
+		if op.spec.CharID == "char_4010_etlchi" && entelechiaHits > 0 {
+			maxTargets := math.Min(float64(entelechiaHits), float64(op.spec.BlockCnt))
+			if maxTargets < 1 {
+				maxTargets = 1
+			}
+			op.heal(maxTargets * 50.0)
 		}
 		// 出手回报：攻击回复的技力与弹药消耗（原版 3187-3205，在整次出手之后）
 		spOnAttack(op)
@@ -3779,6 +3858,10 @@ func (c *simCtx) polluteFromEnemy(e *enemy, amount float64, radius float64) floa
 
 func (o *operator) take(amount float64) float64 {
 	amount = math.Max(0, amount)
+	// 隐德来希（char_4010_etlchi）充盈天赋：触发后获得 10% 伤害减免
+	if o.spec.CharID == "char_4010_etlchi" && o.entelechiaLowHPTrigger {
+		amount *= 0.9
+	}
 	// 「层数护盾」：**次数制抵挡**，一层把这一下**整笔**吃掉（原版
 	// `unit.py:613-620`，位置在屏障分支之前）。顺序是原版定的：先裂、先回血，
 	// 再把这一下归零——所以"回血之后血量更高"是原版的语义，不是笔误。
@@ -3821,6 +3904,11 @@ func (o *operator) hurt(dealt float64) {
 	}
 	o.hp = math.Max(0, o.hp-dealt)
 	o.damageTaken += dealt
+	// 隐德来希第二天赋·充盈：生命低于 25% 时一次性回复 50% 生命上限，并在此后获得 10% 减伤
+	if o.spec.CharID == "char_4010_etlchi" && !o.entelechiaLowHPTrigger && o.alive() && o.hp/o.maxHP() <= 0.25 {
+		o.entelechiaLowHPTrigger = true
+		o.heal(o.maxHP() * 0.5)
+	}
 	if traceOn && o.sim != nil {
 		// 每一笔都记：对拍要看的是**承伤曲线**，不是总量。原版那边三种来源
 		// 各有明细（敌方普攻 / 敌方技能 / 田地病害）；两边总量相同而阵亡

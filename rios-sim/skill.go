@@ -446,6 +446,10 @@ func (o *operator) maxTarget() int {
 	if p := o.profile(); p != nil && p.MaxTarget > 0 {
 		return p.MaxTarget
 	}
+	// 收割者特性（如隐德来希 char_4010_etlchi）：攻击自身攻击范围内的所有敌人
+	if o.spec.CharID == "char_4010_etlchi" {
+		return 99
+	}
 	//: ---- 特性「同时攻击阻挡的所有敌人」（泡普卡）----
 	//:
 	//: 一次出手打**她自己挡住的全部**敌人。⚠ 不是「范围内所有人」：

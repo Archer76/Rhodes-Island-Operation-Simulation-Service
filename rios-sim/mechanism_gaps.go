@@ -220,6 +220,8 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 		if r := op.FriendlyHealRestriction; r != nil {
 			if !validFriendlyHealRestriction(op.CharID, r) {
 				add("friendly_heal_restriction", 0, "禁止友方治疗缺少精确特性来源")
+			} else if op.CharID == "char_4010_etlchi" && op.EntelechiaSource != nil && op.EntelechiaSource.ConsumerImplemented {
+				// 隐德来希收割者特性、群攻与逐伤自愈已在主战斗循环真行使
 			} else {
 				present := false
 				for _, g := range op.Placeholders {

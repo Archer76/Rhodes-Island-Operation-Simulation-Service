@@ -842,6 +842,31 @@ func SpawnsOf(level, path, difficulty string, p3rArmed bool) (SpawnsOut, error) 
 }
 
 func spawnsOfWithInputs(level, path, difficulty string, p3rArmed bool, inputs *buildInputs) (SpawnsOut, error) {
+	if inputs != nil && !p3rArmed {
+		inputs.spawnsOnce.Do(func() {
+			inputs.spawnsVal, inputs.spawnsErr = computeSpawnsOf(level, path, difficulty, false, inputs)
+		})
+		if inputs.spawnsErr != nil {
+			return inputs.spawnsVal, inputs.spawnsErr
+		}
+		// 返回克隆外壳以保证调用方修改 Scanned/Params 不会并发污染
+		cached := inputs.spawnsVal
+		scanned := make(map[string]int, len(cached.Scanned))
+		for k, v := range cached.Scanned {
+			scanned[k] = v
+		}
+		covered := make(map[string]int, len(cached.Covered))
+		for k, v := range cached.Covered {
+			covered[k] = v
+		}
+		cached.Scanned = scanned
+		cached.Covered = covered
+		return cached, nil
+	}
+	return computeSpawnsOf(level, path, difficulty, p3rArmed, inputs)
+}
+
+func computeSpawnsOf(level, path, difficulty string, p3rArmed bool, inputs *buildInputs) (SpawnsOut, error) {
 	out := SpawnsOut{
 		Spawns:   []map[string]any{},
 		Unported: append([]string{}, spawnsUnported...),

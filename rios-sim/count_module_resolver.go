@@ -51,6 +51,9 @@ func exactModuleTalentGaps(op OperatorSpec, instance int) []mechanisms.Gap {
 		if present {
 			continue
 		}
+		if op.CharID == "char_4010_etlchi" && op.EntelechiaSource != nil && op.EntelechiaSource.ConsumerImplemented {
+			continue
+		}
 		gaps = append(gaps, mechanisms.Gap{ID: "module.talent_override", Status: "unimplemented", Source: "module", CharID: op.CharID, Operator: op.Name, SourceID: r.ModuleID, SourceName: c.Name, Key: key, Description: c.Description, RawBlackboard: cloneRawBlackboard(c.BB), RawSource: append(json.RawMessage(nil), r.RawPart...), RawSlot: append(json.RawMessage(nil), raw...), Slot: 1, Level: r.ModuleLevel, Instance: instance, Reason: "升级part内符合资格的来源仍有未完成事件消费者；单一选中项不能删除其它来源"})
 	}
 	return gaps

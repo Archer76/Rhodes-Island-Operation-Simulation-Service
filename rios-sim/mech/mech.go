@@ -64,6 +64,7 @@ import (
 // 契约与 `Ctx.Trace` 相同：只在 `RIOS_TRACE=1` 时输出、只走 stderr、
 // **不进判决**。未注入时（单测里）是 no-op。
 var Trace = func(format string, args ...any) {}
+var TraceOn = false
 
 // ID 是机制的稳定标识。
 //
