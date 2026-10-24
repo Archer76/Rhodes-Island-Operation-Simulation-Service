@@ -65,6 +65,22 @@ func (o *operator) healFromCharacter(source *operator, amount float64, v *Verdic
 		}
 		return 0
 	}
+	// 黍「百谷长青」：「治疗干员时对其与周围四格地块进行播种」。
+	// 挂在这条**角色治疗**的唯一入口上，才能覆盖普攻治疗、技能二专注治疗、
+	// 技能三攻击兼治疗三条路；挂在任何单条路径上都会漏掉另外两条。
+	//
+	// 顺带消费模组二/三级的特性覆写：「治疗生命值低于 50% 的友方单位时
+	// 治疗量提升 15%」（`hp_ratio=0.5`、`heal_scale=1.15`）。判据是**治疗前**
+	// 的血量比例——治完之后再判会把"刚好跨过 50%"的那一口算错。
+	if source != nil && source.spec.CharID == shuCharID && source.shuState != nil {
+		cfg := source.shuState.Config
+		if cfg.LowHealScale > 0 && cfg.LowHealRatio > 0 && o.hp < o.maxHP()*cfg.LowHealRatio {
+			amount *= cfg.LowHealScale
+		}
+		if amount > 0 {
+			source.shuState.sowAround(cellOf(o.cell), source.spec.Name)
+		}
+	}
 	return o.heal(amount)
 }
 

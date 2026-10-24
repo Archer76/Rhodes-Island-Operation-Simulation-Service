@@ -180,6 +180,7 @@ type OperatorSpec struct {
 	WisdelSource     *WisdelSourceSpec     `json:"wisdel_source,omitempty"`
 	EntelechiaSource *EntelechiaSourceSpec `json:"entelechia_source,omitempty"`
 	SakikoSource     *SakikoSourceSpec     `json:"sakiko_source,omitempty"`
+	ShuSource        *ShuSourceSpec        `json:"shu_source,omitempty"`
 	Placeholders     []mechanisms.Gap      `json:"mechanism_placeholders,omitempty"`
 	CharID       string           `json:"char_id"`
 	Name         string           `json:"name"`
@@ -231,6 +232,10 @@ type OperatorSpec struct {
 	//: 按职业发的全场光环（星熊「特种作战策略」，`talents.CLASS_AURA_TALENTS`）。
 	//: 与 `nation_id`（势力）是两回事：那个是"哪个势力"，这个是"哪个职业"。
 	Profession string `json:"profession,omitempty"`
+	//: 阵营代号（`operator.groupId`，如 `sui`）。与上面两条并列、互不替代：
+	//: 势力判「罗德岛翻倍」、职业判按职业发的全场光环、阵营判「【岁】干员计数」。
+	//: 消费者是黍「天有四时」的「编队中有四名【岁】干员」——那条数的是**编队**。
+	GroupID string `json:"group_id,omitempty"`
 	//: 这一位干员自己带出去的**全场光环**（天赋）。一个干员可以有多条
 	//: （「万众巨潮」与「特种作战策略」是并列的两条天赋，不是同一件事）。
 	//:

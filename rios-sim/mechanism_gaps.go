@@ -252,6 +252,11 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 				add("skill_ranged_exemption", 0, "技能远程倍率豁免缺少精确模组来源")
 			} else if op.CharID == "char_4182_oblvns" && op.SakikoSource != nil && op.SakikoSource.ConsumerImplemented {
 				// 祥子模组特性、音符发射、正弦运动与穿透伤害已在主战斗循环真行使
+			} else if op.CharID == "char_2025_shu" && op.ShuSource != nil && op.ShuSource.ConsumerImplemented {
+				// 黍：模组特性（治疗低血友方 +15%）、播种地块、天赋二光环与
+				// 技能一/二/三已在主战斗循环真行使。**未消费的黑板键仍具名上报**
+				// ——豁免只覆盖"已消费"的那几件，不覆盖"还没建"的键。
+				gaps = mechanisms.Merge(gaps, shuRemainingGapsFromSpec(op.ShuSource, op.Name, i))
 			} else {
 				// A valid exemption source still contains unimplemented notes and
 				// penetration. Raw callers must not erase that source's gaps.

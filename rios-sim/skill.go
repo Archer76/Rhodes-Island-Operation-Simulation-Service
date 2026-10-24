@@ -207,6 +207,13 @@ func activate(op *operator, t float64, spec *Spec, cost *float64,
 	//: 新干员的技能只要真被走到，这一行就会出现。
 	trace("SKILL t=%.4f op=%s activate sp_cost=%.1f duration=%.2f infinite=%t ammo=%d",
 		t, op.spec.Name, sk.SPCost, sk.Duration, sk.Infinite, sk.Ammo)
+	// 黍：开技事件进判决（她的三个技能各有独立状态机，光凭 SKILL trace
+	// 在判决层看不见"哪一档真开了"）。
+	if op.spec.CharID == shuCharID && verdict != nil {
+		verdict.Events = append(verdict.Events, Event{
+			T: t, Kind: "shu_skill_start", Who: op.spec.Name,
+		})
+	}
 	if sk.Infinite {
 		op.skillTimer = math.Inf(1)
 	} else {
@@ -223,6 +230,13 @@ func activate(op *operator, t float64, spec *Spec, cost *float64,
 		op.powerAttackLeft = float64(op.spec.PowerAttackCount)
 	}
 	op.spCharges++
+	// 黍「化被草木」：每次开技获得一层治疗充能（上限 = 技能 `ct`）。
+	// 它与 `spCharges`（开技次数）不是一回事：`spCharges` 只增不减，
+	// 而这一层会被下一次攻击的附带治疗消耗掉。
+	if op.spec.CharID == shuCharID && op.shuState != nil && !passive &&
+		op.shuState.Config.Slot == 1 && op.shuState.Charges < op.shuState.Config.S1Charges {
+		op.shuState.Charges++
+	}
 	// 技能给的生命上限（原版 `sim.py:2498` → `unit.py:947`）：
 	// 「上限和当前血量一起涨」——`hp += 基准 × pct`，这里用绝对值反推：
 	// `pct × 基准 = 新上限 − 基准`。少了这一句，"开技能翻倍生命上限"的干员
@@ -267,10 +281,15 @@ func deactivate(op *operator) {
 // 凡是"夹血量 / 算血量比例"的地方都该走这里，而不是直接读 `spec.MaxHP`：
 // 直接读会在技能期间把上限算小（回血夹在旧上限、血量比例偏高）。
 func (o *operator) maxHP() float64 {
+	base := o.spec.MaxHP
 	if p := o.profile(); p != nil && p.MaxHP != nil {
-		return *p.MaxHP
+		base = *p.MaxHP
 	}
-	return o.spec.MaxHP
+	// 黍「天有四时」：场上有三名不同职业干员时所有干员生命上限提高。
+	if o.shuMaxHpPct != 0 {
+		base *= 1 + o.shuMaxHpPct
+	}
+	return base
 }
 
 // spOnAttack 出手回复的技力（`_operators_attack` 尾部）。
@@ -367,7 +386,7 @@ func (o *operator) atk() float64 {
 	if p := o.profile(); p != nil {
 		base = p.ATK
 	}
-	return base + o.spec.ATK*o.auraAtkPct
+	return base + o.spec.ATK*(o.auraAtkPct+o.shuAtkPct)
 }
 
 func (o *operator) defense() float64 {
@@ -422,17 +441,24 @@ func (o *operator) interval() float64 {
 	if o.spec.EnemyCountAttackSpeed != nil {
 		panic("敌数攻速必须使用显式实时场景intervalForEnemies")
 	}
+	var interval float64
 	if o.spec.AttackSpeedWhenFree != 0 || o.spec.HPAttackSpeed != nil {
 		timing := o.spec.AttackTiming
 		if p := o.profile(); p != nil {
 			timing = p.AttackTiming
 		}
-		return timingInterval(timing, o.freeAttackSpeed()+o.hpAttackSpeed())
+		interval = timingInterval(timing, o.freeAttackSpeed()+o.hpAttackSpeed())
+	} else if p := o.profile(); p != nil {
+		interval = p.Interval
+	} else {
+		interval = o.spec.AttackInterval
 	}
-	if p := o.profile(); p != nil {
-		return p.Interval
+	// 黍「天有四时」与技能三「离离枯荣」：攻击速度是**加法**到基准 100 上，
+	// 间隔按 `基础 × 100 / 攻速` 收缩（与引擎其余攻速口径一致）。
+	if o.shuAspd != 0 {
+		interval *= 100 / math.Max(aspdMin, 100+o.shuAspd)
 	}
-	return o.spec.AttackInterval
+	return interval
 }
 
 func (o *operator) damageType() string {

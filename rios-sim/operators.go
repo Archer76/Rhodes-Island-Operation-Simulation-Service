@@ -165,6 +165,9 @@ type OperatorOut struct {
 
 	NationID   *string `json:"nation_id,omitempty"`
 	Profession *string `json:"profession,omitempty"`
+	//: 阵营代号（`operator.group_id`，如 `sui`）。与上面两条同一姿势：
+	//: 取不到就不送。消费者是黍「天有四时」的【岁】干员计数。
+	GroupID *string `json:"group_id,omitempty"`
 
 	//: ---- 职业特性：生命流失（怪杰那一族）----
 	//:
@@ -207,6 +210,7 @@ type OperatorOut struct {
 	WisdelSource     *WisdelSourceSpec     `json:"wisdel_source,omitempty"`
 	EntelechiaSource *EntelechiaSourceSpec `json:"entelechia_source,omitempty"`
 	SakikoSource     *SakikoSourceSpec     `json:"sakiko_source,omitempty"`
+	ShuSource        *ShuSourceSpec        `json:"shu_source,omitempty"`
 	Skill        *SkillSpec        `json:"skill,omitempty"`
 	Active     *Profile        `json:"active,omitempty"`
 
@@ -807,6 +811,10 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 	} else {
 		covered["profession_empty"]++
 	}
+	if st.GroupID != "" {
+		v := st.GroupID
+		out.GroupID = &v
+	}
 	//: 职业特性「自身生命会不断流失」（怪杰）：`> 0` 才送，与 `splash_*` 同族。
 	//: ★ 这是**段 A 之外的键**（Python 的 `_operator_spec` 不产出它）——
 	//: 判据那一侧具名进 `GO_ONLY`，见 `wire.go` 上那一段的说明。
@@ -1018,6 +1026,10 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 		return OperatorOut{}, err
 	}
 	out.WisdelSource, err = buildWisdelSourceSpec(st, r.Skill, skillLevel)
+	if err != nil {
+		return OperatorOut{}, err
+	}
+	out.ShuSource, err = buildShuSourceSpec(st, r.Skill, skillLevel)
 	if err != nil {
 		return OperatorOut{}, err
 	}

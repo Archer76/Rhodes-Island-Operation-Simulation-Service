@@ -491,6 +491,15 @@ type operator struct {
 	// ---- 丰川祥子（char_4182_oblvns）机制状态
 	sakikoStore        *sakikoOrdinaryStore
 	sakikoSineBindings []*sakikoFreeSineBinding
+
+	// ---- 黍（char_2025_shu）机制状态
+	shuState *ShuBattleState
+	//: 天赋二「天有四时」与技能三「离离枯荣」的**动态面板加成**。
+	//: 它们随场上职业构成、编队【岁】人数、地面敌人是否踩田逐帧变化，
+	//: 所以不能写进 `OperatorSpec`（那是部署前算好的静态快照）。
+	shuMaxHpPct float64
+	shuAspd     float64
+	shuAtkPct   float64
 }
 
 func (o *operator) alive() bool { return o.hp > 0 && !o.retreated }
@@ -684,7 +693,13 @@ func (o *operator) canBlock(e *enemy) bool {
 	if e.spec.IsFlying {
 		return false
 	}
-	return o.spec.BlockCnt > 0 && len(o.blocking) < o.spec.BlockCnt
+	limit := o.spec.BlockCnt
+	// 黍「嘉禾盈仓」：技能开启期间阻挡数 +block_cnt。
+	if o.spec.CharID == shuCharID && o.shuState != nil && o.skillActive &&
+		o.shuState.Config.Slot == 2 {
+		limit += o.shuState.Config.S2BlockBonus
+	}
+	return limit > 0 && len(o.blocking) < limit
 }
 
 // runSim 把一份规格推成判决。
@@ -958,6 +973,24 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 			if op.spec.CharID == "char_4182_oblvns" {
 				op.sakikoStore = &sakikoOrdinaryStore{owner: op}
 				op.sakikoSineBindings = nil
+			}
+
+			// 黍（char_2025_shu）部署初始化
+			if op.spec.CharID == "char_2025_shu" {
+				if op.spec.ShuSource == nil {
+					return nil, fmt.Errorf("shu deploy: ShuSource is nil")
+				}
+				cfg, err := decodeShuRuntimeConfig(op.spec.ShuSource)
+				if err != nil {
+					return nil, fmt.Errorf("shu deploy decode config: %w", err)
+				}
+				op.shuState = newShuBattleState(cfg)
+				// 模组三级「部署时立即给所处地块播种该效果」：`born_range_id=0-1`
+				// 在 range_table 里就是单格 (0,0)，所以只播自身格，不扩四邻。
+				if cfg.BornSow {
+					op.shuState.sowSelf(cellOf(op.cell), op.spec.Name)
+					trace("SHU-SOW t=deploy op=%s cell=%v tiles=%d", op.spec.Name, cellOf(op.cell), len(op.shuState.SownTiles))
+				}
 			}
 
 			// ---- 层数护盾（原版 `_attach_talent_shield`，`sim.py:3157-3182`，
@@ -1420,6 +1453,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		talentTick(ops, dt)
 		entelechiaTick(ops, dt, t, verdict)
 		sakikoTick(ops, enemies, dt, t, verdict)
+		shuTick(ops, enemies, dt, t, spec, verdict)
 
 		intrinsicCountTick(enemies, t)
 		if ctx.countError != nil {
@@ -2497,6 +2531,13 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 		//: 正好反过来：斑点的技能本来就带 `atk`，于是「一开技能就改打人」，
 		//: 一整场治不出一次——症状与「技能可以治疗友方单位没接」一模一样。
 		skillHeals := op.spec.HealsOnSkill && op.skillActive
+		if op.spec.CharID == shuCharID && op.shuState != nil && op.skillActive &&
+			op.shuState.Config.Slot == 3 {
+			// 黍技能三「离离枯荣」：攻击**同时**可治疗我方干员。她不是
+			// 「平A 改成治疗」（`HealsOnSkill` 那种），所以这里要把它从纯治疗
+			// 分支里排除，治疗那一半在伤害结算之后单独走。
+			skillHeals = false
+		}
 		healsNow := op.spec.Heals || skillHeals
 		turnedToDamage := op.spec.Heals && !skillHeals && math.Abs(scaleNow-1.0) > 1e-9
 		deals := !healsNow || turnedToDamage
@@ -2504,7 +2545,14 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 		var extraHeal *operator
 		if !deals {
 			targets = nil
-			heals = pickHeals(op, ops, 1)
+			// 黍「嘉禾盈仓」：专注治疗范围内**至多两名**友方。其余守护者
+			// （斑点那一族）仍然只治一名。
+			healCount := 1
+			if op.spec.CharID == shuCharID && op.shuState != nil && op.skillActive &&
+				op.shuState.Config.Slot == 2 {
+				healCount = op.shuState.Config.S2MaxTarget
+			}
+			heals = pickHeals(op, ops, healCount)
 			//: 天赋「附加治疗」（安赛尔，`talenteffects.go` 的 `attack@prob`）：
 			//: 有 p 的几率**额外**再治一名友方。这里乘的同样是**期望值**（`p × 治疗量`）。
 			//:
@@ -2551,6 +2599,11 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 		}
 		op.attackTimer = 0
 		op.attackClock.Reset()
+		// 黍技能一「化被草木」：下一次攻击为周围血量不足一半的一名友方
+		// 恢复攻击力 × heal_scale 的生命，消耗一层充能。
+		if op.spec.CharID == shuCharID && op.shuState != nil {
+			applyShuS1Heal(op, ops, verdict)
+		}
 		scale := scaleNow
 		hits := op.hitCount()
 		//: ★ 行使指纹两族（建模族清点用）：**公式层**（这一击真的走了倍率解析）
@@ -2767,6 +2820,23 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				maxTargets = 1
 			}
 			op.heal(maxTargets * 50.0)
+		}
+		// 黍技能三「离离枯荣」：攻击**同时**治疗范围内的我方干员。
+		// 治疗量 = 攻击力（与守护者「治疗量相当于攻击力」同一口径）。
+		// 口径登记：正文写「攻击同时可治疗我方干员」，没写人数上限，按范围内
+		// 全体存活友方建模；该口径记在 `ShuRuntimeConfig.Unresolved` 待证。
+		if op.spec.CharID == shuCharID && op.shuState != nil && op.skillActive &&
+			op.shuState.Config.Slot == 3 {
+			cells := op.targetRange()
+			for _, ally := range ops {
+				if !ally.alive() {
+					continue
+				}
+				if !inCells(cells, cellOf(ally.cell)) {
+					continue
+				}
+				ally.healFromCharacter(op, power, verdict)
+			}
 		}
 		// 出手回报：攻击回复的技力与弹药消耗（原版 3187-3205，在整次出手之后）
 		spOnAttack(op)
@@ -3996,6 +4066,12 @@ func (o *operator) take(amount float64) float64 {
 	// 隐德来希（char_4010_etlchi）充盈天赋：触发后获得 10% 伤害减免
 	if o.spec.CharID == "char_4010_etlchi" && o.entelechiaLowHPTrigger {
 		amount *= 0.9
+	}
+	// 黍「百谷长青」：站在播种地块上的友方获得庇护（伤害减免）。
+	// 地块效果是环境效果：施加者撤退后仍按地块结算（该口径登记在
+	// `ShuRuntimeConfig.Unresolved`，只有行为证据能定死）。
+	if p := o.sownProtect(); p > 0 {
+		amount *= 1 - p
 	}
 	// 「层数护盾」：**次数制抵挡**，一层把这一下**整笔**吃掉（原版
 	// `unit.py:613-620`，位置在屏障分支之前）。顺序是原版定的：先裂、先回血，

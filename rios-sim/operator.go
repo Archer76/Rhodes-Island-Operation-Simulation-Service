@@ -135,6 +135,9 @@ type OperatorStats struct {
 	//: 主职业代号（`TANK`）。与 `team_id`（小队）也不是一回事，别混。
 	NationID   string `json:"nation_id"`
 	Profession string `json:"profession"`
+	//: 阵营代号（`operator.groupId`，如 `sui`）。**与势力/职业三者互不替代**：
+	//: 势力判「罗德岛翻倍」，职业判按职业发的全场光环，阵营判「【岁】干员计数」。
+	GroupID string `json:"group_id"`
 	//: 天赋「翔虫机动」（`operator_traits.go`）。**没有这条时全取零值**。
 	Glider
 	//: 天赋的**非面板**效果（`talenteffects.go`）：部署给技力／概率强化攻击／
@@ -429,6 +432,7 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 		Description string            `json:"description"`
 		NationID    string            `json:"nationId"`
 		Profession  string            `json:"profession"`
+		GroupID     string            `json:"groupId"`
 	}
 	if err := json.Unmarshal(raw, &char); err != nil {
 		return nil, fmt.Errorf("%s 的表项解析失败：%w", cfg.CharID, err)
@@ -594,6 +598,9 @@ func OperatorStatsFor(cfg OperatorCalcConfig, rounding string) (*OperatorStats, 
 	//: 身份两字段：直接取自 character_table，不做任何推断。
 	st.NationID = char.NationID
 	st.Profession = char.Profession
+	//: 阵营代号（`operator.groupId`，如 `sui`）。消费者：黍「天有四时」的
+	//: 「编队中有四名【岁】干员」——那条数的是**编队**，不是场上职业。
+	st.GroupID = char.GroupID
 	//: 「翔虫机动」：一个天赋两个平面（落位放宽 ＋ 限时攻击力加成）。
 	st.Glider = readGlider(char.Talents, cfg.Elite, cfg.Level, cfg.Potential)
 	//: 天赋的**非面板**效果（`talenteffects.go`）：走**同一张键表**与同一个解析器
