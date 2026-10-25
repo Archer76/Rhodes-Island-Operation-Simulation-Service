@@ -173,5 +173,14 @@ func (o *operator) targetRange() [][2]int {
 	if p := o.profile(); p != nil && p.TargetRange != nil {
 		return p.TargetRange.Cells
 	}
+	// 逻各斯技能一「殁亡」/技能三「延异视阈」：正文写明「攻击范围扩大」，
+	// 技能自己的 `rangeId`（3-3 / 3-4）就是这期间的目标选取范围。
+	//
+	// 绝对格在**建规格时**算好（那时才有部署朝向），运行期只按技能开关切换
+	// ——运行期再算一遍就是第二套旋转/平移口径。
+	if o.spec.CharID == logosCharID && o.skillActive && o.spec.LogosSource != nil &&
+		len(o.spec.LogosSource.SkillRangeAbsCells) > 0 {
+		return o.spec.LogosSource.SkillRangeAbsCells
+	}
 	return o.spec.Range
 }

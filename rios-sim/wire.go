@@ -181,10 +181,11 @@ type OperatorSpec struct {
 	EntelechiaSource *EntelechiaSourceSpec `json:"entelechia_source,omitempty"`
 	SakikoSource     *SakikoSourceSpec     `json:"sakiko_source,omitempty"`
 	ShuSource        *ShuSourceSpec        `json:"shu_source,omitempty"`
+	LogosSource      *LogosSourceSpec      `json:"logos_source,omitempty"`
 	Placeholders     []mechanisms.Gap      `json:"mechanism_placeholders,omitempty"`
-	CharID       string           `json:"char_id"`
-	Name         string           `json:"name"`
-	Cell         [2]int           `json:"cell"`
+	CharID           string                `json:"char_id"`
+	Name             string                `json:"name"`
+	Cell             [2]int                `json:"cell"`
 
 	MaxHP float64 `json:"max_hp"`
 	//: 「圣山的祝福」（圣聆初雪的天赋）：**受到致命伤害时不撤退**——免死一次、

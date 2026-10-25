@@ -211,8 +211,9 @@ type OperatorOut struct {
 	EntelechiaSource *EntelechiaSourceSpec `json:"entelechia_source,omitempty"`
 	SakikoSource     *SakikoSourceSpec     `json:"sakiko_source,omitempty"`
 	ShuSource        *ShuSourceSpec        `json:"shu_source,omitempty"`
-	Skill        *SkillSpec        `json:"skill,omitempty"`
-	Active     *Profile        `json:"active,omitempty"`
+	LogosSource      *LogosSourceSpec      `json:"logos_source,omitempty"`
+	Skill            *SkillSpec            `json:"skill,omitempty"`
+	Active           *Profile              `json:"active,omitempty"`
 
 	//: **只在本进程内用**：这一位干员的技能黑板里落在首发表之外的键。
 	//: 不出去（`json:"-"`）——出去的那一份是 bundle 上汇总+去重的 `SkillUnknownKeys`，
@@ -1032,6 +1033,15 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 	out.ShuSource, err = buildShuSourceSpec(st, r.Skill, skillLevel)
 	if err != nil {
 		return OperatorOut{}, err
+	}
+	out.LogosSource, err = buildLogosSourceSpec(st, r.Skill, skillLevel)
+	if err != nil {
+		return OperatorOut{}, err
+	}
+	// 逻各斯技能一/三的「攻击范围扩大」：绝对格只能在**这里**算——运行期
+	// `operator` 没有朝向。算不出来就大声失败，不静默退化成"范围没扩大"。
+	if err := attachLogosSkillRange(out.LogosSource, r.Direction, r.Position); err != nil {
+		return OperatorOut{}, fmt.Errorf("%s（%s）的技能范围：%v", r.Operator, r.Entry.CharID, err)
 	}
 	if sk, act, unknown, err := bindSkillAtLevelWithInputs(e.CharID, r.Skill, skillLevel, atk, def, res,
 		maxHP, spd, interval, st.TextDerived.DamageType, inputs); err != nil {

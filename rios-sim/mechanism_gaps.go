@@ -214,6 +214,16 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 	}
 	for i, op := range spec.Operators {
 		gaps = mechanisms.Merge(gaps, op.Placeholders, hpTimingGaps(op), exactModuleTalentGaps(op, i))
+		// 逻各斯（char_4133_logos）：闭环的**具名缺口**。
+		//
+		// 与黍同一纪律：豁免只覆盖"已消费"的那几件。逻各斯已消费的是
+		// 天赋二「剜魂具辞」（法抗削减挂在 `enemy.res()`、法伤加值挂在伤害结算后）、
+		// 技能一「殁亡」的斩杀、技能二「提喻」的锁定多段与减速、技能三的多目标
+		// 与范围扩大；**没消费的照样逐条上报**——第一天赋整条概率链在等 V-2 裁定
+		// （不折期望值），技能三的敌方子弹与两个模组的隐藏天赋各有落点缺口。
+		if op.CharID == "char_4133_logos" && op.LogosSource != nil && op.LogosSource.ConsumerImplemented {
+			gaps = mechanisms.Merge(gaps, logosRemainingGapsFromSpec(op.LogosSource, op.Name, i))
+		}
 		add := func(key string, value float64, reason string) {
 			gaps = mechanisms.Merge(gaps, []mechanisms.Gap{{ID: "runtime." + key, Status: "unimplemented", Source: "operator_spec", Operator: op.Name, CharID: op.CharID, Key: key, RawValue: value, Reason: reason, Instance: i}})
 		}

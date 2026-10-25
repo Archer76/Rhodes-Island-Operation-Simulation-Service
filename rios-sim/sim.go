@@ -197,6 +197,16 @@ type enemy struct {
 	sluggishTimer float64
 	// Run-local independent Wang slow layers. Nil preserves legacy movement.
 	wangSlows *wangSlowEffects
+	//: 逻各斯技能二「提喻」叠出来的**移速乘区**（`attack@move_speed` × 层数）。
+	//: 0 表示没有，`logosMoveScale()` 此时恒返回精确的 1.0 —— 于是没被她盯上的
+	//: 敌人在这次接线前后**逐位相同**（与 `sluggishFactor` 同一套理由）。
+	logosMoveDown float64
+	//: 天赋二「剜魂具辞」的减益状态：到期时刻、法抗削减、受到法术伤害的平坦加值。
+	//: 三项分开存而不是塞一个小结构体，是因为 `enemy.res()` 只读其中一项，
+	//: 而 `res()` 是法抗的**唯一入口**，别的地方不该再去问第二遍。
+	logosDebuffUntil         float64
+	logosMagicResDown        float64
+	logosMagicFlatBonusValue float64
 	//: 冻结剩余秒数（原版 `freeze_timer` / `frozen`，unit.py:1015-1023）。
 	//: 冻结与停顿**不是**一回事：停顿只是走得慢，冻结是**这一帧既不走也不出手**
 	//: （`advance` 与 `_enemies_attack` 两处都拦）。目前唯一的来源是圣聆初雪的
@@ -500,6 +510,11 @@ type operator struct {
 	shuMaxHpPct float64
 	shuAspd     float64
 	shuAtkPct   float64
+
+	// ---- 逻各斯（char_4133_logos）机制状态
+	//: 技能二的锁定目标/层数/计时器与技能一的斩杀计数都住在这里。
+	//: 天赋二与技能三没有跨帧状态（前者挂在敌人身上，后者走既有面板链）。
+	logosState *LogosBattleState
 }
 
 func (o *operator) alive() bool { return o.hp > 0 && !o.retreated }
@@ -993,6 +1008,19 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 				}
 			}
 
+			// 逻各斯（char_4133_logos）部署初始化
+			// 技能一的斩杀阈值、技能二的锁定与天赋二的减益都要 Config。
+			if op.spec.CharID == logosCharID {
+				if op.spec.LogosSource == nil {
+					return nil, fmt.Errorf("logos deploy: LogosSource is nil")
+				}
+				cfg, err := decodeLogosRuntimeConfig(op.spec.LogosSource)
+				if err != nil {
+					return nil, fmt.Errorf("logos deploy decode config: %w", err)
+				}
+				op.logosState = newLogosBattleState(cfg)
+			}
+
 			// ---- 层数护盾（原版 `_attach_talent_shield`，`sim.py:3157-3182`，
 			// 在 `_do_deploy` 里、紧随部署时技能/天赋效果之后）
 			//
@@ -1454,6 +1482,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		entelechiaTick(ops, dt, t, verdict)
 		sakikoTick(ops, enemies, dt, t, verdict)
 		shuTick(ops, enemies, dt, t, spec, verdict)
+		logosTick(ops, enemies, dt, t, verdict)
 
 		intrinsicCountTick(enemies, t)
 		if ctx.countError != nil {
@@ -2260,6 +2289,12 @@ func advance(e *enemy, dt, speedScale, speedMult float64) {
 	if e.wangSlows != nil && e.sim != nil && e.sim.time != nil {
 		speed = e.wangSlows.speed(speed, *e.sim.time)
 	}
+	//: 逻各斯技能二「提喻」：被锁定的目标移速按层爬坡下降。
+	//: `logosMoveScale()` 在没叠过层时**恰好返回 1.0**，乘 1.0 在 IEEE754 下
+	//: 是精确的 ⇒ 没被她盯上的敌人这次接线前后逐位相同。
+	if e.logosMoveDown != 0 {
+		speed *= e.logosMoveScale()
+	}
 	if speed <= 0 {
 		return
 	}
@@ -2486,6 +2521,15 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 		if op.freezeTimer > 0 {
 			continue
 		}
+		//: 逻各斯技能二「提喻」：攻击**改为**锁定一个目标的周期性法术伤害，
+		//: 所以平A 整段停摆（含出手计时器）。伤害那一支在 `logosTick` 里独立结算。
+		//:
+		//: ⚠ 只在这一档跳过。技能一/三的平A 照旧——它们的伤害来自正常的
+		//: 出手（`atk`／`atk_scale` 已经进了面板），不是替换掉攻击。
+		if op.spec.CharID == logosCharID && op.logosState != nil && op.skillActive &&
+			op.logosState.Config.Slot == 2 {
+			continue
+		}
 		interval, err := op.intervalForEnemies(enemies)
 		if err != nil {
 			return err
@@ -2509,6 +2553,15 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 			continue
 		}
 		targets := pickTargets(op, enemies, op.maxTarget(), t)
+		//: ★ 行使指纹：逻各斯技能三「延异视阈」的「同时攻击 max_target 个目标」
+		//: **真的在一次出手里命中 ≥2 个**。判据与「泡普卡同时攻击阻挡的所有
+		//: 敌人」同形：不是"目标数配成 4 了"，而是这一击确实打到两个以上。
+		if op.spec.CharID == logosCharID && op.logosState != nil && op.skillActive &&
+			op.logosState.Config.Slot == 3 && len(targets) > 1 {
+			verdict.Events = append(verdict.Events, Event{
+				T: t, Kind: "logos_s3_multi", Who: op.spec.Name,
+			})
+		}
 		// ---- 医疗：平A 是**治疗**，不是伤害（原版 3994-4019）
 		//
 		// 判据两段：① 这个人是医疗（`op.heals`）；② 这一击**没被技能改成伤害**
@@ -2766,7 +2819,20 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				// 乘进 `hitScale`（结算之前）会得到完全不同的数——那是法抗/
 				// 防御也一起被缩放，症状是"伤害偏低且随目标防御变化"。
 				dmg *= comboDmgScale
+				//: 逻各斯天赋二「剜魂具辞」的另一半：「受到的法术伤害提高 N 点」。
+				//: 它是**平坦值**，加在防御/法抗结算**之后**（正文说的是"受到的
+				//: 法术伤害"，不是"法术攻击力"）。加在结算之前会顺带被法抗削一遍，
+				//: 症状是"对高法抗目标这条天赋几乎不生效"。
+				if dmgType == "MAGIC" {
+					dmg += target.logosMagicFlat()
+				}
 				dealt := target.take(dmg, op)
+				//: 逻各斯天赋二：**打中**之后把减益挂上去（作用于之后的伤害）。
+				//: 时点口径见 `logos_runtime.go::logosTalent2OnHit`；`dealt > 0`
+				//: 才挂——0 伤害是"没打中"（免疫/无敌窗口），不该吃到减益。
+				if dealt > 0 && op.spec.CharID == logosCharID && op.logosState != nil {
+					logosTalent2OnHit(op, target, t, verdict)
+				}
 				if dealt > 0 && op.spec.CharID == "char_4010_etlchi" {
 					entelechiaHits++
 					if op.entelechiaDOTTargets != nil {
@@ -3668,10 +3734,17 @@ func (e *enemy) interval() float64 {
 // `spec.RES` 是整局的静态规格（改写它会让同一只敌人"冻过一次就永久变脆"）。
 // 所有"敌人作为受击方"的结算都要走这里读，直接读 `spec.RES` 就是漏这条。
 func (e *enemy) res() float64 {
+	base := e.spec.RES
 	if e.friendlyFrozen() {
-		return e.spec.RES - frozenResDown
+		base -= frozenResDown
 	}
-	return e.spec.RES
+	// 逻各斯天赋二「剜魂具辞」：攻击使目标在 N 秒内法术抗性 −M。
+	// 挂在 `res()` 这个**唯一入口**上，所以任何来源的法术伤害都吃到它，
+	// 不会有"普攻吃到了、技能伤害没吃到"这种分裂。
+	if down := e.logosResDown(); down != 0 {
+		base -= down
+	}
+	return base
 }
 
 // friendlyFrozen 报告这一只**这一刻**是否处于【友方冻结】。

@@ -399,10 +399,19 @@ func (o *operator) defense() float64 {
 }
 
 func (o *operator) res() float64 {
+	base := o.spec.RES
 	if p := o.profile(); p != nil {
-		return p.RES
+		base = p.RES
 	}
-	return o.spec.RES
+	// 逻各斯技能二「提喻」：法术抗性 +`magic_resistance`（数据里是平坦值 70）。
+	// 它没走 `applyMods`（那一族只折 atk/def/max_hp/攻速），所以在这里按
+	// 「技能期间加平坦值」接上——与 `magic_resistance` 的分类（`classify.go`：
+	// buff/res/flat）同一条口径。
+	if o.spec.CharID == logosCharID && o.logosState != nil && o.skillActive &&
+		o.logosState.Config.Slot == 2 {
+		base += o.logosState.Config.S2MagicRes
+	}
+	return base
 }
 
 // dodgeVs 是这名干员针对某个伤害类型的闪避比例（原版
@@ -471,6 +480,14 @@ func (o *operator) damageType() string {
 func (o *operator) maxTarget() int {
 	if p := o.profile(); p != nil && p.MaxTarget > 0 {
 		return p.MaxTarget
+	}
+	//: 逻各斯技能三「延异视阈」：同时攻击 `attack@max_target` 个目标（M3 = 4）。
+	//:
+	//: ⚠ 它是**技能期间**才成立的：把 4 写进 `OperatorSpec`（部署前的静态快照）
+	//: 会让没开技能时也一次打四个——症状是"整关伤害凭空变高"，而不是少打。
+	if o.spec.CharID == logosCharID && o.logosState != nil && o.skillActive &&
+		o.logosState.Config.Slot == 3 && o.logosState.Config.S3MaxTarget > 0 {
+		return o.logosState.Config.S3MaxTarget
 	}
 	// 收割者特性（如隐德来希 char_4010_etlchi）：攻击自身攻击范围内的所有敌人
 	if o.spec.CharID == "char_4010_etlchi" {
