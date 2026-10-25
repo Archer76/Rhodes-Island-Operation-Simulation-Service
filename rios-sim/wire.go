@@ -182,6 +182,7 @@ type OperatorSpec struct {
 	SakikoSource     *SakikoSourceSpec     `json:"sakiko_source,omitempty"`
 	ShuSource        *ShuSourceSpec        `json:"shu_source,omitempty"`
 	LogosSource      *LogosSourceSpec      `json:"logos_source,omitempty"`
+	UlpiaSource      *UlpiaSourceSpec      `json:"ulpia_source,omitempty"`
 	Placeholders     []mechanisms.Gap      `json:"mechanism_placeholders,omitempty"`
 	CharID           string                `json:"char_id"`
 	Name             string                `json:"name"`

@@ -212,6 +212,7 @@ type OperatorOut struct {
 	SakikoSource     *SakikoSourceSpec     `json:"sakiko_source,omitempty"`
 	ShuSource        *ShuSourceSpec        `json:"shu_source,omitempty"`
 	LogosSource      *LogosSourceSpec      `json:"logos_source,omitempty"`
+	UlpiaSource      *UlpiaSourceSpec      `json:"ulpia_source,omitempty"`
 	Skill            *SkillSpec            `json:"skill,omitempty"`
 	Active           *Profile              `json:"active,omitempty"`
 
@@ -1041,6 +1042,13 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 	// 逻各斯技能一/三的「攻击范围扩大」：绝对格只能在**这里**算——运行期
 	// `operator` 没有朝向。算不出来就大声失败，不静默退化成"范围没扩大"。
 	if err := attachLogosSkillRange(out.LogosSource, r.Direction, r.Position); err != nil {
+		return OperatorOut{}, fmt.Errorf("%s（%s）的技能范围：%v", r.Operator, r.Entry.CharID, err)
+	}
+	out.UlpiaSource, err = buildUlpiaSourceSpec(st, r.Skill, skillLevel)
+	if err != nil {
+		return OperatorOut{}, err
+	}
+	if err := attachUlpiaSkillRange(out.UlpiaSource, r.Direction, r.Position); err != nil {
 		return OperatorOut{}, fmt.Errorf("%s（%s）的技能范围：%v", r.Operator, r.Entry.CharID, err)
 	}
 	if sk, act, unknown, err := bindSkillAtLevelWithInputs(e.CharID, r.Skill, skillLevel, atk, def, res,
