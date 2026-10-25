@@ -394,8 +394,8 @@ func TestLogosSeedSurvivesSerialization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildLogosSourceSpec: %v", err)
 	}
-	if src.RNGSeed != logosDefaultRNGSeed {
-		t.Fatalf("建规格时应显式写入默认 seed %d，实得 %d", logosDefaultRNGSeed, src.RNGSeed)
+	if src.RNGSeed != defaultProbRNGSeed {
+		t.Fatalf("建规格时应显式写入默认 seed %d，实得 %d", defaultProbRNGSeed, src.RNGSeed)
 	}
 	blob, err := json.Marshal(src)
 	if err != nil {
@@ -417,7 +417,7 @@ func TestLogosSeedSurvivesSerialization(t *testing.T) {
 			OperatorSkill: src.OperatorSkill, Talents: src.Talents,
 			Evidence: src.Evidence,
 		})
-		r := newLogosRNG(seed)
+		r := newProbRNG(seed)
 		out := make([]bool, 0, 64)
 		for i := 0; i < 64; i++ {
 			out = append(out, r.chance(cfg.Talent1Prob))

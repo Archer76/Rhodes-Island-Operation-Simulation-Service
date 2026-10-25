@@ -519,6 +519,80 @@ type operator struct {
 	//: 技能二的锁定目标/层数/计时器与技能一的斩杀计数都住在这里。
 	//: 天赋二与技能三没有跨帧状态（前者挂在敌人身上，后者走既有面板链）。
 	logosState *LogosBattleState
+
+	// ---- 引擎级概率事件（V-2 裁定后由期望值改精确抽样） ----
+	//
+	// `probRNG` 是这位干员的抽样器，种子来自**规格**（`OperatorSpec.RNGSeed`）。
+	// 它与 `logosRNG` 共用同一套取数口（`prob_rng.go`），只是**实例分开**：
+	// 逻各斯那条链有自己的证据包与 seed，引擎级事件用这一份。
+	probRNG *probRNG
+	//: 种子事件只打一次，而且**在第一次真的抽签时**才打：没有概率事件的干员
+	//: 不该在判决里多出一条与它无关的标注。
+	probRNGAnnounced bool
+	//: 抽签数 / 命中数分开记（只报命中数看不出闸有没有在跑）。
+	procRolls int
+	procHits  int
+	healRolls int
+	healHits  int
+}
+
+// operatorProbSeed 取这位干员的抽样种子：规格优先，缺失时回落到
+// 逻各斯证据包里的那一份（手工规格可能只填了后者），再缺就是写死的默认值。
+//
+// ⚠ 三处都不生成随机数——种子只有一个来源，就是规格。
+func operatorProbSeed(spec OperatorSpec) uint64 {
+	if spec.RNGSeed != 0 {
+		return spec.RNGSeed
+	}
+	if spec.LogosSource != nil && spec.LogosSource.RNGSeed != 0 {
+		return spec.LogosSource.RNGSeed
+	}
+	return defaultProbRNGSeed
+}
+
+// ensureProbRNG 取（必要时建）抽取器。手工构造的 `operator`（测试夹具）没有
+// 走部署分支，这里按规格补一个，保证"同一份规格 ⇒ 同一条序列"仍然成立。
+func (o *operator) ensureProbRNG() *probRNG {
+	if o.probRNG == nil {
+		o.probRNG = newProbRNG(operatorProbSeed(o.spec))
+	}
+	return o.probRNG
+}
+
+// probChance 是一次**引擎级**概率判定：抽一次签，并把 seed 标注补进判决。
+//
+// `kind` 只用于痕迹与计数分账（`talent_proc` / `talent_extra_heal`），
+// 不参与判定。命中时调用方自己写语义事件。
+func (o *operator) probChance(p float64, kind string, t float64, verdict *Verdict) bool {
+	if p <= 0 {
+		return false
+	}
+	rng := o.ensureProbRNG()
+	if !o.probRNGAnnounced {
+		o.probRNGAnnounced = true
+		if verdict != nil {
+			verdict.Events = append(verdict.Events, Event{
+				T: t, Kind: "prob_rng_seed",
+				Who: fmt.Sprintf("%s seed=%d", o.spec.Name, operatorProbSeed(o.spec)),
+			})
+		}
+	}
+	switch kind {
+	case "talent_proc":
+		o.procRolls++
+	default:
+		o.healRolls++
+	}
+	hit := rng.chance(p)
+	if hit {
+		switch kind {
+		case "talent_proc":
+			o.procHits++
+		default:
+			o.healHits++
+		}
+	}
+	return hit
 }
 
 func (o *operator) alive() bool { return o.hp > 0 && !o.retreated }
@@ -1026,18 +1100,22 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 				// 概率事件的抽样种子**只从规格来**（V-2 裁定第 1 条）。下一行把
 				// 用到的 seed 写进判决事件流：读判决的人因此知道这条时间线是
 				// 「该 seed 下的一次采样」，不是胜率、也不是期望（裁定第 2 条）。
-				op.logosState = newLogosBattleState(cfg, op.spec.LogosSource.RNGSeed)
-				actualSeed := op.spec.LogosSource.RNGSeed
-				if actualSeed == 0 {
-					actualSeed = logosDefaultRNGSeed
-				}
+				//
+				// 种子的**唯一权威**是 `OperatorSpec.RNGSeed`；逻各斯证据包里的
+				// 那一份是手工规格的回落（`operatorProbSeed`）。两处都不生成随机数。
+				seed := operatorProbSeed(op.spec)
+				op.logosState = newLogosBattleState(cfg, seed)
 				if verdict != nil {
 					verdict.Events = append(verdict.Events, Event{
 						T: t, Kind: "logos_rng_seed",
-						Who: fmt.Sprintf("%s seed=%d", op.spec.Name, actualSeed),
+						Who: fmt.Sprintf("%s seed=%d", op.spec.Name, seed),
 					})
 				}
 			}
+			// 引擎级概率事件的抽样器：**在部署时建**，不在首次抽签时建——
+			// 建得晚会让"什么时候第一次抽"影响序列起点，同一份规格就可能跑出
+			// 两条时间线。手工夹具没有部署分支，由 `ensureProbRNG` 兜底。
+			op.probRNG = newProbRNG(operatorProbSeed(op.spec))
 
 			// ---- 层数护盾（原版 `_attach_talent_shield`，`sim.py:3157-3182`，
 			// 在 `_do_deploy` 里、紧随部署时技能/天赋效果之后）
@@ -2625,13 +2703,18 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 			}
 			heals = pickHeals(op, ops, healCount)
 			//: 天赋「附加治疗」（安赛尔，`talenteffects.go` 的 `attack@prob`）：
-			//: 有 p 的几率**额外**再治一名友方。这里乘的同样是**期望值**（`p × 治疗量`）。
+			//: 有 p 的几率**额外**再治一名友方。**精确事件**：抽一次签，抽中了才
+			//: 多治一名、且治整份治疗量；没抽中这一击就只有一名。
 			//:
 			//: ⚠ 第二名**必须在这一刻就挑出来**：治疗第一个人的循环跑完之后，
 			//: 那个人的血已经涨上去了，可能满血而被 `pickHeals` 排除——池子变了，
 			//: 挑到的会是另一个人。写成「先治再挑」的症状是「额外治疗永远治在一个
 			//: 更健康的人身上」，判决上只表现为治疗量偏低，查起来要命。
-			if op.spec.TalentExtraHealProb > 0 {
+			//:
+			//: ⚠ 抽签位置也在这一刻（挑人之前）：它决定的是"这一击有没有第二名"，
+			//: 而不是"挑到谁之后再说"。放到后面会让同一份规格的序列随候选池变化。
+			if op.spec.TalentExtraHealProb > 0 &&
+				op.probChance(op.spec.TalentExtraHealProb, "talent_extra_heal", t, verdict) {
 				if two := pickHeals(op, ops, 2); len(two) >= 2 {
 					extraHeal = two[1]
 				}
@@ -2737,16 +2820,46 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 		power := op.atk()
 		//: ---- 天赋「要害瞄准·初级」（`talenteffects.go` 的 `atk_scale` ＋ `prob`）----
 		//:
-		//: 正文：「攻击时，N% 几率当次攻击的攻击力提升至 M%」。这里乘的是**期望倍率**
-		//: `1 + p·(M − 1)`，不掷骰子——与既有的闪避同一条口径（`resolveDamage` 把
-		//: `dodge` 当期望值削掉）：掷骰子会让同一条时间线两次跑出两个数，
-		//: 而判决比对靠的就是可重复。
+		//: ---- 天赋「要害瞄准·初级」：**逐次抽签**（V-2 裁定后） ----
+		//:
+		//: 正文：「攻击时，N% 几率当次攻击的攻击力提升至 M%」。这是**离散事件**：
+		//: 每一击独立抽一次签，命中则把这一击的攻击力乘 `M`、没命中就原样——
+		//: 不是把 `1 + p·(M − 1)` 折进面板。折期望会让"这一击到底加没加成"
+		//: 永远无法回答，而它同时是**阈值判断的输入**（伤害与后续归属）。
+		//:
+		//: 多条天赋各给一条时**各自独立抽签**、命中者相乘：这正是期望公式
+		//: `Π(1 + p_i(s_i − 1))` 的精确对应物（分布相同、时刻不同）。
 		//:
 		//: ⚠ 乘在 `power` 上（与「强击瓶专家」同一处），所以它**先于**防御/法抗生效
 		//: ——正文说的是"当次攻击的攻击力"，不是"最终伤害"。
-		if op.spec.TalentProcFactor != 0 && op.spec.TalentProcFactor != 1.0 {
+		//:
+		//: ⚠ `TalentProcFactor`（期望倍率）**不再参与战斗**：它留给证据链与
+		//: `mechanism_gaps` 的自校验（"原始事件来源是否齐"）。只有拿不到原始
+		//: 概率/倍率对（手工规格）时才回落到它——那种规格本来就会被闸门拦住。
+		if n := len(op.spec.TalentProcProbabilities); n > 0 &&
+			n == len(op.spec.TalentProcScales) {
+			for i, p := range op.spec.TalentProcProbabilities {
+				if !op.probChance(p, "talent_proc", t, verdict) {
+					continue
+				}
+				scale := op.spec.TalentProcScales[i]
+				power *= scale
+				if traceOn {
+					trace("TALPROC t=%.4f op=%s p=%.6f scale=%.6f power=%.4f",
+						t, op.spec.Name, p, scale, power)
+				}
+				if verdict != nil {
+					verdict.Events = append(verdict.Events, Event{
+						T: t, Kind: "talent_proc", Who: op.spec.Name,
+					})
+				}
+			}
+		} else if op.spec.TalentProcFactor != 0 && op.spec.TalentProcFactor != 1.0 {
+			//: 回落分支：没有原始概率/倍率对，只能按期望倍率乘。
+			//: 这类规格在 `mechanism_gaps` 里会被报成 `talent_proc_factor`
+			//: （"仅有期望倍率，缺少原始精确事件来源"）⇒ 整场拒跑，走不到这里。
 			if traceOn {
-				trace("TALPROC t=%.4f op=%s factor=%.6f power=%.4f",
+				trace("TALPROC-EXPECTED t=%.4f op=%s factor=%.6f power=%.4f",
 					t, op.spec.Name, op.spec.TalentProcFactor, power)
 			}
 			power *= op.spec.TalentProcFactor
@@ -2788,14 +2901,21 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 					}
 				}
 			}
-			//: 额外那一名：期望值口径，所以**每次都治、每次只治 `p × 治疗量`**。
+			//: 额外那一名：**精确事件**（V-2 裁定后）。抽中了就按**整份治疗量**
+			//: 治一名（不是 `p × 治疗量`），没抽中就没有这一笔。
 			if extraHeal != nil {
-				amount := power * op.spec.TalentExtraHealProb
+				amount := power
 				got := extraHeal.healFromCharacter(op, amount, verdict)
 				if traceOn {
 					trace("TALXHEAL t=%.4f op=%s target=%s prob=%.6f amount=%.4f got=%.4f",
 						t, op.spec.Name, extraHeal.spec.Name,
 						op.spec.TalentExtraHealProb, amount, got)
+				}
+				if verdict != nil {
+					verdict.Events = append(verdict.Events, Event{
+						T: t, Kind: "talent_extra_heal",
+						Who: op.spec.Name + " → " + extraHeal.spec.Name,
+					})
 				}
 				if op.spec.TalentDodgeOnHeal > 0 {
 					extraHeal.grantTalentDodge(op.spec.TalentDodgeOnHeal,

@@ -19,7 +19,7 @@ func logosStateForTest(t *testing.T, slot int, elite, pot int) *LogosBattleState
 		level = 7
 	}
 	cfg := logosCfgForTest(t, st, slot, level)
-	return newLogosBattleState(cfg, logosDefaultRNGSeed)
+	return newLogosBattleState(cfg, defaultProbRNGSeed)
 }
 
 func logosUnit(name string, cell [2]float64, atk float64) *operator {
@@ -387,7 +387,7 @@ func TestLogosSkillRangeExpansion(t *testing.T) {
 	op := logosUnit("逻各斯", [2]float64{0, 0}, 100)
 	op.spec.Range = base
 	op.spec.LogosSource = src
-	op.logosState = newLogosBattleState(mustLogosCfg(t, src), logosDefaultRNGSeed)
+	op.logosState = newLogosBattleState(mustLogosCfg(t, src), defaultProbRNGSeed)
 	op.skillActive = false
 	if got := op.targetRange(); len(got) != len(base) {
 		t.Fatalf("未开技能时应走基础范围 %d 格，实得 %d", len(base), len(got))

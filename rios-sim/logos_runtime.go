@@ -48,7 +48,7 @@ type LogosBattleState struct {
 	//
 	// `RNG` 的种子来自**规格**（`LogosSourceSpec.RNGSeed`），不是运行期生成：
 	// 同一份 spec 反序列化后必须得到同一条序列本文件不做任何隐式播种。
-	RNG *logosRNG
+	RNG *probRNG
 	// T1Rolls 是抽签次数（= 出手次数），T1Procs 是命中次数。
 	// 两者分开计：只报"命中了几次"看不出概率闸有没有真的在跑。
 	T1Rolls int
@@ -56,7 +56,7 @@ type LogosBattleState struct {
 }
 
 func newLogosBattleState(cfg *LogosRuntimeConfig, seed uint64) *LogosBattleState {
-	return &LogosBattleState{Config: cfg, RNG: newLogosRNG(seed)}
+	return &LogosBattleState{Config: cfg, RNG: newProbRNG(seed)}
 }
 
 // reset 把逐帧状态清零——技能结束/被打断时调用（正文：「被打断或目标倒下时

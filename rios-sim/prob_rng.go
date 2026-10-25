@@ -1,6 +1,6 @@
 package main
 
-// logos_rng.go：逻各斯概率事件的**确定性伪随机**（V-2 裁定落地）。
+// prob_rng.go：逻各斯概率事件的**确定性伪随机**（V-2 裁定落地）。
 //
 // ## 为什么不用 `math/rand`
 //
@@ -19,32 +19,32 @@ package main
 // 同一 (计划, seed) ⇒ 同一时间线；换 seed 只是换一条同样合法的时间线。
 // 事件流里 `logos_rng_seed` 会把用到的 seed 写在判决上，便于事后反查。
 
-// logosDefaultRNGSeed 是规格没给 seed 时的**固定**默认值。
+// defaultProbRNGSeed 是规格没给 seed 时的**固定**默认值。
 //
 // 它不是"随机挑一个"，而是一个写死的常量：因此"没给 seed"与"给了 1"
 // 是同一份采样，仍然可复现。搜索侧共用同一个 seed 才有可比性（裁定第 1 条）。
-const logosDefaultRNGSeed uint64 = 1
+const defaultProbRNGSeed uint64 = 1
 
-// logosRNG 是 splitmix64 的定长状态机。
+// probRNG 是 splitmix64 的定长状态机。
 //
 // 只暴露两个取数口：`float()`（[0,1) 均匀）与 `chance(p)`（伯努利判定）。
 // 抽目标用 `pick(n)`——它是 `float()` 的一次映射，**不额外消耗**随机性，
 // 于是"抽几个目标"不会因为实现方式不同而改变后续序列。
-type logosRNG struct {
+type probRNG struct {
 	state uint64
 	// draws 是已取数次数（只作留痕/测试用，不参与判定）。
 	draws int
 }
 
-func newLogosRNG(seed uint64) *logosRNG {
+func newProbRNG(seed uint64) *probRNG {
 	if seed == 0 {
-		seed = logosDefaultRNGSeed
+		seed = defaultProbRNGSeed
 	}
-	return &logosRNG{state: seed}
+	return &probRNG{state: seed}
 }
 
 // next 是 splitmix64 的一步（Steele/Lea/Flood 的公开算法，常量固定）。
-func (r *logosRNG) next() uint64 {
+func (r *probRNG) next() uint64 {
 	r.state += 0x9E3779B97F4A7C15
 	z := r.state
 	z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9
@@ -56,7 +56,7 @@ func (r *logosRNG) next() uint64 {
 //
 // 取高 53 位：float64 的有效位数就是 53，这样每个可表示的 [0,1) 值都等概率，
 // 不引入额外的偏置（用低 53 位也一样，但高位是 splitmix64 混合最充分的部分）。
-func (r *logosRNG) float() float64 {
+func (r *probRNG) float() float64 {
 	r.draws++
 	return float64(r.next()>>11) / float64(uint64(1)<<53)
 }
@@ -65,7 +65,7 @@ func (r *logosRNG) float() float64 {
 //
 // ⚠ 两个边界**不取数**：把 0/1 也走一遍 `float()` 会让"这条天赋没有概率"
 // 与"有概率但恰好命中"在序列上分叉，历史读数就对不上了。
-func (r *logosRNG) chance(p float64) bool {
+func (r *probRNG) chance(p float64) bool {
 	if p <= 0 {
 		return false
 	}
@@ -76,7 +76,7 @@ func (r *logosRNG) chance(p float64) bool {
 }
 
 // pick 返回 [0,n) 的均匀下标（n<=0 返回 0）。
-func (r *logosRNG) pick(n int) int {
+func (r *probRNG) pick(n int) int {
 	if n <= 1 {
 		return 0
 	}
