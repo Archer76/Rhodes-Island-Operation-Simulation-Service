@@ -4350,6 +4350,14 @@ func (o *operator) take(amount float64) float64 {
 	if p := o.sownProtect(); p > 0 {
 		amount *= 1 - p
 	}
+	// 黍 Y 模组特性「受到的伤害减少 15%」：**只作用于黍自身承伤**。
+	// 结构依据：这条住在 `operator_trait`（干员特性），特性主语就是该干员本人；
+	// 描述没有写「使我方」或「使周围」，不扩散到友方。
+	// 顺序：与地块庇护同一段、在**层数护盾之前**——护盾是按次数吃掉整笔，
+	// 减伤放在护盾之后只会让"盾破那一笔"少算，不会让护盾少裂一层。
+	if o.spec.CharID == shuCharID && o.shuState != nil && o.shuState.Config.TraitDamageResistance > 0 {
+		amount *= 1 - o.shuState.Config.TraitDamageResistance
+	}
 	// 「层数护盾」：**次数制抵挡**，一层把这一下**整笔**吃掉（原版
 	// `unit.py:613-620`，位置在屏障分支之前）。顺序是原版定的：先裂、先回血，
 	// 再把这一下归零——所以"回血之后血量更高"是原版的语义，不是笔误。
