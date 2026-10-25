@@ -477,3 +477,52 @@ func TestShuSeasonBonusAtkConditions(t *testing.T) {
 		}
 	}
 }
+
+// TestShuYModuleSelfDamageReduction Y 模组特性「受到的伤害减少 15%」只作用于
+// 黍自身承伤：同一笔 100 点伤害，带 Y 掉 85，不带掉 100。
+func TestShuYModuleSelfDamageReduction(t *testing.T) {
+	chdirRepoRootForData(t)
+
+	withY := &operator{
+		hp:   1000,
+		cell: [2]float64{2, 2},
+		spec: OperatorSpec{Name: "黍", CharID: shuCharID, MaxHP: 1000, ATK: 100, AttackInterval: 1.0},
+	}
+	withY.shuState = shuYStateForTest(t, 2)
+	withY.take(100)
+	if math.Abs(withY.hp-915) > 1e-9 {
+		t.Fatalf("带 Y 模组时 100 点伤害应只掉 85，实得 %.2f", 1000-withY.hp)
+	}
+
+	// 不带模组：同一笔伤害掉满。
+	plain := &operator{
+		hp:   1000,
+		cell: [2]float64{2, 2},
+		spec: OperatorSpec{Name: "黍", CharID: shuCharID, MaxHP: 1000, ATK: 100, AttackInterval: 1.0},
+	}
+	cfg := shuCfgForTest(t, &OperatorStats{CharID: shuCharID, Elite: 2, Level: 60, Potential: 1}, 2, 10)
+	plain.shuState = newShuBattleState(cfg)
+	plain.take(100)
+	if math.Abs(plain.hp-900) > 1e-9 {
+		t.Fatalf("不带模组时 100 点伤害应掉满，实得 %.2f", 1000-plain.hp)
+	}
+}
+
+// TestShuYModuleReductionDoesNotAffectAllies 反例：黍带 Y 模组在场时，友方
+// 承伤不受这条特性影响（仍然掉满）。
+func TestShuYModuleReductionDoesNotAffectAllies(t *testing.T) {
+	chdirRepoRootForData(t)
+	shu := shuUnit("黍", [2]float64{2, 2})
+	shu.spec.CharID = shuCharID
+	shu.shuState = shuYStateForTest(t, 2)
+	ally := shuUnit("友方", [2]float64{3, 2})
+	ally.hp = 1000
+	ops := []*operator{shu, ally}
+	ctx := &simCtx{objs: &ops}
+	ally.sim = ctx
+
+	ally.take(100)
+	if math.Abs(ally.hp-900) > 1e-9 {
+		t.Fatalf("友方不该吃到黍的特性减伤，实得掉血 %.2f", 1000-ally.hp)
+	}
+}
