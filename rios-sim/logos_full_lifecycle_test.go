@@ -44,7 +44,7 @@ func logosLifecycleOp(t *testing.T, slot int, cell [2]int, rng [][2]int, dir str
 			BlockCnt: 0, AttackInterval: 1.6, DamageType: "MAGIC",
 			LogosSource: src, Range: rng,
 		},
-		logosState: newLogosBattleState(cfg, logosDefaultRNGSeed),
+		logosState: newLogosBattleState(cfg, defaultProbRNGSeed),
 	}
 }
 

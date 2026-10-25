@@ -383,6 +383,15 @@ type OperatorSpec struct {
 	TalentDodgeOnHeal       float64   `json:"talent_dodge_on_heal,omitempty"`
 	TalentDodgeSeconds      float64   `json:"talent_dodge_seconds,omitempty"`
 
+	//: 这名干员**概率事件抽样**的种子（V-2 裁定第 1 条）。
+	//:
+	//: 与 `LogosSourceSpec.RNGSeed` 是**同一个概念的一个落点**：种子住在规格层，
+	//: 运行期不生成任何随机性。凡是引擎级概率事件（`talent_proc_*` 的逐次判定、
+	//: `talent_extra_heal_prob` 的附加治疗）都用它建自己的抽样器；
+	//: 逻各斯那种**带独立证据包**的干员优先用它、缺失时回落到证据包里的 seed。
+	//: 规格没写（0）时按 `defaultProbRNGSeed`（写死的 1）走——**不是**隐式随机。
+	RNGSeed uint64 `json:"rng_seed,omitempty"`
+
 	Skill *SkillSpec `json:"skill,omitempty"`
 	//: **技能开启期间**的那一套数值。`Skill != nil` 时必须有。
 	//: 与 `OperatorSpec` 顶层的（＝未开启的那一套）成对使用：Go 只负责在

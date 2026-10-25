@@ -240,6 +240,10 @@ type OperatorOut struct {
 	TalentExtraHealProb     *float64  `json:"talent_extra_heal_prob,omitempty"`
 	TalentDodgeOnHeal       *float64  `json:"talent_dodge_on_heal,omitempty"`
 	TalentDodgeSeconds      *float64  `json:"talent_dodge_seconds,omitempty"`
+	//: 概率事件的抽样种子（与 `wire.go::OperatorSpec.RNGSeed` 同名同形）。
+	//: 建规格时**显式**写默认值：留空会让「没写」与「写了 0」在 JSON 上长得一样，
+	//: 而读规格的人无从判断这条时间线是用哪个 seed 采出来的。
+	RNGSeed uint64 `json:"rng_seed,omitempty"`
 	//: 这一位的天赋黑板里、**键表之外**的键（排序去重）。与 `SkillUnknownKeys`
 	//: 同一个姿势：逐位的这一份只在本进程内用，汇总去重的在 bundle 上。
 	TalentUnknownKeys []string `json:"-"`
@@ -1122,6 +1126,10 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 		v := te.DeploySP
 		out.TalentDeploySP = &v
 	}
+	//: 概率抽样种子：**每一位干员都显式带上**，不靠 `omitempty` 表达"用默认"。
+	//: 引擎级概率事件（`talent_proc_*` 与 `talent_extra_heal_prob`）在运行期
+	//: 用自己的这一份建抽样器；同一份规格反序列化后必然得到同一条序列。
+	out.RNGSeed = defaultProbRNGSeed
 	if te.ProcFactor != 1.0 {
 		covered["talent_proc"]++
 		v := te.ProcFactor

@@ -57,7 +57,7 @@ type LogosSourceSpec struct {
 	//   - 搜索侧所有计划共用同一个 seed，判决才可比；
 	//   - 换 seed 只是换一条同样合法的时间线，不是"换胜率"。
 	//
-	// 规格没写（0）时按 `logosDefaultRNGSeed`（写死的 1）走——**不是**隐式随机。
+	// 规格没写（0）时按 `defaultProbRNGSeed`（写死的 1）走——**不是**隐式随机。
 	RNGSeed    uint64                     `json:"rng_seed,omitempty"`
 	Evidence   map[string]json.RawMessage `json:"evidence"`
 	Unresolved []string                   `json:"unresolved"`
@@ -178,7 +178,7 @@ func buildLogosSourceSpec(st *OperatorStats, slot, skillLevel int) (*LogosSource
 		// 种子落在规格里，且**每次建规格都显式写死同一个默认值**：
 		// 靠 `omitempty` 留空会让"没写"与"写了 0"两种输入在 JSON 上长得一样，
 		// 而读规格的人无从判断这条时间线是用哪个 seed 采出来的。
-		RNGSeed: logosDefaultRNGSeed,
+		RNGSeed: defaultProbRNGSeed,
 		Evidence: map[string]json.RawMessage{
 			"character_table": charRaw,
 			"skill_table":     skillRaw,
