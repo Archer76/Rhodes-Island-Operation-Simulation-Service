@@ -149,8 +149,11 @@ func talentMechanismGaps(talents []resolvedTalent, charID, name string) []mechan
 			claim("sp")
 		}
 		if p, ok := toFloat(bb["prob"]); ok {
-			exactProb := logosExactProbTalent(charID, bb)
 			if _, block := tfFindDamageBlock(one); block || bbHas(bb, "duration") || bbHas(bb, "atk_scale") {
+				// sampled 是**逐键审计**的第一步：这条载荷的概率是否已被
+				// seed 抽样链精确消费。它只决定"prob 这一支算不算闭合"，
+				// **不**决定整条天赋放行——剩下的键各自还要过关（博士 b-2）。
+				sampled := !block && sampledProcChain(bb)
 				if block {
 					firstClaim("damage_block", "prob")
 				} else if bbHas(bb, "duration") && p != 0 {
@@ -158,21 +161,21 @@ func talentMechanismGaps(talents []resolvedTalent, charID, name string) []mechan
 				} else {
 					claim("prob", "duration", "atk_scale")
 				}
-				if exactProb {
-					// 逻各斯「语汇演化」：`prob` 已由**精确抽样**消费者接走
-					// （`logosTalent1OnAttack`，seed 来自规格）。`sluggish` 在这
-					// 里是命中后给目标的**停顿秒数**——它由同一条链消费，所以
-					// 一并认领，免得落到 `talent.blackboard.*` 的未识别栏里。
-					claim("sluggish", "emit_count", "element_atk_scale")
+				if sampled {
+					// 抽样链自己消费的键由它认领；`sluggish` 在逻各斯那里是
+					// 命中后给目标的停顿秒数，`emit_count` 是命中后的散播数，
+					// 都出自同一条链。
+					claim(sampledProcChainKeys()...)
 				}
-				if p > 0 && p < 1 && !exactProb {
+				if p > 0 && p < 1 && !sampled {
 					add("talent.probability_event", "unimplemented", "prob", "概率事件当前仅有期望值消费者；精确事件机制待实现")
 				}
 			}
 		}
 		if p, ok := toFloat(bb["attack@prob"]); ok && !bbHas(bb, "atk_scale") {
+			sampled := sampledExtraHealChain(bb)
 			claim("attack@prob")
-			if p > 0 && p < 1 {
+			if p > 0 && p < 1 && !sampled {
 				add("talent.extra_heal_event", "unimplemented", "attack@prob", "额外治疗当前使用期望治疗量；精确事件机制待实现")
 			}
 		}
@@ -213,38 +216,56 @@ func talentMechanismGaps(talents []resolvedTalent, charID, name string) []mechan
 	return gaps
 }
 
-// logosExactProbTalent 报告这条天赋载荷是逻各斯「语汇演化」的概率链，并且已经被
-// **精确抽样**消费者接走（不是期望值）。
+// sampledProcChain 报告这条天赋的「概率强化当次攻击」是否由 **seed 抽样链**
+// 精确消费（不是期望值）。
 //
-// 为什么需要这样一个判断：通用分类器对任何 `0 < prob < 1` 的天赋都会报一条
-// `talent.probability_event`（"概率事件当前仅有期望值消费者"）。V-2 裁定之后
-// 这句话对逻各斯不再成立，而通用分类器认不出"这条链已经有人精确消费了"。
+// 判据只看**载荷本身**：键与值。不看 charID、也不看干员名单——名单表下次就要
+// 加人，而且会绕过"逐键审计"（博士 (b-1)）。
 //
-// 判据写得**很窄**，宁可漏放也不错放：
-//   - 只认这一个 charID；
-//   - 只认已知的键集（基集 + 两个模组附加键），多一个键就退回通用判定；
-//   - `prob` 必须真在 (0,1)、`atk_scale` 与 `sluggish` 必须为正——三者缺一
-//     就说明不是我们审计过的那条链。
-func logosExactProbTalent(charID string, bb map[string]any) bool {
-	if charID != logosCharID {
+//   - 必须有 `prob` ∈ (0,1] 与正的 `atk_scale`：这是那两个离散结果集
+//     （原值 / ×M）与它们的概率，缺一就谈不上"精确事件"；
+//   - 不能带 `duration`：那是"治疗授闪避"那一支（`prob`+`duration`），
+//     由另一个消费者接走，见 `talentEffectsFrom` 的 case 顺序；
+//   - `damage_block`（按天赋名识别）另外排除，由调用方判——那一支是抵挡，
+//     它的 `prob` 有自己的消费者。
+//
+// ⚠ **与运行期同源**：`buildOperatorOut` 用同一个函数决定是否送
+// `talent_proc_*`，`sim.go` 只在拿到这对数时才逐击抽签。两边分叉的那天，
+// 闸门放行的东西会跟真正跑的不是一回事。
+func sampledProcChain(bb map[string]any) bool {
+	if bbHas(bb, "duration") {
 		return false
 	}
 	p, ok := toFloat(bb["prob"])
-	if !ok || p <= 0 || p >= 1 {
+	if !ok || p <= 0 || p > 1 {
 		return false
 	}
-	if v, ok := toFloat(bb["atk_scale"]); !ok || v <= 0 {
+	s, ok := toFloat(bb["atk_scale"])
+	if !ok || s <= 0 {
 		return false
 	}
-	if v, ok := toFloat(bb["sluggish"]); !ok || v <= 0 {
+	return true
+}
+
+// sampledProcChainKeys 是"概率强化当次攻击"这条链**自己消费**的键。
+//
+// `sluggish` / `emit_count` 是命中后才生效的附带量，消费者是同一处，
+// 所以一并认领。**除此以外一个都不许认领**：认了就等于放过一个没有精确
+// 消费者的键（例如 `element_atk_scale`、`stun`、`force`、`defdown_duration`）。
+func sampledProcChainKeys() []string {
+	return []string{"prob", "atk_scale", "sluggish", "emit_count"}
+}
+
+// sampledExtraHealChain 报告这条天赋的「附加治疗」是否由 **seed 抽样链**精确
+// 消费。荷载是 `attack@prob`（治疗时 N% 几率额外再治一名），
+// 结果集是两名 / 一名——同样只看键与值。
+func sampledExtraHealChain(bb map[string]any) bool {
+	if bbHas(bb, "atk_scale") {
 		return false
 	}
-	for _, k := range mechanisms.Keys(bb) {
-		switch k {
-		case "prob", "atk_scale", "sluggish", "emit_count", "element_atk_scale":
-		default:
-			return false
-		}
+	p, ok := toFloat(bb["attack@prob"])
+	if !ok || p <= 0 || p > 1 {
+		return false
 	}
 	return true
 }
@@ -357,14 +378,11 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 			exact := len(op.TalentProcProbabilities) > 0 && len(op.TalentProcProbabilities) == len(op.TalentProcScales)
 			expected := 1.0
 			for j, p := range op.TalentProcProbabilities {
-				if p != 0 && p != 1 {
-					exact = false
-				}
 				if j < len(op.TalentProcScales) {
 					expected *= 1 + p*(op.TalentProcScales[j]-1)
 				}
 			}
-			if expected != op.TalentProcFactor || (expected == 0 && len(op.TalentProcProbabilities) > 0) {
+			if math.Abs(expected-op.TalentProcFactor) > 1e-9 || (expected == 0 && len(op.TalentProcProbabilities) > 0) {
 				exact = false
 			}
 			if !exact {
@@ -384,7 +402,7 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 		for _, f := range []struct {
 			key   string
 			value float64
-		}{{"talent_extra_heal_prob", op.TalentExtraHealProb}, {"talent_dodge_on_heal", op.TalentDodgeOnHeal}, {"talent_dodge_phys", op.TalentDodgePhys}, {"talent_dodge_arts", op.TalentDodgeArts}} {
+		}{{"talent_dodge_on_heal", op.TalentDodgeOnHeal}, {"talent_dodge_phys", op.TalentDodgePhys}, {"talent_dodge_arts", op.TalentDodgeArts}} {
 			if f.value > 0 && f.value < 1 {
 				add(f.key, f.value, "概率事件尚未精确建模，禁止期望值判决")
 			}

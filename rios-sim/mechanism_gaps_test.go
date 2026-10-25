@@ -35,10 +35,16 @@ func TestMechanismTalentPreciseClaimsAndProbability(t *testing.T) {
 	if g := talentMechanismGaps([]resolvedTalent{shield}, "x", "X"); len(g) != 0 {
 		t.Fatalf("shield blocked: %+v", g)
 	}
+	// 精确闭合的概率抽样天赋（如克洛丝 prob + atk_scale）无缺口
 	proc := resolvedTalent{Name: "proc", GroupIndex: 2, CandidateIndex: 1, Blackboard: map[string]any{"prob": .2, "atk_scale": 1.5}}
-	g := talentMechanismGaps([]resolvedTalent{proc}, "x", "X")
-	if len(g) != 1 || g[0].Status != "unimplemented" || g[0].SourceID != "talent:2:1" {
-		t.Fatalf("probability gap: %+v", g)
+	if g := talentMechanismGaps([]resolvedTalent{proc}, "x", "X"); len(g) != 0 {
+		t.Fatalf("exact sampled proc unexpectedly blocked: %+v", g)
+	}
+	// 未闭合键的天赋（如带有未识别键 stun）必须拒跑
+	unclosed := resolvedTalent{Name: "unclosed", GroupIndex: 2, CandidateIndex: 1, Blackboard: map[string]any{"prob": .2, "atk_scale": 1.5, "stun": 1.0}}
+	g := talentMechanismGaps([]resolvedTalent{unclosed}, "x", "X")
+	if len(g) != 1 || g[0].Status != "unidentified" || g[0].Key != "stun" {
+		t.Fatalf("unclosed key gap missing: %+v", g)
 	}
 	proc.Blackboard["prob"] = 1.0
 	if g := talentMechanismGaps([]resolvedTalent{proc}, "x", "X"); len(g) != 0 {
@@ -53,7 +59,7 @@ func TestMechanismNoVerdictForIncompleteRawSpec(t *testing.T) {
 	if v != nil || !errors.As(err, &incomplete) || len(incomplete.Placeholders) != 1 {
 		t.Fatalf("verdict=%+v err=%v", v, err)
 	}
-	spec = Spec{Operators: []OperatorSpec{{Name: "X", TalentExtraHealProb: .07}}}
+	spec = Spec{Operators: []OperatorSpec{{Name: "X", TalentDodgeOnHeal: .07}}}
 	v, err = runSim(&spec)
 	if v != nil || !errors.As(err, &incomplete) {
 		t.Fatalf("raw expectation bypassed: %v %v", v, err)
@@ -78,11 +84,15 @@ func TestMechanismRawProbabilityCannotBypass(t *testing.T) {
 	if g := specMechanismGaps(&spec); len(g) != 0 {
 		t.Fatalf("deterministic source blocked: %+v", g)
 	}
-	for _, factor := range []float64{0, 1} {
+	for _, factor := range []float64{0, 2} {
 		bad := Spec{Operators: []OperatorSpec{{TalentProcFactor: factor, TalentProcProbabilities: []float64{.5, .5}, TalentProcScales: []float64{3, 0}}}}
 		if len(specMechanismGaps(&bad)) == 0 {
 			t.Fatalf("neutral expectation bypass: %v", factor)
 		}
+	}
+	missingProbs := Spec{Operators: []OperatorSpec{{TalentProcFactor: 1.5}}}
+	if len(specMechanismGaps(&missingProbs)) == 0 {
+		t.Fatal("missing discrete probabilities bypass")
 	}
 	zero := Spec{Operators: []OperatorSpec{{TalentProcFactor: 0, TalentProcProbabilities: []float64{1}, TalentProcScales: []float64{0}}}}
 	if len(specMechanismGaps(&zero)) == 0 {
@@ -100,13 +110,13 @@ func TestMechanismRawProbabilityCannotBypass(t *testing.T) {
 
 func TestMechanismProductionChainAndIncompleteSolve(t *testing.T) {
 	chdirRepoRootForData(t)
-	roster := writeTempRoster(t, `[{"name":"克洛丝","charId":"char_124_kroos","elite":1,"level":55,"potential":6}]`)
-	q := SolveQuery{Roster: roster, Operators: []string{"克洛丝"}, PerOp: 1, MaxOps: 1}
+	roster := writeTempRoster(t, `[{"name":"古米","charId":"char_196_sunbr","elite":2,"level":60,"potential":1}]`)
+	q := SolveQuery{Roster: roster, Operators: []string{"古米"}, PerOp: 1, MaxOps: 1}
 	out, err := Solve("main_01-07", "", q)
 	if err != nil || out.Status != "incomplete" || out.Stars != -1 || len(out.Verdict) != 0 || len(out.Placeholders) == 0 || out.Covered.Incomplete == 0 || out.Covered.SimFailed != 0 {
 		t.Fatalf("not distinct incomplete: %+v err=%v", out, err)
 	}
-	plan := json.RawMessage(`{"stage":"main_01-07","deploys":[{"operator":"克洛丝","position":[3,5],"direction":"Up"}]}`)
+	plan := json.RawMessage(`{"stage":"main_01-07","deploys":[{"operator":"古米","position":[3,5],"direction":"Up"}]}`)
 	built, err := BuildSpecFull("main_01-07", "", BuildSpecQuery{Plan: plan, Roster: json.RawMessage(`"` + strings.ReplaceAll(roster, `\`, `\\`) + `"`), AllowSkills: true})
 	if err != nil {
 		t.Fatal(err)
@@ -128,8 +138,8 @@ func TestMechanismProductionChainAndIncompleteSolve(t *testing.T) {
 
 func TestMechanismExcludedCandidateKeepsCompletePlan(t *testing.T) {
 	chdirRepoRootForData(t)
-	roster := writeTempRoster(t, `[{"name":"克洛丝","charId":"char_124_kroos","elite":1,"level":55,"potential":6},{"name":"玫兰莎","charId":"char_208_melan","elite":1,"level":55,"potential":6}]`)
-	out, err := Solve("main_01-07", "", SolveQuery{Roster: roster, Operators: []string{"克洛丝", "玫兰莎"}, PerOp: 1, MaxOps: 1})
+	roster := writeTempRoster(t, `[{"name":"古米","charId":"char_196_sunbr","elite":2,"level":60,"potential":1},{"name":"玫兰莎","charId":"char_208_melan","elite":1,"level":55,"potential":6}]`)
+	out, err := Solve("main_01-07", "", SolveQuery{Roster: roster, Operators: []string{"古米", "玫兰莎"}, PerOp: 1, MaxOps: 1})
 	if err != nil || out.Status != "complete" || len(out.Plan) == 0 || len(out.Verdict) == 0 || out.Covered.Incomplete == 0 || out.Evaluated == 0 || len(out.Placeholders) == 0 {
 		t.Fatalf("complete plan excluded: %+v err=%v", out, err)
 	}
