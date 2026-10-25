@@ -317,23 +317,35 @@ func loadCharTalentsForTest(t *testing.T, charID string) []resolvedTalent {
 	return resolveTalents(char.Talents, 2, 60, 1)
 }
 
-// TestTalentProbGateStillBlocksGenericOperators ⑧ **闸门现状**（这几条路今天在
-// 生产上被拦着）：通用天赋分类器对 `0<prob<1` 且未被精确消费者豁免的载荷，
-// 仍然报 `talent.probability_event`。这条判据的作用是让"这两处能不能真跑"
-// 永远有个明写的答案——将来若统一开豁免，这条会变红，必须显式改。
-func TestTalentProbGateStillBlocksGenericOperators(t *testing.T) {
+// TestTalentProbGateDataDrivenExemption ⑧ **全键集闭合数据驱动豁免**：
+// 通用天赋分类器对全键集均有精确消费者的概率天赋（如克洛丝 prob + atk_scale）
+// 不再报 talent.probability_event，且无任何未识别黑板缺口；
+// 带有未闭合键的天赋（如古米 stun、承曦格雷伊 attack@sluggish）仍然必须拒判。
+func TestTalentProbGateDataDrivenExemption(t *testing.T) {
 	chdirRepoRootForData(t)
 
-	talents := loadCharTalentsForTest(t, "char_124_kroos") // 克洛丝「要害瞄准·初级」
+	// 正向：克洛丝全键集闭合，无任何缺口
+	talents := loadCharTalentsForTest(t, "char_124_kroos")
 	gaps := talentMechanismGaps(talents, "char_124_kroos", "克洛丝")
-	found := false
 	for _, g := range gaps {
 		if g.ID == "talent.probability_event" {
-			found = true
+			t.Fatal("克洛丝全键集已闭合，不应再报 talent.probability_event")
 		}
 	}
-	if !found {
-		t.Fatal("克洛丝的概率天赋本应被闸门拦住；若已统一开豁免，这条判据要显式更新")
+	if len(gaps) != 0 {
+		t.Fatalf("克洛丝天赋应完全闭合（0 gaps），实得 %d 条：%v", len(gaps), gaps)
 	}
-	t.Logf("闸门现状：克洛丝的 prob 天赋仍报 %d 条占位（首条 %s）", len(gaps), gaps[0].ID)
+
+	// 反向：古米带 stun，仍必须报出未识别键缺口
+	gummyTalents := loadCharTalentsForTest(t, "char_196_sunbr")
+	gummyGaps := talentMechanismGaps(gummyTalents, "char_196_sunbr", "古米")
+	stunFound := false
+	for _, g := range gummyGaps {
+		if g.Key == "stun" {
+			stunFound = true
+		}
+	}
+	if !stunFound {
+		t.Fatalf("古米带有未识别键 stun，应当报出缺口；实得：%v", gummyGaps)
+	}
 }

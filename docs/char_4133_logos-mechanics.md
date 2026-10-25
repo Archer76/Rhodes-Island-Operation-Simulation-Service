@@ -303,9 +303,9 @@
 
 ### 本仓里仍用期望值的地方（裁定第 3/4 条的边界）
 
-**已清掉**（2026-10-25 后续一档，`wip/expvalue-20261025`）：`sim.go` 里那两处改成了
-**精确抽样**，与逻各斯这条链**共用同一套**机制——种子仍在规格层
-（这次落在 `OperatorSpec.rng_seed`，逻各斯证据包里的那份是手工规格的回落）、
+**已清掉**（2026-10-25 两档推进，`wip/expvalue-20261025` 与 `wip/prob-audit-20261025`）：
+`sim.go` 里那两处改成了**精确抽样**，与逻各斯这条链**共用同一套**机制——种子仍在规格层
+（落在 `OperatorSpec.rng_seed`，逻各斯证据包里的那份是手工规格的回落）、
 同一台 `prob_rng.go` 的取数口、`chance(0)/chance(1)` 不取数、命中时写语义事件
 （`talent_proc` / `talent_extra_heal`），并在第一次抽签时补一条 `prob_rng_seed`：
 
@@ -315,16 +315,32 @@
 2. **「附加治疗」**（`attack@prob`）：原来每次治 `p × 治疗量`，现在**抽中才治、
    治整份**（没抽中这一击就只有一名）。
 
-⚠ **这两处今天在生产上仍被闸门拦着**：通用天赋分类器对 `0<prob<1` 的载荷报
-`talent.probability_event`，而豁免目前只开给逻各斯（`logosExactProbTalent`）。
-受影响的干员共 24 位（克洛丝／月见夜／风笛／黑／古米／灰喉／槐琥／普罗旺斯／
-至简／跃跃／红隼／达格达／承曦格雷伊／澄闪／真言／艾拉／锏／寒芒克洛丝／
-Stormeye×2／Misery／维什戴尔／安赛尔／逻各斯）。要把它们真正放开，
-需要**逐条审计各自的键集**（`stun` / `force` / `defdown_duration` /
-`atk_up_max_value` / `attack@main_atk_scale` 等仍是未识别键），
-那是别的干员的闭环工作，本档**没有顺手动**。
-判据 `TestTalentProbGateStillBlocksGenericOperators` 把这条现状钉住：
-将来若统一开豁免，它会变红，必须显式更新。
+#### 全键集闭合数据驱动豁免（2026-10-25 博士裁定第五节 (b)）
+
+旧硬编码豁免（`logosExactProbTalent` 按 `charID == logosCharID` 豁免）已彻底废弃，
+改为**数据驱动的全键集闭合审计**（`sampledProcChain` + `sampledExtraHealChain`）：
+- 豁免是**按天赋**给的，不是按干员给的：只有当单条天赋的所有黑板键**全部**落到精确消费者
+  （seed 抽样链或已建模机制）时才豁免该天赋的概率事件；
+- 天赋中任何一个键无精确消费者 ⇒ 继续拒判，并在 `IncompleteError` 中具名报出未闭合的黑板键。
+
+**24 位干员审计与翻转清单**：
+- **整人翻转可跑（5 位）**：克洛丝（char_124_kroos）、跃跃（char_4100_caper）、
+  红隼（char_4023_rfalcn）、风笛（char_222_bpipe）、月见夜（char_283_midn）。
+  （加上此前已闭合的逻各斯 char_4133_logos 计 6 位）。
+- **天赋闭合但技能/特性未闭合仍拒判（5 位）**：安赛尔（S1 缺 `ability_range_forward_extend`）、
+  灰喉（S1 缺 `cnt`）、Stormeye-511（S1 缺 `attack@max_target`/`times`）、
+  至简（特性缺 `delta/init/max_atk_scale`）、真言（S1 缺 `element_atk_scale`/`ep_damage_ratio`）。
+- **多天赋部分闭合边界典型（2 位）**：Stormeye-611（T0 闭合，T1 缺 `delay`/`sp_recovery_per_sec`）、
+  艾拉（T1 闭合，T0 缺 `cnt`/`tokenKey`）——整场仍被未闭合天赋拦截。
+- **概率天赋本身仍有未识别键、天赋层面即拒判（11 位）**：古米（缺 `stun`）、
+  达格达（缺 `atk_up_each_time`/`max_value` 等）、寒芒克洛丝（缺 `stun`）、
+  槐琥（缺 `force`）、普罗旺斯（缺 `prob2`）、承曦格雷伊（缺 `attack@sluggish`）、
+  黑（缺 `defdown_duration`/`def`）、维什戴尔（缺 `attack@main_atk_scale` 等）、
+  澄闪（缺 `attack@atk_scale_2`/`max_stack_cnt`）、Misery（缺 `attack@normal_prob` 等）、
+  锏（缺 `not_combat`/`def_penetrate`）。
+
+对应双向对照测试落地于 `prob_controls_test.go`（`TestDataDrivenExemptionControls`）
+与 `prob_exact_test.go`（`TestTalentProbGateDataDrivenExemption`）。
 
 另：本档的 PRTS 整页取证尚未执行，数值与描述均取自 gamedata 原文。
 

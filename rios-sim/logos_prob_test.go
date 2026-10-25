@@ -320,27 +320,24 @@ func TestLogosTalent1EmitCountDistinctTargets(t *testing.T) {
 func TestLogosGenericClassifierExemptsExactProbChain(t *testing.T) {
 	chdirRepoRootForData(t)
 
-	gapsFor := func(charID string) map[string]bool {
-		st := &OperatorStats{CharID: logosCharID, Elite: 2, Level: 60, Potential: 1}
-		src, err := buildLogosSourceSpec(st, 1, 10)
-		if err != nil {
-			t.Fatalf("buildLogosSourceSpec: %v", err)
-		}
-		var char struct {
-			Talents []json.RawMessage `json:"talents"`
-		}
-		if err := json.Unmarshal(src.Evidence["character_table"], &char); err != nil {
-			t.Fatalf("unmarshal character_table: %v", err)
-		}
-		talents := resolveTalents(char.Talents, 2, 60, 1)
-		got := map[string]bool{}
-		for _, g := range talentMechanismGaps(talents, charID, "逻各斯") {
-			got[g.ID] = true
-		}
-		return got
+	st := &OperatorStats{CharID: logosCharID, Elite: 2, Level: 60, Potential: 1}
+	src, err := buildLogosSourceSpec(st, 1, 10)
+	if err != nil {
+		t.Fatalf("buildLogosSourceSpec: %v", err)
+	}
+	var char struct {
+		Talents []json.RawMessage `json:"talents"`
+	}
+	if err := json.Unmarshal(src.Evidence["character_table"], &char); err != nil {
+		t.Fatalf("unmarshal character_table: %v", err)
+	}
+	talents := resolveTalents(char.Talents, 2, 60, 1)
+
+	got := map[string]bool{}
+	for _, g := range talentMechanismGaps(talents, logosCharID, "逻各斯") {
+		got[g.ID] = true
 	}
 
-	got := gapsFor(logosCharID)
 	if got["talent.probability_event"] {
 		t.Fatal("逻各斯的 prob 链已精确抽样，通用分类器不该再报 talent.probability_event")
 	}
@@ -350,37 +347,37 @@ func TestLogosGenericClassifierExemptsExactProbChain(t *testing.T) {
 		}
 	}
 
-	// 负对照：同一个分类器、同一份载荷，但换个 charID ⇒ 仍然报概率缺口。
-	other := gapsFor("char_9999_not_logos")
-	if !other["talent.probability_event"] {
-		t.Fatalf("对照组（非逻各斯）应当仍报概率缺口；实得 %v", other)
+	// 负对照：载荷中带有未识别键时 ⇒ 必须具名报出该键的黑板缺口。
+	talentsWithUnk := append([]resolvedTalent(nil), talents...)
+	talentsWithUnk[0].Blackboard = map[string]any{"prob": 0.4, "atk_scale": 0.6, "sluggish": 0.8, "unknown_key": 1.0}
+	unkGaps := map[string]bool{}
+	for _, g := range talentMechanismGaps(talentsWithUnk, logosCharID, "逻各斯") {
+		unkGaps[g.ID] = true
+	}
+	if !unkGaps["talent.blackboard.unknown_key"] {
+		t.Fatalf("带未知键的对照组应当具名报出黑板缺口；实得 %v", unkGaps)
 	}
 }
 
-// TestLogosExactProbTalentValidatorBoundaries 校验器本身能收也能拒。
-func TestLogosExactProbTalentValidatorBoundaries(t *testing.T) {
-	base := map[string]any{"prob": 0.4, "atk_scale": 0.6, "sluggish": 0.8}
-	if !logosExactProbTalent(logosCharID, base) {
+// TestSampledProcChainValidatorBoundaries 抽样链判定本身能收也能拒。
+func TestSampledProcChainValidatorBoundaries(t *testing.T) {
+	base := map[string]any{"prob": 0.4, "atk_scale": 0.6}
+	if !sampledProcChain(base) {
 		t.Fatal("审计过的基集应当被认下")
 	}
-	// 模组的两个附加键也认。
-	withModule := map[string]any{"prob": 0.4, "atk_scale": 0.65, "sluggish": 0.8, "emit_count": 2.0}
-	if !logosExactProbTalent(logosCharID, withModule) {
-		t.Fatal("带 emit_count 的模组改写应当被认下")
+	withLogos := map[string]any{"prob": 0.4, "atk_scale": 0.65, "sluggish": 0.8, "emit_count": 2.0}
+	if !sampledProcChain(withLogos) {
+		t.Fatal("带 sluggish 与 emit_count 的模组改写应当被认下")
 	}
-	// 反例四个：别的干员 / 多出来的键 / prob 越界 / 缺 sluggish。
-	if logosExactProbTalent("char_9999_not_logos", base) {
-		t.Fatal("别的 charID 不该被豁免")
+	// 反例三个：缺 atk_scale / prob 越界 / 带 duration。
+	if sampledProcChain(map[string]any{"prob": 0.4}) {
+		t.Fatal("缺 atk_scale 说明不是攻击倍率链")
 	}
-	extra := map[string]any{"prob": 0.4, "atk_scale": 0.6, "sluggish": 0.8, "unknown_key": 1.0}
-	if logosExactProbTalent(logosCharID, extra) {
-		t.Fatal("出现未知键时应退回通用判定")
+	if sampledProcChain(map[string]any{"prob": 0.0, "atk_scale": 0.6}) {
+		t.Fatal("prob<=0 不该走这条抽样")
 	}
-	if logosExactProbTalent(logosCharID, map[string]any{"prob": 1.0, "atk_scale": 0.6, "sluggish": 0.8}) {
-		t.Fatal("prob=1 不是概率事件，不该走这条豁免")
-	}
-	if logosExactProbTalent(logosCharID, map[string]any{"prob": 0.4, "atk_scale": 0.6}) {
-		t.Fatal("缺 sluggish 说明不是我们审计过的那条链")
+	if sampledProcChain(map[string]any{"prob": 0.4, "atk_scale": 0.6, "duration": 5.0}) {
+		t.Fatal("带 duration 属于闪避/buff 族，不该走这条抽样")
 	}
 }
 

@@ -1138,16 +1138,28 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 	//: 引擎级概率事件（`talent_proc_*` 与 `talent_extra_heal_prob`）在运行期
 	//: 用自己的这一份建抽样器；同一份规格反序列化后必然得到同一条序列。
 	out.RNGSeed = defaultProbRNGSeed
-	if te.ProcFactor != 1.0 {
+	//: 概率强化当次攻击：**原始事件来源**（逐条天赋的 p 与 M）在这里送出去，
+	//: 运行期逐击抽签。期望倍率 `TalentProcFactor` 只作证据/自校验，不再参与战斗。
+	//:
+	//: ⚠ 判据与闸门**同源**：`mechanism_gaps.go::sampledProcChain` 决定"这条载荷
+	//: 算不算被精确抽样接走"，这里就用同一个函数决定要不要送那对 (p, M)。
+	//: 两边分叉的那天，闸门放行的是一条链、真正跑的却是另一条。
+	//:
+	//: ⚠ 这一循环**不放在 `ProcFactor != 1` 里**：`1 + p·(M−1)` 恰好等于 1 时
+	//: （M=1 或 p=0 的退化载荷）前者为假，而抽样链仍然认这条天赋——
+	//: 把两者绑在一起会让"闸门放行、运行期不抽"成为可能。
+	for _, talent := range talents {
+		if sampledProcChain(talent.Blackboard) {
+			out.TalentProcProbabilities = append(out.TalentProcProbabilities, bbValue(talent.Blackboard, "prob", 0))
+			out.TalentProcScales = append(out.TalentProcScales, bbValue(talent.Blackboard, "atk_scale", 1))
+		}
+	}
+	if len(out.TalentProcProbabilities) > 0 {
 		covered["talent_proc"]++
+	}
+	if te.ProcFactor != 1.0 {
 		v := te.ProcFactor
 		out.TalentProcFactor = &v
-		for _, talent := range talents {
-			if bbHas(talent.Blackboard, "prob", "atk_scale") && !bbHas(talent.Blackboard, "duration") {
-				out.TalentProcProbabilities = append(out.TalentProcProbabilities, bbValue(talent.Blackboard, "prob", 0))
-				out.TalentProcScales = append(out.TalentProcScales, bbValue(talent.Blackboard, "atk_scale", 1))
-			}
-		}
 	}
 	if te.ExtraHealProb != 0 {
 		covered["talent_extra_heal"]++

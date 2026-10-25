@@ -226,15 +226,18 @@
   `sim.go` 里原先折期望的两处——「要害瞄准·初级」一族的 `talent_proc_*`
   （逐击抽签、命中整份乘倍率）与 `attack@prob` 的「附加治疗」
   （抽中才多治一名、治整份）。`TalentProcFactor` 降级为证据/自校验用。
-- ⚠ 这两处在**生产上仍被闸门拦着**：通用分类器对 `0<prob<1` 仍报
-  `talent.probability_event`，豁免目前只开给逻各斯。受影响共 24 位干员
-  （克洛丝／月见夜／风笛／黑／古米／灰喉／槐琥／普罗旺斯／至简／跃跃／红隼／
-  达格达／承曦格雷伊／澄闪／真言／艾拉／锏／寒芒克洛丝／Stormeye×2／Misery／
-  维什戴尔／安赛尔／逻各斯）。要真正放开得逐条审计各自的键集
-  （`stun` / `force` / `defdown_duration` / `atk_up_max_value` /
-  `attack@main_atk_scale` 等仍是未识别键），那是各自的闭环工作，
-  不在「清期望值」这一档里顺手动；判据
-  `TestTalentProbGateStillBlocksGenericOperators` 钉住这条现状。
+- **全键集闭合数据驱动豁免已落地（2026-10-25 博士裁定第五节 (b)）**：
+  彻底废弃名单表，改为按天赋审计黑板键是否全部闭合。
+  24 位受影响干员审计盘点：
+  - **整人翻转可跑（5 位）**：克洛丝、跃跃、红隼、风笛、月见夜（+逻各斯 S1 计 6 位）；
+  - **天赋闭合但技能/特性未闭合仍拒判（5 位）**：安赛尔（S1 射程前移）、灰喉（S1 cnt）、
+    Stormeye-511（S1 多目标/连击）、至简（特性叠层）、真言（S1 元素损伤）；
+  - **多天赋部分闭合边界典型（2 位）**：Stormeye-611（T0 闭，T1 缺 delay/sp）、
+    艾拉（T1 闭，T0 缺 cnt/tokenKey）——严格按天赋豁免，整场仍被拦截；
+  - **概率天赋本身有未识别键、天赋层面拒判（11 位）**：古米（stun）、达格达（atk_up_each_time 等）、
+    寒芒克洛丝（stun）、槐琥（force）、普罗旺斯（prob2）、承曦格雷伊（attack@sluggish）、
+    黑（defdown_duration 等）、维什戴尔（attack@bomb_atk_scale 等）、澄闪（attack@atk_scale_2 等）、
+    Misery（attack@normal_prob 等）、锏（not_combat 等）。
 - 因此 V-2 不再是"阻塞族"：M-S5 / M-T4 / M-T5 / M-A5 可以按上述口径开工，
   但每一条都要写明它走的是"精确抽样"还是"例外（附证据）"。
 
