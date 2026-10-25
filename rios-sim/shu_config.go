@@ -38,11 +38,17 @@ type ShuRuntimeConfig struct {
 	SeasonAtkRatio          float64 `json:"season_atk_ratio"`
 	SeasonSPInterval        float64 `json:"season_sp_interval"`
 	SeasonSPAmount          float64 `json:"season_sp_amount"`
+	// SeasonBonusAtkRatio 是 Y 模组 talentIndex=-1 的额外攻击力（+3%/+5%），
+	// 触发条件是「三条件达成两种及以上」。
+	SeasonBonusAtkRatio float64 `json:"season_bonus_atk_ratio"`
 
 	// ---- 模组对职业特性的覆写 ----
 	// 「治疗生命值低于 LowHealRatio 的友方单位时治疗量提升 LowHealScale」。
 	LowHealRatio float64 `json:"low_heal_ratio"`
 	LowHealScale float64 `json:"low_heal_scale"`
+	// TraitDamageResistance 是 Y 模组特性覆写的「受到的伤害减少 N%」。
+	// 数据没写减伤对象（自身/全体），只存字段、暂不参与结算。
+	TraitDamageResistance float64 `json:"trait_damage_resistance"`
 
 	// ---- 当前技能（按 Slot 解码） ----
 	Slot         int     `json:"slot"`
@@ -231,14 +237,72 @@ func decodeShuRuntimeConfig(s *ShuSourceSpec) (*ShuRuntimeConfig, error) {
 		}
 		cfg.auditBlackboard(nums, strs, used)
 	}
+	// Y 模组：第二天赋「天有四时」的改写（talentIndex=1）。
+	//
+	// 候选来自 `parts[].addOrOverrideTalentDataBundle.candidates[talentIndex=1]`，
+	// 覆盖同一组键（max_hp/attack_speed/atk/interval/sp）。它与 X 模组的天赋一
+	// 改写是**两个不同的天赋组**，所以不能写进同一条覆盖链。
+	for _, mc := range s.ModuleSeasonCandidates {
+		nums, strs, err := rawBlackboardOf(mc)
+		if err != nil {
+			return nil, fmt.Errorf("shu config: module season talent: %w", err)
+		}
+		used := cfg.consume(nums, strs, "max_hp", "attack_speed", "atk", "interval", "sp")
+		cfg.SeasonEnabled = true
+		cfg.SeasonProfessionCount = 3
+		cfg.SeasonSameProfessionCnt = 3
+		cfg.SeasonSuiDeployCount = 4
+		if v, ok := nums["max_hp"]; ok {
+			cfg.SeasonMaxHPRatio = v
+		}
+		if v, ok := nums["attack_speed"]; ok {
+			cfg.SeasonAspd = v
+		}
+		if v, ok := nums["atk"]; ok {
+			cfg.SeasonAtkRatio = v
+		}
+		if v, ok := nums["interval"]; ok {
+			cfg.SeasonSPInterval = v
+		}
+		if v, ok := nums["sp"]; ok {
+			cfg.SeasonSPAmount = v
+		}
+		cfg.auditBlackboard(nums, strs, used)
+	}
+
+	// Y 模组：talentIndex=-1 的隐藏候选（黑板只有 atk）。
+	//
+	// 数值与天赋描述「上述三个条件达成两种或以上时，则额外使所有干员
+	// 攻击力+3%/+5%」一一对应；但"三种条件达成两种"这个**触发条件**
+	// 只写在 upgradeDescription 里、不在黑板键上，判定点（何时判、是否
+	// 与三条件同帧）数据未明写——按条件性加成消费，语义登记待裁定。
+	if len(s.ModuleConditionalAtk) > 0 {
+		nums, strs, err := rawBlackboardOf(s.ModuleConditionalAtk)
+		if err != nil {
+			return nil, fmt.Errorf("shu config: module conditional atk: %w", err)
+		}
+		used := cfg.consume(nums, strs, "atk")
+		cfg.SeasonBonusAtkRatio = nums["atk"]
+		cfg.auditBlackboard(nums, strs, used)
+		cfg.Unresolved = append(cfg.Unresolved,
+			"Y 模组 talentIndex=-1 候选：黑板只有 atk，数值与「三条件达成两种及以上额外攻击力 +3%/+5%」一一对应；触发条件只写在 upgradeDescription，判定点（何时判）数据未明写，按与三条件同帧重算")
+	}
+
 	if len(s.TraitOverride) > 0 {
 		nums, strs, err := rawBlackboardOf(s.TraitOverride)
 		if err != nil {
 			return nil, fmt.Errorf("shu config: module trait: %w", err)
 		}
-		used := cfg.consume(nums, strs, "heal_scale", "hp_ratio")
+		used := cfg.consume(nums, strs, "heal_scale", "hp_ratio", "damage_resistance")
 		cfg.LowHealScale = nums["heal_scale"]
 		cfg.LowHealRatio = nums["hp_ratio"]
+		if v, ok := nums["damage_resistance"]; ok {
+			// Y 模组的特性覆写：「受到的伤害减少 15%」。减伤的对象（自身 /
+			// 全体）数据里没写主语，只存字段、暂不消费（待裁定）。
+			cfg.TraitDamageResistance = v
+			cfg.Unresolved = append(cfg.Unresolved,
+				"Y 模组特性覆写「受到的伤害减少 15%」未写减伤对象（自身/全体），只存字段、暂不参与结算")
+		}
 		cfg.auditBlackboard(nums, strs, used)
 	}
 

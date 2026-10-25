@@ -187,3 +187,92 @@ func TestShuInvalidTrainingRejected(t *testing.T) {
 		t.Fatal("E1 带模组应当报错（模组需 E2 Lv60）")
 	}
 }
+
+// TestShuYModuleSpec Y 模组「好时节」（uniequip_003_shu，GUA-Y）：
+// 二级/三级把第二天赋改成 0.14/0.16，并带一条 talentIndex=-1 的额外 atk
+// （0.03/0.05）与特性覆写「受到的伤害减少 15%」。
+func TestShuYModuleSpec(t *testing.T) {
+	chdirRepoRootForData(t)
+
+	for _, c := range []struct {
+		level    int
+		hpRatio  float64
+		aspd     float64
+		atkRatio float64
+		bonusAtk float64
+	}{
+		{2, 0.14, 14, 0.14, 0.03},
+		{3, 0.16, 16, 0.16, 0.05},
+	} {
+		st := &OperatorStats{
+			CharID: shuCharID, Elite: 2, Level: 60, Potential: 1,
+			Module: shuYModuleID, ModuleLevel: c.level,
+		}
+		spec, err := buildShuSourceSpec(st, 1, 7)
+		if err != nil {
+			t.Fatalf("Y 模组 Lv%d 构建失败：%v", c.level, err)
+		}
+		if spec.ModuleKind != "Y" {
+			t.Fatalf("Y 模组 Lv%d ModuleKind=%q，期望 Y", c.level, spec.ModuleKind)
+		}
+		if len(spec.ModuleSeasonCandidates) == 0 {
+			t.Fatalf("Y 模组 Lv%d 缺 talentIndex=1 的天赋二候选", c.level)
+		}
+		if len(spec.ModuleConditionalAtk) == 0 {
+			t.Fatalf("Y 模组 Lv%d 缺 talentIndex=-1 的隐藏候选", c.level)
+		}
+		if len(spec.ModuleCandidates) != 0 {
+			t.Fatalf("Y 模组不该出现 X 模组的天赋一候选")
+		}
+		cfg := shuCfgForTest(t, st, 1, 10)
+		if cfg.SeasonMaxHPRatio != c.hpRatio || cfg.SeasonAspd != c.aspd ||
+			cfg.SeasonAtkRatio != c.atkRatio || cfg.SeasonBonusAtkRatio != c.bonusAtk {
+			t.Fatalf("Y 模组 Lv%d 天赋二 = %v/%v/%v + bonus %v，期望 %v/%v/%v + %v",
+				c.level, cfg.SeasonMaxHPRatio, cfg.SeasonAspd, cfg.SeasonAtkRatio,
+				cfg.SeasonBonusAtkRatio, c.hpRatio, c.aspd, c.atkRatio, c.bonusAtk)
+		}
+		if cfg.TraitDamageResistance != 0.15 {
+			t.Fatalf("Y 模组 Lv%d 特性覆写 damage_resistance=%v，期望 0.15", c.level, cfg.TraitDamageResistance)
+		}
+	}
+}
+
+// TestShuModuleKindsDoNotCross X/Y 不混档：各自只认自己的 talentIndex，
+// 非 X/Y 的模组直接拒收。
+func TestShuModuleKindsDoNotCross(t *testing.T) {
+	chdirRepoRootForData(t)
+
+	stX := &OperatorStats{
+		CharID: shuCharID, Elite: 2, Level: 60, Potential: 4,
+		Module: shuXModuleID, ModuleLevel: 3,
+	}
+	specX, err := buildShuSourceSpec(stX, 1, 7)
+	if err != nil {
+		t.Fatalf("X 模组构建失败：%v", err)
+	}
+	if specX.ModuleKind != "X" || len(specX.ModuleCandidates) == 0 || len(specX.ModuleSeasonCandidates) != 0 {
+		t.Fatalf("X 模组分档错误：kind=%q 天赋一候选=%d 天赋二候选=%d",
+			specX.ModuleKind, len(specX.ModuleCandidates), len(specX.ModuleSeasonCandidates))
+	}
+
+	stY := &OperatorStats{
+		CharID: shuCharID, Elite: 2, Level: 60, Potential: 4,
+		Module: shuYModuleID, ModuleLevel: 3,
+	}
+	specY, err := buildShuSourceSpec(stY, 1, 7)
+	if err != nil {
+		t.Fatalf("Y 模组构建失败：%v", err)
+	}
+	if specY.ModuleKind != "Y" || len(specY.ModuleCandidates) != 0 || len(specY.ModuleSeasonCandidates) == 0 {
+		t.Fatalf("Y 模组分档错误：kind=%q 天赋一候选=%d 天赋二候选=%d",
+			specY.ModuleKind, len(specY.ModuleCandidates), len(specY.ModuleSeasonCandidates))
+	}
+
+	// 证章（uniequip_001_shu）不是 X/Y，必须拒收。
+	if _, err := buildShuSourceSpec(&OperatorStats{
+		CharID: shuCharID, Elite: 2, Level: 60, Potential: 1,
+		Module: "uniequip_001_shu", ModuleLevel: 1,
+	}, 1, 7); err == nil {
+		t.Fatal("非 X/Y 模组应当拒收")
+	}
+}

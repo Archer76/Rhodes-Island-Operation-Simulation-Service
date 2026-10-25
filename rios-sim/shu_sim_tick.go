@@ -184,15 +184,39 @@ func applyShuSeason(ops []*operator, st *ShuBattleState, dt float64) {
 		}
 	}
 
+	// 「上述三个条件达成两种或以上时，额外使所有干员攻击力 +N%」——
+	// N 来自 Y 模组 talentIndex=-1 的黑板（2 级 3%、3 级 5%）。
+	// 三种条件分别计数：不同职业≥3、相同职业≥3、编队【岁】≥4。
+	conditions := 0
+	if distinct >= cfg.SeasonProfessionCount && cfg.SeasonMaxHPRatio > 0 {
+		conditions++
+	}
+	if sameMost >= cfg.SeasonSameProfessionCnt && cfg.SeasonAspd > 0 {
+		conditions++
+	}
 	suiOK := st.SeasonSuiCount >= cfg.SeasonSuiDeployCount
-	if !suiOK || cfg.SeasonAtkRatio <= 0 || cfg.SeasonSPInterval <= 0 || cfg.SeasonSPAmount <= 0 {
+	if suiOK && cfg.SeasonAtkRatio > 0 {
+		conditions++
+	}
+
+	bonusAtk := 0.0
+	if suiOK {
+		bonusAtk += cfg.SeasonAtkRatio
+	}
+	if conditions >= 2 && cfg.SeasonBonusAtkRatio > 0 {
+		bonusAtk += cfg.SeasonBonusAtkRatio
+	}
+	if bonusAtk > 0 {
+		for _, ally := range ops {
+			if ally.alive() {
+				ally.shuAtkPct = math.Max(ally.shuAtkPct, bonusAtk)
+			}
+		}
+	}
+
+	if !suiOK || cfg.SeasonSPInterval <= 0 || cfg.SeasonSPAmount <= 0 {
 		st.SeasonSPTimer = 0
 		return
-	}
-	for _, ally := range ops {
-		if ally.alive() {
-			ally.shuAtkPct = math.Max(ally.shuAtkPct, cfg.SeasonAtkRatio)
-		}
 	}
 	st.SeasonSPTimer += dt
 	for st.SeasonSPTimer >= cfg.SeasonSPInterval {
