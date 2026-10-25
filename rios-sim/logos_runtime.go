@@ -43,10 +43,20 @@ type LogosBattleState struct {
 	S2Ticks int
 	// ---- 天赋二「剜魂具辞」的施加次数 ----
 	T2Applied int
+
+	// ---- 第一天赋「语汇演化」的精准抽样状态（V-2 裁定后） ----
+	//
+	// `RNG` 的种子来自**规格**（`LogosSourceSpec.RNGSeed`），不是运行期生成：
+	// 同一份 spec 反序列化后必须得到同一条序列本文件不做任何隐式播种。
+	RNG *logosRNG
+	// T1Rolls 是抽签次数（= 出手次数），T1Procs 是命中次数。
+	// 两者分开计：只报"命中了几次"看不出概率闸有没有真的在跑。
+	T1Rolls int
+	T1Procs int
 }
 
-func newLogosBattleState(cfg *LogosRuntimeConfig) *LogosBattleState {
-	return &LogosBattleState{Config: cfg}
+func newLogosBattleState(cfg *LogosRuntimeConfig, seed uint64) *LogosBattleState {
+	return &LogosBattleState{Config: cfg, RNG: newLogosRNG(seed)}
 }
 
 // reset 把逐帧状态清零——技能结束/被打断时调用（正文：「被打断或目标倒下时
@@ -114,6 +124,104 @@ func (e *enemy) logosTalent2Active() bool {
 		return false
 	}
 	return *e.sim.time < e.logosDebuffUntil
+}
+
+// ---------------------------------------------------------------- 天赋一
+
+// logosTalent1OnAttack 是第一天赋「语汇演化」的**精确事件**（博士 2026-10-25 裁定）。
+//
+// 原文（E2 潜能 1）：「对一个目标发起攻击时，有 40% 几率额外对攻击范围内一个
+// 随机目标造成相当于攻击力 60% 的法术伤害并使其停顿 0.8 秒」。
+//
+// 三条实现在这里定死，都是**离散事件**、没有一处折期望：
+//
+//  1. 触发：`chance(prob)` 抽一次签。命中就走完整分支，没命中就当这一击没有额外事件
+//     ——不是"打折伤害"，而是**有时候根本没有这一笔**。
+//  2. 目标：在攻击范围内**随机**挑 `emit_count` 个（模组Y 改成两个），互不重复；
+//     范围里不够就按现有的挑。
+//  3. 结果两半：法术伤害（`atk_scale` × 当前攻击力，按目标法抗结算）＋**停顿**
+//     `sluggish` 秒（写进敌人的停顿计时器，与全局 80% 减速口径共用同一状态）。
+//
+// ⚠ 时点：只在**普通出手**里调用（`operatorsAttackMode` 每一击之后）。技能二
+// 「提喻」的锁定伤害不是普攻，不抽这一支——正文写的是"对一个目标发起攻击时"，
+// 而那一档的攻击已经被技能替换掉了。该口径登记在 `Unresolved`。
+//
+// ⚠ 模组X 的 `element_atk_scale`（若目标处于凋亡损伤爆发期间再加一段元素伤害）
+// **不在这里**：元素损伤状态机虽然存在，但没有任何战斗调用点，"爆发期间"这个
+// 条件判不出来。它是具名缺口，不是被静默跳过。
+func logosTalent1OnAttack(op *operator, enemies []*enemy, atk, t float64, verdict *Verdict) {
+	if op == nil || op.logosState == nil {
+		return
+	}
+	st := op.logosState
+	cfg := st.Config
+	if !cfg.Talent1Enabled || st.RNG == nil {
+		return
+	}
+	// 抽签次数与命中次数分开记：只报命中数看不出闸门有没有在跑。
+	st.T1Rolls++
+	if !st.RNG.chance(cfg.Talent1Prob) {
+		return
+	}
+
+	// 候选池：攻击范围内、活着、还在场上的敌人。**一次挑定**再结算——
+	// 边打边挑会让"前一个倒下"改变后续候选，同一 seed 也就跑不出同一条线了。
+	cells := op.targetRange()
+	pool := make([]*enemy, 0, len(enemies))
+	for _, e := range enemies {
+		if e == nil || !e.alive() || e.leaked || e.offMap {
+			continue
+		}
+		if !inCells(cells, enemyCellOf(e)) {
+			continue
+		}
+		pool = append(pool, e)
+	}
+	if len(pool) == 0 {
+		// 范围内没人：抽中了也没有目标可打。不消耗抽目标的那一次随机数。
+		return
+	}
+
+	want := cfg.Talent1EmitCount
+	if want < 1 {
+		want = 1
+	}
+	if want > len(pool) {
+		want = len(pool)
+	}
+	// 无放回抽样：每挑一个就从池里移除，`emit_count=2`（模组Y）因此保证两个不同目标。
+	for i := 0; i < want; i++ {
+		idx := st.RNG.pick(len(pool))
+		target := pool[idx]
+		pool = append(pool[:idx], pool[idx+1:]...)
+
+		dmg := resolveDamage(atk, "MAGIC", cfg.Talent1AtkScale,
+			target.spec.DEF, target.res(), 0)
+		dmg += target.logosMagicFlat()
+		dealt := target.take(dmg, op)
+		if dealt > 0 {
+			verdict.DamageDealt += dealt
+		}
+		// 「并使其停顿 N 秒」：取 max 续期（与全仓时限状态同一写法）。
+		// 减速比例是全局常数 80%（`sluggishSlowPct`），黑板里给的只是秒数。
+		if cfg.Talent1Sluggish > 0 {
+			target.sluggishTimer = math.Max(target.sluggishTimer, cfg.Talent1Sluggish)
+		}
+		if dealt > 0 && !target.alive() && !target.pendingReborn() {
+			target.deathTime = t
+			if verdict != nil {
+				verdict.Events = append(verdict.Events,
+					Event{T: t, Kind: "kill", Who: target.spec.Name})
+			}
+		}
+		if verdict != nil {
+			verdict.Events = append(verdict.Events, Event{
+				T: t, Kind: "logos_talent1",
+				Who: op.spec.Name + " → " + target.spec.Name,
+			})
+		}
+	}
+	st.T1Procs++
 }
 
 // 两个读数拆成方法而不是字段直读：法抗那一条要在 `enemy.res()` 的唯一入口里

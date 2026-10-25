@@ -149,6 +149,7 @@ func talentMechanismGaps(talents []resolvedTalent, charID, name string) []mechan
 			claim("sp")
 		}
 		if p, ok := toFloat(bb["prob"]); ok {
+			exactProb := logosExactProbTalent(charID, bb)
 			if _, block := tfFindDamageBlock(one); block || bbHas(bb, "duration") || bbHas(bb, "atk_scale") {
 				if block {
 					firstClaim("damage_block", "prob")
@@ -157,7 +158,14 @@ func talentMechanismGaps(talents []resolvedTalent, charID, name string) []mechan
 				} else {
 					claim("prob", "duration", "atk_scale")
 				}
-				if p > 0 && p < 1 {
+				if exactProb {
+					// 逻各斯「语汇演化」：`prob` 已由**精确抽样**消费者接走
+					// （`logosTalent1OnAttack`，seed 来自规格）。`sluggish` 在这
+					// 里是命中后给目标的**停顿秒数**——它由同一条链消费，所以
+					// 一并认领，免得落到 `talent.blackboard.*` 的未识别栏里。
+					claim("sluggish", "emit_count", "element_atk_scale")
+				}
+				if p > 0 && p < 1 && !exactProb {
 					add("talent.probability_event", "unimplemented", "prob", "概率事件当前仅有期望值消费者；精确事件机制待实现")
 				}
 			}
@@ -205,6 +213,44 @@ func talentMechanismGaps(talents []resolvedTalent, charID, name string) []mechan
 	return gaps
 }
 
+// logosExactProbTalent 报告这条天赋载荷是逻各斯「语汇演化」的概率链，并且已经被
+// **精确抽样**消费者接走（不是期望值）。
+//
+// 为什么需要这样一个判断：通用分类器对任何 `0 < prob < 1` 的天赋都会报一条
+// `talent.probability_event`（"概率事件当前仅有期望值消费者"）。V-2 裁定之后
+// 这句话对逻各斯不再成立，而通用分类器认不出"这条链已经有人精确消费了"。
+//
+// 判据写得**很窄**，宁可漏放也不错放：
+//   - 只认这一个 charID；
+//   - 只认已知的键集（基集 + 两个模组附加键），多一个键就退回通用判定；
+//   - `prob` 必须真在 (0,1)、`atk_scale` 与 `sluggish` 必须为正——三者缺一
+//     就说明不是我们审计过的那条链。
+func logosExactProbTalent(charID string, bb map[string]any) bool {
+	if charID != logosCharID {
+		return false
+	}
+	p, ok := toFloat(bb["prob"])
+	if !ok || p <= 0 || p >= 1 {
+		return false
+	}
+	if v, ok := toFloat(bb["atk_scale"]); !ok || v <= 0 {
+		return false
+	}
+	if v, ok := toFloat(bb["sluggish"]); !ok || v <= 0 {
+		return false
+	}
+	for _, k := range mechanisms.Keys(bb) {
+		switch k {
+		case "prob", "atk_scale", "sluggish", "emit_count", "element_atk_scale":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// specMechanismGaps 是**规格级**闸门：非空即整场拒跑（`sim.go` 的 `runSimContext`）。
+//
 // Raw/prebuilt specs are guarded too: callers cannot bypass the no-approximation
 // policy by omitting the producer's placeholder list.
 func specMechanismGaps(spec *Spec) []mechanisms.Gap {
@@ -219,8 +265,11 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 		// 与黍同一纪律：豁免只覆盖"已消费"的那几件。逻各斯已消费的是
 		// 天赋二「剜魂具辞」（法抗削减挂在 `enemy.res()`、法伤加值挂在伤害结算后）、
 		// 技能一「殁亡」的斩杀、技能二「提喻」的锁定多段与减速、技能三的多目标
-		// 与范围扩大；**没消费的照样逐条上报**——第一天赋整条概率链在等 V-2 裁定
-		// （不折期望值），技能三的敌方子弹与两个模组的隐藏天赋各有落点缺口。
+		// 与范围扩大；**没消费的照样逐条上报**——技能三的敌方子弹、模组X 的
+		// 元素条件分支与两个模组的隐藏天赋各有落点缺口。
+		//
+		// ★ 第一天赋的概率链**已经不在此列**：V-2 裁定后它走 seed 精确抽样
+		// （`logosTalent1OnAttack`），原来的 `logos.talent1.prob_v2` 随裁定撤销。
 		if op.CharID == "char_4133_logos" && op.LogosSource != nil && op.LogosSource.ConsumerImplemented {
 			gaps = mechanisms.Merge(gaps, logosRemainingGapsFromSpec(op.LogosSource, op.Name, i))
 		}

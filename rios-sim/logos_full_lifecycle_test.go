@@ -44,7 +44,7 @@ func logosLifecycleOp(t *testing.T, slot int, cell [2]int, rng [][2]int, dir str
 			BlockCnt: 0, AttackInterval: 1.6, DamageType: "MAGIC",
 			LogosSource: src, Range: rng,
 		},
-		logosState: newLogosBattleState(cfg),
+		logosState: newLogosBattleState(cfg, logosDefaultRNGSeed),
 	}
 }
 
@@ -99,46 +99,54 @@ func kinds(v *Verdict) []string {
 	return out
 }
 
-// TestLogosRefusedUntilV2Ruling 概率机制未裁定 ⇒ **整场拒判**，且理由具名。
+// TestLogosRunsAfterV2Ruling 概率机制裁定之后 ⇒ **整场能跑出判决**，且判决上带着 seed。
 //
-// 这条判据的意义：如果哪天有人把 V-2 缺口"临时"折成期望值让整场跑起来，
-// 这个测试会立刻变红——它守的是裁定，不是实现。
-func TestLogosRefusedUntilV2Ruling(t *testing.T) {
+// 这条判据守的是裁定的**落地**：旧状态是"prob 缺口 ⇒ IncompleteError，整场拒跑"；
+// 现在第一天赋走 seed 精确抽样，`specMechanismGaps` 不该再为它产出占位。
+// 如果哪天有人（a）把抽样悄悄换成期望值，或（b）某条别的缺口把整场重新焊死，
+// 这条会立刻变红——它是"能跑"这一侧的正对照。
+func TestLogosRunsAfterV2Ruling(t *testing.T) {
 	chdirRepoRootForData(t)
 
-	op := logosLifecycleOp(t, 3, [2]int{0, 2},
+	op := logosLifecycleOp(t, 1, [2]int{0, 2},
 		[][2]int{{1, 2}, {2, 2}}, "Right")
-	op.spec.Skill = logosSkillSpec(t, 3)
+	op.spec.Skill = logosSkillSpec(t, 1)
 
 	spec := &Spec{
-		FPS: 30, MaxTime: 5.0, SpeedScale: 1.0,
+		FPS: 30, MaxTime: 12.0, SpeedScale: 1.0,
 		Life: 10, CostInit: 99, CostMax: 99, CostTime: 1.0,
 		Operators: []OperatorSpec{op.spec},
 		Deploys:   []DeploySpec{{Time: 0.0, CharID: logosCharID, Index: 0}},
 		Spawns:    []SpawnSpec{logosSpawn("靶", 2, 2, 100000)},
 	}
-	// 把状态挂到规格上（runSim 会自己建一份，这里只为让闸门走到同一个地方）。
-	out, err := runSimContext(context.Background(), spec)
-	if err == nil {
-		t.Fatalf("概率机制未裁定，本场必须拒判；实得判决 %+v", out)
+	verdict, err := runSimContext(context.Background(), spec)
+	if err != nil {
+		var incomplete *mechanisms.IncompleteError
+		if errors.As(err, &incomplete) {
+			t.Fatalf("V-2 已裁定，逻各斯不该再被占位拒跑：%v（%+v）", err, incomplete.Placeholders)
+		}
+		t.Fatalf("runSimContext 失败：%v", err)
 	}
-	var incomplete *mechanisms.IncompleteError
-	if !errors.As(err, &incomplete) {
-		t.Fatalf("拒判应是 IncompleteError，实得 %T: %v", err, err)
+	if verdict == nil {
+		t.Fatal("verdict is nil")
 	}
-	found := false
-	for _, g := range incomplete.Placeholders {
-		if g.CharID == logosCharID && g.Key == "prob" {
-			found = true
-			if !containsText(g.Reason, "V-2") {
-				t.Fatalf("概率缺口的理由里没写 V-2：%s", g.Reason)
-			}
+
+	// 判决必须自报采样 seed（裁定第 2 条：这是"该 seed 下的一次采样"）。
+	seedEvents := 0
+	for _, ev := range verdict.Events {
+		if ev.Kind == "logos_rng_seed" && containsText(ev.Who, "seed=") {
+			seedEvents++
 		}
 	}
-	if !found {
-		t.Fatalf("拒判理由里没有第一天赋的 prob 缺口：%+v", incomplete.Placeholders)
+	if seedEvents != 1 {
+		t.Fatalf("判决里应有且只有一条 seed 标注，实得 %d 条", seedEvents)
 	}
-	t.Logf("拒判理由：%v（共 %d 项占位）", err, len(incomplete.Placeholders))
+	// 抽样真的在跑：出手若干次之后抽签计数必须非零。
+	// （直接从判决事件推断：12 秒里至少该有一次技能一或普攻出手。）
+	if verdict.DamageDealt <= 0 {
+		t.Fatal("整场零伤害：接线没跑起来")
+	}
+	t.Logf("seed 事件=%d 伤害=%.1f 事件数=%d", seedEvents, verdict.DamageDealt, len(verdict.Events))
 }
 
 // TestLogosFrameWiringSkill3 帧内接线（技能三档）：多目标 + 天赋二减益。

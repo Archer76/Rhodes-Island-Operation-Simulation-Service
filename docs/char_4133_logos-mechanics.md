@@ -15,20 +15,32 @@
 - **天赋解锁**：第一天赋「语汇演化」在 `PHASE_1`（精英 1）解锁；第二天赋「剜魂具辞」在 `PHASE_2`（精英 2）解锁。**精英 0 没有天赋**。
 - **潜能编号口径**：游戏内 1–6（潜能 1 为基础档）。
 
-### 一条必须先说的结论：**本干员在 V-2 裁定之前不可能产出战斗判决**
+### 一条必须先说的结论：概率事件走**规格 seed 的精确抽样**（V-2 已裁定）
 
-第一天赋「语汇演化」是概率机制，按博士 2026-10-24 裁定**必须**作为具名 Gap 上报
-（不得折算成期望值）。本仓的规格闸门是「`specMechanismGaps(spec)` 非空即整场拒跑」
-（`sim.go:731`，`mechanisms.IncompleteError`），因此逻各斯在 V-2 裁定之前**任何一局都会拒判**，
-拒判理由里带着 `logos.talent1.prob_v2`。
+博士 2026-10-25 裁定 V-2「概率机制的结果语义」，原话：
 
-这不是接线没通：`logos_full_lifecycle_test.go` 的 `TestLogosRefusedUntilV2Ruling`
-就是拿**这条语义**做判据——它断言拒判发生、且理由具名到 V-2。
-真要跑起来只有两条路：① 博士裁定 V-2；② 明确授权把该天赋折成某个口径（本档**不**做）。
+> **「只要是能精准判定的都精准判定，很难做精准的才用期望值。」**
+
+这条裁定覆盖了 2026-10-24 那条"概率机制一律不折期望值、作为具名 Gap 拒判"的指示。
+落地口径（操作化，逐条对应）：
+
+1. **默认走精准判定**：概率事件按「规格内固定 seed 的确定性伪随机逐次抽取」实现。
+   种子住在规格层（`LogosSourceSpec.RNGSeed`，见 `logos_spec.go`），**运行期不生成任何随机性**——
+   不读时间、不读地址、不调全局随机源。同一 (计划, seed) 必得同一条时间线。
+2. **判决语义标注**：这样算出来的是「**该 seed 下的一次采样**」，**不是**胜率、不是期望值。
+   判决事件流里有一条 `logos_rng_seed`（`who` 里带 `seed=<n>`），读判决的人据此知道
+   这条时间线是哪一次采样。
+3. **期望值只作例外**，且必须逐条给「精准不可行」的证据。本条天赋**不需要**这个例外：
+   触发、目标选择、伤害、停顿全部可精确判定。
+4. **折期望只许作用在加性标量上**，且一旦折后的值参与阈值/分支判断必须单独标出。
+   本条天赋没有走这条路径（见第八节末「本仓里仍用期望值的地方」）。
+
+因此逻各斯现在**能产出战斗判决**；剩下的拒判只来自与概率无关的具名缺口
+（技能三的敌方子弹、模组X 的元素条件分支/凋亡损伤、模组Y 的回技力），见第五节。
 
 ---
 
-## 一、第一天赋「语汇演化」——**未建模（等 V-2 裁定）**
+## 一、第一天赋「语汇演化」——已建模（seed 精确抽样）
 
 原文（E2 潜能 1）：「对一个目标发起攻击时，有 40% 几率额外对攻击范围内一个随机目标造成相当于攻击力 60% 的法术伤害并使其停顿 0.8 秒」。
 
@@ -41,21 +53,53 @@
 | E2 | 1–4 | 0.4 | 0.60 | 0.8 |
 | E2 | 5–6 | 0.4 | 0.65 | 0.8 |
 
-### 2. 为什么整条链都不建模
+### 2. 实现（`logos_runtime.go::logosTalent1OnAttack`）
 
-它不是"少了个消费者"，而是**语义未定**：40% 的触发在精确事件下应当如何表达
-（逐次随机 / 最坏情况 / 枚举），正是 `docs/roadmap.md` 第六节 **V-2** 的待裁定项。
-在裁定之前：
+每一步都是**离散事件**，没有一处折期望：
 
-- **不许折期望值**（`1 + p·(M−1)` 那种写法）——那会让同一条时间线两次跑出两个数，
-  而判决比对靠的就是可重复；
-- 不许"只在有额外目标时结算"（那是另一种近似：把概率当成 1）；
-- 实现上留 `LogosRuntimeConfig.Talent1*` 字段（证据齐、键齐、值齐），但
-  **没有任何运行期读取者**，并由 `logosRemainingGapsFromSpec` 具名上报
-  `logos.talent1.prob_v2`（理由里写明"在等 V-2 裁定"）。
+- **触发**：`chance(prob)` 抽一次签。命中就走完整分支，没命中就当这一击没有额外事件
+  ——不是"打折伤害"，而是**有时候根本没有这一笔**。
+- **候选池**：攻击范围内、活着、还在场上的敌人（**包含本击的主目标**，见第八节待证栏）。
+- **目标**：`pick(n)` 无放回地挑 `emit_count` 个（默认 1；模组Y 改写为 2），
+  因此"两个随机目标"保证是**两个不同**的目标；候选不足时按现有的挑。
+- **命中结果两半都真行使**：
+  - 额外**法术伤害** = 当前攻击力 × `atk_scale`，走标准法术结算（目标法抗会削它），
+    再叠加天赋二的"受到法术伤害 +N"平坦值；
+  - **停顿** `sluggish` 秒：写进敌人的 `sluggishTimer`，与全局「停顿＝减速 80%」
+    口径共用同一状态（`sluggishFactor()`），所以它**真的会减速**，
+    而不是只记一个数。
+- **计数留痕**：`T1Rolls`（抽签次数＝出手次数）与 `T1Procs`（命中次数）分开记。
+  只报命中数看不出概率闸有没有在跑；`prob=0` 时"抽签 50 次、命中 0 次"才是合格读数。
 
-模组进一步改写这条天赋（见第四节），改写后的 `element_atk_scale` / `emit_count`
-同样跟着整条链一起待裁定——所以缺口报的是**整条链**，不是单个键。
+### 3. 抽样器（`logos_rng.go`）
+
+自带的 splitmix64，**不依赖 `math/rand`**：全局随机源在 Go 1.20 之后被运行时随机播种，
+`rand.NewSource` 又属包内实现细节，升级 Go 时序列可能变——那会让历史读数无法复现，
+而症状是"同一份规格两次跑出两个判决"。splitmix64 只有三行、常量固定、与语言版本无关。
+
+两个边界**不取数**：`chance(0)` 恒假、`chance(1)` 恒真，都不消耗随机数——
+否则"没有概率"与"有概率但恰好命中"会在序列上分叉。
+
+### 4. 种子落点
+
+- 种子住在 **`LogosSourceSpec.RNGSeed`**（`json:"rng_seed"`），建规格时显式写入
+  默认值 `logosDefaultRNGSeed`（写死的 1）。规格没写（0）时按该默认值走——**不是**隐式随机。
+- 所以「同一份 spec 反序列化后得到同一序列」是可证的：`TestLogosSeedSurvivesSerialization`
+  把规格 marshal→unmarshal 之后逐次比对判定序列。
+- 搜索侧所有计划共用同一个 seed，判决因此可比（裁定第 1 条）。
+
+### 5. 通用分类器的豁免
+
+通用天赋分类器对任何 `0 < prob < 1` 的载荷都会报 `talent.probability_event`
+（"概率事件当前仅有期望值消费者"）——V-2 之后这句话对逻各斯不成立。
+`mechanism_gaps.go::logosExactProbTalent` 按 **charID + 键集**精确开豁免
+（键集必须 ⊆ {prob, atk_scale, sluggish, emit_count, element_atk_scale}，
+且 prob∈(0,1)、atk_scale>0、sluggish>0）；同时把 `sluggish` 认领为该链的消费者，
+不再落到 `talent.blackboard.*` 的未识别栏。判据里配了**负对照**：
+同一份载荷换个 charID 仍然要报概率缺口。
+
+模组进一步改写这条天赋（见第四节）：`emit_count` 进同一套抽样；`element_atk_scale`
+需要"目标处于凋亡损伤爆发期间"，条件判不出来 ⇒ 具名缺口（概率那一半不受影响）。
 
 ---
 
@@ -180,10 +224,11 @@
 本档在满练（E2 潜能 1 模组满级）下 `UnusedKeys` 应为空——所有键要么有消费者，
 要么在第四节那三条具名缺口里。
 
-**两层各报一次的现象**：通用天赋分类器对 `prob<1` 的载荷会报
-`talent.probability_event`（"概率事件当前仅有期望值消费者"），本档操作员闭环再报一条
-`logos.talent1.prob_v2`（写明在等 V-2）。两条说的是同一件事、两个作用域
-（通用分类器认不出 V-2），所以拒判理由里会同时看到两条占位。
+**两层各报一次的现象已消除**：V-2 裁定前，通用天赋分类器会报 `talent.probability_event`，
+操作员闭环再报一条 `logos.talent1.prob_v2`（"在等 V-2"），拒判理由里会同时看到两条。
+裁定之后两条都没有了——`logosExactProbTalent` 让通用分类器认出"这条链已被精确抽样消费"，
+`prob_v2` 那条随裁定撤销。**反向**由判据守着：`TestLogosGapsNameEveryUnconsumedMechanism`
+显式断言 `logos.talent1.prob_v2` 不许再出现。
 
 ---
 
@@ -191,17 +236,18 @@
 
 | 位置 | 作用 |
 |---|---|
-| `sim.go` 部署分支 | 解码运行期配置、建立 `LogosBattleState` |
+| `sim.go` 部署分支 | 解码运行期配置、建立 `LogosBattleState`（**seed 从规格来**）、写 `logos_rng_seed` 事件 |
 | `sim.go` 主循环（帧序 5，我方出手之前） | `logosTick`：技能一斩杀、技能二锁定拍 |
-| `sim.go` 我方出手路径 | 天赋二施加；技能三多目标痕迹 |
-| `sim.go` 我方出手开头 | 技能二期间**整段跳过**（平A 停摆） |
+| `sim.go` 我方出手路径（主目标循环之后） | **天赋一精确抽样**（额外法伤＋停顿）、天赋二施加、技能三多目标痕迹 |
+| `sim.go` 我方出手开头 | 技能二期间**整段跳过**（平A 停摆，因此那一档不抽天赋一的签） |
 | `sim.go` `enemy.res()` | 天赋二的法抗削减 |
-| `sim.go` `advance` 速度式 | 技能二的移速乘区 |
+| `sim.go` `advance` 速度式 | 技能二的移速乘区（天赋一的停顿走既有 `sluggishFactor`） |
 | `skill.go` `res()` | 技能二的法术抗性 +70 |
 | `skill.go` `maxTarget()` | 技能三的同时攻击目标数 |
 | `skill_range.go` `targetRange()` | 技能一/三的攻击范围扩大 |
-| `operators.go` / `wire.go` | `LogosSource` 字段与技能范围绝对格 |
-| `mechanism_gaps.go` | 逻各斯分支：具名缺口逐条上报 |
+| `logos_rng.go` | splitmix64 抽样器（`chance` / `pick` / `float`） |
+| `operators.go` / `wire.go` | `LogosSource` 字段、技能范围绝对格、`rng_seed` |
+| `mechanism_gaps.go` | 逻各斯分支：具名缺口逐条上报；`logosExactProbTalent` 给概率链开精确豁免 |
 
 ---
 
@@ -211,9 +257,25 @@
   模组三级覆盖、非法训练档边界。
 - `logos_mechanics_test.go`：天赋二的法抗/平坦加值与到期、技能一阈值与转移伤害
   （含法抗削减）、技能二爬坡与满层自洽性、目标倒下重置、技能三目标数、
-  技能范围扩大、缺口逐条具名。
+  技能范围扩大、缺口逐条具名（含"概率缺口不许再出现"的反向断言）。
+- `logos_prob_test.go`（V-2 裁定新增）：
+  - `TestLogosTalent1SameSeedBitIdentical`：同 seed 两次 `runSimContext` 的判决
+    **字节级相等**（只剔掉墙钟 `sim_ms`），并配"换 seed 必须不同"的正对照；
+  - `TestLogosTalent1DifferentSeedDiffers`：8 个 seed 的命中次数集合必须不止一个值；
+  - `TestLogosTalent1DistributionLoose`：2000 次抽签的命中率落在 prob 的 ±0.06 松界内
+    （3σ≈0.033 再留余量，不写成必然绿）；
+  - `TestLogosTalent1BoundaryAndNoTargetControls`：prob=0／prob=1／范围无候选三个负对照；
+  - `TestLogosTalent1ExactDamageAndSluggish`：额外伤害＝atk×scale 经法抗结算、停顿秒数
+    与 `sluggishFactor()` 的 80% 口径；
+  - `TestLogosTalent1EmitCountDistinctTargets`：`emit_count=2` 打两个**不同**目标，候选不足时不重复打；
+  - `TestLogosGenericClassifierExemptsExactProbChain`：通用分类器不报概率缺口，且配负对照
+    （换 charID 仍要报）；
+  - `TestLogosExactProbTalentValidatorBoundaries`：豁免判据能收也能拒（四个反例）；
+  - `TestLogosSeedSurvivesSerialization`：seed 序列化后不变、判定序列可重放、相邻 seed 不退化；
+  - `TestLogosSpecHasNoProbabilityGapAtFullTraining`：满练时规格级闸门不再产出概率缺口。
 - `logos_full_lifecycle_test.go`：
-  - `TestLogosRefusedUntilV2Ruling`：真调 `runSimContext`，断言**拒判**且理由具名到 V-2；
+  - `TestLogosRunsAfterV2Ruling`：真调 `runSimContext`，断言**能跑出判决**且判决上带
+    `logos_rng_seed`（旧 `TestLogosRefusedUntilV2Ruling` 随裁定删除）；
   - 三个 `TestLogosFrameWiringSkillN`：绕过规格闸门，直接驱动主循环**调用的那几个函数**
     （`logosTick` / `operatorsAttackMode`），证明三档机制在帧序上真被行使
     （多目标痕迹、天赋二施加、斩杀、锁定拍数与满层）。
@@ -232,8 +294,20 @@
 3. **技能一转移伤害的口径**：与倒下单位生命值相等的数值先当作法术伤害原值，
    再走标准法术结算（法抗会削它）。
 4. **技能二的层数时序**：每拍先加一层再结算，因此第 10 拍（5.0 秒）满层；
-   「先结算后加层」会把满层推后一拍。
+   「先结算加层」会把满层推后一拍。
 5. **技能二的锁定重选**：目标倒下/离开范围才重选；技能期间目标一直在范围内就一路锁死。
+6. **天赋一的抽样口径**：每**普通出手**抽一次签；技能二「提喻」的锁定伤害不是普攻，
+   不抽这一支（那一档的攻击已被技能替换）。
+7. **天赋一的候选池是否排除本击主目标**：数据里没有第二个键可判；当前**包含**主目标
+   （与"攻击范围内一个随机目标"的字面读法一致）。
+
+### 本仓里仍用期望值的地方（裁定第 3/4 条的边界）
+
+V-2 的例外路径**不是**本档开的：`sim.go` 里既有的 `TalentProcFactor`
+（"攻击时 N% 几率当次攻击的攻击力提升至 M%"）仍按期望倍率 `1 + p·(M−1)` 结算，
+且既有 `attack@prob` 的额外治疗也按期望治疗量结算。它们都是**加性标量**、
+不参与阈值/分支判断，符合裁定第 4 条的下限；是否改成精确抽样需要各自的操作员闭环
+逐个另开（本档不改别人的机制，只把逻各斯这条链改成精确的事件）。
 
 另：本档的 PRTS 整页取证尚未执行，数值与描述均取自 gamedata 原文。
 

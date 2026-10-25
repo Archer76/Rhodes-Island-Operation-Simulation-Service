@@ -19,7 +19,7 @@ func logosStateForTest(t *testing.T, slot int, elite, pot int) *LogosBattleState
 		level = 7
 	}
 	cfg := logosCfgForTest(t, st, slot, level)
-	return newLogosBattleState(cfg)
+	return newLogosBattleState(cfg, logosDefaultRNGSeed)
 }
 
 func logosUnit(name string, cell [2]float64, atk float64) *operator {
@@ -387,7 +387,7 @@ func TestLogosSkillRangeExpansion(t *testing.T) {
 	op := logosUnit("逻各斯", [2]float64{0, 0}, 100)
 	op.spec.Range = base
 	op.spec.LogosSource = src
-	op.logosState = newLogosBattleState(mustLogosCfg(t, src))
+	op.logosState = newLogosBattleState(mustLogosCfg(t, src), logosDefaultRNGSeed)
 	op.skillActive = false
 	if got := op.targetRange(); len(got) != len(base) {
 		t.Fatalf("未开技能时应走基础范围 %d 格，实得 %d", len(base), len(got))
@@ -409,11 +409,15 @@ func mustLogosCfg(t *testing.T, src *LogosSourceSpec) *LogosRuntimeConfig {
 }
 
 // TestLogosGapsNameEveryUnconsumedMechanism 缺口必须**具名**：
-// 概率链（V-2）、技能三的敌方子弹、两个模组的隐藏天赋，一个都不许被静默吞掉。
+// 技能三的敌方子弹、模组X 的元素条件分支、两个模组的隐藏天赋，一个都不许被静默吞掉。
+//
+// ★ 第一天赋的概率链**不在**这一栏：V-2 裁定后它走 seed 精确抽样，
+// 所以这里还要反向断言"概率缺口已经不存在"——否则旧缺口会以"等 V-2"的名义
+// 继续把整场拒掉，而没人看得出裁定没落地。
 func TestLogosGapsNameEveryUnconsumedMechanism(t *testing.T) {
 	chdirRepoRootForData(t)
 
-	// 模组Y（提供 sp 特性）+ 技能三（提供 projectile_move_scale）
+	// 模组Y（提供 sp 特性与 emit_count=2）+ 技能三（提供 projectile_move_scale）
 	st := &OperatorStats{
 		CharID: logosCharID, Elite: 2, Level: 60, Potential: 1,
 		Module: logosModule2ID, ModuleLevel: 3,
@@ -424,7 +428,6 @@ func TestLogosGapsNameEveryUnconsumedMechanism(t *testing.T) {
 	}
 	gaps := logosRemainingGapsFromSpec(src, "逻各斯", 0)
 	want := map[string]bool{
-		"logos.talent1.prob_v2":   true,
 		"logos.skill3.projectile": true,
 		"logos.module.trait_sp":   true,
 	}
@@ -434,20 +437,18 @@ func TestLogosGapsNameEveryUnconsumedMechanism(t *testing.T) {
 		if g.Reason == "" {
 			t.Fatalf("缺口 %s 没有理由：缺口必须是可读的具名项", g.ID)
 		}
+		if g.ID == "logos.talent1.prob_v2" {
+			t.Fatalf("V-2 已裁定、概率链已精确抽样，不该再报这条缺口：%s", g.Reason)
+		}
 	}
 	for id := range want {
 		if !got[id] {
 			t.Fatalf("缺口 %s 没被上报；实得 %v", id, got)
 		}
 	}
-	// 概率链那条必须写明在等 V-2 裁定（这是博士裁定的措辞要求）。
-	for _, g := range gaps {
-		if g.ID == "logos.talent1.prob_v2" && !containsText(g.Reason, "V-2") {
-			t.Fatalf("概率缺口的理由里没写 V-2：%s", g.Reason)
-		}
-	}
 
-	// 模组X 的凋亡损伤是**另一条**缺口，且只在装了模组X 时出现。
+	// 模组X：凋亡损伤（隐藏天赋）与「爆发期间」元素分支各一条缺口，
+	// 且**只在**装了模组X 时出现。
 	stX := &OperatorStats{
 		CharID: logosCharID, Elite: 2, Level: 60, Potential: 1,
 		Module: logosModule1ID, ModuleLevel: 3,
@@ -456,14 +457,20 @@ func TestLogosGapsNameEveryUnconsumedMechanism(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildLogosSourceSpec(module X): %v", err)
 	}
-	found := false
+	foundEP, foundCond := false, false
 	for _, g := range logosRemainingGapsFromSpec(srcX, "逻各斯", 0) {
-		if g.ID == "logos.module.trait_ep_damage" {
-			found = true
+		switch g.ID {
+		case "logos.module.trait_ep_damage":
+			foundEP = true
+		case "logos.talent1.element_conditional":
+			foundCond = true
 		}
 	}
-	if !found {
+	if !foundEP {
 		t.Fatal("模组X 的凋亡损伤缺口没被上报")
+	}
+	if !foundCond {
+		t.Fatal("模组X 的「爆发期间元素伤害」条件分支缺口没被上报")
 	}
 }
 
