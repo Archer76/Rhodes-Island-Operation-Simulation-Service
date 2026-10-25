@@ -420,3 +420,60 @@ func TestShuSowingRespectsSowableCells(t *testing.T) {
 		t.Fatal("不在可播种格列表里的格不该被播种")
 	}
 }
+
+// shuYStateForTest 造一份 Y 模组三级（好时节）的运行期状态。
+func shuYStateForTest(t *testing.T, slot int) *ShuBattleState {
+	t.Helper()
+	st := &OperatorStats{
+		CharID: shuCharID, Elite: 2, Level: 60, Potential: 1,
+		Module: shuYModuleID, ModuleLevel: 3,
+	}
+	cfg := shuCfgForTest(t, st, slot, 10)
+	return newShuBattleState(cfg)
+}
+
+// TestShuSeasonBonusAtkConditions Y 模组的「三条件达成两种或以上时额外攻击力
+// +5%」（Lv3）：只满足一种不触发（反例）、满足两种触发 +0.05、三种满足时
+// 叠加为 0.16+0.05=0.21。
+func TestShuSeasonBonusAtkConditions(t *testing.T) {
+	chdirRepoRootForData(t)
+	mk := func(name, prof string) *operator {
+		op := shuUnit(name, [2]float64{0, 0})
+		op.spec.Profession = prof
+		return op
+	}
+
+	// 只满足「相同职业≥3」（3 个 TANK，不同职业只有 1 种，岁 0）。
+	st := shuYStateForTest(t, 1)
+	ops := []*operator{mk("a", "TANK"), mk("b", "TANK"), mk("c", "TANK")}
+	st.SeasonSuiCount = 0
+	applyShuSeason(ops, st, 0)
+	for _, op := range ops {
+		if op.shuAtkPct != 0 {
+			t.Fatalf("只满足一种条件不该触发额外攻击力，got %v", op.shuAtkPct)
+		}
+	}
+
+	// 满足两种（3 同职业 + 3 种不同职业）：额外 +5%。
+	st = shuYStateForTest(t, 1)
+	ops = []*operator{
+		mk("a", "TANK"), mk("b", "TANK"), mk("c", "TANK"),
+		mk("d", "MEDIC"), mk("e", "SNIPER"),
+	}
+	applyShuSeason(ops, st, 0)
+	for _, op := range ops {
+		if math.Abs(op.shuAtkPct-0.05) > 1e-9 {
+			t.Fatalf("两种条件应给额外 0.05，got %v", op.shuAtkPct)
+		}
+	}
+
+	// 三种（+ 编队四岁）：0.16 + 0.05 = 0.21。
+	st = shuYStateForTest(t, 1)
+	st.SeasonSuiCount = 4
+	applyShuSeason(ops, st, 0)
+	for _, op := range ops {
+		if math.Abs(op.shuAtkPct-0.21) > 1e-9 {
+			t.Fatalf("三种条件应给 0.16+0.05=0.21，got %v", op.shuAtkPct)
+		}
+	}
+}

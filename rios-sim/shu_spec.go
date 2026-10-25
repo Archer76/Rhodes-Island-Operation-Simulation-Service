@@ -9,8 +9,14 @@ import (
 )
 
 const (
-	shuCharID   = "char_2025_shu"
-	shuModuleID = "uniequip_002_shu"
+	shuCharID = "char_2025_shu"
+	// 黍有两个专属模组：X「钦天司时」（uniequip_002）与 Y「好时节」
+	// （uniequip_003）。两者都改写天赋，但改写的组不同（X 改天赋一、
+	// Y 改天赋二 + 一条 talentIndex=-1 的隐藏候选），不能混档。
+	shuXModuleID = "uniequip_002_shu"
+	shuYModuleID = "uniequip_003_shu"
+	// shuModuleID 保留给「默认 X 模组」的旧调用与测试。
+	shuModuleID = shuXModuleID
 )
 
 // ShuSourceLevel 保存特定等级/阶段的原始证据
@@ -44,9 +50,19 @@ type ShuSourceSpec struct {
 	RawSlot             json.RawMessage   `json:"raw_slot"`
 	Module              *ShuSourceLevel   `json:"module,omitempty"`
 	ModuleCandidates    []json.RawMessage `json:"module_candidates,omitempty"`
-	// TraitOverride 是模组对**职业特性**的覆写原文（黍的模组：治疗生命低于
-	// 50% 的友方时治疗量提升 15%）。它住 `parts[].overrideTraitDataBundle`，
-	// 与 `ModuleCandidates`（talent 改写）不是同一个包。
+	// ModuleKind 是模组档（"X"/"Y"），与 `Module.ID` 一起决定「哪些 part
+	// 的 talentIndex 属于本模组」——分派时按它精确校验，交叉即拒收。
+	ModuleKind string `json:"module_kind,omitempty"`
+	// ModuleSeasonCandidates 是 Y 模组对**第二天赋**（talentIndex=1）的改写
+	// 候选原文（max_hp/attack_speed/atk/interval/sp）。
+	ModuleSeasonCandidates []json.RawMessage `json:"module_season_candidates,omitempty"`
+	// ModuleConditionalAtk 是 Y 模组里 talentIndex=-1 的隐藏候选原文
+	// （isHideTalent、黑板只有 atk）。数值与天赋描述里的「三条件达成两种
+	// 额外 +3%/+5%」一一对应；语义在数据里没有明写，只存原文。
+	ModuleConditionalAtk json.RawMessage `json:"module_conditional_atk,omitempty"`
+	// TraitOverride 是模组对**职业特性**的覆写原文（X：治疗生命低于
+	// 50% 的友方时治疗量提升 15%；Y：受到的伤害减少 15%）。它住
+	// `parts[].overrideTraitDataBundle`，与 talent 改写不是同一个包。
 	TraitOverride json.RawMessage            `json:"trait_override,omitempty"`
 	Evidence      map[string]json.RawMessage `json:"evidence"`
 	Unresolved    []string                   `json:"unresolved"`
@@ -110,7 +126,7 @@ func buildShuSourceSpec(st *OperatorStats, slot, skillLevel int) (*ShuSourceSpec
 	if err != nil {
 		return nil, err
 	}
-	modules, err := shuRawRecords("battle_equip_table", shuModuleID)
+	modules, err := shuRawRecords("battle_equip_table", shuXModuleID, shuYModuleID)
 	if err != nil {
 		return nil, err
 	}
@@ -154,14 +170,22 @@ func buildShuSourceSpec(st *OperatorStats, slot, skillLevel int) (*ShuSourceSpec
 	}
 
 	if st.Module != "" && st.ModuleLevel > 0 {
-		if st.Module != shuModuleID || st.ModuleLevel > 3 || st.Elite != 2 || st.Level < 60 {
+		kind := ""
+		switch st.Module {
+		case shuXModuleID:
+			kind = "X"
+		case shuYModuleID:
+			kind = "Y"
+		}
+		if kind == "" || st.ModuleLevel > 3 || st.Elite != 2 || st.Level < 60 {
 			return nil, fmt.Errorf("shu source: module %s level %d locked or unsupported", st.Module, st.ModuleLevel)
 		}
-		selected, err := shuSourceLevel(shuModuleID, st.ModuleLevel, modules[shuModuleID], "phases")
+		selected, err := shuSourceLevel(st.Module, st.ModuleLevel, modules[st.Module], "phases")
 		if err != nil {
 			return nil, err
 		}
 		out.Module = &selected
+		out.ModuleKind = kind
 		var phase struct {
 			Parts []json.RawMessage `json:"parts"`
 		}
@@ -170,7 +194,8 @@ func buildShuSourceSpec(st *OperatorStats, slot, skillLevel int) (*ShuSourceSpec
 		}
 		for _, raw := range phase.Parts {
 			var part struct {
-				Trait struct {
+				Target string `json:"target"`
+				Trait  struct {
 					Candidates []json.RawMessage `json:"candidates"`
 				} `json:"overrideTraitDataBundle"`
 				Talent struct {
@@ -180,37 +205,79 @@ func buildShuSourceSpec(st *OperatorStats, slot, skillLevel int) (*ShuSourceSpec
 			if err := json.Unmarshal(raw, &part); err != nil {
 				return nil, err
 			}
-			// 特性覆写：取当前精英/等级/潜能可用的那一档（模组对特性只写
-			// 一条候选，仍按同一套门槛筛选，避免把未解锁的档吃进来）。
-			var bestTrait json.RawMessage
-			traitRank := -1
-			for _, cand := range part.Trait.Candidates {
-				var c moduleSpeedCandidate
-				if err := json.Unmarshal(cand, &c); err != nil {
-					return nil, err
+			if part.Target == "TRAIT" {
+				// 特性覆写：取当前精英/等级/潜能可用的那一档（模组对特性只写
+				// 一条候选，仍按同一套门槛筛选，避免把未解锁的档吃进来）。
+				var bestTrait json.RawMessage
+				traitRank := -1
+				for _, cand := range part.Trait.Candidates {
+					var c moduleSpeedCandidate
+					if err := json.Unmarshal(cand, &c); err != nil {
+						return nil, err
+					}
+					if phaseOf(c.UnlockCondition.Phase) <= st.Elite && c.UnlockCondition.Level <= st.Level && c.RequiredPotentialRank <= st.Potential-1 && c.RequiredPotentialRank > traitRank {
+						bestTrait = cand
+						traitRank = c.RequiredPotentialRank
+					}
 				}
-				if phaseOf(c.UnlockCondition.Phase) <= st.Elite && c.UnlockCondition.Level <= st.Level && c.RequiredPotentialRank <= st.Potential-1 && c.RequiredPotentialRank > traitRank {
-					bestTrait = cand
-					traitRank = c.RequiredPotentialRank
+				if bestTrait != nil {
+					out.TraitOverride = bestTrait
 				}
+				continue
 			}
-			if bestTrait != nil {
-				out.TraitOverride = bestTrait
+			if part.Target != "TALENT_DATA_ONLY" && part.Target != "TALENT" {
+				out.Unresolved = append(out.Unresolved,
+					fmt.Sprintf("%s Lv%d：未识别的 part target %q", st.Module, st.ModuleLevel, part.Target))
+				continue
 			}
-			var best json.RawMessage
-			rank := -1
+			// 每个 talentIndex 取 requiredPotentialRank 最高的那一档（与 X 模组
+			// 原来的选法一致），再按「模块 × talentIndex」精确分派。
+			bestByIndex := map[int]json.RawMessage{}
+			bestRankByIndex := map[int]int{}
 			for _, cand := range part.Talent.Candidates {
-				var c moduleSpeedCandidate
+				var c struct {
+					TalentIndex           int  `json:"talentIndex"`
+					IsHideTalent          bool `json:"isHideTalent"`
+					UnlockCondition       struct {
+						Phase any `json:"phase"`
+						Level int `json:"level"`
+					} `json:"unlockCondition"`
+					RequiredPotentialRank int               `json:"requiredPotentialRank"`
+					Blackboard            []json.RawMessage `json:"blackboard"`
+				}
 				if err := json.Unmarshal(cand, &c); err != nil {
 					return nil, err
 				}
-				if phaseOf(c.UnlockCondition.Phase) <= st.Elite && c.UnlockCondition.Level <= st.Level && c.RequiredPotentialRank <= st.Potential-1 && c.RequiredPotentialRank > rank {
-					best = cand
-					rank = c.RequiredPotentialRank
+				if phaseOf(c.UnlockCondition.Phase) > st.Elite || c.UnlockCondition.Level > st.Level ||
+					c.RequiredPotentialRank > st.Potential-1 {
+					continue
+				}
+				idx := c.TalentIndex
+				if prev, ok := bestRankByIndex[idx]; !ok || c.RequiredPotentialRank > prev {
+					bestByIndex[idx] = cand
+					bestRankByIndex[idx] = c.RequiredPotentialRank
 				}
 			}
-			if best != nil {
-				out.ModuleCandidates = append(out.ModuleCandidates, best)
+			for idx, cand := range bestByIndex {
+				switch {
+				case kind == "X" && idx == 0:
+					// X：第一天赋「百谷长青」覆盖（播种回血与庇护）。
+					out.ModuleCandidates = append(out.ModuleCandidates, cand)
+				case kind == "Y" && idx == 1:
+					// Y：第二天赋「天有四时」覆盖（max_hp/attack_speed/atk/
+					// interval/sp）。
+					out.ModuleSeasonCandidates = append(out.ModuleSeasonCandidates, cand)
+				case kind == "Y" && idx == -1:
+					// Y：talentIndex=-1 的隐藏候选（isHideTalent），黑板只有
+					// `atk`；数值与天赋描述里的「三条件达成两种额外 +3%/+5%」
+					// 一一对应。语义未在数据里明写，只存原文、由配置层按条件
+					// 判定，语义登记在 Unresolved。
+					out.ModuleConditionalAtk = append(json.RawMessage(nil), cand...)
+				default:
+					return nil, fmt.Errorf(
+						"shu source: %s Lv%d 出现不属于该模组的 talentIndex=%d（拒绝交叉档）",
+						st.Module, st.ModuleLevel, idx)
+				}
 			}
 		}
 	}
