@@ -246,6 +246,12 @@ func LoadStageFromPack(packPath string, stageID string, difficulty string, enemy
 			cost = int(*stats.LifePointReduce)
 		}
 
+		immunities := map[string]bool{}
+		if stats != nil {
+			for k, v := range stats.Immunities {
+				immunities[k] = v
+			}
+		}
 		sp := SpawnSpec{
 			Time:            spawnTime,
 			Name:            enemyID,
@@ -261,6 +267,7 @@ func LoadStageFromPack(packPath string, stageID string, difficulty string, enemy
 			LifeCost:        cost,
 			DamageType:      "physical",
 			ApplyWay:        "MELEE",
+			Immunities:      immunities,
 			CountVisibility: &CountVisibility{Hidden: false, Camouflage: false},
 		}
 
@@ -472,4 +479,3 @@ func TryLoadStageFromPacks(query string) (*Stage, bool, error) {
 
 	return nil, false, nil
 }
-

@@ -605,6 +605,12 @@ type SpawnSpec struct {
 	KillCost    int  `json:"kill_cost"`
 	CannotClear bool `json:"cannot_clear"`
 
+	//: 敌人的免疫表（`EnemyStats.Immunities`，键如 `teleportImmune`）。
+	//: 目前唯一的消费者：黍技能三「免疫传送(黍) 的敌人不会被施加播种标记」。
+	//: 老规格不带这个键时为 nil ⇒ 按「无免疫数据」处理（与「明确无免疫」在
+	//: 本消费者上同效，因为只有 true 才会改变行为）。
+	Immunities map[string]bool `json:"immunities,omitempty"`
+
 	//: 被击倒时给"圆心周围田地"加多少病害（原版 `passive_pollut`），
 	//: 以及半径（原版 `passive_radius`，0 表示按 1.0 算）。
 	//:

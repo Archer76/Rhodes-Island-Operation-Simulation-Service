@@ -2635,6 +2635,31 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				strings.Join(namesOp(heals), "|"))
 		}
 		if len(targets) == 0 && len(heals) == 0 {
+			// 黍技能三「离离枯荣」：PRTS 备注「无攻击目标时普通攻击可直接
+			// 进行治疗」。旧实现在这里直接 continue，等于没有目标就不出手。
+			if op.spec.CharID == shuCharID && op.shuState != nil && op.skillActive &&
+				op.shuState.Config.Slot == 3 {
+				healPower := op.atk()
+				cells := op.targetRange()
+				healed := false
+				for _, ally := range ops {
+					if !ally.alive() {
+						continue
+					}
+					if !inCells(cells, cellOf(ally.cell)) {
+						continue
+					}
+					op.shuState.markS3Healed(cellOf(ally.cell))
+					if ally.healFromCharacter(op, healPower, verdict) > 0 {
+						healed = true
+					}
+				}
+				if healed {
+					op.attackTimer = 0
+					op.attackClock.Reset()
+					spOnAttack(op)
+				}
+			}
 			if op.spec.CharID == "char_4182_oblvns" && op.sakikoStore != nil {
 				op.attackTimer = 0
 				op.attackClock.Reset()
@@ -2890,7 +2915,8 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 		// 黍技能三「离离枯荣」：攻击**同时**治疗范围内的我方干员。
 		// 治疗量 = 攻击力（与守护者「治疗量相当于攻击力」同一口径）。
 		// 口径登记：正文写「攻击同时可治疗我方干员」，没写人数上限，按范围内
-		// 全体存活友方建模；该口径记在 `ShuRuntimeConfig.Unresolved` 待证。
+		// 全体存活友方建模；该口径记在 `ShuRuntimeConfig.Unresolved`（无依据、
+		// 按现实现保留，不报 Gap）。
 		if op.spec.CharID == shuCharID && op.shuState != nil && op.skillActive &&
 			op.shuState.Config.Slot == 3 {
 			cells := op.targetRange()
@@ -2901,6 +2927,9 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				if !inCells(cells, cellOf(ally.cell)) {
 					continue
 				}
+				// PRTS 备注的补播种规则：被黍作为主目标治疗过（或被其治疗
+				// 目标周围四格覆盖）的地块，也可检查并施加播种标记。
+				op.shuState.markS3Healed(cellOf(ally.cell))
 				ally.healFromCharacter(op, power, verdict)
 			}
 		}

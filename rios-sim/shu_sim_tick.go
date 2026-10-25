@@ -24,6 +24,10 @@ func shuTick(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec, verdi
 			continue
 		}
 		if !op.alive() {
+			// PRTS 天赋备注：「本天赋效果为永久地块效果，**自身退场时清空
+			// 所有地块的播种效果**」。地块回血与庇护查询都以这张表为准，
+			// 清表之后两者同时失效。
+			op.shuState.clearSown()
 			continue
 		}
 		st := op.shuState
@@ -197,23 +201,44 @@ func applyShuSeason(ops []*operator, st *ShuBattleState, dt float64) {
 	}
 }
 
-// applyShuTeleport 结算技能三的传送：
-// 敌人站在播种地块上时记锚点；远离该地块超过 max_distance 格时送回锚点。
+// applyShuTeleport 结算技能三的播种标记与传送。
+//
+// PRTS（revision 442689）：
+//   - 地面敌人**经过播种地块时**被施加【播种标记】并记录当前所在地块，
+//     已有标记不重复施加；
+//   - 「该敌人**每次进入地块时**」按与记录地块的**曼哈顿距离**判定，
+//     超过标注距离（游戏原文「超过」）则传送回记录地块**中心**；
+//   - 传送**不重置已经过的路径点**（只改位置，不改 legIndex/legU/progress）；
+//   - 标记只在该敌人进入消失状态时清除。
 func applyShuTeleport(op *operator, st *ShuBattleState, enemies []*enemy, verdict *Verdict, t float64) {
 	for _, e := range enemies {
-		if !e.alive() || e.spec.IsFlying || e.offMap {
+		// 敌人消失（阵亡/漏出/离场）：标记自动清除，同时忘掉上一帧所在格。
+		if !e.alive() || e.leaked || e.spec.IsFlying || e.offMap {
+			delete(st.TeleportAnchors, e.index)
+			delete(st.LastCells, e.index)
 			continue
 		}
 		cell := cellOf(e.position)
-		if st.isSown(cell) {
-			if _, existed := st.TeleportAnchors[e.index]; !existed {
-				trace("SHU-ANCHOR t=%.2f enemy=%s cell=%v progress=%.3f", t, e.spec.Name, cell, e.progress)
-			}
-			st.anchorIfSown(e, cell)
+		prev, had := st.LastCells[e.index]
+		st.LastCells[e.index] = cell
+		if had && prev == cell {
+			// 没换格：不是「进入地块」，一帧都不判。
+			continue
 		}
-		if a, ok := st.shouldTeleport(e); ok {
-			trace("SHU-TP t=%.2f enemy=%s from=%v back=%v", t, e.spec.Name, e.position, a.Position)
-			st.restore(e, a)
+		// 进入可标记地块 → 施加标记（已有不覆盖、免疫不施加）。
+		if st.markable(cell) {
+			if _, existed := st.TeleportAnchors[e.index]; !existed {
+				st.anchorOnEnter(e, cell)
+				if _, ok := st.TeleportAnchors[e.index]; ok {
+					trace("SHU-ANCHOR t=%.2f enemy=%s cell=%v progress=%.3f", t, e.spec.Name, cell, e.progress)
+				}
+			}
+		}
+		// 进入地块时判定距离（曼哈顿、严格大于）。
+		if a, ok := st.shouldTeleportOnEnter(e, cell); ok {
+			trace("SHU-TP t=%.2f enemy=%s from=%v back=%v", t, e.spec.Name, e.position, a.AnchorCell)
+			st.teleportToAnchor(e, a)
+			st.LastCells[e.index] = a.AnchorCell
 			if verdict != nil {
 				verdict.Events = append(verdict.Events, Event{
 					T: t, Kind: "shu_teleport", Who: op.spec.Name,

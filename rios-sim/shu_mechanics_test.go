@@ -213,37 +213,163 @@ func TestShuModuleLowHealBonus(t *testing.T) {
 	}
 }
 
-// TestShuS3TeleportRestoresRouteSnapshot 技能三传送：锚点记的是完整路线快照，
-// 传送后 legIndex/legU/position/progress 一起回到锚点。
-func TestShuS3TeleportRestoresRouteSnapshot(t *testing.T) {
+// TestShuTeleportManhattanNotChebyshev 距离口径反例：站位 (2,2) 距锚点 (0,0)
+// 在切比雪夫口径下是 2 格（不传），在曼哈顿口径下是 4 格（传）。
+func TestShuTeleportManhattanNotChebyshev(t *testing.T) {
 	chdirRepoRootForData(t)
 	st := shuStateForTest(t, 3)
-	st.sowAround([2]int{3, 2}, "黍")
+	st.sowAround([2]int{0, 0}, "黍")
 
 	e := &enemy{spec: SpawnSpec{Name: "e"}, hp: 100, index: 7}
+	st.TeleportAnchors[e.index] = &ShuTeleportAnchor{AnchorCell: [2]int{0, 0}}
+
+	// 斜向 2 格：切比雪夫 2（≤2 不传）、曼哈顿 4（>2 传）。
+	if _, ok := st.shouldTeleportOnEnter(e, [2]int{2, 2}); !ok {
+		t.Fatal("斜向 (2,2) 在曼哈顿口径下应触发（4 > 2）；不触发说明还在用切比雪夫")
+	}
+	// 阈值边界：曼哈顿 2（未超过）不传——游戏原文「超过」，严格大于。
+	if _, ok := st.shouldTeleportOnEnter(e, [2]int{1, 1}); ok {
+		t.Fatal("曼哈顿 2 等于阈值，不该触发（严格大于）")
+	}
+}
+
+// TestShuTeleportOnEnterNotPerFrame 触发时机：站在远处但不换格时**不判定**，
+// 只有进入新地块的那一帧才判定。逐帧扫距离会在第一帧就传。
+func TestShuTeleportOnEnterNotPerFrame(t *testing.T) {
+	chdirRepoRootForData(t)
+	st := shuStateForTest(t, 3)
+	st.sowAround([2]int{0, 0}, "黍")
+
+	shu := shuUnit("黍", [2]float64{0, 0})
+	shu.spec.CharID = shuCharID
+	shu.shuState = st
+
+	e := &enemy{spec: SpawnSpec{Name: "e"}, hp: 100, index: 3}
+	st.TeleportAnchors[e.index] = &ShuTeleportAnchor{AnchorCell: [2]int{0, 0}}
+	e.position = [2]float64{5, 0}
+	// 已经站在这格里（LastCells 记录同格）：这一帧不算「进入」。
+	st.LastCells[e.index] = [2]int{5, 0}
+
+	applyShuTeleport(shu, st, []*enemy{e}, &Verdict{}, 1.0)
+	if e.position != [2]float64{5, 0} {
+		t.Fatalf("没换格却触发了传送：pos=%v", e.position)
+	}
+	// 进入下一格：这一帧判定，曼哈顿 6 > 2 → 传回 (0,0)。
+	e.position = [2]float64{6, 0}
+	applyShuTeleport(shu, st, []*enemy{e}, &Verdict{}, 1.1)
+	if e.position != [2]float64{0, 0} {
+		t.Fatalf("进入新格后应传送回记录地块中心，pos=%v", e.position)
+	}
+}
+
+// TestShuTeleportKeepsPathAndMarker 传送只改位置、回地块中心；路径进度
+// （legIndex/legU/progress）不变，播种标记保留可再次触发。
+func TestShuTeleportKeepsPathAndMarker(t *testing.T) {
+	chdirRepoRootForData(t)
+	st := shuStateForTest(t, 3)
+	st.sowAround([2]int{0, 0}, "黍")
+
+	shu := shuUnit("黍", [2]float64{0, 0})
+	shu.spec.CharID = shuCharID
+	shu.shuState = st
+
+	e := &enemy{spec: SpawnSpec{Name: "e"}, hp: 100, index: 5}
+	st.TeleportAnchors[e.index] = &ShuTeleportAnchor{AnchorCell: [2]int{0, 0}}
 	e.legIndex = 2
 	e.legU = 1.25
-	e.position = [2]float64{3, 2}
 	e.progress = 1.25
-	st.anchorIfSown(e, [2]int{3, 2})
+	e.position = [2]float64{5, 0}
 
-	// 未超过 2 格：不传送。
-	e.position = [2]float64{5, 2}
-	if _, ok := st.shouldTeleport(e); ok {
-		t.Fatal("距离 2 格不该触发传送")
+	applyShuTeleport(shu, st, []*enemy{e}, &Verdict{}, 1.0)
+	if e.position != [2]float64{0, 0} {
+		t.Fatalf("落点应为记录地块中心 (0,0)，got %v", e.position)
 	}
-	// 超过 2 格：触发并恢复快照。
-	e.position = [2]float64{6, 2}
-	a, ok := st.shouldTeleport(e)
-	if !ok {
-		t.Fatal("距离 3 格应当触发传送")
+	if e.legIndex != 2 || e.legU != 1.25 || e.progress != 1.25 {
+		t.Fatalf("传送不应重置路径进度：leg=%d legU=%v progress=%v", e.legIndex, e.legU, e.progress)
 	}
-	st.restore(e, a)
-	if e.legIndex != 2 || e.legU != 1.25 || e.position != [2]float64{3, 2} || e.progress != 1.25 {
-		t.Fatalf("快照未完整恢复：leg=%d legU=%v pos=%v progress=%v",
-			e.legIndex, e.legU, e.position, e.progress)
+	if _, ok := st.TeleportAnchors[e.index]; !ok {
+		t.Fatal("传送后标记应保留（PRTS：仅敌人消失时清除）")
 	}
-	if _, still := st.TeleportAnchors[e.index]; still {
-		t.Fatal("传送后锚点应被消耗")
+}
+
+// TestShuTeleportImmuneEnemyNotMarked 免疫传送(黍) 的敌人不会被施加标记。
+func TestShuTeleportImmuneEnemyNotMarked(t *testing.T) {
+	chdirRepoRootForData(t)
+	st := shuStateForTest(t, 3)
+	st.sowAround([2]int{0, 0}, "黍")
+
+	shu := shuUnit("黍", [2]float64{0, 0})
+	shu.spec.CharID = shuCharID
+	shu.shuState = st
+
+	e := &enemy{spec: SpawnSpec{Name: "e", Immunities: map[string]bool{"teleportImmune": true}}, hp: 100, index: 9}
+	e.position = [2]float64{0, 0}
+	applyShuTeleport(shu, st, []*enemy{e}, &Verdict{}, 1.0)
+	if _, ok := st.TeleportAnchors[e.index]; ok {
+		t.Fatal("免疫传送的敌人不应被施加播种标记")
+	}
+}
+
+// TestShuS3HealsWithoutTargets 技能三「无攻击目标时普通攻击可直接进行治疗」。
+// 旧实现里没有目标就 continue，这条会红。
+func TestShuS3HealsWithoutTargets(t *testing.T) {
+	chdirRepoRootForData(t)
+	st := shuStateForTest(t, 3)
+
+	shu := &operator{
+		hp:   1000,
+		cell: [2]float64{2, 2},
+		spec: OperatorSpec{
+			Name: "黍", CharID: shuCharID, MaxHP: 1000, ATK: 500, AttackInterval: 1.0,
+			Range: [][2]int{{2, 2}, {3, 2}, {2, 3}, {1, 2}, {2, 1}},
+			Skill: &SkillSpec{SPType: spAuto, SPCost: 45, InitSP: 45, Duration: 30, MaxCharge: 1},
+		},
+	}
+	shu.shuState = st
+	shu.skillActive = true
+
+	ally := &operator{
+		hp:   400,
+		cell: [2]float64{3, 2},
+		spec: OperatorSpec{Name: "友方", CharID: "char_208_melan", MaxHP: 1000, ATK: 100, AttackInterval: 1.0},
+	}
+	ops := []*operator{shu, ally}
+	spec := &Spec{FPS: 30, Operators: []OperatorSpec{shu.spec, ally.spec}}
+
+	for i := 0; i < 40; i++ {
+		if err := operatorsAttackFrame(ops, nil, float64(i)/30.0, spec, &Verdict{}); err != nil {
+			t.Fatalf("attack frame: %v", err)
+		}
+	}
+	if ally.hp <= 400 {
+		t.Fatalf("无攻击目标时技能三应直接治疗友方，hp=%.2f", ally.hp)
+	}
+}
+
+func TestShuSownClearedOnRetreat(t *testing.T) {
+	chdirRepoRootForData(t)
+	st := shuStateForTest(t, 3)
+	st.sowAround([2]int{2, 2}, "黍")
+
+	shu := shuUnit("黍", [2]float64{2, 2})
+	shu.spec.CharID = shuCharID
+	shu.shuState = st
+	shu.hp = 0 // 阵亡/撤退
+	ally := shuUnit("友方", [2]float64{3, 2})
+	ally.hp = 100
+	ops := []*operator{shu, ally}
+	spec := &Spec{}
+	shuTick(ops, nil, 1.0, 1.0, spec, &Verdict{})
+
+	if len(st.SownTiles) != 0 {
+		t.Fatalf("退场后地块应被清空，剩 %d 块", len(st.SownTiles))
+	}
+	if ally.hp != 100 {
+		t.Fatalf("退场后不该再有地块回血，hp=%.2f", ally.hp)
+	}
+	ctx := &simCtx{objs: &ops}
+	ally.sim = ctx
+	if p := ally.sownProtect(); p != 0 {
+		t.Fatalf("退场后不该再有庇护，p=%v", p)
 	}
 }
