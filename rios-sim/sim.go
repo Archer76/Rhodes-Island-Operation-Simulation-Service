@@ -1023,7 +1023,20 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 				if err != nil {
 					return nil, fmt.Errorf("logos deploy decode config: %w", err)
 				}
-				op.logosState = newLogosBattleState(cfg)
+				// 概率事件的抽样种子**只从规格来**（V-2 裁定第 1 条）。下一行把
+				// 用到的 seed 写进判决事件流：读判决的人因此知道这条时间线是
+				// 「该 seed 下的一次采样」，不是胜率、也不是期望（裁定第 2 条）。
+				op.logosState = newLogosBattleState(cfg, op.spec.LogosSource.RNGSeed)
+				actualSeed := op.spec.LogosSource.RNGSeed
+				if actualSeed == 0 {
+					actualSeed = logosDefaultRNGSeed
+				}
+				if verdict != nil {
+					verdict.Events = append(verdict.Events, Event{
+						T: t, Kind: "logos_rng_seed",
+						Who: fmt.Sprintf("%s seed=%d", op.spec.Name, actualSeed),
+					})
+				}
 			}
 
 			// ---- 层数护盾（原版 `_attach_talent_shield`，`sim.py:3157-3182`，
@@ -2886,6 +2899,16 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 					verdict.Events = append(verdict.Events,
 						Event{T: t, Kind: "kill", Who: target.spec.Name})
 				}
+			}
+			//: 逻各斯第一天赋「语汇演化」：**每普通出手抽一次签**（V-2 裁定后走
+			//: 精确抽样，不折期望）。位置在主目标循环**之后**：判据是"这一击确实发生了"
+			//: （`targets` 非空且走到这里），而不是"站在范围里就算一次"。
+			//:
+			//: ⚠ 只用 `power`（本击的攻击力）——天赋正文说的是"相当于攻击力 N%"，
+			//: 所以技能 `atk` 加成自然进得来，倍率与连击**不重复乘**（那是主目标
+			//: 那一击的 `hitScale`，不是这一笔的）。
+			if op.spec.CharID == logosCharID && op.logosState != nil {
+				logosTalent1OnAttack(op, enemies, power, t, verdict)
 			}
 			// 特性溅射：**每个主目标各一次**（原版把调用写在主目标循环里、
 			// 连击循环外面）。不判主目标死活。

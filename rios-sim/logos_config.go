@@ -9,13 +9,20 @@ import (
 // 遵循零硬编码原则，全部数值来自 gamedata 原文。
 type LogosRuntimeConfig struct {
 	// ---- 天赋一「语汇演化」（E1 解锁） ----
+	//
+	// 博士 2026-10-25 裁定 V-2 之后，这一族按下述口径消费：
+	//   - `prob`：**精确抽样**的伯努利判定（每击一次，seed 来自规格）；
+	//   - `atk_scale`：命中时那一笔额外法术伤害的倍率；
+	//   - `sluggish`：命中时给目标的**停顿秒数**（减速比例是全局常数 80%）；
+	//   - `emit_count`（模组Y）：一次命中挑几个**不同**目标；
+	//   - `element_atk_scale`（模组X）：需要「目标处于凋亡损伤爆发期间」，
+	//     条件判不出来 ⇒ 具名缺口（概率那一半不受影响）。
 	Talent1Enabled      bool    `json:"talent1_enabled"`
 	Talent1Prob         float64 `json:"talent1_prob"`
 	Talent1AtkScale     float64 `json:"talent1_atk_scale"`
 	Talent1Sluggish     float64 `json:"talent1_sluggish"`
 	Talent1ElementScale float64 `json:"talent1_element_atk_scale"` // 模组X提供
 	Talent1EmitCount    int     `json:"talent1_emit_count"`        // 模组Y提供，默认为 1
-	Talent1ProbGap      bool    `json:"talent1_prob_gap"`          // 标记在等 V-2 概率裁定
 
 	// ---- 天赋二「剜魂具辞」（E2 解锁） ----
 	Talent2Enabled       bool    `json:"talent2_enabled"`
@@ -120,7 +127,6 @@ func decodeLogosRuntimeConfig(s *LogosSourceSpec) (*LogosRuntimeConfig, error) {
 			cfg.Talent1Prob = nums["prob"]
 			cfg.Talent1AtkScale = nums["atk_scale"]
 			cfg.Talent1Sluggish = nums["sluggish"]
-			cfg.Talent1ProbGap = true // 标记属于 V-2 概率机制
 			cfg.auditBlackboard(nums, strs, used)
 		case 1: // 天赋二：剜魂具辞
 			cfg.Talent2Enabled = true
@@ -261,6 +267,12 @@ func decodeLogosRuntimeConfig(s *LogosSourceSpec) (*LogosRuntimeConfig, error) {
 	cfg.Unresolved = append(cfg.Unresolved,
 		"天赋二「剜魂具辞」的时点：本次这一击的伤害先结算、减益作用于之后的伤害；"+
 			"数据里没有第二个键能判「同一击是否享受到自己的减益」")
+	cfg.Unresolved = append(cfg.Unresolved,
+		"第一天赋「语汇演化」的抽样口径：每**普通出手**抽一次签（`prob`），命中后先在范围内定下 "+
+			"`emit_count` 个互不重复的目标再逐个结算；技能二「提喻」的锁定伤害不是普攻，不抽这一支")
+	cfg.Unresolved = append(cfg.Unresolved,
+		"第一天赋「语汇演化」的「随机目标」是否排除本击的主目标：数据里没有第二个键可判；"+
+			"当前候选池**包含**主目标（与「攻击范围内一个随机目标」的字面读法一致）")
 	if s.Slot == 1 {
 		cfg.Unresolved = append(cfg.Unresolved,
 			"技能一「殁亡」的「另一个随机目标」：数据里没有种子也没有权重，本实现取敌人列表次序的第一个合格目标；"+

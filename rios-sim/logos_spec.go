@@ -48,9 +48,19 @@ type LogosSourceSpec struct {
 	// SkillRangeAbsCells 是技能范围（`rangeId`，如 3-3 / 3-4）在该次部署的
 	// **绝对格**。它在建规格时按部署朝向算一次：运行期没有朝向（`operator`
 	// 只带绝对格 `Range`），重算就是第二套旋转口径。
-	SkillRangeAbsCells [][2]int                   `json:"skill_range_abs_cells,omitempty"`
-	Evidence           map[string]json.RawMessage `json:"evidence"`
-	Unresolved         []string                   `json:"unresolved"`
+	SkillRangeAbsCells [][2]int `json:"skill_range_abs_cells,omitempty"`
+	// RNGSeed 是概率事件（第一天赋「语汇演化」）的**采样种子**。
+	//
+	// 博士 2026-10-25 裁定：概率事件走「规格内固定 seed 的确定性伪随机逐次抽取」。
+	// 因此种子必须住在**规格**里：
+	//   - 同一份 spec 反序列化后必然得到同一条序列（不依赖进程、时间、调用顺序）；
+	//   - 搜索侧所有计划共用同一个 seed，判决才可比；
+	//   - 换 seed 只是换一条同样合法的时间线，不是"换胜率"。
+	//
+	// 规格没写（0）时按 `logosDefaultRNGSeed`（写死的 1）走——**不是**隐式随机。
+	RNGSeed    uint64                     `json:"rng_seed,omitempty"`
+	Evidence   map[string]json.RawMessage `json:"evidence"`
+	Unresolved []string                   `json:"unresolved"`
 }
 
 func logosRawRecords(table string, ids ...string) (map[string]json.RawMessage, error) {
@@ -165,6 +175,10 @@ func buildLogosSourceSpec(st *OperatorStats, slot, skillLevel int) (*LogosSource
 		SkillLevel:          skillLevel,
 		OperatorSkill:       skillLvl,
 		RawSlot:             char.Skills[slot-1],
+		// 种子落在规格里，且**每次建规格都显式写死同一个默认值**：
+		// 靠 `omitempty` 留空会让"没写"与"写了 0"两种输入在 JSON 上长得一样，
+		// 而读规格的人无从判断这条时间线是用哪个 seed 采出来的。
+		RNGSeed: logosDefaultRNGSeed,
 		Evidence: map[string]json.RawMessage{
 			"character_table": charRaw,
 			"skill_table":     skillRaw,
@@ -289,17 +303,19 @@ func attachLogosSkillRange(spec *LogosSourceSpec, direction string, pos [2]int) 
 // logosRemainingGapsFromSpec 收集并上报**没有运行期消费者**的机制。
 //
 // 与黍同一个纪律：豁免必须是「已消费」的断言，不是「这一支我写了个空 else」。
-// 逻各斯比黍多出的一类是**概率机制**——它不是在等实现，而是在等裁定：
 //
-//   - 第一天赋「语汇演化」整条链（`prob` / `atk_scale` / `sluggish` /
-//     模组的 `element_atk_scale` 与 `emit_count`）都是"有 P 的几率额外……"，
-//     属 roadmap 第六节 **V-2「概率机制的结果语义」待裁定项**（博士 2026-10-24
-//     裁定：**不得折算成期望值**，必须作为具名占位拒判）。所以这里报的是
-//     **整条链**，不是一个键——折算期望值会让同一条时间线两次跑出两个数。
-//   - 技能三的 `projectile_move_scale`（敌方子弹减速/清空）没有落点：
-//     本仓没有敌方弹道实体。
-//   - 两个模组的隐藏天赋同样各有落点缺口（元素损伤系统未接线、敌人没有
-//     精英/领袖分类）。
+// ★ 第一天赋「语汇演化」**不在这里**了：博士 2026-10-25 裁定 V-2「概率机制的结果
+// 语义」——「只要是能精准判定的都精准判定，很难做精准的才用期望值」。它的
+// `prob` / `atk_scale` / `sluggish` / 模组 `emit_count` 现在都是**精确抽样**的
+// 离散事件（`logosTalent1OnAttack`），因此不再有概率缺口。
+// 原来那条 `logos.talent1.prob_v2`（"在等 V-2 裁定"）随裁定一起撤销。
+//
+// 仍然具名上报的是**另外三类**，它们都不是概率问题：
+//
+//   - 技能三的 `projectile_move_scale`（敌方子弹减速/清空）：本仓没有敌方弹道实体；
+//   - 模组X 的 `element_atk_scale`：需要"目标处于凋亡损伤爆发期间"，而元素损伤
+//     没有战斗调用点，这个条件判不出来；
+//   - 两个模组的隐藏天赋：元素损伤未接线、敌人没有精英/领袖分类。
 func logosRemainingGapsFromSpec(source *LogosSourceSpec, opName string, instance int) []mechanisms.Gap {
 	if source == nil {
 		return nil
@@ -327,18 +343,19 @@ func logosRemainingGapsFromSpec(source *LogosSourceSpec, opName string, instance
 			"逻各斯的该黑板键没有运行期消费者；未消费即具名登记，不作静默忽略")
 	}
 
-	// 第一天赋：概率机制整条链（V-2 待裁定）。
-	if cfg.Talent1Enabled {
-		add("logos.talent1.prob_v2", "talent", "prob",
-			"第一天赋「语汇演化」的触发是概率机制（prob/atk_scale/sluggish，含模组的 element_atk_scale 与 emit_count），"+
-				"属 roadmap 第六节 V-2「概率机制的结果语义」待裁定项；按博士 2026-10-24 裁定**不折算期望值**，具名拒判")
-	}
-
 	// 技能三：敌方子弹减速/清空没有落点。
 	if cfg.Slot == 3 && cfg.S3ProjectileMoveScale > 0 {
 		add("logos.skill3.projectile", "skill", "projectile_move_scale",
 			"技能三「延异视阈」的「使范围内敌方子弹飞行速度大幅降低、技能结束时全部清除」未建模："+
 				"本仓没有敌方弹道实体，该键没有落点")
+	}
+
+	// 第一天赋的**元素条件分支**（只有模组X 会给这个键）：
+	// 概率那一半已精确建模，这一半缺的是"凋亡损伤爆发期间"这个状态。
+	if cfg.Talent1ElementScale > 0 {
+		add("logos.talent1.element_conditional", "talent", "element_atk_scale",
+			"第一天赋（模组X 改写）的「若该随机目标处于凋亡损伤爆发期间则同时造成元素伤害」未建模："+
+				"元素损伤状态机存在但没有战斗调用点，判不出「爆发期间」这个条件；概率那一半已按 seed 精确抽样")
 	}
 
 	// 模组隐藏天赋各自的落点缺口。
