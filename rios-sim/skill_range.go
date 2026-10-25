@@ -182,5 +182,10 @@ func (o *operator) targetRange() [][2]int {
 		len(o.spec.LogosSource.SkillRangeAbsCells) > 0 {
 		return o.spec.LogosSource.SkillRangeAbsCells
 	}
+	// 乌尔比安技能一「必须促成的接触」/技能三「必须开辟的通路」范围改写 (3-2 / 6-1)
+	if o.spec.CharID == ulpiaCharID && o.skillActive && o.spec.UlpiaSource != nil &&
+		len(o.spec.UlpiaSource.SkillRangeAbsCells) > 0 {
+		return o.spec.UlpiaSource.SkillRangeAbsCells
+	}
 	return o.spec.Range
 }

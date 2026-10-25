@@ -273,6 +273,10 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 		if op.CharID == "char_4133_logos" && op.LogosSource != nil && op.LogosSource.ConsumerImplemented {
 			gaps = mechanisms.Merge(gaps, logosRemainingGapsFromSpec(op.LogosSource, op.Name, i))
 		}
+		// 乌尔比安（char_4145_ulpia）：闭环的具名缺口
+		if op.CharID == "char_4145_ulpia" && op.UlpiaSource != nil && op.UlpiaSource.ConsumerImplemented {
+			gaps = mechanisms.Merge(gaps, ulpiaRemainingGapsFromSpec(op.UlpiaSource, op.Name, i))
+		}
 		add := func(key string, value float64, reason string) {
 			gaps = mechanisms.Merge(gaps, []mechanisms.Gap{{ID: "runtime." + key, Status: "unimplemented", Source: "operator_spec", Operator: op.Name, CharID: op.CharID, Key: key, RawValue: value, Reason: reason, Instance: i}})
 		}

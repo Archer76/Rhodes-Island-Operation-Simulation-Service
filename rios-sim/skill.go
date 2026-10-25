@@ -289,6 +289,11 @@ func (o *operator) maxHP() float64 {
 	if o.shuMaxHpPct != 0 {
 		base *= 1 + o.shuMaxHpPct
 	}
+	// 乌尔比安天赋二「血脉的哺养」：击倒敌人叠加生命上限（绝对值）
+	if o.spec.CharID == ulpiaCharID && o.ulpiaState != nil {
+		hpBonus, _ := o.ulpiaState.ulpiaTalent2Bonus()
+		base += hpBonus
+	}
 	return base
 }
 
@@ -386,7 +391,13 @@ func (o *operator) atk() float64 {
 	if p := o.profile(); p != nil {
 		base = p.ATK
 	}
-	return base + o.spec.ATK*(o.auraAtkPct+o.shuAtkPct)
+	res := base + o.spec.ATK*(o.auraAtkPct+o.shuAtkPct)
+	// 乌尔比安天赋二「血脉的哺养」：击倒敌人叠加攻击力（绝对值）
+	if o.spec.CharID == ulpiaCharID && o.ulpiaState != nil {
+		_, atkBonus := o.ulpiaState.ulpiaTalent2Bonus()
+		res += atkBonus
+	}
+	return res
 }
 
 func (o *operator) defense() float64 {

@@ -520,6 +520,9 @@ type operator struct {
 	//: 天赋二与技能三没有跨帧状态（前者挂在敌人身上，后者走既有面板链）。
 	logosState *LogosBattleState
 
+	// ---- 乌尔比安（char_4145_ulpia）机制状态
+	ulpiaState *UlpiaBattleState
+
 	// ---- 引擎级概率事件（V-2 裁定后由期望值改精确抽样） ----
 	//
 	// `probRNG` 是这位干员的抽样器，种子来自**规格**（`OperatorSpec.RNGSeed`）。
@@ -791,6 +794,10 @@ func (o *operator) canBlock(e *enemy) bool {
 	if o.spec.CharID == shuCharID && o.shuState != nil && o.skillActive &&
 		o.shuState.Config.Slot == 2 {
 		limit += o.shuState.Config.S2BlockBonus
+	}
+	// 乌尔比安：技能二「必须维系的界限」阻挡数 +1，以及模组Y 达到 9 层击杀叠加后阻挡数 +1
+	if o.spec.CharID == ulpiaCharID && o.ulpiaState != nil {
+		limit += o.ulpiaBlockCntBonus()
 	}
 	return limit > 0 && len(o.blocking) < limit
 }
@@ -1111,6 +1118,17 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 						Who: fmt.Sprintf("%s seed=%d", op.spec.Name, seed),
 					})
 				}
+			}
+			// 乌尔比安（char_4145_ulpia）部署初始化
+			if op.spec.CharID == ulpiaCharID {
+				if op.spec.UlpiaSource == nil {
+					return nil, fmt.Errorf("ulpia deploy: UlpiaSource is nil")
+				}
+				cfg, err := decodeUlpiaRuntimeConfig(op.spec.UlpiaSource)
+				if err != nil {
+					return nil, fmt.Errorf("ulpia deploy decode config: %w", err)
+				}
+				op.ulpiaState = newUlpiaBattleState(cfg)
 			}
 			// 引擎级概率事件的抽样器：**在部署时建**，不在首次抽签时建——
 			// 建得晚会让"什么时候第一次抽"影响序列起点，同一份规格就可能跑出
@@ -1579,6 +1597,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		sakikoTick(ops, enemies, dt, t, verdict)
 		shuTick(ops, enemies, dt, t, spec, verdict)
 		logosTick(ops, enemies, dt, t, verdict)
+		ulpiaTick(ops, enemies, dt, t, verdict)
 
 		intrinsicCountTick(enemies, t)
 		if ctx.countError != nil {
@@ -2982,6 +3001,10 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				// 乘进 `hitScale`（结算之前）会得到完全不同的数——那是法抗/
 				// 防御也一起被缩放，症状是"伤害偏低且随目标防御变化"。
 				dmg *= comboDmgScale
+				// 乌尔比安模组Y：对被阻挡的敌人造成的伤害提升至 damage_scale (1.1) 倍
+				if op.spec.CharID == ulpiaCharID && op.ulpiaState != nil {
+					dmg *= op.ulpiaDamageScale(target)
+				}
 				//: 逻各斯天赋二「剜魂具辞」的另一半：「受到的法术伤害提高 N 点」。
 				//: 它是**平坦值**，加在防御/法抗结算**之后**（正文说的是"受到的
 				//: 法术伤害"，不是"法术攻击力"）。加在结算之前会顺带被法抗削一遍，
@@ -3819,6 +3842,10 @@ func resolve(enemies []*enemy, cost *float64, life *int, t float64,
 	verdict *Verdict) {
 	for _, e := range enemies {
 		if e.hp <= 0 && !e.leaked && !e.costAwarded {
+			// 乌尔比安天赋二「血脉的哺养」：击倒敌人时叠加层数
+			if e.lastHitBy != nil && e.lastHitBy.spec.CharID == ulpiaCharID && e.lastHitBy.ulpiaState != nil {
+				ulpiaTalent2OnKill(e.lastHitBy, e, t, verdict)
+			}
 			//: 两笔账**分开算、都要加**：
 			//:   ① 敌人自己的 `kill_cost`（敌方天赋 `Talent1.cost`，`enemy_derive.go` 读的）；
 			//:   ② **击杀者**的特性「击杀敌人后获得 N 点部署费用」（翎羽，博士新增的落点）。
@@ -4365,6 +4392,18 @@ func (o *operator) hurt(dealt float64) {
 	}
 	o.hp = math.Max(0, o.hp-dealt)
 	o.damageTaken += dealt
+	// 乌尔比安第一天赋「本性的坚守」：每次受到伤害时治疗自身
+	if o.spec.CharID == ulpiaCharID && o.ulpiaState != nil && o.alive() {
+		var tm float64
+		var v *Verdict
+		if o.sim != nil {
+			if o.sim.time != nil {
+				tm = *o.sim.time
+			}
+			v = o.sim.verdict
+		}
+		ulpiaTalent1OnHit(o, dealt, tm, v)
+	}
 	// 隐德来希第二天赋·充盈：生命低于 25% 时一次性回复 50% 生命上限，并在此后获得 10% 减伤
 	if o.spec.CharID == "char_4010_etlchi" && !o.entelechiaLowHPTrigger && o.alive() && o.hp/o.maxHP() <= 0.25 {
 		o.entelechiaLowHPTrigger = true
