@@ -770,3 +770,23 @@ func maxInt(a, b int) int {
 	}
 	return b
 }
+
+// sowableCellsOf 返回「可播种格」：可部署我方单位（`buildable != NONE`）
+// 或可通行地块（`passable == ALL`）。
+//
+// 来源：PRTS 黍页天赋一备注「本天赋仅能对可部署我方单位或可通行的地块
+// 进行播种」。字段口径见 `stage.go` 的 `buildableOf` / `passableOf`。
+func sowableCellsOf(m StageMap) [][2]int {
+	cells := make([][2]int, 0, m.Width*m.Height/4)
+	for y := range m.Tiles {
+		for x := range m.Tiles[y] {
+			t := m.Tiles[y][x]
+			deployable := t.Buildable != "" && t.Buildable != "NONE"
+			passable := t.Passable == "ALL"
+			if deployable || passable {
+				cells = append(cells, [2]int{x, y})
+			}
+		}
+	}
+	return cells
+}

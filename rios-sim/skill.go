@@ -467,6 +467,13 @@ func (o *operator) interval() float64 {
 	if o.shuAspd != 0 {
 		interval *= 100 / math.Max(aspdMin, 100+o.shuAspd)
 	}
+	// 黍「嘉禾盈仓」：PRTS 备注（rev 442689）「特殊间隔」指攻击间隔 1.3+1.3。
+	// 前一个 1.3 已在 `profile.Interval`（技能黑板 `base_attack_time`）里，
+	// 这里只加备注写明的增量。
+	if o.spec.CharID == shuCharID && o.shuState != nil && o.skillActive &&
+		o.shuState.Config.Slot == 2 {
+		interval += shuS2SpecialIntervalBonus
+	}
 	return interval
 }
 

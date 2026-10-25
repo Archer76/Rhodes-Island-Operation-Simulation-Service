@@ -504,6 +504,10 @@ type operator struct {
 
 	// ---- 黍（char_2025_shu）机制状态
 	shuState *ShuBattleState
+	//: 黍天赋一给的「生命回复速度」属性（每秒回复量）。PRTS 备注明确：
+	//: 地块回血的提供方式是增加生命回复速度、不受治疗加成与禁疗影响，
+	//: 所以它不走 `heal()`（治疗类能力），而是累加到本字段、每帧按秒结算。
+	shuRecoveryPerSec float64
 	//: 天赋二「天有四时」与技能三「离离枯荣」的**动态面板加成**。
 	//: 它们随场上职业构成、编队【岁】人数、地面敌人是否踩田逐帧变化，
 	//: 所以不能写进 `OperatorSpec`（那是部署前算好的静态快照）。
@@ -1000,6 +1004,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 					return nil, fmt.Errorf("shu deploy decode config: %w", err)
 				}
 				op.shuState = newShuBattleState(cfg)
+				op.shuState.SowableCells = spec.SowableCells
 				// 模组三级「部署时立即给所处地块播种该效果」：`born_range_id=0-1`
 				// 在 range_table 里就是单格 (0,0)，所以只播自身格，不扩四邻。
 				if cfg.BornSow {

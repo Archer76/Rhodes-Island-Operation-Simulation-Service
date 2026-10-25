@@ -5,6 +5,14 @@ import (
 	"fmt"
 )
 
+// shuS2SpecialIntervalBonus 是技能二「嘉禾盈仓」备注里写的**增量**。
+//
+// PRTS 黍页（revision 442689）技能二备注原文：「『特殊间隔』指攻击间隔1.3+1.3」。
+// 前一个 1.3 是技能黑板 `base_attack_time`（技能期间的攻击间隔，已进
+// `profile.Interval`）；这里只写**增量** 1.3，所以实际间隔是
+// 「当前攻击间隔 + 1.3」，不是把 2.6 直接写成常量。
+const shuS2SpecialIntervalBonus = 1.3
+
 // ShuRuntimeConfig 把黍的全部黑板键解析成强类型字段。
 //
 // 数值**全部来自 raw 原文**：天赋读 `spec.Talents` 的候选 raw、模组读

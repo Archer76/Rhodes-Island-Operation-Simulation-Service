@@ -224,6 +224,9 @@ type FullSpec struct {
 
 	HighlandCells [][2]int `json:"highland_cells"`
 	GoalCells     [][2]int `json:"goal_cells"`
+	//: 可播种格（Go 单方面扩协议，见 `specgo.go::specKeysGoOnly`）：
+	//: 可部署我方单位（`buildable != NONE`）或可通行地块（`passable == ALL`）。
+	SowableCells [][2]int `json:"sowable_cells,omitempty"`
 
 	Operators []OperatorOut `json:"operators"`
 	Deploys   []SpecDeploy  `json:"deploys"`
@@ -440,6 +443,7 @@ func BuildSpecFull(level, path string, q BuildSpecQuery) (BuildSpecOut, error) {
 	// ---- 关卡静态 8 项 ----
 	env := StageEnv(st.Options, st.Runes, difficulty)
 	out.Spec.Stage = st.Code
+	out.Spec.SowableCells = sowableCellsOf(st.Map)
 	out.Spec.FPS = env.FPS
 	out.Spec.MaxTime = maxTime
 	out.Spec.Life = env.Life

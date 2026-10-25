@@ -53,6 +53,12 @@ type Spec struct {
 	//: 不在表里就当没高台（高台溅射那一段因此整段不发生）。
 	HighlandCells [][2]int `json:"highland_cells,omitempty"`
 
+	//: 可播种格（可部署我方单位或可通行地块，PRTS 天赋一备注）。
+	//: Go 单方面扩协议（`specKeysGoOnly`）：由 `BuildSpecFull` 从 StageMap
+	//: 的 `buildable/passable` 算出；运行期没有地图，只能靠规格带。
+	//: **空 = 不知道**（不限制，老规格行为不变）；非空 = 仅列表内可播种。
+	SowableCells [][2]int `json:"sowable_cells,omitempty"`
+
 	//: 防守点格（`tile_end`）。Go 没有地图，而积雪的**满层冻结**要判
 	//: "这一格是不是终点"——终点格豁免（原版 `sim.py:1155` 的 `not self._is_goal`）。
 	//: 不在表里就当没有终点格（见 `simCtx.IsGoalCell`）。

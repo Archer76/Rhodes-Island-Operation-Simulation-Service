@@ -48,9 +48,10 @@ func shuTick(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec, verdi
 				continue
 			}
 			if tile, ok := st.SownTiles[cellOf(ally.cell)]; ok {
-				// 地块回血走 `heal`，不走 `healFromCharacter`：它不是"角色治疗"，
-				// 不能反过来再触发播种（会自我扩张成无限地块）。
-				ally.heal(tile.Recovery * talentScale * dt)
+				// PRTS 天赋备注：生命恢复的提供方式是增加位于地块上干员的
+				// 「生命回复速度」属性，不受治疗加成与禁疗影响 ⇒ 不走
+				// `heal()`（治疗类能力），累加到属性上、本帧末尾按秒结算。
+				ally.shuRecoveryPerSec += tile.Recovery * talentScale
 			}
 		}
 
@@ -62,6 +63,14 @@ func shuTick(ops []*operator, enemies []*enemy, dt, t float64, spec *Spec, verdi
 			applyShuTeleport(op, st, enemies, verdict, t)
 			applyShuS3Aura(op, st, ops, enemies)
 		}
+	}
+	// 结算「生命回复速度」属性：按秒加血，不走 heal（PRTS：不是治疗类能力，
+	// 不受治疗加成与禁疗影响）。属性是**这一帧**累加的，结算完即清零。
+	for _, op := range ops {
+		if r := op.shuRecoveryPerSec; r > 0 && op.alive() {
+			op.hp = math.Min(op.maxHP(), op.hp+r*dt)
+		}
+		op.shuRecoveryPerSec = 0
 	}
 	// 上限变化后把当前血量夹一次（条件消失时上限会降回去）。
 	for _, op := range ops {

@@ -373,3 +373,50 @@ func TestShuSownClearedOnRetreat(t *testing.T) {
 		t.Fatalf("退场后不该再有庇护，p=%v", p)
 	}
 }
+
+// TestShuS2SpecialInterval 技能二「特殊间隔」= 当前攻击间隔 + 1.3（PRTS 备注
+// 「攻击间隔1.3+1.3」）。技能期间 profile.Interval 是 1.3，所以结果应为 2.6。
+func TestShuS2SpecialInterval(t *testing.T) {
+	chdirRepoRootForData(t)
+	st := shuStateForTest(t, 2)
+
+	shu := &operator{
+		hp:   1000,
+		cell: [2]float64{2, 2},
+		spec: OperatorSpec{
+			Name: "黍", CharID: shuCharID, MaxHP: 1000, ATK: 100, AttackInterval: 1.2,
+			Active: &Profile{Interval: 1.3},
+		},
+	}
+	shu.shuState = st
+	shu.skillActive = true
+	if got := shu.interval(); math.Abs(got-2.6) > 1e-9 {
+		t.Fatalf("技能二治疗间隔 = %v，期望 2.6（1.3 + 1.3）", got)
+	}
+
+	// 关掉技能后回到普通间隔，不能被这条规则残留影响。
+	shu.skillActive = false
+	if got := shu.interval(); math.Abs(got-1.2) > 1e-9 {
+		t.Fatalf("技能关闭后间隔 = %v，期望 1.2", got)
+	}
+}
+
+// TestShuSowingRespectsSowableCells 播种限制：只播「可部署我方单位或可通行
+// 地块」。SowableCells 只给两格时，四邻里另外三格必须被拒。
+func TestShuSowingRespectsSowableCells(t *testing.T) {
+	chdirRepoRootForData(t)
+	st := shuStateForTest(t, 1)
+	// 只允许 (2,2) 与 (3,2)。
+	st.SowableCells = [][2]int{{2, 2}, {3, 2}}
+
+	added := st.sowAround([2]int{2, 2}, "黍")
+	if added != 2 {
+		t.Fatalf("可播种格限制下应新增 2 格，实得 %d", added)
+	}
+	if !st.isSown([2]int{2, 2}) || !st.isSown([2]int{3, 2}) {
+		t.Fatal("允许的两格应被播种")
+	}
+	if st.isSown([2]int{1, 2}) || st.isSown([2]int{2, 3}) {
+		t.Fatal("不在可播种格列表里的格不该被播种")
+	}
+}

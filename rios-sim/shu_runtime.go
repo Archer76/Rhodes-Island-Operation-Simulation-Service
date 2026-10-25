@@ -29,6 +29,9 @@ type ShuTeleportAnchor struct {
 type ShuBattleState struct {
 	Config *ShuRuntimeConfig
 
+	// 可播种格（来自规格 `sowable_cells`；空 = 不知道，不限制）。
+	SowableCells [][2]int
+
 	// 播种地块集合（键：格坐标）。
 	SownTiles map[[2]int]*SownTile
 
@@ -72,6 +75,11 @@ func newShuBattleState(cfg *ShuRuntimeConfig) *ShuBattleState {
 // sow 对单个地块播种；同一格重复播种**不叠加**，取更强的效果（回血与
 // 庇护分别取大）。天赋原文只说"播种施加如下效果"，没有任何叠加说明。
 func (s *ShuBattleState) sow(cell [2]int, sower string, recovery, protect float64) bool {
+	// PRTS 天赋备注：仅可部署我方单位或可通行地块可播种。规格不带这份
+	// 几何时（`SowableCells` 为空）按「不知道」处理，不做限制。
+	if len(s.SowableCells) > 0 && !inCells(s.SowableCells, cell) {
+		return false
+	}
 	if t, ok := s.SownTiles[cell]; ok {
 		if recovery > t.Recovery {
 			t.Recovery = recovery
