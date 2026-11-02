@@ -14,9 +14,10 @@
   1. 遇到未定义机制严禁猜想，具名上报 Gap 拒判；
   2. 出现与本次改动相关的非环境测试失败且无法定位时立即停手；
   3. 严禁合入主分支，严禁 push。
-- **验收档**：必复跑（机制数值与战斗循环由主会话在合入前亲自全量复测）。
-- **worker 形态**：新会话（`de_session spawn`，满足独立 worktree、长轮次自洽及可唤醒要求）。
+- **验收档**：必复跑（主会话独立全量复跑：专项测试 8 项全 PASS 1.72s；全包综合回归 rios-sim 67.4s / maa 19.8s / data 1.8s / tui 5.0s 全 ok）。
+- **worker 形态**：新会话（`session-b15d24a3-cb73-4ecd-a51f-d49a6055cf15`）。
 - **模型档**：
   - 路由/主会话：gemini-3.8-flash-high / deepseek-official；
-  - 执行专员：继承默认工作预设与路由。
-- **状态**：在飞
+  - 执行专员：kst-54577be0d3bd0e1f-gateway / gemini-3.8-flash-high。
+- **状态**：收单（已合入 main 分支并推送 GitHub origin/main：14e61f3）
+
