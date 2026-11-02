@@ -348,7 +348,7 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 				// 提丰：特性重量优先索敌、第一天赋破甲、第二天赋未阻挡停顿与技能一/二/三全机制已真行使
 				gaps = mechanisms.Merge(gaps, typhonRemainingGapsFromSpec(op.TyphonSource, op.Name, i))
 			} else if op.CharID == oxiCharID && op.OxiSource != nil && op.OxiSource.ConsumerImplemented {
-				// 塔露拉：原质近卫特性、第一天赋「绝不妥协」、第二天赋「我即火焰」与技能一/二/三全机制已真行使
+				// 塔露拉：本源近卫特性、第一天赋「绝不妥协」、第二天赋「我即火焰」与技能一/二/三全机制已真行使
 				gaps = mechanisms.Merge(gaps, oxiRemainingGapsFromSpec(op.OxiSource, op.Name, i))
 			} else {
 				// A valid exemption source still contains unimplemented notes and

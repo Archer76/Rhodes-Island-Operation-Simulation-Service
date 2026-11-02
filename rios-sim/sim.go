@@ -4036,7 +4036,7 @@ func enemiesAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec *S
 
 			dmg := resolveDamage(e.spec.ATK, e.spec.DamageType, 1.0,
 				op.defense(), op.res(), op.dodgeVs(e.spec.DamageType))
-			// 塔露拉技能二「阻断骤雪」受击减伤与反击吸血
+			// 塔露拉技能二「阂断骤雪」受击减伤与反击吸血
 			if op.spec.CharID == oxiCharID && op.oxiRuntime != nil && op.oxiRuntime.Config != nil && op.oxiRuntime.Config.Slot == 2 {
 				dmg = op.oxiRuntime.OnTakeDamage(t, e, dmg, op, enemies, verdict)
 			}

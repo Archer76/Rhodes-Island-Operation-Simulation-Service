@@ -33,11 +33,11 @@ type OxiRuntimeConfig struct {
 	Duration     float64 `json:"duration"`
 	SkillRangeID string  `json:"skill_range_id"`
 
-	// 技能 1「照霁白夜」
+	// 技能 1「照霎白夜」
 	S1AtkScale float64 `json:"s1_atk_scale"`
 	S1Fear     float64 `json:"s1_fear"`
 
-	// 技能 2「阻断骤雪」
+	// 技能 2「阂断骤雪」
 	S2SkillDuration      float64 `json:"s2_skill_duration"`
 	S2DamageRemaining    float64 `json:"s2_damage_remaining_scale"`
 	S2DamageResistance   float64 `json:"s2_damage_resistance"`
@@ -174,7 +174,7 @@ func decodeOxiRuntimeConfig(s *OxiSourceSpec) (*OxiRuntimeConfig, error) {
 		nums, _, _ := parseRawBlackboard(skFields.Blackboard)
 		for k, v := range nums {
 			switch k {
-			// 技能 1「照霁白夜」
+			// 技能 1「照霎白夜」
 			case "atk_scale":
 				if s.Slot == 1 {
 					cfg.S1AtkScale = v
@@ -186,7 +186,7 @@ func decodeOxiRuntimeConfig(s *OxiSourceSpec) (*OxiRuntimeConfig, error) {
 					consumed["skill.1.fear"] = true
 				}
 
-			// 技能 2「阻断骤雪」
+			// 技能 2「阂断骤雪」
 			case "skill_duration":
 				if s.Slot == 2 {
 					cfg.S2SkillDuration = v

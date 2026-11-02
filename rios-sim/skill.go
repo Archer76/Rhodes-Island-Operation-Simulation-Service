@@ -526,7 +526,7 @@ func (o *operator) maxTarget() int {
 	if p := o.profile(); p != nil && p.MaxTarget > 0 {
 		return p.MaxTarget
 	}
-	// 塔露拉技能二「阻断骤雪」：触发增益期间攻击所有阻挡的敌人
+	// 塔露拉技能二「阂断骤雪」：触发增益期间攻击所有阻挡的敌人
 	if o.spec.CharID == oxiCharID && o.oxiRuntime != nil && o.oxiRuntime.BuffStacks > 0 {
 		if n := len(o.blocking); n > 1 {
 			return n

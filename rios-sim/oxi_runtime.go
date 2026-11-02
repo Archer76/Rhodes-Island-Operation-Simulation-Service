@@ -45,7 +45,7 @@ type OxiRuntime struct {
 	FlameCells       []*OxiFlameCell
 	BurstEnemyWindow map[int]float64 // enemy index -> 窗口截止时刻
 
-	// 技能 2「阻断骤雪」
+	// 技能 2「阂断骤雪」
 	Charges         int
 	InActivePeriod  bool
 	ActiveRemaining float64
