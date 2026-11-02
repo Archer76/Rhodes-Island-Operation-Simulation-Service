@@ -12,9 +12,9 @@
   1. 遇到有争议的非官方通用俗称必须列出对照，不得静默处理；
   2. 若需底层逆向工具必须自行 spawn 逆向专用会话（reverse 预设）；
   3. 严禁合入主分支，严禁 push。
-- **验收档**：必复跑（对账核查所有修正处）。
-- **worker 形态**：新会话（`de_session spawn`）。
+- **验收档**：必复跑（主会话亲自全量复跑：自动化校验 tools/audit_official_terminology.py 0 违规通过，全干员回归测试 84.8s 全绿）。
+- **worker 形态**：新会话（`session-6021bb34-4def-477c-a88c-6ba1617ec156`）。
 - **模型档**：
   - 路由/主会话：gemini-3.8-flash-high / deepseek-official；
   - 执行专员：kst-54577be0d3bd0e1f-gateway / gemini-3.8-flash-high。
-- **状态**：在飞
+- **状态**：收单（已合入 main 分支并推送 GitHub origin/main：fa8f2ae）
