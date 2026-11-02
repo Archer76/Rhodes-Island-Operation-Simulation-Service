@@ -8,13 +8,13 @@ import (
 // TyphonRuntimeConfig 将提丰的所有机制黑板键映射为强类型配置。
 // 数值全部提取自 spec 中的原始 RawMessage，严禁硬编码。
 type TyphonRuntimeConfig struct {
-	// 第一天赋「碎石破阵」
+	// 第一天赋「锐如兽牙」
 	T1Unlocked     bool    `json:"t1_unlocked"`
 	T1DefPenetrate float64 `json:"t1_def_penetrate"`
 	T1Duration     float64 `json:"t1_duration"`
 	T1MaxStackCnt  int     `json:"t1_max_stack_cnt"`
 
-	// 第二天赋「沉着巡弋」
+	// 第二天赋「重如沼泥」
 	T2Unlocked  bool    `json:"t2_unlocked"`
 	T2AtkScale  float64 `json:"t2_atk_scale"`
 	T2Sluggish  float64 `json:"t2_sluggish"`
@@ -43,7 +43,7 @@ type TyphonRuntimeConfig struct {
 	S1Atk         float64 `json:"s1_atk"`
 	S1AttackSpeed float64 `json:"s1_attack_speed"`
 
-	// 技能 2「冰原馈赠」
+	// 技能 2「冰原秩序」
 	S2Atk           float64 `json:"s2_atk"`
 	S2AttackProb    float64 `json:"s2_attack_prob"`
 	S2AttackStun    float64 `json:"s2_attack_stun"`

@@ -516,7 +516,7 @@ func (o *operator) maxTarget() int {
 		o.logosState.Config.Slot == 3 && o.logosState.Config.S3MaxTarget > 0 {
 		return o.logosState.Config.S3MaxTarget
 	}
-	// 提丰技能二「冰原馈赠」：每次攻击发射 2 支箭矢（优先攻击不同目标）
+	// 提丰技能二「冰原秩序」：每次攻击发射 2 支箭矢（优先攻击不同目标）
 	if o.spec.CharID == typhonCharID && o.typhonRuntime != nil && o.skillActive &&
 		o.typhonRuntime.Config.Slot == 2 {
 		return 2

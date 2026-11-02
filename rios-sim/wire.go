@@ -284,7 +284,7 @@ type OperatorSpec struct {
 	//: ⚠ 安德切尔同时带特性「优先攻击空中单位」，两条同时命中时谁先谁后**未取证**，
 	//: 本实现排在空中之后并具名登记。
 	PreferRanged bool `json:"prefer_ranged,omitempty"`
-	//: 特性「优先攻击重量最重的敌人」（攻城狙击手那一族）：选目标时重量最重者优先。
+	//: 特性「优先攻击重量最重的敌人」（攻城手那一族）：选目标时重量最重者优先。
 	//: 与 `prefer_highest_def` 同一条排序链，见 `sim.go::pickTargets`。
 	PreferHeaviest bool `json:"prefer_heaviest,omitempty"` //: 普攻连击（焰狐龙梓兰的**隐藏天赋**）：一次普攻打 `ComboHits` 击，每击倍率
 	//: `ComboHitScale`，**计算防御/法抗之后**再整笔乘 `ComboDamageScale`。

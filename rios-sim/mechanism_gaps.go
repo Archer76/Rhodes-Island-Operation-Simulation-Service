@@ -342,7 +342,7 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 				// ——豁免只覆盖"已消费"的那几件，不覆盖"还没建"的键。
 				gaps = mechanisms.Merge(gaps, shuRemainingGapsFromSpec(op.ShuSource, op.Name, i))
 			} else if op.CharID == "char_4132_ascln" && op.AsclnSource != nil && op.AsclnSource.ConsumerImplemented {
-				// 阿斯卡纶：第一天赋「密林低语」、第二天赋「暗影遮蔽」与技能一/二/三全机制已真行使
+				// 阿斯卡纶：第一天赋「死亡拘审」、第二天赋「噬光残影」与技能一/二/三全机制已真行使
 				gaps = mechanisms.Merge(gaps, asclnRemainingGapsFromSpec(op.AsclnSource, op.Name, i))
 			} else if op.CharID == typhonCharID && op.TyphonSource != nil && op.TyphonSource.ConsumerImplemented {
 				// 提丰：特性重量优先索敌、第一天赋破甲、第二天赋未阻挡停顿与技能一/二/三全机制已真行使

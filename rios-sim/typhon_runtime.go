@@ -9,12 +9,12 @@ type TyphonRuntime struct {
 	Config *TyphonRuntimeConfig
 	RNG    *probRNG
 
-	// 第一天赋「碎石破阵」
+	// 第一天赋「锐如兽牙」
 	T1TargetIndex int     `json:"t1_target_index"` // 当前连续攻击的目标敌人 index (-1 为无)
 	T1Stacks      int     `json:"t1_stacks"`       // 当前叠层数
 	T1Timer       float64 `json:"t1_timer"`        // 破甲保持持续时间
 
-	// 技能 2「冰原馈赠」状态机
+	// 技能 2「冰原秩序」状态机
 	S2CastCount int `json:"s2_cast_count"` // 技能释放次数：1=首次20s，>=2=二次开启无限
 
 	// 技能状态跟踪

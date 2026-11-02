@@ -513,7 +513,7 @@ type TextDerived struct {
 	//: 空中之后（见 `sim.go::pickTargets` 的排序链与那里的注释），并**具名登记**
 	//: 这条次序未经取证——它不像「哪一条该生效」那样可以直接量。
 	PreferRanged bool `json:"prefer_ranged"`
-	//: 特性正文含「优先攻击重量最重的敌人」（攻城狙击手那一族）⇒ 选目标时重量高的优先。
+	//: 特性正文含「优先攻击重量最重的敌人」（攻城手那一族）⇒ 选目标时重量高的优先。
 	PreferHeaviest bool `json:"prefer_heaviest"`
 }
 

@@ -1,11 +1,11 @@
 # 工单：塔露拉（char_4247_oxi）机制全生命周期闭环
 
 - **工单编号**：`dispatch/2026-11-02-talulah-mechanics.md`
-- **目标**：实现六星近卫·原质近卫塔露拉（char_4247_oxi）的特性真实伤害/元素损伤、第一天赋「绝不妥协」、第二天赋「我即火焰」、S1「照霁白夜」、S2「阻断骤雪」、S3「日冕重烈」机制全闭环。
+- **目标**：实现六星近卫·本源近卫塔露拉（char_4247_oxi）的特性真实伤害/元素损伤、第一天赋「绝不妥协」、第二天赋「我即火焰」、S1「照霎白夜」、S2「阂断骤雪」、S3「日冕重烈」机制全闭环。
 - **完成判据**：
   1. 产出干员机制口径文档 `docs/char_4247_oxi-mechanics.md`，完成全量黑板键审计台账与三态结论；中文名词 100% 遵照官方 gamedata 原文；
   2. 规格层 `oxi_spec.go`/`oxi_config.go` 与运行时 `oxi_runtime.go`/`oxi_sim_tick.go` 完整落地；
-  3. 原质近卫特性（阻挡所有敌人、攻击造成真实伤害/元素损伤）、S1 恐惧战栗（`fear`）、S2 受击减伤反击与生命汲取、S3 停攻火浪弹道推进与过载全宽焚原真实行使；
+  3. 本源近卫特性（阻挡所有敌人、攻击造成真实伤害/元素损伤）、S1 恐惧战栗（`fear`）、S2 受击减伤反击与生命汲取、S3 停攻火浪弹道推进与过载全宽焚原真实行使；
   4. 专项测试套件 `TestOxi*` 全部真实 PASS（输出逐条 `--- PASS` 名称与耗时）；
   5. 全包回归（`RIOS_DATA=D:\home\DSH\ak-tactic\data\gamedata`，`RIOS_DB=D:\home\DSH\ak-tactic\data` 目录）用例级全绿，无相关失败；
   6. 在仓外独立 worktree `D:\home\DSH\ak-tactic-talulah-20261102`（分支 `wip/talulah-mechanics-20261102`）生成干净提交并提供 commit sha。

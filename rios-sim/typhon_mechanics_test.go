@@ -168,7 +168,7 @@ func TestTyphonSourceSpecCoverage(t *testing.T) {
 	}
 }
 
-// TestTyphonTraitPreferHeaviest 验证攻城狙击手特性「优先攻击重量最重的敌人」索敌规则
+// TestTyphonTraitPreferHeaviest 验证攻城手特性「优先攻击重量最重的敌人」索敌规则
 func TestTyphonTraitPreferHeaviest(t *testing.T) {
 	op := &operator{
 		cell: [2]float64{0, 0},

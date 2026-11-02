@@ -8,7 +8,7 @@ import (
 // AsclnRuntimeConfig 将阿斯卡纶的所有机制黑板键映射为强类型配置。
 // 数值全部提取自 spec 中的原始 RawMessage，严禁硬编码。
 type AsclnRuntimeConfig struct {
-	// 第一天赋「密林低语」
+	// 第一天赋「死亡拘审」
 	T1MoveSpeed      float64 `json:"t1_move_speed"`
 	T1AtkRatio       float64 `json:"t1_atk_ratio"`
 	T1MaxStackCnt    int     `json:"t1_max_stack_cnt"`
@@ -16,7 +16,7 @@ type AsclnRuntimeConfig struct {
 	T1Interval       float64 `json:"t1_interval"`
 	T1OnKillHpRatio  float64 `json:"t1_on_kill_hp_ratio"` // Y 模组击倒回复
 
-	// 第二天赋「暗影遮蔽」
+	// 第二天赋「噬光残影」
 	T2Unlocked       bool    `json:"t2_unlocked"`
 	T2AttackSpeed    float64 `json:"t2_attack_speed"`
 	T2AttackSpeedAdd float64 `json:"t2_attack_speed_add"`
@@ -36,16 +36,16 @@ type AsclnRuntimeConfig struct {
 	Duration     float64 `json:"duration"`
 	SkillRangeID string  `json:"skill_range_id"`
 
-	// 技能 1「无声收割」
+	// 技能 1「追袭」
 	S1AtkScale float64 `json:"s1_atk_scale"`
 	S1Cnt      int     `json:"s1_cnt"`
 
-	// 技能 2「荆棘束缚」
+	// 技能 2「恩赐」
 	S2Atk         float64 `json:"s2_atk"`
 	S2MoveSpeed   float64 `json:"s2_move_speed"`
 	S2RangeRadius float64 `json:"s2_range_radius"`
 
-	// 技能 3「尽头余烬」
+	// 技能 3「降临」
 	S3Atk                 float64 `json:"s3_atk"`
 	S3BaseAttackTime      float64 `json:"s3_base_attack_time"`
 	S3TauntLevel          float64 `json:"s3_taunt_level"`

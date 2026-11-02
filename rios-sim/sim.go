@@ -3094,7 +3094,7 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 			if op.spec.CharID == typhonCharID && op.typhonRuntime != nil {
 				// 模组 X 特性追加：重量 >= 3 敌人攻击力提升
 				atkBase *= op.typhonRuntime.CheckModX(target)
-				// 第二天赋「沉着巡弋」：攻击未阻挡敌人提升攻击力，并停顿 3.0s
+				// 第二天赋「重如沼泥」：攻击未阻挡敌人提升攻击力，并停顿 3.0s
 				t2Scale, applySluggish := op.typhonRuntime.CheckT2(target)
 				atkBase *= t2Scale
 				if applySluggish {
@@ -3163,7 +3163,7 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 						op.entelechiaDOTTargets[target] = t + 5.0
 					}
 				}
-				// 阿斯卡纶第一天赋「密林低语」：攻击对敌人施加/叠加 debuff
+				// 阿斯卡纶第一天赋「死亡拘审」：攻击对敌人施加/叠加 debuff
 				if dealt > 0 && op.spec.CharID == asclnCharID && op.asclnRuntime != nil {
 					op.asclnRuntime.ApplyT1Debuff(target.index)
 				}
