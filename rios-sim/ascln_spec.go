@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	asclnCharID = "char_4132_ascln"
+	asclnCharID    = "char_4132_ascln"
 	asclnXModuleID = "uniequip_002_ascln"
 	asclnYModuleID = "uniequip_003_ascln"
 )
@@ -33,22 +33,22 @@ type AsclnTalentSource struct {
 // 这里**只存原文**：天赋/模组/技能的数值一律由 decodeAsclnRuntimeConfig 从这些 Raw 里解析。
 // 规格层不手写任何一个硬编码数值。
 type AsclnSourceSpec struct {
-	ConsumerImplemented bool                `json:"consumer_implemented"`
-	Elite               int                 `json:"elite"`
-	Level               int                 `json:"level"`
-	Potential           int                 `json:"potential"`
-	Slot                int                 `json:"slot"`
-	SkillLevel          int                 `json:"skill_level"`
-	Talents             []AsclnTalentSource `json:"talents"`
-	OperatorSkill       AsclnSourceLevel    `json:"operator_skill"`
-	RawSlot             json.RawMessage     `json:"raw_slot"`
-	Module              *AsclnSourceLevel   `json:"module,omitempty"`
-	ModuleCandidates    []json.RawMessage   `json:"module_candidates,omitempty"`
-	ModuleKind          string              `json:"module_kind,omitempty"`
-	TraitOverride       json.RawMessage     `json:"trait_override,omitempty"`
+	ConsumerImplemented bool                       `json:"consumer_implemented"`
+	Elite               int                        `json:"elite"`
+	Level               int                        `json:"level"`
+	Potential           int                        `json:"potential"`
+	Slot                int                        `json:"slot"`
+	SkillLevel          int                        `json:"skill_level"`
+	Talents             []AsclnTalentSource        `json:"talents"`
+	OperatorSkill       AsclnSourceLevel           `json:"operator_skill"`
+	RawSlot             json.RawMessage            `json:"raw_slot"`
+	Module              *AsclnSourceLevel          `json:"module,omitempty"`
+	ModuleCandidates    []json.RawMessage          `json:"module_candidates,omitempty"`
+	ModuleKind          string                     `json:"module_kind,omitempty"`
+	TraitOverride       json.RawMessage            `json:"trait_override,omitempty"`
 	Evidence            map[string]json.RawMessage `json:"evidence"`
-	Unresolved          []string            `json:"unresolved"`
-	RNGSeed             uint64              `json:"rng_seed,omitempty"`
+	Unresolved          []string                   `json:"unresolved"`
+	RNGSeed             uint64                     `json:"rng_seed,omitempty"`
 }
 
 func asclnRawRecords(table string, ids ...string) (map[string]json.RawMessage, error) {
@@ -87,11 +87,11 @@ func asclnSourceLevel(id string, level int, raw json.RawMessage, field string) (
 }
 
 func buildAsclnSourceSpec(st *OperatorStats, slot, skillLevel int) (*AsclnSourceSpec, error) {
-	if st == nil {
-		return nil, fmt.Errorf("ascln source: OperatorStats is nil")
+	if st == nil || st.CharID != asclnCharID {
+		return nil, nil
 	}
-	if st.CharID != asclnCharID {
-		return nil, fmt.Errorf("ascln source: expected %s, got %s", asclnCharID, st.CharID)
+	if slot == 0 {
+		slot = 1
 	}
 	if st.Elite < 0 || st.Elite > 2 {
 		return nil, fmt.Errorf("ascln source: elite %d out of range [0, 2]", st.Elite)

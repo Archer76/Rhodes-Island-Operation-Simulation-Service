@@ -213,6 +213,7 @@ type OperatorOut struct {
 	ShuSource        *ShuSourceSpec        `json:"shu_source,omitempty"`
 	AsclnSource      *AsclnSourceSpec      `json:"ascln_source,omitempty"`
 	LogosSource      *LogosSourceSpec      `json:"logos_source,omitempty"`
+	TyphonSource     *TyphonSourceSpec     `json:"typhon_source,omitempty"`
 	UlpiaSource      *UlpiaSourceSpec      `json:"ulpia_source,omitempty"`
 	Skill            *SkillSpec            `json:"skill,omitempty"`
 	Active           *Profile              `json:"active,omitempty"`
@@ -283,6 +284,7 @@ type OperatorOut struct {
 	AttacksAllBlocked *bool `json:"attacks_all_blocked,omitempty"`
 	//: **天赋**正文含「优先攻击防御力最高的敌人」（史都华德）：选目标时防御力高的优先。
 	PreferHighestDef *bool `json:"prefer_highest_def,omitempty"`
+	PreferHeaviest   *bool `json:"prefer_heaviest,omitempty"`
 	//: **天赋**正文含「优先攻击使用远程武器的敌人」（安德切尔）：`ApplyWay == RANGED` 优先。
 	PreferRanged       *bool            `json:"prefer_ranged,omitempty"`
 	BlessingSave       *float64         `json:"blessing_save,omitempty"`
@@ -944,6 +946,11 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 		b := true
 		out.PreferHighestDef = &b
 	}
+	if st.TextDerived.PreferHeaviest {
+		covered["prefer_heaviest_true"]++
+		b := true
+		out.PreferHeaviest = &b
+	}
 	if st.TextDerived.PreferRanged {
 		covered["prefer_ranged_true"]++
 		b := true
@@ -1052,6 +1059,10 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 	// `operator` 没有朝向。算不出来就大声失败，不静默退化成"范围没扩大"。
 	if err := attachLogosSkillRange(out.LogosSource, r.Direction, r.Position); err != nil {
 		return OperatorOut{}, fmt.Errorf("%s（%s）的技能范围：%v", r.Operator, r.Entry.CharID, err)
+	}
+	out.TyphonSource, err = buildTyphonSourceSpec(st, r.Skill, skillLevel)
+	if err != nil {
+		return OperatorOut{}, err
 	}
 	out.UlpiaSource, err = buildUlpiaSourceSpec(st, r.Skill, skillLevel)
 	if err != nil {

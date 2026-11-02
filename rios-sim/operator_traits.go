@@ -513,6 +513,8 @@ type TextDerived struct {
 	//: 空中之后（见 `sim.go::pickTargets` 的排序链与那里的注释），并**具名登记**
 	//: 这条次序未经取证——它不像「哪一条该生效」那样可以直接量。
 	PreferRanged bool `json:"prefer_ranged"`
+	//: 特性正文含「优先攻击重量最重的敌人」（攻城狙击手那一族）⇒ 选目标时重量高的优先。
+	PreferHeaviest bool `json:"prefer_heaviest"`
 }
 
 // airPriorityTrait / allBlockedTrait 是特性那两条的判据词。
@@ -521,8 +523,9 @@ type TextDerived struct {
 // `operator_trait.blackboard` 都是 `{}`），机制只写在正文里。
 // 「黑板里没有」不等于「没有这条机制」——本仓写明的盲区之一。
 const (
-	airPriorityTrait = "优先攻击空中单位"
-	allBlockedTrait  = "同时攻击阻挡的所有敌人"
+	airPriorityTrait    = "优先攻击空中单位"
+	allBlockedTrait     = "同时攻击阻挡的所有敌人"
+	preferHeaviestTrait = "优先攻击重量最重的敌人"
 	//: 「撤退时返还初始部署费用」——先锋·冲锋手那一族的特性后半句（翎羽）。
 	retreatRefundTrait = "撤退时返还初始部署费用"
 )
@@ -579,6 +582,7 @@ func textDerived(traitDesc string, talents []json.RawMessage) TextDerived {
 	out.HealsOnSkill = strings.Contains(plain, healsOnSkillTrait)
 	out.AirPriority = strings.Contains(plain, airPriorityTrait)
 	out.AttacksAllBlocked = strings.Contains(plain, allBlockedTrait)
+	out.PreferHeaviest = strings.Contains(plain, preferHeaviestTrait)
 	out.RetreatRefund = strings.Contains(plain, retreatRefundTrait)
 	//: 这两条走**天赋**正文（`talents`），不是特性正文——史都华德／安德切尔的
 	//: 黑板里一个字都没写它们。取数口与 `weakness_damage` 同一个（`talentText`）。

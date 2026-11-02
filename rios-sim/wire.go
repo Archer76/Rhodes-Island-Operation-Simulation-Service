@@ -189,6 +189,7 @@ type OperatorSpec struct {
 	ShuSource        *ShuSourceSpec        `json:"shu_source,omitempty"`
 	AsclnSource      *AsclnSourceSpec      `json:"ascln_source,omitempty"`
 	LogosSource      *LogosSourceSpec      `json:"logos_source,omitempty"`
+	TyphonSource     *TyphonSourceSpec     `json:"typhon_source,omitempty"`
 	UlpiaSource      *UlpiaSourceSpec      `json:"ulpia_source,omitempty"`
 	Placeholders     []mechanisms.Gap      `json:"mechanism_placeholders,omitempty"`
 	CharID           string                `json:"char_id"`
@@ -282,7 +283,10 @@ type OperatorSpec struct {
 	//: **天赋**正文「优先攻击使用远程武器的敌人」（安德切尔）：`ApplyWay == RANGED` 优先。
 	//: ⚠ 安德切尔同时带特性「优先攻击空中单位」，两条同时命中时谁先谁后**未取证**，
 	//: 本实现排在空中之后并具名登记。
-	PreferRanged bool `json:"prefer_ranged,omitempty"` //: 普攻连击（焰狐龙梓兰的**隐藏天赋**）：一次普攻打 `ComboHits` 击，每击倍率
+	PreferRanged bool `json:"prefer_ranged,omitempty"`
+	//: 特性「优先攻击重量最重的敌人」（攻城狙击手那一族）：选目标时重量最重者优先。
+	//: 与 `prefer_highest_def` 同一条排序链，见 `sim.go::pickTargets`。
+	PreferHeaviest bool `json:"prefer_heaviest,omitempty"` //: 普攻连击（焰狐龙梓兰的**隐藏天赋**）：一次普攻打 `ComboHits` 击，每击倍率
 	//: `ComboHitScale`，**计算防御/法抗之后**再整笔乘 `ComboDamageScale`。
 	//:
 	//: ⚠ 两个"不是 1"的判据必须按原版抄：`ComboHits` 的"没有这条"是 **1**
@@ -615,12 +619,13 @@ type SpawnSpec struct {
 	ApplyWay    string  `json:"apply_way"`
 	AttackTimes int     `json:"attack_times"`
 
-	IsFlying    bool `json:"is_flying"`
-	Unblockable bool `json:"unblockable"`
-	TauntLevel  int  `json:"taunt_level"`
-	LifeCost    int  `json:"life_cost"`
-	KillCost    int  `json:"kill_cost"`
-	CannotClear bool `json:"cannot_clear"`
+	IsFlying    bool    `json:"is_flying"`
+	Unblockable bool    `json:"unblockable"`
+	TauntLevel  int     `json:"taunt_level"`
+	LifeCost    int     `json:"life_cost"`
+	KillCost    int     `json:"kill_cost"`
+	CannotClear bool    `json:"cannot_clear"`
+	Weight      float64 `json:"weight,omitempty"`
 
 	//: 敌人的免疫表（`EnemyStats.Immunities`，键如 `teleportImmune`）。
 	//: 目前唯一的消费者：黍技能三「免疫传送(黍) 的敌人不会被施加播种标记」。

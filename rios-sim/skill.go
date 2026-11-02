@@ -141,7 +141,7 @@ func skillTickMode(ops []*operator, dt, t float64, spec *Spec, cost *float64, ve
 				}
 			}
 			// 弹药类：打光就结束
-			if sk.Ammo > 0 && op.ammoLeft <= 0 {
+			if (sk.Ammo > 0 || (op.spec.CharID == typhonCharID && op.typhonRuntime != nil && op.typhonRuntime.Config.Slot == 3)) && op.ammoLeft <= 0 {
 				deactivate(op)
 				continue
 			}
@@ -213,6 +213,10 @@ func activate(op *operator, t float64, spec *Spec, cost *float64,
 		verdict.Events = append(verdict.Events, Event{
 			T: t, Kind: "shu_skill_start", Who: op.spec.Name,
 		})
+	}
+	// 提丰（char_2012_typhon）：管理 S2 首次20s/二次无限持续 与 S3 全图锁定弹药生命周期
+	if op.spec.CharID == typhonCharID && op.typhonRuntime != nil {
+		op.typhonRuntime.OnSkillActivate(t, op, nil, verdict)
 	}
 	if sk.Infinite {
 		op.skillTimer = math.Inf(1)
@@ -485,6 +489,11 @@ func (o *operator) interval() float64 {
 		o.shuState.Config.Slot == 2 {
 		interval += shuS2SpecialIntervalBonus
 	}
+	// 提丰「永恒狩猎」：技能开启期间基础攻击间隔变为 3.1s
+	if o.spec.CharID == typhonCharID && o.typhonRuntime != nil && o.skillActive &&
+		o.typhonRuntime.Config.Slot == 3 && o.typhonRuntime.Config.S3BaseAttackTime > 0 {
+		interval = o.typhonRuntime.Config.S3BaseAttackTime
+	}
 	return interval
 }
 
@@ -506,6 +515,11 @@ func (o *operator) maxTarget() int {
 	if o.spec.CharID == logosCharID && o.logosState != nil && o.skillActive &&
 		o.logosState.Config.Slot == 3 && o.logosState.Config.S3MaxTarget > 0 {
 		return o.logosState.Config.S3MaxTarget
+	}
+	// 提丰技能二「冰原馈赠」：每次攻击发射 2 支箭矢（优先攻击不同目标）
+	if o.spec.CharID == typhonCharID && o.typhonRuntime != nil && o.skillActive &&
+		o.typhonRuntime.Config.Slot == 2 {
+		return 2
 	}
 	// 收割者特性（如隐德来希 char_4010_etlchi）：攻击自身攻击范围内的所有敌人
 	if o.spec.CharID == "char_4010_etlchi" {

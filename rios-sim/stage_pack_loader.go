@@ -245,6 +245,10 @@ func LoadStageFromPack(packPath string, stageID string, difficulty string, enemy
 		if stats != nil && stats.LifePointReduce != nil {
 			cost = int(*stats.LifePointReduce)
 		}
+		weight := 0.0
+		if stats != nil && stats.Weight != nil {
+			weight = *stats.Weight
+		}
 
 		immunities := map[string]bool{}
 		if stats != nil {
@@ -264,6 +268,7 @@ func LoadStageFromPack(packPath string, stageID string, difficulty string, enemy
 			MoveSpeed:       ms,
 			Interval:        interval,
 			AttackRange:     radius,
+			Weight:          weight,
 			LifeCost:        cost,
 			DamageType:      "physical",
 			ApplyWay:        "MELEE",

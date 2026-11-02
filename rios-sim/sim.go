@@ -114,6 +114,7 @@ type enemy struct {
 	attackTimer float64
 	attackClock timing.Accumulator
 	attackPause float64
+	stunTimer   float64
 	hits        int
 	leaked      bool
 	leakTime    float64
@@ -244,6 +245,23 @@ type enemy struct {
 }
 
 func (e *enemy) alive() bool { return e.hp > 0 }
+
+func (e *enemy) weight() float64 {
+	if e == nil {
+		return 0
+	}
+	return e.spec.Weight
+}
+
+func (e *enemy) applyStun(duration float64) {
+	if e == nil || duration <= 0 {
+		return
+	}
+	if e.spec.Immunities != nil && e.spec.Immunities["stunImmune"] {
+		return
+	}
+	e.stunTimer = math.Max(e.stunTimer, duration)
+}
 
 // cell 是原版 `EnemyUnit.cell()`：**四舍五入**到整数格（不是截断）。
 //
@@ -525,6 +543,9 @@ type operator struct {
 
 	// ---- 阿斯卡纶（char_4132_ascln）机制状态
 	asclnRuntime *AsclnRuntime
+
+	// ---- 提丰（char_2012_typhon）机制状态
+	typhonRuntime *TyphonRuntime
 
 	// ---- 引擎级概率事件（V-2 裁定后由期望值改精确抽样） ----
 	//
@@ -1147,6 +1168,24 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 					})
 				}
 			}
+			// 提丰（char_2012_typhon）部署初始化
+			if op.spec.CharID == typhonCharID {
+				if op.spec.TyphonSource == nil {
+					return nil, fmt.Errorf("typhon deploy: TyphonSource is nil")
+				}
+				cfg, err := decodeTyphonRuntimeConfig(op.spec.TyphonSource)
+				if err != nil {
+					return nil, fmt.Errorf("typhon deploy decode config: %w", err)
+				}
+				cfg.RNGSeed = operatorProbSeed(op.spec)
+				op.typhonRuntime = newTyphonRuntime(cfg)
+				if verdict != nil {
+					verdict.Events = append(verdict.Events, Event{
+						T: t, Kind: "typhon_rng_seed",
+						Who: fmt.Sprintf("%s seed=%d", op.spec.Name, cfg.RNGSeed),
+					})
+				}
+			}
 			// 乌尔比安（char_4145_ulpia）部署初始化
 			if op.spec.CharID == ulpiaCharID {
 				if op.spec.UlpiaSource == nil {
@@ -1385,6 +1424,9 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 			if e.sluggishTimer > 0 {
 				e.sluggishTimer = math.Max(0.0, e.sluggishTimer-dt)
 			}
+			if e.stunTimer > 0 {
+				e.stunTimer = math.Max(0.0, e.stunTimer-dt)
+			}
 			if e.freezeTimer > 0 {
 				e.freezeTimer = e.freezeClock.StepTime(e.freezeTimer, -1)
 				if e.freezeClock.TimeAtMost(0) {
@@ -1414,7 +1456,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 			//: 博士 2026-09-25 裁定停顿＝减速 80% ⇒ 它不再拦推进，改成在
 			//: `advance` 的速度式上乘一个 0.2（`sluggishFactor`）。
 			if e.alive() && !e.leaked && !e.offMap && e.blockedBy == nil &&
-				e.attackPause <= 0 && !e.frozenLatched {
+				e.attackPause <= 0 && !e.frozenLatched && e.stunTimer <= 0 {
 				// 关卡特有机制可以改这一只的推进速度乘区（如田地/阻流阀）；
 				// 没挂机制时 `speedFor` 恒为 1.0，与最小版本逐位相同。
 				//
@@ -1627,6 +1669,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		logosTick(ops, enemies, dt, t, verdict)
 		ulpiaTick(ops, enemies, dt, t, verdict)
 		asclnSimTick(ops, enemies, dt, t, spec, verdict)
+		typhonSimTick(ops, enemies, dt, t, spec, verdict)
 
 		intrinsicCountTick(enemies, t)
 		if ctx.countError != nil {
@@ -2723,6 +2766,24 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				T: t, Kind: "logos_s3_multi", Who: op.spec.Name,
 			})
 		}
+		// 提丰（char_2012_typhon）目标定制：S3 全图锁定追踪 与 S2 双箭选靶
+		if op.spec.CharID == typhonCharID && op.typhonRuntime != nil && op.skillActive {
+			if op.typhonRuntime.Config.Slot == 3 {
+				locked := op.typhonRuntime.GetLockedEnemy(enemies)
+				if locked == nil {
+					locked = op.typhonRuntime.AcquireS3Lock(op, enemies)
+				}
+				if locked != nil {
+					targets = []*enemy{locked}
+				} else {
+					targets = nil
+				}
+			} else if op.typhonRuntime.Config.Slot == 2 {
+				if len(targets) == 1 {
+					targets = []*enemy{targets[0], targets[0]}
+				}
+			}
+		}
 		// ---- 医疗：平A 是**治疗**，不是伤害（原版 3994-4019）
 		//
 		// 判据两段：① 这个人是医疗（`op.heals`）；② 这一击**没被技能改成伤害**
@@ -2875,6 +2936,17 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 			scale = op.spec.ComboHitScale
 			comboDmgScale = op.spec.ComboDamageScale
 		}
+		// 提丰技能三「永恒狩猎」：每发弹药发射 S3MaxHitNum 次打击，每击造成 S3AtkScale 物理伤害
+		if op.spec.CharID == typhonCharID && op.typhonRuntime != nil && op.skillActive && op.typhonRuntime.Config.Slot == 3 {
+			hits = op.typhonRuntime.Config.S3MaxHitNum
+			if hits <= 0 {
+				hits = 5
+			}
+			scale = op.typhonRuntime.Config.S3AtkScale
+			if scale <= 0 {
+				scale = 1.0
+			}
+		}
 		//: ★ 行使指纹：特性「同时攻击阻挡的所有敌人」（泡普卡）**真的打到两个以上**。
 		//: 判在 `deals`（这一击是伤害还是治疗）之外、也判在目标定下来之后——
 		//: 「她挡住了三个」不是这条机制的见证，**一次出手命中 ≥2 个**才是。
@@ -3018,6 +3090,18 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 						power, atkBase)
 				}
 			}
+			// 提丰（char_2012_typhon）特性与天赋加成
+			if op.spec.CharID == typhonCharID && op.typhonRuntime != nil {
+				// 模组 X 特性追加：重量 >= 3 敌人攻击力提升
+				atkBase *= op.typhonRuntime.CheckModX(target)
+				// 第二天赋「沉着巡弋」：攻击未阻挡敌人提升攻击力，并停顿 3.0s
+				t2Scale, applySluggish := op.typhonRuntime.CheckT2(target)
+				atkBase *= t2Scale
+				if applySluggish {
+					target.sluggishTimer = math.Max(target.sluggishTimer, op.typhonRuntime.Config.T2Sluggish)
+					op.typhonRuntime.TotalT2SluggishApplied++
+				}
+			}
 			for i := 0; i < hits; i++ {
 				if !target.alive() {
 					break
@@ -3039,14 +3123,22 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 						T: t, Kind: "sakiko_note_launch", Who: op.spec.Name,
 					})
 				}
+				targetDEF := target.spec.DEF
+				if op.spec.CharID == typhonCharID && op.typhonRuntime != nil {
+					targetDEF = op.typhonRuntime.EffectiveDEF(target)
+				}
 				dmg := resolveDamage(atkBase, dmgType, hitScale,
-					target.spec.DEF, target.res(), target.dodgeVs(dmgType))
+					targetDEF, target.res(), target.dodgeVs(dmgType))
 				// 连击的 `ComboDamageScale` **乘在这里**：原版是
 				// `self._damage_enemy(target, dmg.final * combo_dmg_scale, ...)`
 				// （`sim.py:4135`），也就是**算完防御/法抗之后**再整笔缩放。
 				// 乘进 `hitScale`（结算之前）会得到完全不同的数——那是法抗/
 				// 防御也一起被缩放，症状是"伤害偏低且随目标防御变化"。
 				dmg *= comboDmgScale
+				// 提丰模组 Y：远距离伤害加成（最高 12%）
+				if op.spec.CharID == typhonCharID && op.typhonRuntime != nil {
+					dmg *= op.typhonRuntime.CheckModY([2]float64{float64(op.cell[0]), float64(op.cell[1])}, target.position)
+				}
 				// 乌尔比安模组Y：对被阻挡的敌人造成的伤害提升至 damage_scale (1.1) 倍
 				if op.spec.CharID == ulpiaCharID && op.ulpiaState != nil {
 					dmg *= op.ulpiaDamageScale(target)
@@ -3074,6 +3166,30 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				// 阿斯卡纶第一天赋「密林低语」：攻击对敌人施加/叠加 debuff
 				if dealt > 0 && op.spec.CharID == asclnCharID && op.asclnRuntime != nil {
 					op.asclnRuntime.ApplyT1Debuff(target.index)
+				}
+				// 提丰（char_2012_typhon）命中处理：第一天赋叠层与技能晕眩
+				if dealt > 0 && op.spec.CharID == typhonCharID && op.typhonRuntime != nil {
+					op.typhonRuntime.TotalAttacks++
+					op.typhonRuntime.TotalDamageDealt += dealt
+					op.typhonRuntime.RecordHit(target)
+					// S2 概率晕眩：遵循 V-2 规范确定性 RNG 抽样
+					if op.skillActive && op.typhonRuntime.Config.Slot == 2 {
+						if op.probChance(op.typhonRuntime.Config.S2AttackProb, "typhon_s2_stun", t, verdict) {
+							target.applyStun(op.typhonRuntime.Config.S2AttackStun)
+							op.typhonRuntime.TotalStunsApplied++
+							if verdict != nil {
+								verdict.Events = append(verdict.Events, Event{
+									T: t, Kind: "typhon_s2_stun",
+									Who: fmt.Sprintf("%s → %s", op.spec.Name, target.spec.Name),
+								})
+							}
+						}
+					}
+					// S3 命中微晕眩（0.4s）
+					if op.skillActive && op.typhonRuntime.Config.Slot == 3 {
+						target.applyStun(op.typhonRuntime.Config.S3Stun)
+						op.typhonRuntime.TotalStunsApplied++
+					}
 				}
 				if traceOn {
 					trace("        打 %s 攻=%.1f 类型=%s 倍率=%.3f 防=%.1f 抗=%.1f 伤害=%.3f 实扣=%.3f 剩=%.3f",
@@ -3432,6 +3548,9 @@ func pickTargets(op *operator, enemies []*enemy, n int, t float64) []*enemy {
 		if op.spec.AirPriority && a.spec.IsFlying != b.spec.IsFlying {
 			return a.spec.IsFlying
 		}
+		if op.spec.PreferHeaviest && a.weight() != b.weight() {
+			return a.weight() > b.weight()
+		}
 		if op.spec.PreferHighestDef && a.spec.DEF != b.spec.DEF {
 			return a.spec.DEF > b.spec.DEF
 		}
@@ -3475,6 +3594,10 @@ func pickTargets(op *operator, enemies []*enemy, n int, t float64) []*enemy {
 				trace("TRAITDEF t=%.4f op=%s pick=%s(def=%.1f) def=%s(def=%.1f)",
 					t, op.spec.Name, out[0].spec.Name, out[0].spec.DEF,
 					def.spec.Name, def.spec.DEF)
+			case op.spec.PreferHeaviest && out[0].weight() > def.weight():
+				trace("TRAITWEIGHT t=%.4f op=%s pick=%s(w=%.1f) def=%s(w=%.1f)",
+					t, op.spec.Name, out[0].spec.Name, out[0].weight(),
+					def.spec.Name, def.weight())
 			case op.spec.PreferRanged && preferRangedWay(out[0], def):
 				//: 打出来的两个量是**判据本身**（是不是地面 ＋ 远程攻击范围），
 				//: 不是 `ApplyWay`——后者只是旁证，写成它会让读的人以为判据是那个。
@@ -3773,7 +3896,7 @@ func enemiesAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec *S
 		// ⚠ 读的是**复合**的 `frozen()`：原版的 `frozen` 是
 		// `freeze_timer > 0` **或**"所站格满层"（积雪），只读计时器会让
 		// 积雪那一半静默失效（敌人照打）。
-		if e.frozen() {
+		if e.frozen() || e.stunTimer > 0 {
 			continue
 		}
 		op := enemyTarget(e, ops, spec.RangedEnemies)
