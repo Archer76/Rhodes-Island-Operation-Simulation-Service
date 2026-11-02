@@ -254,3 +254,11 @@ tools/opfamily_inventory.py
 # Detailed game-data-derived stage/enemy inventories stay local.
 docs/enemies-hs-8.md
 docs/stage-hs-8.md
+
+# 本地构建与运行缓存
+.gocache/
+cache/
+
+# 本地注册表备份
+*.reg
+
