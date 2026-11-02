@@ -566,6 +566,9 @@ type operator struct {
 	// ---- 塔露拉（char_4247_oxi）机制状态
 	oxiRuntime *OxiRuntime
 
+	// ---- 冻河（char_4244_tocka）机制状态
+	tockaRuntime *TockaRuntime
+
 	// ---- 引擎级概率事件（V-2 裁定后由期望值改精确抽样） ----
 	//
 	// `probRNG` 是这位干员的抽样器，种子来自**规格**（`OperatorSpec.RNGSeed`）。
@@ -1236,6 +1239,18 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 				}
 				op.ulpiaState = newUlpiaBattleState(cfg)
 			}
+			// 冻河（char_4244_tocka）部署初始化
+			if op.spec.CharID == tockaCharID {
+				if op.spec.TockaSource == nil {
+					return nil, fmt.Errorf("tocka deploy: TockaSource is nil")
+				}
+				cfg, err := decodeTockaRuntimeConfig(op.spec.TockaSource)
+				if err != nil {
+					return nil, fmt.Errorf("tocka deploy decode config: %w", err)
+				}
+				cfg.RNGSeed = operatorProbSeed(op.spec)
+				op.tockaRuntime = newTockaRuntime(cfg)
+			}
 			// 引擎级概率事件的抽样器：**在部署时建**，不在首次抽签时建——
 			// 建得晚会让"什么时候第一次抽"影响序列起点，同一份规格就可能跑出
 			// 两条时间线。手工夹具没有部署分支，由 `ensureProbRNG` 兜底。
@@ -1713,6 +1728,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		asclnSimTick(ops, enemies, dt, t, spec, verdict)
 		typhonSimTick(ops, enemies, dt, t, spec, verdict)
 		oxiSimTick(ops, enemies, dt, t, spec, verdict)
+		tockaSimTick(ops, enemies, dt, t, spec, verdict)
 
 		intrinsicCountTick(enemies, t)
 		if ctx.countError != nil {
@@ -3266,6 +3282,33 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 						op.typhonRuntime.TotalStunsApplied++
 					}
 				}
+				// 冻河（char_4244_tocka）命中处理：第二天赋强化溅射虚弱与 S3 攻击晕眩
+				if dealt > 0 && op.spec.CharID == tockaCharID && op.tockaRuntime != nil {
+					// 第二天赋「雪的印痕」强化普攻：范围溅射虚弱与法术 DoT
+					if op.tockaRuntime.EmpoweredAttackReady {
+						op.tockaRuntime.EmpoweredAttackReady = false
+						op.tockaRuntime.TotalEmpoweredHits++
+						rRadius := op.tockaRuntime.Config.T2ProjectileRange
+						if rRadius <= 0 {
+							rRadius = 1.5
+						}
+						for _, e := range enemies {
+							if e != nil && e.alive() {
+								dist := math.Hypot(e.position[0]-target.position[0], e.position[1]-target.position[1])
+								if dist <= rRadius {
+									op.tockaRuntime.ApplyT2Weaken(e)
+								}
+							}
+						}
+					}
+					// S3 命中晕眩
+					if op.skillActive && op.tockaRuntime.Config.Slot == 3 {
+						if stunSec := op.tockaRuntime.Config.S3AttackStun; stunSec > 0 {
+							target.applyStun(stunSec)
+							op.tockaRuntime.TotalStunsApplied++
+						}
+					}
+				}
 				if traceOn {
 					trace("        打 %s 攻=%.1f 类型=%s 倍率=%.3f 防=%.1f 抗=%.1f 伤害=%.3f 实扣=%.3f 剩=%.3f",
 						target.spec.Name, atkBase, dmgType, hitScale, target.spec.DEF,
@@ -4034,7 +4077,26 @@ func enemiesAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec *S
 				}
 			}
 
-			dmg := resolveDamage(e.spec.ATK, e.spec.DamageType, 1.0,
+			// 冻河第二天赋虚弱攻击力降低
+			enemyATK := e.spec.ATK
+			for _, other := range ops {
+				if other != nil && other.spec.CharID == tockaCharID && other.tockaRuntime != nil {
+					if mod := other.tockaRuntime.EnemyAtkModifier(e.index); mod != 0 {
+						enemyATK *= (1.0 + mod)
+					}
+					break
+				}
+			}
+
+			// 冻河 S1 受击响应：持有 S1 协同标记受到攻击时获得衰减屏障并眩晕攻击者
+			for _, other := range ops {
+				if other != nil && other.spec.CharID == tockaCharID && other.tockaRuntime != nil {
+					other.tockaRuntime.HandleAllyDamaged(op, e, other, ops)
+					break
+				}
+			}
+
+			dmg := resolveDamage(enemyATK, e.spec.DamageType, 1.0,
 				op.defense(), op.res(), op.dodgeVs(e.spec.DamageType))
 			// 塔露拉技能二「阂断骤雪」受击减伤与反击吸血
 			if op.spec.CharID == oxiCharID && op.oxiRuntime != nil && op.oxiRuntime.Config != nil && op.oxiRuntime.Config.Slot == 2 {
@@ -4652,6 +4714,15 @@ func (o *operator) take(amount float64) float64 {
 			trace("SHIELD t=%.4f op=%s break %d/%d heal=%.3f hp=%.3f",
 				*o.sim.time, o.spec.Name, o.shieldLayers, o.shieldMaxLayers,
 				o.shieldBreakHeal, o.hp)
+		}
+	}
+	// 冻河 S1 衰减屏障吸收伤害
+	if o.sim != nil && o.sim.objs != nil {
+		for _, other := range *o.sim.objs {
+			if other != nil && other.spec.CharID == tockaCharID && other.tockaRuntime != nil {
+				amount = other.tockaRuntime.AbsorbDamageWithBarrier(o, amount)
+				break
+			}
 		}
 	}
 	dealt := math.Min(o.hp, amount)

@@ -218,6 +218,15 @@ func activate(op *operator, t float64, spec *Spec, cost *float64,
 	if op.spec.CharID == typhonCharID && op.typhonRuntime != nil {
 		op.typhonRuntime.OnSkillActivate(t, op, nil, verdict)
 	}
+	// 冻河 S3 协同响应：持有 S3 标记的干员开启技能时触发加成与标记转移
+	if op.sim != nil && op.sim.objs != nil {
+		for _, other := range *op.sim.objs {
+			if other != nil && other.spec.CharID == tockaCharID && other.tockaRuntime != nil {
+				other.tockaRuntime.HandleAllySkillActivated(op, other, *op.sim.objs)
+				break
+			}
+		}
+	}
 	if sk.Infinite {
 		op.skillTimer = math.Inf(1)
 	} else {
@@ -410,6 +419,19 @@ func (o *operator) atk() float64 {
 			res += o.oxiRuntime.Config.S3Atk * o.spec.ATK
 		}
 	}
+	// 冻河自身 S3 衰减攻击力加成
+	if o.spec.CharID == tockaCharID && o.tockaRuntime != nil {
+		res += o.spec.ATK * o.tockaRuntime.SelfAtkModifier()
+	}
+	// 友方干员受冻河 S3 协同衰减攻击力加成
+	if o.sim != nil && o.sim.objs != nil {
+		for _, other := range *o.sim.objs {
+			if other != nil && other.spec.CharID == tockaCharID && other.tockaRuntime != nil {
+				res += o.spec.ATK * other.tockaRuntime.OpAtkModifier(o)
+				break
+			}
+		}
+	}
 	return res
 }
 
@@ -509,6 +531,23 @@ func (o *operator) interval() float64 {
 		o.typhonRuntime.Config.Slot == 3 && o.typhonRuntime.Config.S3BaseAttackTime > 0 {
 		interval = o.typhonRuntime.Config.S3BaseAttackTime
 	}
+	// 友方干员受冻河 S2 协同攻速加成
+	if o.sim != nil && o.sim.objs != nil {
+		for _, other := range *o.sim.objs {
+			if other != nil && other.spec.CharID == tockaCharID && other.tockaRuntime != nil {
+				if aspd := other.tockaRuntime.OpAspdModifier(o); aspd != 0 {
+					interval *= 100 / math.Max(aspdMin, 100+aspd)
+				}
+				break
+			}
+		}
+	}
+	// 冻河自身 S3 攻速提升
+	if o.spec.CharID == tockaCharID && o.tockaRuntime != nil && o.skillActive && o.tockaRuntime.Config.Slot == 3 {
+		if aspd := o.tockaRuntime.Config.S3AttackSpeed; aspd != 0 {
+			interval *= 100 / math.Max(aspdMin, 100+aspd)
+		}
+	}
 	return interval
 }
 
@@ -545,6 +584,11 @@ func (o *operator) maxTarget() int {
 		o.typhonRuntime.Config.Slot == 2 {
 		return 2
 	}
+	// 冻河技能三「踽踽独行之春」：同时攻击 attack@max_target 个目标
+	if o.spec.CharID == tockaCharID && o.tockaRuntime != nil && o.skillActive &&
+		o.tockaRuntime.Config.Slot == 3 && o.tockaRuntime.Config.S3AttackMaxTarget > 0 {
+		return o.tockaRuntime.Config.S3AttackMaxTarget
+	}
 	// 收割者特性（如隐德来希 char_4010_etlchi）：攻击自身攻击范围内的所有敌人
 	if o.spec.CharID == "char_4010_etlchi" {
 		return 99
@@ -568,6 +612,10 @@ func (o *operator) maxTarget() int {
 // atkScale / hitCount / finalHitScale 是"这一击怎么打"的三个数；
 // 没有技能（或没开）时是 1 / 1 / 无。
 func (o *operator) atkScale() float64 {
+	if o.spec.CharID == tockaCharID && o.tockaRuntime != nil && o.skillActive &&
+		o.tockaRuntime.Config.Slot == 3 && o.tockaRuntime.Config.S3AttackAtkScale > 0 {
+		return o.tockaRuntime.Config.S3AttackAtkScale
+	}
 	if p := o.profile(); p != nil {
 		return p.AtkScale
 	}
