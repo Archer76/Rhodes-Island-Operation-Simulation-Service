@@ -211,6 +211,7 @@ type OperatorOut struct {
 	EntelechiaSource *EntelechiaSourceSpec `json:"entelechia_source,omitempty"`
 	SakikoSource     *SakikoSourceSpec     `json:"sakiko_source,omitempty"`
 	ShuSource        *ShuSourceSpec        `json:"shu_source,omitempty"`
+	AsclnSource      *AsclnSourceSpec      `json:"ascln_source,omitempty"`
 	LogosSource      *LogosSourceSpec      `json:"logos_source,omitempty"`
 	UlpiaSource      *UlpiaSourceSpec      `json:"ulpia_source,omitempty"`
 	Skill            *SkillSpec            `json:"skill,omitempty"`
@@ -1036,6 +1037,10 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 		return OperatorOut{}, err
 	}
 	out.ShuSource, err = buildShuSourceSpec(st, r.Skill, skillLevel)
+	if err != nil {
+		return OperatorOut{}, err
+	}
+	out.AsclnSource, err = buildAsclnSourceSpec(st, r.Skill, skillLevel)
 	if err != nil {
 		return OperatorOut{}, err
 	}

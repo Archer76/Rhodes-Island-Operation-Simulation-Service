@@ -523,6 +523,9 @@ type operator struct {
 	// ---- 乌尔比安（char_4145_ulpia）机制状态
 	ulpiaState *UlpiaBattleState
 
+	// ---- 阿斯卡纶（char_4132_ascln）机制状态
+	asclnRuntime *AsclnRuntime
+
 	// ---- 引擎级概率事件（V-2 裁定后由期望值改精确抽样） ----
 	//
 	// `probRNG` 是这位干员的抽样器，种子来自**规格**（`OperatorSpec.RNGSeed`）。
@@ -1119,6 +1122,31 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 					})
 				}
 			}
+
+			// 阿斯卡纶（char_4132_ascln）部署初始化
+			if op.spec.CharID == asclnCharID {
+				if op.spec.AsclnSource == nil {
+					return nil, fmt.Errorf("ascln deploy: AsclnSource is nil")
+				}
+				cfg, err := decodeAsclnRuntimeConfig(op.spec.AsclnSource)
+				if err != nil {
+					return nil, fmt.Errorf("ascln deploy decode config: %w", err)
+				}
+				cfg.RNGSeed = operatorProbSeed(op.spec)
+				op.asclnRuntime = newAsclnRuntime(cfg)
+				col, row := int(op.cell[0]), int(op.cell[1])
+				if spec != nil && spec.Stage != "" {
+					if stObj, err := LoadStage(spec.Stage); err == nil && stObj != nil {
+						op.asclnRuntime.CheckAdjacentHighground(stObj, col, row)
+					}
+				}
+				if verdict != nil {
+					verdict.Events = append(verdict.Events, Event{
+						T: t, Kind: "ascln_rng_seed",
+						Who: fmt.Sprintf("%s seed=%d", op.spec.Name, cfg.RNGSeed),
+					})
+				}
+			}
 			// 乌尔比安（char_4145_ulpia）部署初始化
 			if op.spec.CharID == ulpiaCharID {
 				if op.spec.UlpiaSource == nil {
@@ -1598,6 +1626,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		shuTick(ops, enemies, dt, t, spec, verdict)
 		logosTick(ops, enemies, dt, t, verdict)
 		ulpiaTick(ops, enemies, dt, t, verdict)
+		asclnSimTick(ops, enemies, dt, t, spec, verdict)
 
 		intrinsicCountTick(enemies, t)
 		if ctx.countError != nil {
@@ -2410,6 +2439,23 @@ func advance(e *enemy, dt, speedScale, speedMult float64) {
 	if e.logosMoveDown != 0 {
 		speed *= e.logosMoveScale()
 	}
+	// 阿斯卡纶第一天赋与技能减速
+	if e.sim != nil && e.sim.objs != nil {
+		for _, op := range *e.sim.objs {
+			if op != nil && op.spec.CharID == asclnCharID && op.asclnRuntime != nil && op.alive() {
+				cx, cy := e.cell()
+				inRange := inCells(op.targetRange(), [2]int{cx, cy})
+				asclnMod := op.asclnRuntime.EnemyMoveSpeedModifier(e.index, inRange)
+				if asclnMod != 0 {
+					factor := 1.0 + asclnMod
+					if factor < 0.1 {
+						factor = 0.1 // 舟游移速下限通常保底 0.1
+					}
+					speed *= factor
+				}
+			}
+		}
+	}
 	if speed <= 0 {
 		return
 	}
@@ -3024,6 +3070,10 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 					if op.entelechiaDOTTargets != nil {
 						op.entelechiaDOTTargets[target] = t + 5.0
 					}
+				}
+				// 阿斯卡纶第一天赋「密林低语」：攻击对敌人施加/叠加 debuff
+				if dealt > 0 && op.spec.CharID == asclnCharID && op.asclnRuntime != nil {
+					op.asclnRuntime.ApplyT1Debuff(target.index)
 				}
 				if traceOn {
 					trace("        打 %s 攻=%.1f 类型=%s 倍率=%.3f 防=%.1f 抗=%.1f 伤害=%.3f 实扣=%.3f 剩=%.3f",
@@ -3766,6 +3816,26 @@ func enemiesAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec *S
 		// 防御/法抗取**这一刻**的数（技能给防御的，敌人打上来时就得吃到）。
 		dealt := 0.0
 		for seg := 0; seg < times; seg++ {
+			// 阿斯卡纶技能 3 命中率抽样与闪避判定（V-2 规范）
+			if op.spec.CharID == asclnCharID && op.asclnRuntime != nil {
+				isPhysical := (e.spec.DamageType == "PHYSICAL")
+				cx, cy := e.cell()
+				inRange := inCells(op.targetRange(), [2]int{cx, cy})
+				isGround := !e.spec.IsFlying
+				hit, reason := op.asclnRuntime.SampleHitChance(isPhysical, inRange, isGround)
+				if !hit {
+					// 触发未命中或闪避：结算生命回复
+					heal := op.asclnRuntime.OnEvadeOrMiss(op.maxHP())
+					if heal > 0 {
+						op.hp = math.Min(op.maxHP(), op.hp+heal)
+					}
+					if traceOn {
+						trace("ASCLN-EVADE t=%.4f op=%s reason=%s heal=%.1f hp=%.1f", t, op.spec.Name, reason, heal, op.hp)
+					}
+					continue
+				}
+			}
+
 			dmg := resolveDamage(e.spec.ATK, e.spec.DamageType, 1.0,
 				op.defense(), op.res(), op.dodgeVs(e.spec.DamageType))
 			dealt += op.take(dmg)

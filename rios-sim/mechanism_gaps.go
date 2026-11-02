@@ -341,6 +341,9 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 				// 技能一/二/三已在主战斗循环真行使。**未消费的黑板键仍具名上报**
 				// ——豁免只覆盖"已消费"的那几件，不覆盖"还没建"的键。
 				gaps = mechanisms.Merge(gaps, shuRemainingGapsFromSpec(op.ShuSource, op.Name, i))
+			} else if op.CharID == "char_4132_ascln" && op.AsclnSource != nil && op.AsclnSource.ConsumerImplemented {
+				// 阿斯卡纶：第一天赋「密林低语」、第二天赋「暗影遮蔽」与技能一/二/三全机制已真行使
+				gaps = mechanisms.Merge(gaps, asclnRemainingGapsFromSpec(op.AsclnSource, op.Name, i))
 			} else {
 				// A valid exemption source still contains unimplemented notes and
 				// penetration. Raw callers must not erase that source's gaps.

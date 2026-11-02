@@ -187,6 +187,7 @@ type OperatorSpec struct {
 	EntelechiaSource *EntelechiaSourceSpec `json:"entelechia_source,omitempty"`
 	SakikoSource     *SakikoSourceSpec     `json:"sakiko_source,omitempty"`
 	ShuSource        *ShuSourceSpec        `json:"shu_source,omitempty"`
+	AsclnSource      *AsclnSourceSpec      `json:"ascln_source,omitempty"`
 	LogosSource      *LogosSourceSpec      `json:"logos_source,omitempty"`
 	UlpiaSource      *UlpiaSourceSpec      `json:"ulpia_source,omitempty"`
 	Placeholders     []mechanisms.Gap      `json:"mechanism_placeholders,omitempty"`
