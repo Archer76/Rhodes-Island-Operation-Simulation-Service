@@ -401,6 +401,15 @@ func (o *operator) atk() float64 {
 		_, atkBonus := o.ulpiaState.ulpiaTalent2Bonus()
 		res += atkBonus
 	}
+	// 塔露拉技能二叠层与技能三加成
+	if o.spec.CharID == oxiCharID && o.oxiRuntime != nil && o.oxiRuntime.Config != nil {
+		if o.oxiRuntime.BuffStacks > 0 {
+			res += float64(o.oxiRuntime.BuffStacks) * o.oxiRuntime.Config.S2Atk * o.spec.ATK
+		}
+		if o.skillActive && o.oxiRuntime.Config.Slot == 3 {
+			res += o.oxiRuntime.Config.S3Atk * o.spec.ATK
+		}
+	}
 	return res
 }
 
@@ -410,7 +419,13 @@ func (o *operator) defense() float64 {
 		base = p.DEF
 	}
 	// 同 `atk()`：光环的底子是 `spec.DEF`，不是技能面板。
-	return base + o.spec.DEF*o.auraDefPct
+	res := base + o.spec.DEF*o.auraDefPct
+	if o.spec.CharID == oxiCharID && o.oxiRuntime != nil && o.oxiRuntime.Config != nil {
+		if o.oxiRuntime.BuffStacks > 0 {
+			res += float64(o.oxiRuntime.BuffStacks) * o.oxiRuntime.Config.S2Def * o.spec.DEF
+		}
+	}
+	return res
 }
 
 func (o *operator) res() float64 {
@@ -498,6 +513,9 @@ func (o *operator) interval() float64 {
 }
 
 func (o *operator) damageType() string {
+	if o.spec.CharID == oxiCharID {
+		return "MAGIC"
+	}
 	if p := o.profile(); p != nil {
 		return p.DamageType
 	}
@@ -507,6 +525,12 @@ func (o *operator) damageType() string {
 func (o *operator) maxTarget() int {
 	if p := o.profile(); p != nil && p.MaxTarget > 0 {
 		return p.MaxTarget
+	}
+	// 塔露拉技能二「阻断骤雪」：触发增益期间攻击所有阻挡的敌人
+	if o.spec.CharID == oxiCharID && o.oxiRuntime != nil && o.oxiRuntime.BuffStacks > 0 {
+		if n := len(o.blocking); n > 1 {
+			return n
+		}
 	}
 	//: 逻各斯技能三「延异视阈」：同时攻击 `attack@max_target` 个目标（M3 = 4）。
 	//:

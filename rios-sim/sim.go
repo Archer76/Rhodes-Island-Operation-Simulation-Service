@@ -234,6 +234,8 @@ type enemy struct {
 	//: 折减落在 `interval()`（与干员侧同一条攻速公式），"再次中招转冻结"落在
 	//: `applyCold()`。此前这条数两台引擎都拿不到——见 `docs/mechanics-dictionary.md`。
 	coldTimer float64
+	fearTimer float64
+	element   *elementState
 
 	//: 造它的那个模拟器——挨打效果（蜕皮加病害）要问机制层，机制层挂在
 	//: 模拟器上。之所以用反向指针而不是给 `take()` 加参数：`take()` 有多个
@@ -261,6 +263,19 @@ func (e *enemy) applyStun(duration float64) {
 		return
 	}
 	e.stunTimer = math.Max(e.stunTimer, duration)
+}
+
+func (e *enemy) applyFear(duration float64, sourceCell [2]int) {
+	if e == nil || duration <= 0 {
+		return
+	}
+	if e.spec.Immunities != nil && e.spec.Immunities["fearedImmune"] {
+		return
+	}
+	e.fearTimer = math.Max(e.fearTimer, duration)
+	if e.blockedBy != nil {
+		e.blockedBy = nil
+	}
 }
 
 // cell 是原版 `EnemyUnit.cell()`：**四舍五入**到整数格（不是截断）。
@@ -361,6 +376,7 @@ func newEnemy(spec SpawnSpec, index int, position [2]float64, c *simCtx) *enemy 
 		traceSpeed:      -1.0,
 		//: 天桩-乙的自毁时刻从 -1 起步（0 会被读成"开局就该自毁"）。
 		diverBoomAt: -1.0,
+		element:     newElementState(defaultMaxEP),
 	}
 	if n := len(spec.RebornSummons); n > 0 {
 		// 原版 `_build_enemy` 就给每只排好这一列（-1 = 不在窗口里，不排拍）
@@ -546,6 +562,9 @@ type operator struct {
 
 	// ---- 提丰（char_2012_typhon）机制状态
 	typhonRuntime *TyphonRuntime
+
+	// ---- 塔露拉（char_4247_oxi）机制状态
+	oxiRuntime *OxiRuntime
 
 	// ---- 引擎级概率事件（V-2 裁定后由期望值改精确抽样） ----
 	//
@@ -1186,6 +1205,26 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 					})
 				}
 			}
+			// 塔露拉（char_4247_oxi）部署初始化
+			if op.spec.CharID == oxiCharID {
+				if op.spec.OxiSource == nil {
+					return nil, fmt.Errorf("oxi deploy: OxiSource is nil")
+				}
+				cfg, err := decodeOxiRuntimeConfig(op.spec.OxiSource)
+				if err != nil {
+					return nil, fmt.Errorf("oxi deploy decode config: %w", err)
+				}
+				cfg.RNGSeed = operatorProbSeed(op.spec)
+				op.oxiRuntime = newOxiRuntime(cfg)
+				op.oxiRuntime.Position = [2]int{int(op.cell[0]), int(op.cell[1])}
+				op.oxiRuntime.Dir = deriveDirectionFromRange(op.spec.Cell, op.spec.Range)
+				if verdict != nil {
+					verdict.Events = append(verdict.Events, Event{
+						T: t, Kind: "oxi_rng_seed",
+						Who: fmt.Sprintf("%s seed=%d", op.spec.Name, cfg.RNGSeed),
+					})
+				}
+			}
 			// 乌尔比安（char_4145_ulpia）部署初始化
 			if op.spec.CharID == ulpiaCharID {
 				if op.spec.UlpiaSource == nil {
@@ -1426,6 +1465,9 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 			}
 			if e.stunTimer > 0 {
 				e.stunTimer = math.Max(0.0, e.stunTimer-dt)
+			}
+			if e.fearTimer > 0 {
+				e.fearTimer = math.Max(0.0, e.fearTimer-dt)
 			}
 			if e.freezeTimer > 0 {
 				e.freezeTimer = e.freezeClock.StepTime(e.freezeTimer, -1)
@@ -1670,6 +1712,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		ulpiaTick(ops, enemies, dt, t, verdict)
 		asclnSimTick(ops, enemies, dt, t, spec, verdict)
 		typhonSimTick(ops, enemies, dt, t, spec, verdict)
+		oxiSimTick(ops, enemies, dt, t, spec, verdict)
 
 		intrinsicCountTick(enemies, t)
 		if ctx.countError != nil {
@@ -2756,6 +2799,10 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 		if !due {
 			continue
 		}
+		if op.spec.CharID == oxiCharID && op.oxiRuntime != nil && op.skillActive && op.oxiRuntime.Config.Slot == 3 {
+			op.attackTimer = 0
+			continue
+		}
 		targets := pickTargets(op, enemies, op.maxTarget(), t)
 		//: ★ 行使指纹：逻各斯技能三「延异视阈」的「同时攻击 max_target 个目标」
 		//: **真的在一次出手里命中 ≥2 个**。判据与「泡普卡同时攻击阻挡的所有
@@ -3143,6 +3190,10 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				if op.spec.CharID == ulpiaCharID && op.ulpiaState != nil {
 					dmg *= op.ulpiaDamageScale(target)
 				}
+				// 塔露拉（char_4247_oxi）：第一天赋法术增伤
+				if op.spec.CharID == oxiCharID && op.oxiRuntime != nil {
+					dmg *= op.oxiRuntime.GetArcaneDamageMultiplier()
+				}
 				//: 逻各斯天赋二「剜魂具辞」的另一半：「受到的法术伤害提高 N 点」。
 				//: 它是**平坦值**，加在防御/法抗结算**之后**（正文说的是"受到的
 				//: 法术伤害"，不是"法术攻击力"）。加在结算之前会顺带被法抗削一遍，
@@ -3166,6 +3217,30 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				// 阿斯卡纶第一天赋「死亡拘审」：攻击对敌人施加/叠加 debuff
 				if dealt > 0 && op.spec.CharID == asclnCharID && op.asclnRuntime != nil {
 					op.asclnRuntime.ApplyT1Debuff(target.index)
+				}
+				// 塔露拉（char_4247_oxi）命中处理：第一天赋衰减与灼燃损伤、技能一恐惧
+				if dealt > 0 && op.spec.CharID == oxiCharID && op.oxiRuntime != nil {
+					op.oxiRuntime.OnAttack(target, t)
+					if op.oxiRuntime.Config != nil && op.oxiRuntime.Config.T1EpDamageRatio > 0 {
+						epAmount := dealt * op.oxiRuntime.Config.T1EpDamageRatio
+						op.oxiRuntime.TotalEpDamageDealt += epAmount
+						if target.element != nil {
+							if target.element.damage(elemFire, epAmount) {
+								op.oxiRuntime.RecordEnemyBurningBurst(target.index, t)
+							}
+						}
+					}
+					if op.skillActive && op.oxiRuntime.Config != nil && op.oxiRuntime.Config.Slot == 1 && op.oxiRuntime.Config.S1Fear > 0 {
+						target.applyFear(op.oxiRuntime.Config.S1Fear, [2]int{int(op.cell[0]), int(op.cell[1])})
+						op.oxiRuntime.TotalFearsApplied++
+						if verdict != nil {
+							verdict.Events = append(verdict.Events, Event{
+								T:    t,
+								Kind: "oxi_s1_fear",
+								Who:  op.spec.Name,
+							})
+						}
+					}
 				}
 				// 提丰（char_2012_typhon）命中处理：第一天赋叠层与技能晕眩
 				if dealt > 0 && op.spec.CharID == typhonCharID && op.typhonRuntime != nil {
@@ -3896,7 +3971,7 @@ func enemiesAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec *S
 		// ⚠ 读的是**复合**的 `frozen()`：原版的 `frozen` 是
 		// `freeze_timer > 0` **或**"所站格满层"（积雪），只读计时器会让
 		// 积雪那一半静默失效（敌人照打）。
-		if e.frozen() || e.stunTimer > 0 {
+		if e.frozen() || e.stunTimer > 0 || e.fearTimer > 0 {
 			continue
 		}
 		op := enemyTarget(e, ops, spec.RangedEnemies)
@@ -3961,6 +4036,10 @@ func enemiesAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec *S
 
 			dmg := resolveDamage(e.spec.ATK, e.spec.DamageType, 1.0,
 				op.defense(), op.res(), op.dodgeVs(e.spec.DamageType))
+			// 塔露拉技能二「阻断骤雪」受击减伤与反击吸血
+			if op.spec.CharID == oxiCharID && op.oxiRuntime != nil && op.oxiRuntime.Config != nil && op.oxiRuntime.Config.Slot == 2 {
+				dmg = op.oxiRuntime.OnTakeDamage(t, e, dmg, op, enemies, verdict)
+			}
 			dealt += op.take(dmg)
 			if traceOn {
 				// `ecell` 不是装饰：同一个名字的敌人有好几只（HS-EX-8 上「勿玷」

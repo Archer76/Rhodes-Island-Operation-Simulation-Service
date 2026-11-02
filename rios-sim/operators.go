@@ -214,6 +214,7 @@ type OperatorOut struct {
 	AsclnSource      *AsclnSourceSpec      `json:"ascln_source,omitempty"`
 	LogosSource      *LogosSourceSpec      `json:"logos_source,omitempty"`
 	TyphonSource     *TyphonSourceSpec     `json:"typhon_source,omitempty"`
+	OxiSource        *OxiSourceSpec        `json:"oxi_source,omitempty"`
 	UlpiaSource      *UlpiaSourceSpec      `json:"ulpia_source,omitempty"`
 	Skill            *SkillSpec            `json:"skill,omitempty"`
 	Active           *Profile              `json:"active,omitempty"`
@@ -1061,6 +1062,10 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 		return OperatorOut{}, fmt.Errorf("%s（%s）的技能范围：%v", r.Operator, r.Entry.CharID, err)
 	}
 	out.TyphonSource, err = buildTyphonSourceSpec(st, r.Skill, skillLevel)
+	if err != nil {
+		return OperatorOut{}, err
+	}
+	out.OxiSource, err = buildOxiSourceSpec(st, r.Skill, skillLevel)
 	if err != nil {
 		return OperatorOut{}, err
 	}
