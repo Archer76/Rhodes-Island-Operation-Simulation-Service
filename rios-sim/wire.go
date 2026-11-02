@@ -190,6 +190,7 @@ type OperatorSpec struct {
 	AsclnSource      *AsclnSourceSpec      `json:"ascln_source,omitempty"`
 	LogosSource      *LogosSourceSpec      `json:"logos_source,omitempty"`
 	TyphonSource     *TyphonSourceSpec     `json:"typhon_source,omitempty"`
+	TockaSource      *TockaSourceSpec      `json:"tocka_source,omitempty"`
 	UlpiaSource      *UlpiaSourceSpec      `json:"ulpia_source,omitempty"`
 	Placeholders     []mechanisms.Gap      `json:"mechanism_placeholders,omitempty"`
 	CharID           string                `json:"char_id"`
