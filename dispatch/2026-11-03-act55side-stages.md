@@ -14,9 +14,9 @@
   1. 遇到未定义关卡机制具名上报 Gap 拒判；若需逆向工具必须自行 spawn 逆向专用会话（reverse 预设）；
   2. 出现非环境测试失败立即停手；
   3. 严禁合入主分支，严禁 push。
-- **验收档**：必复跑（主会话亲自全量复测关卡包与引擎加载）。
-- **worker 形态**：新会话（`de_session spawn`）。
+- **验收档**：必复跑（主会话亲自全量复跑：关卡包构建 10 关就绪，TestSqliteResourcePackAct55Side 专项测试 0.33s PASS，全包回归 73.9s 全绿，术语守卫 0 违规）。
+- **worker 形态**：新会话（`session-145a564c-07da-400d-8041-db48a454b392`）。
 - **模型档**：
   - 路由/主会话：gemini-3.8-flash-high / deepseek-official；
   - 执行专员：kst-54577be0d3bd0e1f-gateway / gemini-3.8-flash-high。
-- **状态**：在飞
+- **状态**：收单（已合入 main 分支并推送 GitHub origin/main：3de6c37）
