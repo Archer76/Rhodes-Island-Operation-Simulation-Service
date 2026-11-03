@@ -580,14 +580,13 @@ func onStagePicked(r *root, res any) {
 // isPackStage 检查该关卡是否已经打包进本地离线关卡包中（免除网络下载）
 func isPackStage(levelID string) bool {
 	dataDir := data.DataDBDir()
-	for _, pack := range []string{"stages_act31side.sqlite"} {
+	for _, pack := range []string{"stages_act31side.sqlite", "stages_act55side.sqlite"} {
 		p := filepath.Join(dataDir, pack)
 		if _, err := os.Stat(p); err == nil {
-			if strings.HasPrefix(levelID, "act31side_") {
+			if strings.HasPrefix(levelID, "act31side_") || strings.HasPrefix(levelID, "act55side_") {
 				return true
 			}
 		}
 	}
 	return false
 }
-

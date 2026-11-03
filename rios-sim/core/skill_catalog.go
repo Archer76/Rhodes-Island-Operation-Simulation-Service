@@ -17,6 +17,18 @@ type SkillCatalog struct {
 func LoadSkillCatalog() (*SkillCatalog, error) {
 	root := os.Getenv("RIOS_DATA")
 	if root == "" {
+		for _, p := range []string{
+			filepath.Join("data", "gamedata"),
+			filepath.Join("..", "data", "gamedata"),
+			filepath.Join("..", "..", "data", "gamedata"),
+		} {
+			if _, err := os.Stat(p); err == nil {
+				root = p
+				break
+			}
+		}
+	}
+	if root == "" {
 		root = filepath.Join("data", "gamedata")
 	}
 	base := filepath.Join(root, "raw.githubusercontent.com", "excel")

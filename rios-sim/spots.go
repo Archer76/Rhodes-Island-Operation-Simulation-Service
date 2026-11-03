@@ -20,9 +20,9 @@ import (
 // 可部署格都没有**，几何剪枝自然一个候选都不剩 —— 症状是「无论选什么都是 0 条结果」。
 // Go 这边一次就把四个取值认全，并把 `all` 计入行使计数（它是最容易被漏的那一类）。
 
-// DeployableMelee 是「能站地面干员」（`stage.py:84`：`MELEE` 或 `ALL`）。
+// DeployableMelee 是「能站地面干员」（`stage.py:84`：`MELEE` 或 `ALL`，支持战壕 `tile_trench`）。
 func (t Tile) DeployableMelee() bool {
-	return t.Buildable == "MELEE" || t.Buildable == "ALL"
+	return t.Buildable == "MELEE" || t.Buildable == "ALL" || t.Key == "tile_trench"
 }
 
 // DeployableRanged 是「能站高台干员」（`stage.py:89`：`RANGED` 或 `ALL`）。

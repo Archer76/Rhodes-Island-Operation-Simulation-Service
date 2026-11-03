@@ -169,6 +169,15 @@ func DataRoot() string {
 	if v := os.Getenv("RIOS_DATA"); v != "" {
 		return v
 	}
+	for _, p := range []string{
+		filepath.Join("data", "gamedata"),
+		filepath.Join("..", "data", "gamedata"),
+		filepath.Join("..", "..", "data", "gamedata"),
+	} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
 	return filepath.Join("data", "gamedata")
 }
 

@@ -333,9 +333,21 @@ func LoadStageObjectFromPack(packPath string, query string, difficulty string) (
 			var k, b string
 			if scanErr := tileRows.Scan(&col, &row, &k, &b); scanErr == nil {
 				if row >= 0 && row < mapH && col >= 0 && col < mapW {
+					passable := "NONE"
+					if k != "tile_hole" && k != "tile_wall" && k != "tile_fence_bound" && k != "tile_forbidden" {
+						passable = "ALL"
+					}
+					// 战壕地块：支持地面干员部署且敌人可通行
+					if k == "tile_trench" {
+						passable = "ALL"
+						if b == "" || b == "RANGED" || b == "MELEE" {
+							b = "ALL"
+						}
+					}
 					tiles[row][col] = Tile{
 						Key:       k,
 						Buildable: b,
+						Passable:  passable,
 					}
 				}
 			}
@@ -467,6 +479,7 @@ func TryLoadStageFromPacks(query string) (*Stage, bool, error) {
 	// 目前注册的活动资源包列表
 	knownPacks := []string{
 		"stages_act31side.sqlite",
+		"stages_act55side.sqlite",
 	}
 
 	for _, dataDir := range cands {

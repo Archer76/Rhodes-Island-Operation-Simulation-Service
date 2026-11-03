@@ -44,6 +44,15 @@ func DataDBDir() string {
 	if v := os.Getenv("RIOS_DB"); v != "" {
 		return v
 	}
+	for _, p := range []string{
+		"data",
+		filepath.Join("..", "data"),
+		filepath.Join("..", "..", "data"),
+	} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
 	return "data"
 }
 
