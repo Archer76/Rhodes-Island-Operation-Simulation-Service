@@ -14,9 +14,9 @@
   1. 遇到未定义机制严禁猜想，具名上报 Gap 拒判；若需逆向工具必须自行 spawn 逆向专用会话（reverse 预设），不得在业务开发树混用；
   2. 严禁加入任何房间，完工通过定向单播单向推回发起会话；
   3. 严禁合入主分支，严禁 push。
-- **验收档**：必复跑（机制数值与战斗循环由主会话在合入前亲自全量复测）。
-- **worker 形态**：新会话（`de_session spawn`，无房隔离模式）。
+- **验收档**：必复跑（主会话亲自全量复跑：专项测试 5 项全 PASS 0.98s；官方术语守护 tools/audit_official_terminology.py 0 违规；全干员综合回归 77.2s 全 ok）。
+- **worker 形态**：新会话（`session-1862a370-3c17-4dc2-8c91-b251142d909b`，无房隔离模式）。
 - **模型档**：
   - 路由/主会话：gemini-3.8-flash-high / deepseek-official；
   - 执行专员：kst-54577be0d3bd0e1f-gateway / gemini-3.8-flash-high。
-- **状态**：在飞
+- **状态**：收单（已合入 main 分支并推送 GitHub origin/main：d715b24）
