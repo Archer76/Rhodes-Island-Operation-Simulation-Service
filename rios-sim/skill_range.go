@@ -187,5 +187,23 @@ func (o *operator) targetRange() [][2]int {
 		len(o.spec.UlpiaSource.SkillRangeAbsCells) > 0 {
 		return o.spec.UlpiaSource.SkillRangeAbsCells
 	}
+	// 机械师技能三「工程学十字星」十字范围改写 (x-6，9格)
+	if o.spec.CharID == mcnistCharID && o.skillActive && o.mcnistRuntime != nil && o.mcnistRuntime.Config.Slot == 3 {
+		cfg := o.mcnistRuntime.Config
+		cells := make([][2]int, 0, len(cfg.S3CrossRangeCells)+2)
+		cx, cy := int(o.cell[0]), int(o.cell[1])
+		for _, rel := range cfg.S3CrossRangeCells {
+			cells = append(cells, [2]int{cx + rel[0], cy + rel[1]})
+		}
+		// 若结构性原理在场且阻挡敌人，将结构性原理阻挡的敌人地块也加入可攻击范围
+		if o.mcnistRuntime.TokenDeployed && o.mcnistRuntime.TokenOp != nil && o.mcnistRuntime.TokenOp.alive() {
+			for _, b := range o.mcnistRuntime.TokenOp.blocking {
+				if b != nil && b.hp > 0 {
+					cells = append(cells, [2]int{int(math.Round(b.position[0])), int(math.Round(b.position[1]))})
+				}
+			}
+		}
+		return cells
+	}
 	return o.spec.Range
 }

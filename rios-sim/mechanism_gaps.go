@@ -359,6 +359,9 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 			} else if op.CharID == sbell2CharID && op.Sbell2Source != nil && op.Sbell2Source.ConsumerImplemented {
 				// 圣聆初雪：阵法术师特性、第一天赋「无垠的雪景」、第二天赋「圣山的祝福」与技能一/二/三全生命周期闭环
 				gaps = mechanisms.Merge(gaps, sbell2RemainingGapsFromSpec(op.Sbell2Source, op.Name, i))
+			} else if op.CharID == mcnistCharID && op.McnistSource != nil && op.McnistSource.ConsumerImplemented {
+				// 机械师：哨戒铁卫特性、第一天赋「结构性原理」、第二天赋「生命方程」与技能一/二/三全机制已真行使
+				gaps = mechanisms.Merge(gaps, mcnistRemainingGapsFromSpec(op.McnistSource, op.Name, i))
 			} else {
 				// A valid exemption source still contains unimplemented notes and
 				// penetration. Raw callers must not erase that source's gaps.

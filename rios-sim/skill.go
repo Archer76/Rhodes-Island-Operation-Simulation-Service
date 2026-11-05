@@ -423,6 +423,15 @@ func (o *operator) atk() float64 {
 	if o.spec.CharID == tockaCharID && o.tockaRuntime != nil {
 		res += o.spec.ATK * o.tockaRuntime.SelfAtkModifier()
 	}
+	// 机械师自身 S2 / S3 攻击力加成
+	if o.spec.CharID == mcnistCharID && o.mcnistRuntime != nil && o.skillActive {
+		cfg := o.mcnistRuntime.Config
+		if cfg.Slot == 2 && cfg.S2Atk > 0 {
+			res += o.spec.ATK * cfg.S2Atk
+		} else if cfg.Slot == 3 && cfg.S3Atk > 0 {
+			res += o.spec.ATK * cfg.S3Atk
+		}
+	}
 	// 友方干员受冻河 S3 协同衰减攻击力加成
 	if o.sim != nil && o.sim.objs != nil {
 		for _, other := range *o.sim.objs {
@@ -629,6 +638,13 @@ func (o *operator) maxTarget() int {
 	if o.spec.CharID == sbell2CharID && o.skillActive {
 		return 99
 	}
+	// 机械师 S1（五连击群体攻击）/ S3（十字范围所有敌人）
+	if o.spec.CharID == mcnistCharID && o.mcnistRuntime != nil && o.skillActive {
+		cfg := o.mcnistRuntime.Config
+		if cfg.Slot == 1 || cfg.Slot == 3 {
+			return 99
+		}
+	}
 	//: ---- 特性「同时攻击阻挡的所有敌人」（泡普卡）----
 	//:
 	//: 一次出手打**她自己挡住的全部**敌人。⚠ 不是「范围内所有人」：
@@ -652,6 +668,14 @@ func (o *operator) atkScale() float64 {
 		o.tockaRuntime.Config.Slot == 3 && o.tockaRuntime.Config.S3AttackAtkScale > 0 {
 		return o.tockaRuntime.Config.S3AttackAtkScale
 	}
+	if o.spec.CharID == mcnistCharID && o.mcnistRuntime != nil && o.skillActive {
+		cfg := o.mcnistRuntime.Config
+		if cfg.Slot == 1 && cfg.S1AtkScale > 0 {
+			return cfg.S1AtkScale
+		} else if cfg.Slot == 3 && cfg.S3CrossAtkScale > 0 {
+			return cfg.S3CrossAtkScale
+		}
+	}
 	if p := o.profile(); p != nil {
 		return p.AtkScale
 	}
@@ -659,6 +683,9 @@ func (o *operator) atkScale() float64 {
 }
 
 func (o *operator) hitCount() int {
+	if o.spec.CharID == mcnistCharID && o.mcnistRuntime != nil && o.skillActive && o.mcnistRuntime.Config.Slot == 1 {
+		return o.mcnistRuntime.Config.S1Times // 5连击
+	}
 	if p := o.profile(); p != nil && p.HitCount > 0 {
 		return p.HitCount
 	}
