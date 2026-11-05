@@ -353,6 +353,9 @@ func specMechanismGaps(spec *Spec) []mechanisms.Gap {
 			} else if op.CharID == tockaCharID && op.TockaSource != nil && op.TockaSource.ConsumerImplemented {
 				// 冻河：游击手特性协同、第一天赋「夜的哑然」、第二天赋「雪的印痕」与技能一/二/三全机制已真行使
 				gaps = mechanisms.Merge(gaps, tockaRemainingGapsFromSpec(op.TockaSource, op.Name, i))
+			} else if op.CharID == mcnistCharID && op.McnistSource != nil && op.McnistSource.ConsumerImplemented {
+				// 机械师：哨戒铁卫特性、第一天赋「结构性原理」、第二天赋「生命方程」与技能一/二/三全机制已真行使
+				gaps = mechanisms.Merge(gaps, mcnistRemainingGapsFromSpec(op.McnistSource, op.Name, i))
 			} else {
 				// A valid exemption source still contains unimplemented notes and
 				// penetration. Raw callers must not erase that source's gaps.

@@ -192,6 +192,7 @@ type OperatorSpec struct {
 	TyphonSource     *TyphonSourceSpec     `json:"typhon_source,omitempty"`
 	OxiSource        *OxiSourceSpec        `json:"oxi_source,omitempty"`
 	TockaSource      *TockaSourceSpec      `json:"tocka_source,omitempty"`
+	McnistSource     *McnistSourceSpec     `json:"mcnist_source,omitempty"`
 	UlpiaSource      *UlpiaSourceSpec      `json:"ulpia_source,omitempty"`
 	Placeholders     []mechanisms.Gap      `json:"mechanism_placeholders,omitempty"`
 	CharID           string                `json:"char_id"`

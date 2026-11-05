@@ -569,6 +569,9 @@ type operator struct {
 	// ---- 冻河（char_4244_tocka）机制状态
 	tockaRuntime *TockaRuntime
 
+	// ---- 机械师（char_4230_mcnist）机制状态
+	mcnistRuntime *McnistRuntime
+
 	// ---- 引擎级概率事件（V-2 裁定后由期望值改精确抽样） ----
 	//
 	// `probRNG` 是这位干员的抽样器，种子来自**规格**（`OperatorSpec.RNGSeed`）。
@@ -1251,6 +1254,18 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 				cfg.RNGSeed = operatorProbSeed(op.spec)
 				op.tockaRuntime = newTockaRuntime(cfg)
 			}
+			// 机械师（char_4230_mcnist）部署初始化
+			if op.spec.CharID == mcnistCharID {
+				if op.spec.McnistSource == nil {
+					return nil, fmt.Errorf("mcnist deploy: McnistSource is nil")
+				}
+				cfg, err := decodeMcnistRuntimeConfig(op.spec.McnistSource)
+				if err != nil {
+					return nil, fmt.Errorf("mcnist deploy decode config: %w", err)
+				}
+				op.mcnistRuntime = newMcnistRuntime(cfg)
+				op.mcnistRuntime.InitOnDeploy(op)
+			}
 			// 引擎级概率事件的抽样器：**在部署时建**，不在首次抽签时建——
 			// 建得晚会让"什么时候第一次抽"影响序列起点，同一份规格就可能跑出
 			// 两条时间线。手工夹具没有部署分支，由 `ensureProbRNG` 兜底。
@@ -1729,6 +1744,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		typhonSimTick(ops, enemies, dt, t, spec, verdict)
 		oxiSimTick(ops, enemies, dt, t, spec, verdict)
 		tockaSimTick(ops, enemies, dt, t, spec, verdict)
+		mcnistSimTick(ops, enemies, dt, t, spec, verdict)
 
 		intrinsicCountTick(enemies, t)
 		if ctx.countError != nil {
@@ -3309,6 +3325,19 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 						}
 					}
 				}
+				// 机械师（char_4230_mcnist）S1 弹药消耗
+				if dealt > 0 && op.spec.CharID == mcnistCharID && op.mcnistRuntime != nil {
+					if op.skillActive && op.mcnistRuntime.Config.Slot == 1 {
+						op.mcnistRuntime.TotalClusterAttacks++
+						if op.mcnistRuntime.AmmoRemaining > 0 {
+							op.mcnistRuntime.AmmoRemaining--
+							if op.mcnistRuntime.AmmoRemaining <= 0 {
+								op.skillActive = false
+								op.sp = 0
+							}
+						}
+					}
+				}
 				if traceOn {
 					trace("        打 %s 攻=%.1f 类型=%s 倍率=%.3f 防=%.1f 抗=%.1f 伤害=%.3f 实扣=%.3f 剩=%.3f",
 						target.spec.Name, atkBase, dmgType, hitScale, target.spec.DEF,
@@ -4017,6 +4046,22 @@ func enemiesAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec *S
 		if e.frozen() || e.stunTimer > 0 || e.fearTimer > 0 {
 			continue
 		}
+		// 战栗 (Tremble)：阻挡该敌人的干员使其无法攻击
+		tremblingBlocked := false
+		for _, other := range ops {
+			if other != nil && other.spec.CharID == mcnistCharID && other.mcnistRuntime != nil {
+				if other.mcnistRuntime.EnemyIsTrembling(e.index) {
+					// 检查敌人是否被干员阻挡
+					if e.blockedBy != nil && e.blockedBy.alive() {
+						tremblingBlocked = true
+					}
+				}
+				break
+			}
+		}
+		if tremblingBlocked {
+			continue
+		}
 		op := enemyTarget(e, ops, spec.RangedEnemies)
 		if op == nil || !op.alive() {
 			continue
@@ -4082,6 +4127,15 @@ func enemiesAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec *S
 			for _, other := range ops {
 				if other != nil && other.spec.CharID == tockaCharID && other.tockaRuntime != nil {
 					if mod := other.tockaRuntime.EnemyAtkModifier(e.index); mod != 0 {
+						enemyATK *= (1.0 + mod)
+					}
+					break
+				}
+			}
+			// 机械师三技能虚弱光环降低敌人攻击力
+			for _, other := range ops {
+				if other != nil && other.spec.CharID == mcnistCharID && other.mcnistRuntime != nil {
+					if mod := other.mcnistRuntime.EnemyAtkModifier(e.index); mod != 0 {
 						enemyATK *= (1.0 + mod)
 					}
 					break
@@ -4721,6 +4775,19 @@ func (o *operator) take(amount float64) float64 {
 		for _, other := range *o.sim.objs {
 			if other != nil && other.spec.CharID == tockaCharID && other.tockaRuntime != nil {
 				amount = other.tockaRuntime.AbsorbDamageWithBarrier(o, amount)
+				break
+			}
+		}
+	}
+	// 机械师【生命方程】屏障吸收与超额防护
+	if o.sim != nil && o.sim.objs != nil {
+		for _, other := range *o.sim.objs {
+			if other != nil && other.spec.CharID == mcnistCharID && other.mcnistRuntime != nil {
+				amount = other.mcnistRuntime.AbsorbDamageWithBarrier(o, amount)
+				if other.mcnistRuntime.Config.Slot == 2 && o.sim.enemies != nil {
+					isOwner := (o.spec.CharID == mcnistCharID)
+					other.mcnistRuntime.CheckAndHandleS2BarrierBurst(isOwner, other, *o.sim.enemies)
+				}
 				break
 			}
 		}
