@@ -208,6 +208,7 @@ type enemy struct {
 	logosDebuffUntil         float64
 	logosMagicResDown        float64
 	logosMagicFlatBonusValue float64
+	dminonAspdDown           float64
 	//: 冻结剩余秒数（原版 `freeze_timer` / `frozen`，unit.py:1015-1023）。
 	//: 冻结与停顿**不是**一回事：停顿只是走得慢，冻结是**这一帧既不走也不出手**
 	//: （`advance` 与 `_enemies_attack` 两处都拦）。目前唯一的来源是圣聆初雪的
@@ -568,6 +569,9 @@ type operator struct {
 
 	// ---- 冻河（char_4244_tocka）机制状态
 	tockaRuntime *TockaRuntime
+
+	// ---- 国度（char_4246_dminon）机制状态
+	dminonRuntime *DminonRuntime
 
 	// ---- 引擎级概率事件（V-2 裁定后由期望值改精确抽样） ----
 	//
@@ -1251,6 +1255,30 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 				cfg.RNGSeed = operatorProbSeed(op.spec)
 				op.tockaRuntime = newTockaRuntime(cfg)
 			}
+			// 国度（char_4246_dminon）部署初始化
+			if op.spec.CharID == dminonCharID {
+				if op.spec.DminonSource == nil {
+					return nil, fmt.Errorf("dminon deploy: DminonSource is nil")
+				}
+				cfg, err := decodeDminonRuntimeConfig(op.spec.DminonSource)
+				if err != nil {
+					return nil, fmt.Errorf("dminon deploy decode config: %w", err)
+				}
+				cfg.RNGSeed = operatorProbSeed(op.spec)
+				op.dminonRuntime = newDminonRuntime(cfg)
+				baseCells := op.spec.DminonSource.BaseRangeAbsCells
+				if len(baseCells) == 0 {
+					baseCells = op.targetRange()
+				}
+				skillCells := op.spec.DminonSource.SkillRangeAbsCells
+				op.dminonRuntime.InitRealm(baseCells, skillCells)
+				if verdict != nil {
+					verdict.Events = append(verdict.Events, Event{
+						T: t, Kind: "dminon_rng_seed",
+						Who: fmt.Sprintf("%s seed=%d", op.spec.Name, cfg.RNGSeed),
+					})
+				}
+			}
 			// 引擎级概率事件的抽样器：**在部署时建**，不在首次抽签时建——
 			// 建得晚会让"什么时候第一次抽"影响序列起点，同一份规格就可能跑出
 			// 两条时间线。手工夹具没有部署分支，由 `ensureProbRNG` 兜底。
@@ -1729,6 +1757,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		typhonSimTick(ops, enemies, dt, t, spec, verdict)
 		oxiSimTick(ops, enemies, dt, t, spec, verdict)
 		tockaSimTick(ops, enemies, dt, t, spec, verdict)
+		dminonSimTick(ops, enemies, dt, t, spec, verdict)
 
 		intrinsicCountTick(enemies, t)
 		if ctx.countError != nil {
@@ -2556,6 +2585,19 @@ func advance(e *enemy, dt, speedScale, speedMult float64) {
 					speed *= factor
 				}
 			}
+			// 国度（char_4246_dminon）模组 AMB-X 特性范围内移速 -20%
+			if op != nil && op.spec.CharID == dminonCharID && op.dminonRuntime != nil && op.alive() {
+				cx, cy := e.cell()
+				inRange := inCells(op.targetRange(), [2]int{cx, cy})
+				dminonMod := op.dminonRuntime.EnemyMoveSpeedModifier(inRange)
+				if dminonMod != 0 {
+					factor := 1.0 + dminonMod
+					if factor < 0.1 {
+						factor = 0.1
+					}
+					speed *= factor
+				}
+			}
 		}
 	}
 	if speed <= 0 {
@@ -2844,6 +2886,19 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 			} else if op.typhonRuntime.Config.Slot == 2 {
 				if len(targets) == 1 {
 					targets = []*enemy{targets[0], targets[0]}
+				}
+			}
+		}
+		// 国度（char_4246_dminon）技能三「无人之国度」：同时攻击“国度”上所有敌人
+		if op.spec.CharID == dminonCharID && op.dminonRuntime != nil && op.skillActive && op.dminonRuntime.Config.Slot == 3 {
+			targets = nil
+			for _, e := range enemies {
+				if e == nil || !e.alive() || e.offMap || e.leaked {
+					continue
+				}
+				ecell := [2]int{int(math.RoundToEven(e.position[0])), int(math.RoundToEven(e.position[1]))}
+				if op.dminonRuntime.IsOnRealm(ecell) {
+					targets = append(targets, e)
 				}
 			}
 		}
@@ -3190,8 +3245,19 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				if op.spec.CharID == typhonCharID && op.typhonRuntime != nil {
 					targetDEF = op.typhonRuntime.EffectiveDEF(target)
 				}
+				effectiveDodge := target.dodgeVs(dmgType)
+				// 国度（char_4246_dminon）技能二「受戮」：使“国度”上的敌人无法闪避物法攻击
+				for _, opFinder := range ops {
+					if opFinder != nil && opFinder.spec.CharID == dminonCharID && opFinder.dminonRuntime != nil && opFinder.alive() {
+						tcell := [2]int{int(math.RoundToEven(target.position[0])), int(math.RoundToEven(target.position[1]))}
+						if opFinder.dminonRuntime.IsEnemyUndodgeable(tcell) {
+							effectiveDodge = 0
+						}
+						break
+					}
+				}
 				dmg := resolveDamage(atkBase, dmgType, hitScale,
-					targetDEF, target.res(), target.dodgeVs(dmgType))
+					targetDEF, target.res(), effectiveDodge)
 				// 连击的 `ComboDamageScale` **乘在这里**：原版是
 				// `self._damage_enemy(target, dmg.final * combo_dmg_scale, ...)`
 				// （`sim.py:4135`），也就是**算完防御/法抗之后**再整笔缩放。
@@ -4096,6 +4162,38 @@ func enemiesAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec *S
 				}
 			}
 
+			// 国度（char_4246_dminon）技能三「无人之国度」受击响应
+			if !e.spec.IsFlying {
+				for _, other := range ops {
+					if other != nil && other.spec.CharID == dminonCharID && other.dminonRuntime != nil && other.alive() {
+						dminonRt := other.dminonRuntime
+						opCell := [2]int{int(math.RoundToEven(op.cell[0])), int(math.RoundToEven(op.cell[1]))}
+						if dminonRt.SkillActive && dminonRt.Config.Slot == 3 && dminonRt.IsOnRealm(opCell) {
+							ecell := [2]int{int(math.RoundToEven(e.position[0])), int(math.RoundToEven(e.position[1]))}
+							if _, ok := dminonRt.TryS3Counter(ecell); ok {
+								counterDmg := other.atk() * dminonRt.Config.S3AoeAtkScale
+								def := e.spec.DEF
+								actualCounterDmg := math.Max(counterDmg*0.05, counterDmg-def)
+								dealtCounter := e.take(actualCounterDmg, other)
+								dminonRt.TotalCounterDamage += dealtCounter
+								if !e.alive() && verdict != nil {
+									verdict.Kills++
+									verdict.Events = append(verdict.Events, Event{
+										T: t, Kind: "kill", Who: e.spec.Name + " (无人之国度反击)",
+									})
+								}
+								if verdict != nil {
+									verdict.Events = append(verdict.Events, Event{
+										T: t, Kind: "dminon_s3_counter", Who: other.spec.Name,
+									})
+								}
+							}
+						}
+						break
+					}
+				}
+			}
+
 			dmg := resolveDamage(enemyATK, e.spec.DamageType, 1.0,
 				op.defense(), op.res(), op.dodgeVs(e.spec.DamageType))
 			// 塔露拉技能二「阂断骤雪」受击减伤与反击吸血
@@ -4262,6 +4360,9 @@ func (e *enemy) interval() float64 {
 	aspd := 100.0
 	if e.coldTimer > 0 {
 		aspd -= coldASPDDown
+	}
+	if e.dminonAspdDown > 0 {
+		aspd -= e.dminonAspdDown
 	}
 	return e.spec.Interval * 100.0 / math.Max(aspdMin, aspd)
 }
