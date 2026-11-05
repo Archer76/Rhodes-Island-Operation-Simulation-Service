@@ -1294,6 +1294,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 					return nil, fmt.Errorf("sbell2 deploy decode config: %w", err)
 				}
 				op.sbell2Runtime = newSbell2Runtime(cfg)
+			}
 			// 机械师（char_4230_mcnist）部署初始化
 			if op.spec.CharID == mcnistCharID {
 				if op.spec.McnistSource == nil {
