@@ -573,6 +573,9 @@ type operator struct {
 	// ---- 国度（char_4246_dminon）机制状态
 	dminonRuntime *DminonRuntime
 
+	// ---- 圣聆初雪（char_1046_sbell2）机制状态
+	sbell2Runtime *Sbell2Runtime
+
 	// ---- 引擎级概率事件（V-2 裁定后由期望值改精确抽样） ----
 	//
 	// `probRNG` 是这位干员的抽样器，种子来自**规格**（`OperatorSpec.RNGSeed`）。
@@ -1279,6 +1282,17 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 					})
 				}
 			}
+			// 圣聆初雪（char_1046_sbell2）部署初始化
+			if op.spec.CharID == sbell2CharID {
+				if op.spec.Sbell2Source == nil {
+					return nil, fmt.Errorf("sbell2 deploy: Sbell2Source is nil")
+				}
+				cfg, err := decodeSbell2RuntimeConfig(op.spec.Sbell2Source)
+				if err != nil {
+					return nil, fmt.Errorf("sbell2 deploy decode config: %w", err)
+				}
+				op.sbell2Runtime = newSbell2Runtime(cfg)
+			}
 			// 引擎级概率事件的抽样器：**在部署时建**，不在首次抽签时建——
 			// 建得晚会让"什么时候第一次抽"影响序列起点，同一份规格就可能跑出
 			// 两条时间线。手工夹具没有部署分支，由 `ensureProbRNG` 兜底。
@@ -1758,6 +1772,7 @@ func runSimContext(cancelCtx context.Context, spec *Spec) (*Verdict, error) {
 		oxiSimTick(ops, enemies, dt, t, spec, verdict)
 		tockaSimTick(ops, enemies, dt, t, spec, verdict)
 		dminonSimTick(ops, enemies, dt, t, spec, verdict)
+		sbell2SimTick(ops, enemies, dt, t, spec, verdict)
 
 		intrinsicCountTick(enemies, t)
 		if ctx.countError != nil {
@@ -2835,6 +2850,10 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 			op.logosState.Config.Slot == 2 {
 			continue
 		}
+		// 阵法术师特性（圣聆初雪）：未开启技能时不攻击
+		if op.spec.CharID == sbell2CharID && op.sbell2Runtime != nil && !op.sbell2Runtime.CanNormalAttack(op.skillActive) {
+			continue
+		}
 		interval, err := op.intervalForEnemies(enemies)
 		if err != nil {
 			return err
@@ -3245,6 +3264,10 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				if op.spec.CharID == typhonCharID && op.typhonRuntime != nil {
 					targetDEF = op.typhonRuntime.EffectiveDEF(target)
 				}
+				targetRES := target.res()
+				if op.spec.CharID == sbell2CharID && op.sbell2Runtime != nil && op.skillActive && op.sbell2Runtime.Config.Slot == 3 {
+					targetRES = math.Max(0.0, targetRES-op.sbell2Runtime.Config.S3MagicResistPenetrateFixed)
+				}
 				effectiveDodge := target.dodgeVs(dmgType)
 				// 国度（char_4246_dminon）技能二「受戮」：使“国度”上的敌人无法闪避物法攻击
 				for _, opFinder := range ops {
@@ -3257,7 +3280,7 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 					}
 				}
 				dmg := resolveDamage(atkBase, dmgType, hitScale,
-					targetDEF, target.res(), effectiveDodge)
+					targetDEF, targetRES, effectiveDodge)
 				// 连击的 `ComboDamageScale` **乘在这里**：原版是
 				// `self._damage_enemy(target, dmg.final * combo_dmg_scale, ...)`
 				// （`sim.py:4135`），也就是**算完防御/法抗之后**再整笔缩放。
@@ -3275,6 +3298,10 @@ func operatorsAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec 
 				// 塔露拉（char_4247_oxi）：第一天赋法术增伤
 				if op.spec.CharID == oxiCharID && op.oxiRuntime != nil {
 					dmg *= op.oxiRuntime.GetArcaneDamageMultiplier()
+				}
+				// 圣聆初雪（char_1046_sbell2）：模组 Y 范围内敌人越多伤害越高
+				if op.spec.CharID == sbell2CharID && op.sbell2Runtime != nil {
+					dmg *= op.sbell2Runtime.DamageMultiplier(len(targets))
 				}
 				//: 逻各斯天赋二「剜魂具辞」的另一半：「受到的法术伤害提高 N 点」。
 				//: 它是**平坦值**，加在防御/法抗结算**之后**（正文说的是"受到的
@@ -4199,6 +4226,10 @@ func enemiesAttackMode(ops []*operator, enemies []*enemy, dt, t float64, spec *S
 			// 塔露拉技能二「阂断骤雪」受击减伤与反击吸血
 			if op.spec.CharID == oxiCharID && op.oxiRuntime != nil && op.oxiRuntime.Config != nil && op.oxiRuntime.Config.Slot == 2 {
 				dmg = op.oxiRuntime.OnTakeDamage(t, e, dmg, op, enemies, verdict)
+			}
+			// 圣聆初雪第二天赋受击反击寒冷
+			if op.spec.CharID == sbell2CharID && op.sbell2Runtime != nil {
+				op.sbell2Runtime.OnTakeDamage(e, true)
 			}
 			dealt += op.take(dmg)
 			if traceOn {

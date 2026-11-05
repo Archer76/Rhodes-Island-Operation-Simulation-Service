@@ -447,6 +447,10 @@ func (o *operator) defense() float64 {
 			res += float64(o.oxiRuntime.BuffStacks) * o.oxiRuntime.Config.S2Def * o.spec.DEF
 		}
 	}
+	// 圣聆初雪特性：未开启技能时防御力大幅提升 (+200%)
+	if o.spec.CharID == sbell2CharID && o.sbell2Runtime != nil {
+		res += o.sbell2Runtime.TraitBonusDEF(o.skillActive, o.spec.DEF)
+	}
 	return res
 }
 
@@ -462,6 +466,10 @@ func (o *operator) res() float64 {
 	if o.spec.CharID == logosCharID && o.logosState != nil && o.skillActive &&
 		o.logosState.Config.Slot == 2 {
 		base += o.logosState.Config.S2MagicRes
+	}
+	// 圣聆初雪特性：未开启技能时法术抗性大幅提升 (+20)
+	if o.spec.CharID == sbell2CharID && o.sbell2Runtime != nil {
+		base += o.sbell2Runtime.TraitBonusRES(o.skillActive)
 	}
 	return base
 }
@@ -615,6 +623,10 @@ func (o *operator) maxTarget() int {
 	}
 	// 伏击客特性（如国度 char_4246_dminon、阿斯卡纶 char_4132_ascln）：攻击范围内所有敌人
 	if o.spec.CharID == dminonCharID || o.spec.CharID == asclnCharID {
+		return 99
+	}
+	// 阵法术师（圣聆初雪 char_1046_sbell2）：技能开启时攻击造成群体法术伤害
+	if o.spec.CharID == sbell2CharID && o.skillActive {
 		return 99
 	}
 	//: ---- 特性「同时攻击阻挡的所有敌人」（泡普卡）----

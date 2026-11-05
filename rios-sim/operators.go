@@ -219,6 +219,7 @@ type OperatorOut struct {
 	UlpiaSource      *UlpiaSourceSpec      `json:"ulpia_source,omitempty"`
 	RadianSource     *RadianSourceSpec     `json:"radian_source,omitempty"`
 	DminonSource     *DminonSourceSpec     `json:"dminon_source,omitempty"`
+	Sbell2Source     *Sbell2SourceSpec     `json:"sbell2_source,omitempty"`
 	Skill            *SkillSpec            `json:"skill,omitempty"`
 	Active           *Profile              `json:"active,omitempty"`
 
@@ -1093,6 +1094,10 @@ func buildOperatorOutWithInputs(r DeployRow, covered map[string]int, healMode st
 	}
 	if err := attachDminonSkillRange(out.DminonSource, r.Direction, r.Position); err != nil {
 		return OperatorOut{}, fmt.Errorf("%s（%s）的技能范围：%v", r.Operator, r.Entry.CharID, err)
+	}
+	out.Sbell2Source, err = buildSbell2SourceSpec(st, r.Skill, skillLevel)
+	if err != nil {
+		return OperatorOut{}, err
 	}
 	if sk, act, unknown, err := bindSkillAtLevelWithInputs(e.CharID, r.Skill, skillLevel, atk, def, res,
 		maxHP, spd, interval, st.TextDerived.DamageType, inputs); err != nil {
