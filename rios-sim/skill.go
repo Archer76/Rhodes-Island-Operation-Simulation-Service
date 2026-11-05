@@ -479,6 +479,9 @@ func (o *operator) res() float64 {
 //
 // 真实伤害两类都不吃闪避（原版 `damage.py:144`）。
 func (o *operator) dodgeVs(damageType string) float64 {
+	if o.spec.CharID == dminonCharID {
+		return 0.50
+	}
 	skillDodge := 0.0
 	if p := o.profile(); p != nil {
 		if damageType == "MAGIC" {
@@ -548,6 +551,23 @@ func (o *operator) interval() float64 {
 			interval *= 100 / math.Max(aspdMin, 100+aspd)
 		}
 	}
+	// 国度技能攻速提升
+	if o.spec.CharID == dminonCharID && o.dminonRuntime != nil && o.skillActive {
+		aspd := 0.0
+		switch o.dminonRuntime.Config.Slot {
+		case 1:
+			aspd = o.dminonRuntime.Config.S1AttackSpeed
+		case 2:
+			if o.dminonRuntime.IsPermanent {
+				aspd = o.dminonRuntime.Config.S2AttackSpeed
+			}
+		case 3:
+			aspd = o.dminonRuntime.Config.S3AttackSpeed
+		}
+		if aspd != 0 {
+			interval *= 100 / math.Max(aspdMin, 100+aspd)
+		}
+	}
 	return interval
 }
 
@@ -591,6 +611,10 @@ func (o *operator) maxTarget() int {
 	}
 	// 收割者特性（如隐德来希 char_4010_etlchi）：攻击自身攻击范围内的所有敌人
 	if o.spec.CharID == "char_4010_etlchi" {
+		return 99
+	}
+	// 伏击客特性（如国度 char_4246_dminon、阿斯卡纶 char_4132_ascln）：攻击范围内所有敌人
+	if o.spec.CharID == dminonCharID || o.spec.CharID == asclnCharID {
 		return 99
 	}
 	//: ---- 特性「同时攻击阻挡的所有敌人」（泡普卡）----
