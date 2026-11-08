@@ -27,4 +27,15 @@ DEFAULT = ROOT / "data" / "operbox" / "Arknights_OperBox_Export.json"
 def operbox_path() -> pathlib.Path:
     """返回 OperBox 导出的路径（**未必存在**，由调用方判）。"""
     p = os.environ.get("AK_OPERBOX")
-    return pathlib.Path(p) if p else DEFAULT
+    if p:
+        return pathlib.Path(p)
+    # 候选 1: 开发树根下的 data/operbox/...
+    # 候选 2: 若自身位于 eng/tools/，检查上一层目录（安装包根）的 data/operbox/...
+    candidates = [
+        DEFAULT,
+        ROOT.parent / "data" / "operbox" / "Arknights_OperBox_Export.json",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return DEFAULT

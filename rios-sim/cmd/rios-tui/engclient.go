@@ -29,11 +29,20 @@ import (
 // ★ 为什么抽成一个函数而不是各处 `append(os.Environ(), ...)` 抄三遍：抄三遍迟早会漂，
 // 而漂的表现是「有的路子干净、有的路子脏」——正好是这一项要防的形状。
 func pythonEnv() []string {
-	return append(os.Environ(),
+	env := append(os.Environ(),
 		"PYTHONIOENCODING=utf-8",
 		"PYTHONUTF8=1",
 		"PYTHONDONTWRITEBYTECODE=1",
 	)
+	if ddir, _ := findDataDir(); ddir != "" {
+		if abs, err := filepath.Abs(ddir); err == nil {
+			env = append(env,
+				"SKLAND_HOME="+filepath.Join(abs, "skland_home"),
+				"AK_OPERBOX="+filepath.Join(abs, "operbox", "Arknights_OperBox_Export.json"),
+			)
+		}
+	}
+	return env
 }
 
 // # Go↔Python 的桥客户端（解释器与脚本都可指定，缺件必须**具名失败**）
