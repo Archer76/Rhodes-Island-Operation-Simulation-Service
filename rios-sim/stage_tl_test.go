@@ -24,6 +24,24 @@ var allTLStages = []tlStageItem{
 	{ID: "act55side_08", Code: "TL-8", Difficulty: "NORMAL", Name: "潮湿的火焰"},
 	{ID: "act55side_09", Code: "TL-9", Difficulty: "NORMAL", Name: "自由的黄昏"},
 	{ID: "act55side_10", Code: "TL-10", Difficulty: "NORMAL", Name: "活着的重量"},
+
+	// 高难关卡 TL-EX-1 ~ TL-EX-8 (普通与突袭)
+	{ID: "act55side_ex01", Code: "TL-EX-1", Difficulty: "NORMAL", Name: "致我的陛下……"},
+	{ID: "act55side_ex01", Code: "TL-EX-1", Difficulty: "FOUR_STAR", Name: "致我的陛下……"},
+	{ID: "act55side_ex02", Code: "TL-EX-2", Difficulty: "NORMAL", Name: "致拉·尼·苏沃林"},
+	{ID: "act55side_ex02", Code: "TL-EX-2", Difficulty: "FOUR_STAR", Name: "致拉·尼·苏沃林"},
+	{ID: "act55side_ex03", Code: "TL-EX-3", Difficulty: "NORMAL", Name: "致马特维"},
+	{ID: "act55side_ex03", Code: "TL-EX-3", Difficulty: "FOUR_STAR", Name: "致马特维"},
+	{ID: "act55side_ex04", Code: "TL-EX-4", Difficulty: "NORMAL", Name: "致谢尔戈·卡拉泽"},
+	{ID: "act55side_ex04", Code: "TL-EX-4", Difficulty: "FOUR_STAR", Name: "致谢尔戈·卡拉泽"},
+	{ID: "act55side_ex05", Code: "TL-EX-5", Difficulty: "NORMAL", Name: "致雷尔金"},
+	{ID: "act55side_ex05", Code: "TL-EX-5", Difficulty: "FOUR_STAR", Name: "致雷尔金"},
+	{ID: "act55side_ex06", Code: "TL-EX-6", Difficulty: "NORMAL", Name: "致雷德先生"},
+	{ID: "act55side_ex06", Code: "TL-EX-6", Difficulty: "FOUR_STAR", Name: "致雷德先生"},
+	{ID: "act55side_ex07", Code: "TL-EX-7", Difficulty: "NORMAL", Name: "致瓦伊凡小姑娘"},
+	{ID: "act55side_ex07", Code: "TL-EX-7", Difficulty: "FOUR_STAR", Name: "致瓦伊凡小姑娘"},
+	{ID: "act55side_ex08", Code: "TL-EX-8", Difficulty: "NORMAL", Name: "致……"},
+	{ID: "act55side_ex08", Code: "TL-EX-8", Difficulty: "FOUR_STAR", Name: "致……"},
 }
 
 func TestSqliteResourcePackAct55Side(t *testing.T) {
@@ -53,7 +71,9 @@ func TestSqliteResourcePackAct55Side(t *testing.T) {
 		"enemy_10262_dsjred",
 		"enemy_10263_dsjblk",
 		"enemy_1602_blksnk",
+		"enemy_1602_blksnk2_1",
 		"enemy_1603_hlystp",
+		"enemy_1603_hlystp2_1",
 	}
 
 	for _, eID := range tlRequiredCoreEnemies {
@@ -63,7 +83,7 @@ func TestSqliteResourcePackAct55Side(t *testing.T) {
 	}
 	t.Logf("Pure enemy library validated: %d total enemies, all act55side core enemies present", len(enemyLib.ByKey))
 
-	// 2. 遍历测试 TL-1 至 TL-10 全部 10 关装配
+	// 2. 遍历测试 TL-1 至 TL-10 与 TL-EX-1 至 TL-EX-8 全部 26 个关卡档位装配
 	for _, item := range allTLStages {
 		t.Run("Pack_"+item.Code+"_"+item.Difficulty, func(t *testing.T) {
 			spec, err := LoadStageFromPack(stagePackPath, item.ID, item.Difficulty, enemyLib)
@@ -157,6 +177,54 @@ func TestSqliteResourcePackAct55Side(t *testing.T) {
 			verdict.SpawnsPlaced, len(verdict.Events), verdict.Won)
 	})
 
+	t.Run("RunSimFromSqlitePack_TLEX1", func(t *testing.T) {
+		spec, err := LoadStageFromPack(stagePackPath, "act55side_ex01", "NORMAL", enemyLib)
+		if err != nil {
+			t.Fatalf("LoadStageFromPack act55side_ex01 failed: %v", err)
+		}
+		spec.Life = 30
+		spec.MaxTime = 30.0
+		spec.Mechanisms = nil
+		spec.MechConfig = nil
+
+		verdict, err := runSim(spec)
+		if err != nil {
+			t.Fatalf("runSim with act55side_ex01 failed: %v", err)
+		}
+		if verdict == nil {
+			t.Fatalf("expected non-nil verdict")
+		}
+		if verdict.SpawnsPlaced == 0 {
+			t.Fatalf("expected SpawnsPlaced > 0, got 0")
+		}
+		t.Logf("TL-EX-1 Simulation completed: SpawnsPlaced=%d, Events=%d, Won=%v",
+			verdict.SpawnsPlaced, len(verdict.Events), verdict.Won)
+	})
+
+	t.Run("RunSimFromSqlitePack_TLEX8", func(t *testing.T) {
+		spec, err := LoadStageFromPack(stagePackPath, "act55side_ex08", "NORMAL", enemyLib)
+		if err != nil {
+			t.Fatalf("LoadStageFromPack act55side_ex08 failed: %v", err)
+		}
+		spec.Life = 30
+		spec.MaxTime = 30.0
+		spec.Mechanisms = nil
+		spec.MechConfig = nil
+
+		verdict, err := runSim(spec)
+		if err != nil {
+			t.Fatalf("runSim with act55side_ex08 failed: %v", err)
+		}
+		if verdict == nil {
+			t.Fatalf("expected non-nil verdict")
+		}
+		if verdict.SpawnsPlaced == 0 {
+			t.Fatalf("expected SpawnsPlaced > 0, got 0")
+		}
+		t.Logf("TL-EX-8 Simulation completed: SpawnsPlaced=%d, Events=%d, Won=%v",
+			verdict.SpawnsPlaced, len(verdict.Events), verdict.Won)
+	})
+
 	// 5. 战壕地块（tile_trench）支持专项测试
 	t.Run("TileTrenchProperties", func(t *testing.T) {
 		st, err := LoadStageObjectFromPack(stagePackPath, "act55side_01", "NORMAL")
@@ -189,7 +257,7 @@ func TestSqliteResourcePackAct55Side(t *testing.T) {
 
 	// 6. TUI 顶层 LoadStage 查询与 StageOptions 恢复
 	t.Run("LoadStageTUIQuery", func(t *testing.T) {
-		for _, q := range []string{"act55side_01", "TL-1", "act55side_10", "TL-10"} {
+		for _, q := range []string{"act55side_01", "TL-1", "act55side_10", "TL-10", "act55side_ex01", "TL-EX-1", "act55side_ex08", "TL-EX-8"} {
 			st, err := LoadStage(q)
 			if err != nil {
 				t.Fatalf("LoadStage(%q) failed: %v", q, err)

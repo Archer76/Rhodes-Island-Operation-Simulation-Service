@@ -23,6 +23,14 @@ OFFICIAL_NAMES = {
     "act55side_08": "潮湿的火焰",
     "act55side_09": "自由的黄昏",
     "act55side_10": "活着的重量",
+    "act55side_ex01": "致我的陛下……",
+    "act55side_ex02": "致拉·尼·苏沃林",
+    "act55side_ex03": "致马特维",
+    "act55side_ex04": "致谢尔戈·卡拉泽",
+    "act55side_ex05": "致雷尔金",
+    "act55side_ex06": "致雷德先生",
+    "act55side_ex07": "致瓦伊凡小姑娘",
+    "act55side_ex08": "致……",
 }
 
 STAGES_CONFIG = [
@@ -36,6 +44,22 @@ STAGES_CONFIG = [
     ("act55side_08", "TL-8", "NORMAL", "level_act55side_08"),
     ("act55side_09", "TL-9", "NORMAL", "level_act55side_09"),
     ("act55side_10", "TL-10", "NORMAL", "level_act55side_10"),
+    ("act55side_ex01", "TL-EX-1", "NORMAL", "level_act55side_ex01"),
+    ("act55side_ex01", "TL-EX-1", "FOUR_STAR", "level_act55side_ex01"),
+    ("act55side_ex02", "TL-EX-2", "NORMAL", "level_act55side_ex02"),
+    ("act55side_ex02", "TL-EX-2", "FOUR_STAR", "level_act55side_ex02"),
+    ("act55side_ex03", "TL-EX-3", "NORMAL", "level_act55side_ex03"),
+    ("act55side_ex03", "TL-EX-3", "FOUR_STAR", "level_act55side_ex03"),
+    ("act55side_ex04", "TL-EX-4", "NORMAL", "level_act55side_ex04"),
+    ("act55side_ex04", "TL-EX-4", "FOUR_STAR", "level_act55side_ex04"),
+    ("act55side_ex05", "TL-EX-5", "NORMAL", "level_act55side_ex05"),
+    ("act55side_ex05", "TL-EX-5", "FOUR_STAR", "level_act55side_ex05"),
+    ("act55side_ex06", "TL-EX-6", "NORMAL", "level_act55side_ex06"),
+    ("act55side_ex06", "TL-EX-6", "FOUR_STAR", "level_act55side_ex06"),
+    ("act55side_ex07", "TL-EX-7", "NORMAL", "level_act55side_ex07"),
+    ("act55side_ex07", "TL-EX-7", "FOUR_STAR", "level_act55side_ex07"),
+    ("act55side_ex08", "TL-EX-8", "NORMAL", "level_act55side_ex08"),
+    ("act55side_ex08", "TL-EX-8", "FOUR_STAR", "level_act55side_ex08"),
 ]
 
 
@@ -218,7 +242,7 @@ def build_stage_pack(gamedata_root: pathlib.Path, out_db: pathlib.Path):
             fstart = start_time + w.get("preDelay", 0.0)
             for f in w.get("fragments", []):
                 fstart += f.get("preDelay", 0.0)
-                acts = [a for a in f.get("actions", []) if a.get("actionType") == "SPAWN"]
+                acts = [a for a in f.get("actions", []) if a.get("actionType") in (0, "SPAWN")]
                 for a in acts:
                     cnt = a.get("count", 1)
                     interval = a.get("interval", 1.0)
@@ -249,7 +273,7 @@ def build_stage_pack(gamedata_root: pathlib.Path, out_db: pathlib.Path):
         s_info = stage_table.get(stage_id, {})
         stage_name = s_info.get("name") or OFFICIAL_NAMES.get(stage_id, code)
 
-        life = int(opt.get("maxLifePoint", 3))
+        life = 1 if diff == "FOUR_STAR" else int(opt.get("maxLifePoint", 3))
         cost_init = float(opt.get("initialCost", 10.0))
         cost_max = float(opt.get("maxCost", 99.0))
         cost_time = float(opt.get("costIncreaseTime", 1.0))
