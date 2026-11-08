@@ -192,7 +192,7 @@ def _from_skland(path: Path) -> list[Operator]:
 
 
 def _from_operbox(path: Path) -> list[Operator]:
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw = json.loads(path.read_text(encoding="utf-8-sig"))
     # MAA 的导出有两种外形：带 data 字段的包装、或直接是数组
     rows = raw.get("data") if isinstance(raw, dict) else raw
     if isinstance(rows, dict):
