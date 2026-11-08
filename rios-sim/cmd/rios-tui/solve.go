@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"rios-sim/core"
 	"rios-sim/mechanisms"
 	"rios-sim/progress"
 
@@ -126,7 +127,13 @@ func solvePool(c *appCtx) ([]string, string) {
 		for _, n := range kept {
 			seen[n] = true
 		}
-		ops := append([]RosterOperator(nil), c.roster.Operators...)
+		ops := make([]RosterOperator, 0, len(c.roster.Operators))
+		for _, op := range c.roster.Operators {
+			// 自动补充时仅限已制作完成的干员
+			if core.IsOperatorImplemented(op.Name) || core.IsOperatorImplemented(op.CharID) {
+				ops = append(ops, op)
+			}
+		}
 		sortByLevelDesc(ops)
 		for _, op := range ops {
 			if len(extra) >= want {

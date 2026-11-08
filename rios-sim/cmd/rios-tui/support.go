@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"rios-sim/core"
 	"rios-sim/data"
 )
 
@@ -159,10 +160,17 @@ func (*supportPickScreen) help() string {
 // —— 与选人屏「没有名册」那条口径一样（屏照压，但不假装能选）。
 func newSupportPickScreen() *supportPickScreen {
 	s := &supportPickScreen{}
-	rows, err := data.AllOperators()
+	allRows, err := data.AllOperators()
 	if err != nil {
 		s.err = err.Error()
 		return s
+	}
+	// 助战候选也仅限已完成制作的干员
+	rows := make([]data.OperatorRow, 0, len(allRows))
+	for _, r := range allRows {
+		if core.IsOperatorImplemented(r.Name) || core.IsOperatorImplemented(r.CharID) {
+			rows = append(rows, r)
+		}
 	}
 	s.rows = rows
 	return s

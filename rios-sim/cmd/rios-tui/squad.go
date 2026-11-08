@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"rios-sim/core"
 )
 
 // # [2] 选编队：问编队 ＋ 选人屏
@@ -546,7 +548,13 @@ func (s *squadPickScreen) onMouse(_ *appCtx, m tea.MouseMsg) (screen, action) {
 func newSquadPickScreen(c *appCtx, keep []RosterOperator) *squadPickScreen {
 	s := &squadPickScreen{picked: map[string]bool{}}
 	if r := c.roster; r != nil {
-		ops := append([]RosterOperator(nil), r.Operators...)
+		ops := make([]RosterOperator, 0, len(r.Operators))
+		for _, op := range r.Operators {
+			// 只保留在 rios-sim 中已完成机制闭环制作的干员（按名称或 char_id 判定）
+			if core.IsOperatorImplemented(op.Name) || core.IsOperatorImplemented(op.CharID) {
+				ops = append(ops, op)
+			}
+		}
 		//: 练度降序 —— 与 Python 的 `Roster.top()` 同向（那边还带 potential，
 		//: 桥上没给这个字段，同级改按 char_id 定序，保证两次打开顺序一致）。
 		//: ★ 比较器**只有一份**（`util.go` 的 `sortByLevelDesc`）：解算屏补人用的是
